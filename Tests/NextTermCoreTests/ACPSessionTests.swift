@@ -89,23 +89,24 @@ import Testing
 
     private let permission = #"{"sessionId":"s1","toolCall":{"toolCallId":"t9","title":"Run `rm -rf build`?","kind":"execute","status":"pending"},"options":[{"optionId":"a1","name":"Allow once","kind":"allow_once"},{"optionId":"a2","name":"Always allow","kind":"allow_always"},{"optionId":"r1","name":"Reject","kind":"reject_once"},{"optionId":"r2","name":"Always reject","kind":"reject_always"}]}"#
 
-    @Test func aPermissionRequestOffersEveryOptionButAStandingAllow() {
+    @Test func aPermissionRequestOffersTheAgentsOptions() {
         var session = ACPSession()
         session.prompted("clean up")
         let asked = session.requested(permission: .string("p1"), params: value(permission))
-        #expect(asked?.options.map(\.name) == ["Allow once", "Reject", "Always reject"])
+        #expect(asked?.options.map(\.name) == ["Allow once", "Always allow", "Reject", "Always reject"])
+        #expect(session.option(at: 1)?.kind == "allow_always")
         #expect(asked?.action == "Run `rm -rf build`")
         session.moveHighlight(1)
         session.moveHighlight(5)
-        #expect(session.pending?.highlighted == 2)
-        let picked = session.choose(1)
+        #expect(session.pending?.highlighted == 3)
+        let picked = session.choose(2)
         #expect(picked?.requestID == .string("p1"))
         #expect(picked?.optionID == "r1")
         #expect(session.pending == nil)
         #expect(session.items.last == .permission(action: "Run `rm -rf build`", answer: "Reject"))
-        // Only Allow always offered: nothing the tab gives, and nothing opens.
-        let onlyAlways = value(#"{"sessionId":"s1","toolCall":{"toolCallId":"t1"},"options":[{"optionId":"a","name":"Always","kind":"allow_always"}]}"#)
-        #expect(session.requested(permission: .number(4), params: onlyAlways) == nil)
+        // No options: nothing opens.
+        let none = value(#"{"sessionId":"s1","toolCall":{"toolCallId":"t1"},"options":[]}"#)
+        #expect(session.requested(permission: .number(4), params: none) == nil)
         #expect(session.pending == nil)
     }
 
@@ -131,7 +132,7 @@ import Testing
         let activity = AgentScreen.activity(screenLines: screen, mask: .empty)
         #expect(activity == .asking("Do you want to allow: Run `rm -rf build`?"))
         let menu = AgentScreen.menu(screenLines: screen, mask: .empty)
-        #expect(menu?.choices == ["Allow once", "Reject", "Always reject"])
+        #expect(menu?.choices == ["Allow once", "Always allow", "Reject", "Always reject"])
         #expect(menu?.style == .list)
         #expect(menu?.highlighted == 0)
         #expect(menu?.keys(toPick: 2) == ["down", "down", "enter"])

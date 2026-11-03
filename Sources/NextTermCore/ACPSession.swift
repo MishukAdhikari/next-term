@@ -68,8 +68,8 @@ public struct ACPSession: Sendable {
         public let requestID: ACPWire.Value
         /// What the agent asks to do: its tool call's title.
         public let action: String
-        /// The options offered here. Allow always is left out: a standing permission one agent could give another
-        /// through the tab's keys needs the asking on the Mac that `answer_agent` gains with the app's own channel (R16).
+        /// The agent's options. An allow_always one is answered only once the user approves on the Mac (R16): the tab's
+        /// keys can't tell the user from an agent steering the session.
         public let options: [Option]
         /// The option the menu's cursor is on.
         public var highlighted: Int
@@ -201,7 +201,7 @@ public struct ACPSession: Sendable {
         let title = call?["title"]?.string ?? call?["toolCallId"]?.string.flatMap { tools[$0]?.title } ?? ""
         let options: [Permission.Option] = (params["options"]?.array ?? []).compactMap { option in
             guard let optionID = option["optionId"]?.string, let name = option["name"]?.string,
-                  let kind = option["kind"]?.string, kind != "allow_always" else { return nil }
+                  let kind = option["kind"]?.string else { return nil }
             return Permission.Option(id: optionID, name: Self.oneLine(name, limit: 60), kind: kind)
         }
         guard !options.isEmpty else { return nil }
@@ -217,6 +217,12 @@ public struct ACPSession: Sendable {
         guard var permission = pending else { return }
         permission.highlighted = min(max(permission.highlighted + step, 0), permission.options.count - 1)
         pending = permission
+    }
+
+    /// Option `index` of the open request, unanswered.
+    public func option(at index: Int) -> Permission.Option? {
+        guard let permission = pending, permission.options.indices.contains(index) else { return nil }
+        return permission.options[index]
     }
 
     /// Picks option `index` of the open request: the agent's request id and the option's id to answer with, or nil

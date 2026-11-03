@@ -109,12 +109,17 @@ final class MCPControlServer: @unchecked Sendable {
         // found before its line came is no MCP caller either: no MCP answer goes to it. Its connection closes as the call
         // ends, as every other one does.
         // `nxtrm secret import`'s header answers itself the same way; its keys come after, raw, never through this reader.
+        // An agent session's report or Allow always (AgentSessionSocket) answers itself the same way.
         let selfAnswering = request?.tool == SecretSocket.tool || request?.tool == SecretPipeSocket.tool
+            || request?.tool == AgentSessionSocket.tool
         let route = calls.route(call, read: request, selfAnswering: selfAnswering) {
-            SecretSocket.isWrapper(pid: peer)
+            SecretSocket.isWrapper(pid: peer) || AgentSessionSocket.isSession(pid: peer)
         }
         switch route {
         case .answerItself:
+            if request?.tool == AgentSessionSocket.tool {
+                return AgentSessionSocket.handle(fd: fd, arguments: request?.arguments ?? [:], peer: peer, auditToken: token)
+            }
             if request?.tool == SecretPipeSocket.tool {
                 return SecretPipeSocket.handle(fd: fd, arguments: request?.arguments ?? [:], peer: peer, auditToken: token)
             }
@@ -249,7 +254,7 @@ enum MCPControl {
     }
 
     private static var app: AppDelegate { AppDelegate.shared }
-    private static var allTabs: [TerminalTab] { app.controllers.flatMap(\.tabs) }
+    static var allTabs: [TerminalTab] { app.controllers.flatMap(\.tabs) }
 
     /// A tab's text an agent reads (title, command, screen, question, choices, served URL, selected text), with stored
     /// keys' exact values masked. Pattern masking is not added here: it would change what agents read today. The
@@ -427,6 +432,9 @@ enum MCPControl {
         }
         info.merge(questionInfo(tab)) { $1 }
         info.merge(restoredFields(tab)) { $1 } // what a restart did to it (U13)
+        if let session = MainActor.assumeIsolated({ AgentSessionSocket.reports[tab.id] }), tab.status.program == CommandClassifier.agentSessionProgram {
+            info["agent_session"] = session.agent // an agent session (plan 030): read_tab gives its last message
+        }
         if let code = tab.status.exitCode, tab.status.state == .failed { info["exit_code"] = Int(code) }
         if tab === caller { info["you"] = true }
         if let openedBy = tab.openedBy {
@@ -508,6 +516,7 @@ enum MCPControl {
             var info: [String: Any] = ["id": tab.id.uuidString.lowercased(), "state": state(tab)]
             info.merge(questionInfo(tab)) { $1 }
             info.merge(restoredFields(tab)) { $1 }
+            info.merge(MainActor.assumeIsolated { AgentSessionSocket.fields(tab) }) { $1 } // an agent session's own (plan 030)
             info.merge(screenFields(tab, lines: min(2000, max(1, lines)))) { $1 }
             reply(ok(info))
         }
@@ -525,6 +534,7 @@ enum MCPControl {
                 var info: [String: Any] = ["id": tab.id.uuidString.lowercased(), "state": state(tab), "timed_out": busy || starting]
                 info.merge(questionInfo(tab)) { $1 }
                 info.merge(restoredFields(tab)) { $1 }
+                info.merge(MainActor.assumeIsolated { AgentSessionSocket.fields(tab) }) { $1 } // stop_reason, last_message
                 info.merge(screenFields(tab, lines: 40)) { $1 }
                 reply(ok(info))
             }

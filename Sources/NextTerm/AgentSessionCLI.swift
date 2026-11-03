@@ -219,9 +219,9 @@ final class AgentSessionRunner {
                     reply(earlier, ACPWire.permissionOutcome(optionID: nil))
                 }
                 if session.requested(permission: id, params: params) == nil {
-                    // Nothing the tab can give (only Allow always offered): declined, never allowed by default (R17).
+                    // No option to give: cancelled, never allowed by default (R17).
                     reply(id, ACPWire.permissionOutcome(optionID: nil))
-                    session.note("The agent offered only a standing permission, which a session tab doesn\u{2019}t give yet; it was cancelled.")
+                    session.note("The agent asked permission with no options; it was cancelled.")
                 }
                 report()
                 draw()
@@ -261,14 +261,96 @@ final class AgentSessionRunner {
         draw()
     }
 
+    /// An Allow always waiting for the user's OK on the Mac: the menu takes no other answer meanwhile.
+    private var confirming = false
+
     private func choose(_ index: Int) {
+        guard !confirming, let option = session.option(at: index) else { return }
+        guard option.kind == "allow_always" else { return answer(index) }
+        // A standing permission is the one answer that outlives the question: asked of the user on the Mac first, as the
+        // tab's keys can't tell them from an agent steering the session (R16).
+        guard appSocket != nil, let permission = session.pending else {
+            session.note("\u{201C}\(option.name)\u{201D} needs your OK in Next Term, which this session can\u{2019}t reach; pick another option.")
+            return draw()
+        }
+        confirming = true
+        session.note("Waiting for your OK on the Mac for \u{201C}\(option.name)\u{201D}\u{2026}")
+        draw()
+        let fields: [String: Any] = ["op": "confirm_always", "agent": agent.name, "action": permission.action, "option": option.name]
+        callApp(fields, timeout: 16 * 60) { [weak self] answer in
+            guard let self else { return }
+            self.confirming = false
+            // Still the same request: the turn wasn't stopped meanwhile.
+            guard self.session.pending?.requestID == permission.requestID else { return self.draw() }
+            if answer?["approved"] as? Bool == true {
+                self.answer(index)
+            } else {
+                self.session.note("\u{201C}\(option.name)\u{201D} was declined on the Mac; the request is still open.")
+                self.draw()
+            }
+        }
+    }
+
+    private func answer(_ index: Int) {
         guard let (id, option) = session.choose(index) else { return }
         reply(id, ACPWire.permissionOutcome(optionID: option))
         report()
         draw()
     }
 
-    /// OSC 7501: working, blocked on a permission (with the question's words), or done.
+    // MARK: the app
+
+    /// Next Term's socket, when the session runs in one of its tabs.
+    private let appSocket = ProcessInfo.processInfo.environment["NEXTTERM_MCP_SOCKET"]
+    /// One request to the app at a time, in order: a report is in before the tab hears the state it reports.
+    private let appQueue = DispatchQueue(label: "nxtrm-agent.app")
+    private var turnsEnded = 0
+
+    /// A request to the app (AgentSessionSocket), answered on the main queue: its fields, or nil when it couldn't be
+    /// asked or didn't answer in `timeout` seconds.
+    private func callApp(_ fields: [String: Any], timeout: Int, then: @escaping ([String: Any]?) -> Void) {
+        guard let path = appSocket else { return then(nil) }
+        appQueue.async {
+            let answer = Self.ask(path: path, fields: fields, timeout: timeout)
+            DispatchQueue.main.async { then(answer) }
+        }
+    }
+
+    private static func ask(path: String, fields: [String: Any], timeout: Int) -> [String: Any]? {
+        let fd = MCPSocket.connect(path: path)
+        guard fd >= 0 else { return nil }
+        defer { close(fd) }
+        var noSigPipe: Int32 = 1
+        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, socklen_t(MemoryLayout<Int32>.size))
+        var wait = timeval(tv_sec: timeout, tv_usec: 0)
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &wait, socklen_t(MemoryLayout<timeval>.size))
+        let request: [String: Any] = ["tool": AgentSessionSocket.tool, "arguments": fields]
+        guard var data = try? JSONSerialization.data(withJSONObject: request) else { return nil }
+        data.append(0x0A)
+        let sent = data.withUnsafeBytes { raw -> Bool in
+            var offset = 0
+            while offset < raw.count {
+                let written = Darwin.write(fd, raw.baseAddress! + offset, raw.count - offset)
+                if written <= 0 { return false }
+                offset += written
+            }
+            return true
+        }
+        guard sent else { return nil }
+        var line = Data()
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        while !line.contains(0x0A) {
+            let count = Darwin.read(fd, &buffer, buffer.count)
+            if count <= 0 { break }
+            line.append(contentsOf: buffer[0..<count])
+        }
+        guard let object = (try? JSONSerialization.jsonObject(with: line)) as? [String: Any], let text = object["text"] as? String,
+              let fields = (try? JSONSerialization.jsonObject(with: Data(text.utf8))) as? [String: Any] else { return nil }
+        return fields
+    }
+
+    /// The state for the app (stop reason, last message), then OSC 7501 for the tab: working, blocked on a permission
+    /// (with the question's words), or done. In order, so wait_for_tab never finds a turn done before its last message.
     private func report() {
         var fields = "app=nxtrm-agent"
         if let permission = session.pending {
@@ -281,7 +363,14 @@ final class AgentSessionRunner {
         }
         guard fields != lastReport else { return }
         lastReport = fields
-        write("\u{1b}]7501;" + fields + "\u{1b}\\")
+        let osc = "\u{1b}]7501;" + fields + "\u{1b}\\"
+        guard appSocket != nil else { return write(osc) }
+        let state = session.pending != nil ? "attention" : (session.working ? "working" : (session.lastStop == nil ? "idle" : "done"))
+        if state == "done" { turnsEnded += 1 }
+        var update: [String: Any] = ["op": "report", "agent": agent.name, "state": state, "turns": turnsEnded,
+                                     "last_message": session.lastMessage]
+        if let stop = session.lastStop { update["stop_reason"] = stop.rawValue }
+        callApp(update, timeout: 2) { [weak self] _ in self?.write(osc) }
     }
 
     private func fatal(_ message: String) {

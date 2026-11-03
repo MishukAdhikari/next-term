@@ -80,13 +80,32 @@ extension SelfTest {
         let answered = await wait(10) { screen().contains("You said: hello there") && tab.status.state != .working }
         check(!sent.isError && answered && tab.programReports, "agent session: send_to_tab's prompt runs a turn that ends, by its reports",
               "\(sent.text), state \(tab.status.state.rawValue): \(screen().suffix(300))")
+        let read = await call("read_tab", ["tab_id": id, "lines": 5])
+        let readJSON = (try? JSONSerialization.jsonObject(with: Data(read.text.utf8))) as? [String: Any] ?? [:]
+        check(readJSON["stop_reason"] as? String == "end_turn" && readJSON["last_message"] as? String == "You said: hello there"
+                  && readJSON["agent_session"] as? String == "Gemini CLI",
+              "agent session: read_tab gives the turn's stop reason and the agent's last message exactly", read.text)
 
         _ = await call("send_to_tab", ["tab_id": id, "text": "please rm it"])
         let asks = await wait(10) { tab.status.state == .attention }
         let choices = MCPControl.questionInfo(tab)["choices"] as? [String]
-        check(asks && tab.status.question == "Do you want to allow: Run rm -rf build?" && choices == ["Allow once", "Reject"],
-              "agent session: a permission request is the tab's question, its options (no standing allow) the choices",
+        check(asks && tab.status.question == "Do you want to allow: Run rm -rf build?" && choices == ["Allow once", "Always allow", "Reject"],
+              "agent session: a permission request is the tab's question, the agent's options the choices",
               "\(tab.status.state.rawValue), \(tab.status.question ?? "no question"), \(choices ?? [])")
+
+        // Always allow, picked by an agent, is asked of the user on the Mac; declined there, the request stays open.
+        let always = await call("answer_agent", ["tab_id": id, "question_id": MCPControl.questionID(tab) ?? "", "answer": "Always allow"])
+        var approval: AgentApprovalWindow?
+        let shown = await wait(10) {
+            approval = NSApp.windows.compactMap { $0.windowController as? AgentApprovalWindow }.first { $0.window?.title == "Allow Gemini CLI always?" }
+            return approval?.window?.isVisible == true
+        }
+        check(!always.isError && shown && screen().contains("Waiting for your OK on the Mac"),
+              "agent session: Always allow from answer_agent asks the user on the Mac first", "\(always.text): \(screen().suffix(300))")
+        approval?.declineButton.performClick(nil)
+        let stillOpen = await wait(10) { screen().contains("was declined on the Mac") && tab.status.state == .attention }
+        check(stillOpen && !screen().contains("Permission answer"), "agent session: declined on the Mac, the agent gets no answer and the request stays open",
+              screen().suffix(300).description)
         let picked = await call("answer_agent", ["tab_id": id, "question_id": MCPControl.questionID(tab) ?? "", "answer": "Reject"])
         let rejected = await wait(10) { screen().contains("Permission answer: no") && tab.status.state != .attention }
         check(!picked.isError && rejected, "agent session: answer_agent picks Reject and the agent gets it",
