@@ -101,10 +101,14 @@ final class HintLine: NSView {
     override var mouseDownCanMoveWindow: Bool { false }
     override var acceptsFirstResponder: Bool { false }
 
-    /// The words' width as drawn.
-    private var wordsWidth: CGFloat {
-        ceil(NSAttributedString(string: words, attributes: [.font: Self.font]).size().width) + (button != nil ? 4 : 2)
+    /// The words' width as drawn: their cell's, with its padding (a label's intrinsic width can be short of it), so whole
+    /// words are never cut.
+    var wordsWidth: CGFloat {
+        ceil(((button ?? label) as NSControl?)?.cell?.cellSize.width ?? 0)
     }
+
+    /// Whether its words show whole in the room layout gave them (the self-test's check).
+    var wordsWhole: Bool { ((button ?? label)?.frame.width ?? 0) >= wordsWidth }
 
     /// Beside the rail: as wide as its words, its × and their insets.
     var besideWidth: CGFloat { Self.inset + wordsWidth + 4 + Self.closeSize + 6 }

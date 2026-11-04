@@ -1541,6 +1541,10 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         // The window column on its own side when the user chose one (View › Window Column Position › Right), else on the
         // sidebar's: the far right with it, the order mirrored.
         columnHost.columnOnRight = AppDelegate.shared.windowColumnOnRight
+        columnHost.roomBeside = { [weak self] () -> CGFloat in
+            guard let self, self.isSidebarVisible, self.sidebarOnRight == self.columnHost.columnOnRight else { return 0 }
+            return self.sidebar.frame.width
+        }
         placeWindowColumn()
         updateInsets()
     }

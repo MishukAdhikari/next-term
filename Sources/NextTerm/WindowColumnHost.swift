@@ -101,6 +101,9 @@ final class WindowColumnHost: NSView {
     /// or beside the rail's foot over the content's edge.
     private(set) var hint: HintLine?
     private(set) var hintInList = false
+    /// How wide the chrome is that lies beside the column, where a hint may sit without covering text: the window's
+    /// project sidebar when it is shown on the column's edge, else none.
+    var roomBeside: () -> CGFloat = { 0 }
 
     init(content: NSView) {
         self.content = content
@@ -300,6 +303,8 @@ final class WindowColumnHost: NSView {
             if shown.form == .expanded, line.fits(width: column.frame.width - WindowColumnWidth.hairline) {
                 column.hint = line
             } else {
+                // Beside the column only over chrome (the project sidebar on that edge), never the editor's or terminal's text.
+                guard line.besideWidth + 8 <= roomBeside() else { return false }
                 line.beside = true
                 addSubview(line) // over the split view, as the list is
             }

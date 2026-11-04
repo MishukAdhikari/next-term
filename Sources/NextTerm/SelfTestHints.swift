@@ -109,13 +109,14 @@ extension SelfTest {
         let keyboard: NSResponder? = c.window?.firstResponder
         ColumnHints.shared.columnAppeared()
         let up: Bool = await wait(2) { host.hint?.hint == .columnBasics }
+        if up { await screenshot(c, suffix: "-hint-column-basics") }
         let line: HintLine? = host.hint
         let beside: Bool = line.map { $0.beside && $0.superview === host && abs($0.frame.minX - host.column.frame.maxX) < 0.5 } ?? false
         let staticText: Bool = line?.label?.accessibilityRole() == .staticText && line?.label?.accessibilityHelp() == HintWords.columnBasics
-        check(up && line?.words == HintWords.columnBasics && beside && staticText && HintCenter.shared.visible?.hint == .columnBasics
+        check(up && line?.wordsWhole == true && line?.words == HintWords.columnBasics && beside && staticText && HintCenter.shared.visible?.hint == .columnBasics
                 && c.window?.firstResponder === keyboard && line?.alphaValue == 1,
-              "hints: the column's first showing puts “Rest here to see your windows · double-click to keep open” beside the rail's foot, as static text, at once with Reduce Motion and without the keyboard",
-              "up \(up), “\(line?.words ?? "")”, beside \(beside), static text \(staticText), keyboard kept \(c.window?.firstResponder === keyboard)")
+              "hints: the column's first showing puts “Rest here to see your windows” beside the rail's foot, as static text, at once with Reduce Motion and without the keyboard",
+              "up \(up), “\(line?.words ?? "")”, plate \(line?.frame ?? .zero), words \(line?.label?.frame ?? .zero) of \(line?.wordsWidth ?? 0), font \(line?.label?.font?.pointSize ?? 0), beside \(beside), static text \(staticText), keyboard kept \(c.window?.firstResponder === keyboard)")
         let counted: Bool = await wait(1) { HintCenter.shared.record(.columnBasics).shown == 1 }
         check(counted, "hints: up past its exposure time, a showing counts", "\(HintCenter.shared.record(.columnBasics))")
         // Another hint's moment, while this one is up: it holds back.
@@ -159,7 +160,7 @@ extension SelfTest {
         check(retired == .actionPerformed, "hints: the list opening on the rail retires the column's basics", "\(String(describing: retired))")
     }
 
-    /// H1: the list open a moment shows "⇄ Move to the right edge" at its foot as a real button with its tooltip; it
+    /// H1: the list open a moment shows "⇄ Move column right" at its foot as a real button with its tooltip; it
     /// counts; a click moves the column and retires it, as View › Window Column Position does; × retires it.
     private static func sideChecks(_ app: AppDelegate, _ c: TerminalWindowController, freshTips: () -> Void, nextDay: () -> Void) async {
         let host: WindowColumnHost = c.columnHost
@@ -167,18 +168,19 @@ extension SelfTest {
         HintCenter.shared.retire(.columnBasics, reason: .closed) // its own checks are done
         host.showList()
         let up: Bool = await wait(2) { host.hint?.hint == .columnSide }
+        host.list?.layoutSubtreeIfNeeded() // as the next display would: the line was just put up
         let line: HintLine? = host.hint
         let words = HintWords.columnSide(onRight: false)
         let inList: Bool = line.map { host.hintInList && $0.superview === host.list && !$0.beside } ?? false
         let button: NSButton? = line?.button
-        let real: Bool = button?.title == "⇄ Move to the right edge" && button?.toolTip == words.help && button?.isBordered == false
+        let real: Bool = line?.wordsWhole == true && button?.title == "⇄ Move column right" && button?.toolTip == words.help && button?.isBordered == false
             && button?.accessibilityHelp() == words.help && button?.refusesFirstResponder == true
         // Above the list's foot, the rows left clear of it.
         let foot: NSRect = host.list?.hideButton.frame ?? .zero
         let rows: CGFloat = host.list?.shownButtons.map(\.frame.maxY).max() ?? 0
         let placed: Bool = line.map { abs($0.frame.maxY - foot.minY) < 0.5 && rows <= $0.frame.minY } ?? false
         check(up && inList && real && placed,
-              "hints: the list open a moment shows “⇄ Move to the right edge” at its foot, a real borderless button with “Or ask your agent…” as its tooltip",
+              "hints: the list open a moment shows “⇄ Move column right” at its foot, a real borderless button with “Or ask your agent…” as its tooltip",
               "up \(up), in the list \(inList), button “\(button?.title ?? "")” tip “\(button?.toolTip ?? "")”, line \(line?.frame ?? .zero), foot \(foot), rows end \(rows)")
         await screenshot(c, suffix: "-hint-column-side")
         let counted: Bool = await wait(1) { HintCenter.shared.record(.columnSide).shown == 1 }
@@ -209,7 +211,7 @@ extension SelfTest {
         host.showList()
         _ = await wait(2) { host.hint?.hint == .columnSide }
         let left: String = host.hint?.button?.title ?? ""
-        check(left == "⇄ Move to the left edge", "hints: with the column on the right it offers the left edge", "“\(left)”")
+        check(left == "⇄ Move column left", "hints: with the column on the right it offers the left edge", "“\(left)”")
         // × closes it for good.
         host.hint?.setHoveringForTest(true)
         let shows: Bool = host.hint?.closeButton.alphaValue == 1
@@ -241,9 +243,10 @@ extension SelfTest {
         guard await wait(5, { behind.status.state == .attention }) else { return note("hints: H2 not checked, the bell did not ring") }
         for controller in app.controllers { controller.refresh() }
         let up: Bool = await wait(4) { host.hint?.hint == .nextAgent }
+        if up { await screenshot(c, suffix: "-hint-next-agent") }
         let key: String? = KeyboardShortcuts.shared.chord(for: "goToNextAgentNeedingYou:")?.display
         let words: String? = HintWords.nextAgent(key: key)
-        check(up && words != nil && host.hint?.words == words && host.hint?.beside == true,
+        check(up && words != nil && host.hint?.words == words && host.hint?.beside == true && host.hint?.wordsWhole == true,
               "hints: a needs-you mark in another window says “Press \(key ?? "?") to jump to it” at the front window's column foot",
               "up \(up), “\(host.hint?.words ?? "")”")
         app.goToNextAgentNeedingYou(nil)
@@ -251,6 +254,16 @@ extension SelfTest {
               "hints: Go to Next Agent Needing You retires it", "\(HintCenter.shared.record(.nextAgent))")
         other.remove(behind)
         if let window = c.window { _ = await bringToFront(window) }
+
+        // Beside the rail only over the project sidebar: with the sidebar hidden, nothing goes over the text.
+        let wasShown: Bool = c.isSidebarVisible
+        c.setSidebarVisible(false)
+        await pause(0.3)
+        let probe = HintLine(.columnBasics, words: HintWords.columnBasics)
+        let overText: Bool = host.showHint(probe, inList: false)
+        if overText { host.removeHint() }
+        c.setSidebarVisible(wasShown)
+        check(!overText, "hints: with the project sidebar hidden, a hint beside the rail waits rather than cover the editor or terminal")
     }
 
     /// The off switch takes the hint up down and shows none; Reset Tips and Help › Show Tips Again bring them back.

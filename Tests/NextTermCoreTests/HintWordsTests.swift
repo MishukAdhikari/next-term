@@ -18,10 +18,10 @@ struct HintWordsTests {
 
     @Test func theColumnSideHintNamesTheOtherEdge() {
         let left = HintWords.columnSide(onRight: false)
-        #expect(left.lead == "⇄" && left.words == "Move to the right edge")
-        #expect(left.help == "Or ask your agent: “put the window column on the right”.")
+        #expect(left.lead == "⇄" && left.words == "Move column right")
+        #expect(left.help == "Or ask your agent: ‘put the window column on the right’.")
         let right = HintWords.columnSide(onRight: true)
-        #expect(right.words == "Move to the left edge" && right.help == "Or ask your agent: “put the window column on the left”.")
+        #expect(right.words == "Move column left" && right.help == "Or ask your agent: ‘put the window column on the left’.")
     }
 
     @Test func theNextAgentHintReadsTheLiveKeyAndHasNoneWithout() {

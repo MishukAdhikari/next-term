@@ -7,7 +7,7 @@ public enum HintWords {
     /// column is not on.
     public static func columnSide(onRight: Bool) -> (lead: String, words: String, help: String) {
         let edge: String = onRight ? "left" : "right"
-        return ("⇄", "Move to the \(edge) edge", "Or ask your agent: “put the window column on the \(edge)”.")
+        return ("⇄", "Move column \(edge)", "Or ask your agent: ‘put the window column on the \(edge)’.")
     }
 
     /// H2, at the window column's foot: Go to Next Agent Needing You's key, as the user has it. No key, no hint: there
@@ -18,7 +18,7 @@ public enum HintWords {
     }
 
     /// H3, beside the rail's foot, the first time the column shows.
-    public static let columnBasics = "Rest here to see your windows · double-click to keep open"
+    public static let columnBasics = "Rest here to see your windows"
 
     /// The × on every hint, for VoiceOver and its tooltip: it closes the tip for good.
     public static let close = "Close Tip"
