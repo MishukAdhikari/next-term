@@ -184,6 +184,7 @@ extension MCPWriteControl {
         let app = AppDelegate.shared!
         var layout: [String: Any] = [
             "terminal_position": app.terminalPosition.rawValue, "sidebar_side": app.sidebarSide.rawValue,
+            "window_column_side": app.windowColumnOnRight ? "right" : "left",
             "terminal_tabs": app.terminalTabs.rawValue,
             "sidebar": controller.isSidebarVisible ? "shown" : "hidden", "terminal_folded": controller.terminalCollapsed,
             "window_column": app.showsWindowColumn ? "shown" : "hidden", "window_column_folded": !app.windowColumnExpanded,
@@ -246,6 +247,10 @@ extension MCPWriteControl {
         if let side = wanted.sidebarSide, side != app.sidebarSide.rawValue {
             change.sidebarSide = side
             lines.append("The project sidebar moves to the \(side), in every window.")
+        }
+        if let side = wanted.windowColumnSide, side != (app.windowColumnOnRight ? "right" : "left") {
+            change.windowColumnSide = side
+            lines.append("The window column moves to the \(side), in every window.")
         }
         if let tabs = wanted.terminalTabs, tabs != app.terminalTabs.rawValue {
             change.terminalTabs = tabs
@@ -315,6 +320,10 @@ extension MCPWriteControl {
         if let folded = change.windowColumnFolded {
             app.windowColumnExpanded = !folded
             changed.append("window_column_folded")
+        }
+        if let side = change.windowColumnSide {
+            app.setWindowColumnSide(side == "right" ? .right : .left)
+            changed.append("window_column_side")
         }
         guard let controller, AppDelegate.shared.controllers.contains(where: { $0 === controller }) else { return changed }
         if let shown = change.sidebarShown {

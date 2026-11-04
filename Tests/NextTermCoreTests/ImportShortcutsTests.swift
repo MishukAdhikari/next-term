@@ -16,7 +16,7 @@ import Testing
         var map: [String: KeyChord?] = MenuKeys.defaults.mapValues { $0 }
         for id in ["closeProject:", "copyPathWithLine:", "revealInSidebar:", "toggleSoftWrap:", "toggleSidebarSide:", "equalizePanes:",
                    "closeOtherTabs:", "closeTabsToTheRight:", "revealInFinder:", "copyFilePath:", "copyRelativeFilePath:",
-                   "moveTabToNewWindow:", "mergeAllWindows:", "toggleTabBar:"] {
+                   "moveTabToNewWindow:", "mergeAllWindows:", "toggleTabBar:", "toggleWindowColumnSide:"] {
             map[id] = .some(nil)
         }
         return map

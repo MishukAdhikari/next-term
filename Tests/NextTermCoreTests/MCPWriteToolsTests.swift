@@ -201,12 +201,22 @@ import Testing
         // With the others in one call.
         let both = try MCPLayoutChange.parse(["terminal_tabs": "right", "terminal_position": "bottom", "terminal_folded": true]).get()
         #expect(both == MCPLayoutChange(terminalPosition: "bottom", terminalTabs: "right", terminalFolded: true))
-        // An empty call names all seven.
+        // An empty call names all eight.
         let empty = try #require(MCPLayoutChange.parse([:]).failureText)
         for name in MCPLayoutChange.arguments {
             #expect(empty.contains(name), "\(name)")
         }
-        #expect(MCPLayoutChange.arguments.count == 7)
+        #expect(MCPLayoutChange.arguments.count == 8)
+    }
+
+    /// The window column on its own edge, apart from the project sidebar's, or back on it.
+    @Test func theWindowColumnTakesAnEdgeOfItsOwn() throws {
+        #expect(try MCPLayoutChange.parse(["window_column_side": "right"]).get() == MCPLayoutChange(windowColumnSide: "right"))
+        #expect(MCPLayoutChange.parse(["window_column_side": "top"]).isFailure)
+        // An agent's setup lists it as a row, and its undo puts the side back.
+        let change = MCPLayoutChange(windowColumnSide: "right")
+        #expect(AgentSetup.layoutRows(change, place: "the window").map(\.title) == ["Window column on the right"])
+        #expect(AgentSetup.layoutChange(AgentSetup.layoutValues(change)) == change)
     }
 
     @Test func theWindowColumnIsShownHiddenFoldedOrUnfolded() throws {

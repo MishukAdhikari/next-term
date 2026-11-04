@@ -53,6 +53,7 @@ public enum ImportShortcuts {
             "showChanges:": "Show Changes",
             "toggleSoftWrap:": "Soft Wrap",
             "toggleSidebarSide:": "Project Sidebar on the Right",
+            "toggleWindowColumnSide:": "Window Column on the Right",
             "increaseFontSize:": "Bigger",
             "decreaseFontSize:": "Smaller",
             "resetFontSize:": "Actual Size",

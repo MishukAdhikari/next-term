@@ -114,8 +114,8 @@ extension MCPServer {
              inputSchema: #"{"type": "object", "properties": {\#(tabArgument), "zoomed": {"type": "boolean", "description": "Default true."}, \#(reasonArgument)}, "required": ["tab_id"], "additionalProperties": false}"#,
              readOnly: false, destructive: false, idempotent: true, timeout: 60),
         Tool(name: "set_layout", title: "Set the layout",
-             description: "Changes the layout as the View menu does. terminal_position (bottom, right, left or top), sidebar_side (left or right), terminal_tabs (top, or left or right for a list of the tabs down that side of the terminal), window_column (shown or hidden: a rail with a dot for each open window at every window's outer edge, while two or more are open; resting the pointer on it shows the list) and window_column_folded (false pins it unfolded to a row per window with its name and marks) apply to every window. sidebar (shown or hidden) and terminal_folded (true folds the terminal to its tab bar, or to a rail beside the editor) apply to one window: your window, or the one with project open. The user is asked on the Mac first; a call that changes nothing answers at once with the layout.",
-             inputSchema: #"{"type": "object", "properties": {"terminal_position": {"type": "string", "enum": ["bottom", "right", "left", "top"]}, "sidebar_side": {"type": "string", "enum": ["left", "right"]}, "terminal_tabs": {"type": "string", "enum": ["top", "left", "right"]}, "window_column": {"type": "string", "enum": ["shown", "hidden"]}, "window_column_folded": {"type": "boolean"}, "sidebar": {"type": "string", "enum": ["shown", "hidden"]}, "terminal_folded": {"type": "boolean"}, \#(projectArgument), \#(reasonArgument)}, "additionalProperties": false}"#,
+             description: "Changes the layout as the View menu does. terminal_position (bottom, right, left or top), sidebar_side (left or right), terminal_tabs (top, or left or right for a list of the tabs down that side of the terminal), window_column (shown or hidden: a rail with a dot for each open window at every window's outer edge, while two or more are open; resting the pointer on it shows the list) and window_column_folded (false pins it unfolded to a row per window with its name and marks) and window_column_side (left or right: by default the project sidebar's side) apply to every window. sidebar (shown or hidden) and terminal_folded (true folds the terminal to its tab bar, or to a rail beside the editor) apply to one window: your window, or the one with project open. The user is asked on the Mac first; a call that changes nothing answers at once with the layout.",
+             inputSchema: #"{"type": "object", "properties": {"terminal_position": {"type": "string", "enum": ["bottom", "right", "left", "top"]}, "sidebar_side": {"type": "string", "enum": ["left", "right"]}, "terminal_tabs": {"type": "string", "enum": ["top", "left", "right"]}, "window_column": {"type": "string", "enum": ["shown", "hidden"]}, "window_column_folded": {"type": "boolean"}, "window_column_side": {"type": "string", "enum": ["left", "right"]}, "sidebar": {"type": "string", "enum": ["shown", "hidden"]}, "terminal_folded": {"type": "boolean"}, \#(projectArgument), \#(reasonArgument)}, "additionalProperties": false}"#,
              readOnly: false, destructive: false, idempotent: true, timeout: 60),
         Tool(name: "settings_get", title: "Get settings",
              description: "The settings that settings_set may change, with their values and what each takes: the editor's font_size, line_height and soft_wrap; the terminal's font, size, colours, cursor and scrollback, new_tab_folder and terminal_position; the notification choices; agent_spinner, agents_offer_tabs and agents_bring_tabs_forward; open_projects_in, at_launch, sidebar_single_click and shortcut_set. Other settings are not listed. Also layout: the layout as set_layout answers it, for your window or the front one.",
@@ -818,13 +818,16 @@ public struct MCPLayoutChange: Equatable, Sendable {
     public var windowColumnShown: Bool?
     /// The window column folded to its badges or unfolded to its rows, in every window.
     public var windowColumnFolded: Bool?
+    /// The window column's edge, left or right, in every window: on the project sidebar's side unless set apart.
+    public var windowColumnSide: String?
 
     /// set_layout's arguments that change something.
     public static let arguments: [String] = ["terminal_position", "sidebar_side", "terminal_tabs", "window_column", "window_column_folded",
-                                              "sidebar", "terminal_folded"]
+                                              "window_column_side", "sidebar", "terminal_folded"]
 
     public init(terminalPosition: String? = nil, sidebarSide: String? = nil, terminalTabs: String? = nil, sidebarShown: Bool? = nil,
-                terminalFolded: Bool? = nil, windowColumnShown: Bool? = nil, windowColumnFolded: Bool? = nil) {
+                terminalFolded: Bool? = nil, windowColumnShown: Bool? = nil, windowColumnFolded: Bool? = nil,
+                windowColumnSide: String? = nil) {
         self.terminalPosition = terminalPosition
         self.sidebarSide = sidebarSide
         self.terminalTabs = terminalTabs
@@ -832,11 +835,12 @@ public struct MCPLayoutChange: Equatable, Sendable {
         self.terminalFolded = terminalFolded
         self.windowColumnShown = windowColumnShown
         self.windowColumnFolded = windowColumnFolded
+        self.windowColumnSide = windowColumnSide
     }
 
     public var isEmpty: Bool {
         let everyWindow: Bool = terminalPosition == nil && sidebarSide == nil && terminalTabs == nil && windowColumnShown == nil
-            && windowColumnFolded == nil
+            && windowColumnFolded == nil && windowColumnSide == nil
         return everyWindow && sidebarShown == nil && terminalFolded == nil
     }
 
@@ -865,10 +869,13 @@ public struct MCPLayoutChange: Equatable, Sendable {
                 change.windowColumnShown = try args.choice("window_column", of: ["shown", "hidden"], default: "shown") == "shown"
             }
             if given("window_column_folded") { change.windowColumnFolded = try args.bool("window_column_folded", default: true) }
+            if given("window_column_side") {
+                change.windowColumnSide = try args.choice("window_column_side", of: ["left", "right"], default: "left")
+            }
             if given("sidebar") { change.sidebarShown = try args.choice("sidebar", of: ["shown", "hidden"], default: "shown") == "shown" }
             if given("terminal_folded") { change.terminalFolded = try args.bool("terminal_folded", default: false) }
             guard !change.isEmpty else {
-                throw MCPToolError("Give at least one of terminal_position, sidebar_side, terminal_tabs, window_column, window_column_folded, sidebar and terminal_folded.")
+                throw MCPToolError("Give at least one of terminal_position, sidebar_side, terminal_tabs, window_column, window_column_folded, window_column_side, sidebar and terminal_folded.")
             }
             return change
         }

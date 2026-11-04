@@ -480,6 +480,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         controllers.forEach { $0.applyLayout() }
     }
 
+    /// The window column's side, when the user chose one apart from the project sidebar's; nil, it is on the sidebar's
+    /// side, as it always was.
+    var windowColumnSide: SidebarSide? {
+        get { SidebarSide(rawValue: UserDefaults.standard.string(forKey: "windowColumnSide") ?? "") }
+        set { UserDefaults.standard.set(newValue?.rawValue, forKey: "windowColumnSide") }
+    }
+
+    /// Where the window column is: its own side, else the project sidebar's.
+    var windowColumnOnRight: Bool { (windowColumnSide ?? sidebarSide) == .right }
+
+    /// View › Window Column on the Right: the column moves to the other edge. On the sidebar's side again, it follows the
+    /// sidebar again.
+    @objc func toggleWindowColumnSide(_ sender: Any?) {
+        setWindowColumnSide(windowColumnOnRight ? .left : .right)
+    }
+
+    /// The window column to `side` in every window (View menu, set_layout): on the sidebar's side it follows the sidebar again.
+    func setWindowColumnSide(_ side: SidebarSide) {
+        windowColumnSide = side == sidebarSide ? nil : side
+        controllers.forEach { $0.applyLayout() }
+    }
+
     @objc func setTerminalTabs(_ sender: NSMenuItem) {
         guard let raw = sender.representedObject as? String, let tabs = TerminalTabsSetting(rawValue: raw) else { return }
         moveTerminalTabs(to: tabs)
@@ -1633,6 +1655,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             item.state = item.representedObject as? String == terminalPosition.rawValue ? .on : .off
         }
         if item.action == #selector(toggleSidebarSide(_:)) { item.state = sidebarSide == .right ? .on : .off }
+        if item.action == #selector(toggleWindowColumnSide(_:)) { item.state = windowColumnOnRight ? .on : .off }
         if item.action == #selector(setTerminalTabs(_:)) {
             item.state = item.representedObject as? String == terminalTabs.rawValue ? .on : .off
         }
@@ -2395,6 +2418,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // The window's colour along its top row; also a right-click there, and Show Project Colors in Settings › General.
         view.addItem(withTitle: ProjectColorMenu.title, action: nil, keyEquivalent: "").submenu = ProjectColorMenu.submenu()
         item(view, "Project Sidebar on the Right", #selector(toggleSidebarSide(_:)), "", target: self)
+        item(view, "Window Column on the Right", #selector(toggleWindowColumnSide(_:)), "", target: self)
         view.addItem(.separator())
         item(view, "Bigger", #selector(increaseFontSize(_:)), "+", target: self)
         let biggerAlt = item(view, "Bigger", #selector(increaseFontSize(_:)), "=", target: self)

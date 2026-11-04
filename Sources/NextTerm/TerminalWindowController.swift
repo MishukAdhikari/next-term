@@ -1536,8 +1536,9 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         }
         applyTerminalTabs()
         updateCollapseButton()
-        // The window column follows the sidebar's side: the far right with it, the order mirrored.
-        columnHost.columnOnRight = sidebarOnRight
+        // The window column on its own side when the user chose one (View › Window Column on the Right), else on the
+        // sidebar's: the far right with it, the order mirrored.
+        columnHost.columnOnRight = AppDelegate.shared.windowColumnOnRight
         placeWindowColumn()
         updateInsets()
     }

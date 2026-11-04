@@ -250,6 +250,7 @@ enum MCPSetupControl {
         let app = AppDelegate.shared!
         var values: [String: String] = [
             "terminal_position": app.terminalPosition.rawValue, "sidebar_side": app.sidebarSide.rawValue,
+            "window_column_side": app.windowColumnOnRight ? "right" : "left",
             "terminal_tabs": app.terminalTabs.rawValue, "window_column": app.showsWindowColumn ? "shown" : "hidden",
             "window_column_folded": String(!app.windowColumnExpanded),
         ]

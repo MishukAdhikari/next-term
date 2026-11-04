@@ -217,6 +217,27 @@ extension SelfTest {
         first.window?.layoutIfNeeded()
         check(first.windowColumn.frame.minX == 0 && !first.windowColumn.onRight && !first.windowColumn.chevronPointsRight,
               "window column: back on the left, it is at the left edge again, its chevron pointing left", "\(first.windowColumn.frame)")
+
+        // An edge of its own: the column on the right while the project files stay on the left, the files' header clear of
+        // the traffic lights again. Back on the sidebar's side, it follows the sidebar again.
+        let savedSide = app.windowColumnSide
+        defer {
+            app.windowColumnSide = savedSide
+            app.controllers.forEach { $0.applyLayout() }
+        }
+        app.setWindowColumnSide(.right)
+        first.window?.layoutIfNeeded()
+        let host: WindowColumnHost = first.columnHost
+        let column: NSRect = first.windowColumn.frame
+        let files: NSRect = first.sidebar.convert(first.sidebar.bounds, to: host)
+        let apart: Bool = abs(column.maxX - host.bounds.maxX) < 0.5 && files.minX < 0.5 && first.windowColumn.onRight
+            && first.sidebar.headerInset > 8 && app.sidebarSide == .left
+        await screenshot(first, suffix: "-column-apart")
+        check(apart, "window column: on the right with the project files on the left, at the right edge, the files' header clear of the traffic lights",
+              "column \(column), files \(files), header inset \(first.sidebar.headerInset)")
+        app.setWindowColumnSide(.left)
+        check(app.windowColumnSide == nil && !first.windowColumn.onRight,
+              "window column: moved back to the sidebar's side, it follows the sidebar again", "side \(String(describing: app.windowColumnSide))")
     }
 
     // MARK: AE3: the setting off

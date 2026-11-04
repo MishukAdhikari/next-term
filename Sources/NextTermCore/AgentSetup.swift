@@ -255,6 +255,7 @@ public enum AgentSetup {
         var rows: [Row] = []
         if let side = change.terminalPosition { rows.append(Row(id: layoutID("terminal_position"), title: terminalPlace(side))) }
         if let side = change.sidebarSide { rows.append(Row(id: layoutID("sidebar_side"), title: "Project sidebar on the \(side)")) }
+        if let side = change.windowColumnSide { rows.append(Row(id: layoutID("window_column_side"), title: "Window column on the \(side)")) }
         if let tabs = change.terminalTabs {
             let title = tabs == TerminalTabsSetting.top.rawValue ? "Terminal tabs along the top" : "Terminal tabs in a list on the \(tabs)"
             rows.append(Row(id: layoutID("terminal_tabs"), title: title))
@@ -315,7 +316,8 @@ public enum AgentSetup {
                                sidebarShown: keep("sidebar") ? change.sidebarShown : nil,
                                terminalFolded: keep("terminal_folded") ? change.terminalFolded : nil,
                                windowColumnShown: keep("window_column") ? change.windowColumnShown : nil,
-                               windowColumnFolded: keep("window_column_folded") ? change.windowColumnFolded : nil)
+                               windowColumnFolded: keep("window_column_folded") ? change.windowColumnFolded : nil,
+                               windowColumnSide: keep("window_column_side") ? change.windowColumnSide : nil)
     }
 
     /// Each field `change` sets, with its value as a snapshot keeps it: “right”, “shown”, “true”.
@@ -326,6 +328,7 @@ public enum AgentSetup {
         if let tabs = change.terminalTabs { values.append(("terminal_tabs", tabs)) }
         if let shown = change.windowColumnShown { values.append(("window_column", shown ? "shown" : "hidden")) }
         if let folded = change.windowColumnFolded { values.append(("window_column_folded", String(folded))) }
+        if let side = change.windowColumnSide { values.append(("window_column_side", side)) }
         if let shown = change.sidebarShown { values.append(("sidebar", shown ? "shown" : "hidden")) }
         if let folded = change.terminalFolded { values.append(("terminal_folded", String(folded))) }
         return values
@@ -341,6 +344,7 @@ public enum AgentSetup {
             case "terminal_tabs": change.terminalTabs = value
             case "window_column": change.windowColumnShown = value == "shown"
             case "window_column_folded": change.windowColumnFolded = value == "true"
+            case "window_column_side": change.windowColumnSide = value
             case "sidebar": change.sidebarShown = value == "shown"
             case "terminal_folded": change.terminalFolded = value == "true"
             default: continue
@@ -463,6 +467,7 @@ public struct AgentSetupSnapshot: Codable, Equatable, Sendable {
         case "terminal_tabs": return "Terminal tabs"
         case "window_column": return "Window column"
         case "window_column_folded": return "Window column folded"
+        case "window_column_side": return "Window column side"
         case "sidebar": return "Project sidebar"
         case "terminal_folded": return "Terminal folded"
         default: return AgentSetup.rowTitles[name] ?? name
@@ -517,7 +522,7 @@ extension MCPServer {
     public static let setupTools: [Tool] = [
         Tool(name: "apply_setup", title: "Ask to apply a setup plan",
              description: "Asks the user to apply a whole setup plan in one window on the Mac, instead of an ask for each part: settings (names and values as settings_set takes them), layout (set_layout's fields, with project for the per-window ones) and import (a source from list_import_sources, or path and format, with items and plan_id from preview_import, as apply_import takes them). Give one or more. The window names you and shows your reason, with a tickable row per change (\"Font size 13 → 14\", \"Terminal on the right\", \"Shortcuts: VS Code set\", and one row for the import) and Apply N Changes; the user may untick rows, and only the ticked ones change. Nothing may be set twice: a setting in settings and in layout, or in the import's ticked rows too, is refused. Answers within about 50 seconds: applied (the rows applied and skipped, the values now, the import's undo_id, and how to undo it), declined, stopped, busy, up_to_date (nothing would change; no window opens), changed_since_preview, or pending with a request_id: call again with only request_id to keep waiting. The window closes as a cancel after 10 minutes. Next Term › Undo Agent Setup… puts back all it changed, across relaunches; undo_import the import alone. Agent control, keys, other apps' files and shell profiles are never part of it. This Mac only.",
-             inputSchema: #"{"type": "object", "properties": {"settings": {"type": "object", "description": "Setting names and their new values, as settings_get lists them and settings_set takes them.", "minProperties": 1}, "layout": {"type": "object", "description": "set_layout's fields.", "properties": {"terminal_position": {"type": "string", "enum": ["bottom", "right", "left", "top"]}, "sidebar_side": {"type": "string", "enum": ["left", "right"]}, "terminal_tabs": {"type": "string", "enum": ["top", "left", "right"]}, "window_column": {"type": "string", "enum": ["shown", "hidden"]}, "window_column_folded": {"type": "boolean"}, "sidebar": {"type": "string", "enum": ["shown", "hidden"]}, "terminal_folded": {"type": "boolean"}, "project": {"type": "string", "description": "For sidebar and terminal_folded: an open project's folder or name. Default: your window's project, or the front one."}}, "additionalProperties": false}, "import": {"type": "object", "description": "An import, as apply_import takes it.", "properties": {"source": {"type": "string", "description": "A source's id (or name) from list_import_sources."}, "path": {"type": "string", "description": "Instead of source: a settings file in an open project, as preview_import reads it."}, "format": {"type": "string", "enum": ["vscode-settings", "vscode-keybindings"]}, "project": {"type": "string", "description": "With a relative path: an open project's folder or name."}, "items": {"type": "array", "items": {"type": "string"}, "maxItems": 300, "description": "Row ids from preview_import to tick. Default: the rows the preview ticks."}, "plan_id": {"type": "string", "description": "preview_import's plan_id: refused if the plan changed since."}}, "additionalProperties": false}, "reason": {"type": "string", "description": "Why, in a sentence; shown to the user as your words in the window."}, "request_id": {"type": "string", "description": "A pending request's id, to keep waiting for the user's answer."}}, "additionalProperties": false}"#,
+             inputSchema: #"{"type": "object", "properties": {"settings": {"type": "object", "description": "Setting names and their new values, as settings_get lists them and settings_set takes them.", "minProperties": 1}, "layout": {"type": "object", "description": "set_layout's fields.", "properties": {"terminal_position": {"type": "string", "enum": ["bottom", "right", "left", "top"]}, "sidebar_side": {"type": "string", "enum": ["left", "right"]}, "terminal_tabs": {"type": "string", "enum": ["top", "left", "right"]}, "window_column": {"type": "string", "enum": ["shown", "hidden"]}, "window_column_folded": {"type": "boolean"}, "window_column_side": {"type": "string", "enum": ["left", "right"]}, "sidebar": {"type": "string", "enum": ["shown", "hidden"]}, "terminal_folded": {"type": "boolean"}, "project": {"type": "string", "description": "For sidebar and terminal_folded: an open project's folder or name. Default: your window's project, or the front one."}}, "additionalProperties": false}, "import": {"type": "object", "description": "An import, as apply_import takes it.", "properties": {"source": {"type": "string", "description": "A source's id (or name) from list_import_sources."}, "path": {"type": "string", "description": "Instead of source: a settings file in an open project, as preview_import reads it."}, "format": {"type": "string", "enum": ["vscode-settings", "vscode-keybindings"]}, "project": {"type": "string", "description": "With a relative path: an open project's folder or name."}, "items": {"type": "array", "items": {"type": "string"}, "maxItems": 300, "description": "Row ids from preview_import to tick. Default: the rows the preview ticks."}, "plan_id": {"type": "string", "description": "preview_import's plan_id: refused if the plan changed since."}}, "additionalProperties": false}, "reason": {"type": "string", "description": "Why, in a sentence; shown to the user as your words in the window."}, "request_id": {"type": "string", "description": "A pending request's id, to keep waiting for the user's answer."}}, "additionalProperties": false}"#,
              readOnly: false, destructive: false, idempotent: true, timeout: 60, alwaysLoad: false),
     ]
 
