@@ -1398,8 +1398,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
+        // A new project starts here too: New Folder makes its folder, and it opens as one.
+        panel.canCreateDirectories = true
         panel.prompt = "Open"
-        panel.message = "Choose a project folder"
+        panel.message = "Choose a project folder, or make a new one with New Folder"
         let handler: (NSApplication.ModalResponse) -> Void = { [weak self] response in
             guard response == .OK, let url = panel.url else { return }
             self?.openProject(at: url, from: from)

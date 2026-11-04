@@ -24,7 +24,7 @@ extension SelfTest {
         defer { fresh.close() }
         fresh.list(projects: [])
         let none: [String] = returnKeyButtons(fresh.window)
-        check(none.isEmpty, "with nothing listed, Return on the Welcome window presses nothing: not Open…", "Return on \(none)")
+        check(none.isEmpty, "with nothing listed, Return on the Welcome window presses nothing: not Open Project…", "Return on \(none)")
         fresh.list(projects: [project])
         let one: [String] = returnKeyButtons(fresh.window)
         check(one == ["Open Project"], "once a project is listed, Return is Open Project's", "Return on \(one)")
@@ -138,7 +138,7 @@ extension SelfTest {
     }
 
     /// File › Open Project… (⌘O) in `controller`'s project window shows the Welcome window, not the folder panel, and a
-    /// project chosen there opens as from that window; ⌘O again on the Welcome window is Open…, the panel, over it. The
+    /// project chosen there opens as from that window; ⌘O again on the Welcome window is Open Project…, the panel, over it. The
     /// keys need the app in front: without it the menu's action runs as the key would, and the second half skips.
     static func openProjectChecks(_ app: AppDelegate, from controller: TerminalWindowController) async {
         guard let projectWindow = controller.window else { return check(false, "open project: the project window is there") }
@@ -155,7 +155,7 @@ extension SelfTest {
             return note("open project: ⌘O on the Welcome window skipped, \(notFrontmost(window))")
         }
         pressAppKey(window, "o", code: 31, flags: .command)
-        check(await wait(2) { window.attachedSheet is NSOpenPanel }, "⌘O again on the Welcome window is Open…: the folder panel, over it",
+        check(await wait(2) { window.attachedSheet is NSOpenPanel }, "⌘O again on the Welcome window is Open Project…: the folder panel, over it",
               String(describing: window.attachedSheet))
         check(app.welcomeOrigin === controller, "and the Welcome window keeps the window it was asked from")
         (window.attachedSheet as? NSOpenPanel)?.cancel(nil)

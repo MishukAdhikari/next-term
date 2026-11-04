@@ -41,9 +41,9 @@ final class SwitcherHintLine: NSTextField {
 
 // MARK: - the three ways in
 
-/// What a way in does when clicked, as the menu command does: Open… the folder panel (over the Welcome window when it
+/// What a way in does when clicked, as the menu command does: Open Project… the folder panel (over the Welcome window when it
 /// is in front), Connect to Server… the remote sheet, New Terminal a window with a shell. The key it shows is its menu
-/// command's (`SwitcherWayIn.command`): Open… is File › Open Project…'s key here.
+/// command's (`SwitcherWayIn.command`): Open Project… has File › Open Project…'s key here.
 extension SwitcherWayIn {
     var action: Selector {
         switch self {
@@ -209,7 +209,7 @@ final class WayInRow: WayInButton {
     var shownKey: String? { key.isHidden ? nil : key.stringValue }
 }
 
-/// Open…, Connect to Server… and New Terminal at the foot of the Welcome list's column, in that order, as three rows
+/// Open Project…, Connect to Server… and New Terminal at the foot of the Welcome list's column, in that order, as three rows
 /// alike. They sit outside the list, so ↑ and ↓ never land on one; their keys and Full Keyboard Access reach them.
 final class WaysInRows: NSStackView {
     let rows: [WayInRow] = SwitcherWayIn.allCases.map { (way: SwitcherWayIn) -> WayInRow in WayInRow(way) }
