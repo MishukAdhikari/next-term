@@ -172,13 +172,19 @@ extension SelfTest {
         // with none yet (a whole run's earlier tabs can have one) has nothing to say there, and shows one line.
         if let folders = tabsMenu.items.first(where: { $0.title == "Show Folders" }) {
             let known: Int = c.groups.firstIndex { !$0.focused.directory.isEmpty } ?? 0
+            let before: Bool = app.tabListShowsFolders
+            // As opening the menu does: performActionForItem goes by the item's isEnabled, which is what the menu's last
+            // update left: one made while the tabs were on top (the whole run's earlier parts send keys, and AppKit
+            // updates the menus to match their key equivalents) left it off, and the click would do nothing.
+            tabsMenu.update()
+            let itemOn: Bool = folders.isEnabled
             tabsMenu.performActionForItem(at: tabsMenu.index(of: folders))
             window.layoutIfNeeded()
             // What the toggle did, for a failure: the setting, the menu item, the list's feed and its rows.
             let toggledOn: Bool = app.tabListShowsFolders
-            let enabled: Bool = AppDelegate.shared.validateMenuItem(folders)
+            let enabled: Bool = itemOn && AppDelegate.shared.validateMenuItem(folders)
             let fedDetail: String = list.rows.filter { !$0.isPane }[safe: known]?.detail ?? "none"
-            let state = "folders \(toggledOn), item enabled \(enabled), list shows \(c.listShowsTabs), dragging \(list.isDragging), fed \(fedDetail)"
+            let state = "folders \(before) → \(toggledOn), item enabled \(enabled), list shows \(c.listShowsTabs), dragging \(list.isDragging), fed \(fedDetail)"
             let detail = list.tabRowView(at: known)?.shownDetail
             let tall: Bool = abs((list.tabRowView(at: known)?.frame.height ?? 0) - TabListLayout.twoLineHeight) < 1
             tabsMenu.performActionForItem(at: tabsMenu.index(of: folders))
