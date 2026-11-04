@@ -302,6 +302,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     /// The window's id in the index of every window (AppDelegate.windowIndex): its own, the same while it is open.
     let indexID: Int
     private static var lastIndexID = 0
+    /// When the window was made, on the uptime clock: no hint shows in a window's first minute (HintCenter).
+    let madeAt: TimeInterval = ProcessInfo.processInfo.systemUptime
     /// Where the project keeps its colour (ProjectColors.key): for a linked worktree its repository's main checkout, so
     /// every worktree window of a repository has one colour. nil with no project, or the home folder: no colour.
     private(set) var projectColorKey: String?

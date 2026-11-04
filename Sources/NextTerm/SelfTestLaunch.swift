@@ -110,7 +110,7 @@ extension SelfTest {
     }
 
     /// The General tab's rows, laid out as the other tabs' are: "At launch:" beside the radio buttons, "At quit:",
-    /// "Sessions:" and "Windows:" beside their checkboxes, "Projects:" beside its pop-up, "Privacy:" beside Full Disk Access…, in a 110 pt label column, so the controls start at one edge. The radio group is
+    /// "Sessions:" and "Windows:" beside their checkboxes, "Projects:" beside its pop-up, "Tips:" beside its checkbox, "Privacy:" beside Full Disk Access…, in a 110 pt label column, so the controls start at one edge. The radio group is
     /// named with the label's words, so VoiceOver does not read "At launch:" too. Measured as Auto Layout places each view,
     /// by its alignment rect: a label's frame is 2 pt wider on each side.
     private static func generalLayoutChecks() {
@@ -125,14 +125,16 @@ extension SelfTest {
         let windows: NSTextField = view.windowsLabel
         let projects: NSTextField = view.projectsLabel
         let privacy: NSTextField = view.privacyLabel
+        let tips: NSTextField = view.tipsLabel
         let targets: [String] = ["Ask Each Time", "This Window", "New Window", "New Tab in This Window", "As macOS Prefers"]
         let titles = launch.stringValue == "At launch:" && quit.stringValue == "At quit:" && sessions.stringValue == "Sessions:"
             && windows.stringValue == "Windows:" && view.projectColors.title == "Show project colors"
             && view.windowColumn.title == "Show the window column when two or more windows are open"
             && projects.stringValue == "Projects:" && view.projectsIn.itemTitles == targets
             && privacy.stringValue == "Privacy:" && view.fullDiskAccess.title == "Full Disk Access…"
+            && tips.stringValue == "Tips:" && view.tips.title == "Show tips for features you haven’t used" && view.resetTips.title == "Reset Tips"
         let widths: [CGFloat] = [placed(launch).width, placed(quit).width, placed(sessions).width, placed(windows).width,
-                                 placed(projects).width, placed(privacy).width]
+                                 placed(projects).width, placed(privacy).width, placed(tips).width]
         let column = widths.allSatisfy { abs($0 - 110) < 0.5 }
         let besideRadios = launch.superview != nil && launch.superview === view.opensGroup.superview
         let besideAsk = quit.superview != nil && quit.superview === view.askToResume.superview
@@ -140,14 +142,16 @@ extension SelfTest {
             && privacy.superview != nil && privacy.superview === view.fullDiskAccess.superview
             && windows.superview != nil && windows.superview === view.projectColors.superview
             && projects.superview != nil && projects.superview === view.projectsIn.superview
+            && tips.superview != nil && tips.superview === view.tips.superview
         let radiosX: CGFloat = placed(view.opensGroup).minX
         let askX: CGFloat = placed(view.askToResume).minX
         let scrollbackX: CGFloat = placed(view.keepScrollback).minX
         let colorsX: CGFloat = placed(view.projectColors).minX
         let columnX: CGFloat = placed(view.windowColumn).minX
+        let tipsX: CGFloat = placed(view.tips).minX
         let labelEnd: CGFloat = placed(launch).maxX
         let oneEdge = abs(radiosX - askX) < 0.5 && abs(radiosX - scrollbackX) < 0.5 && abs(radiosX - colorsX) < 0.5 && abs(radiosX - columnX) < 0.5
-            && radiosX > labelEnd
+            && abs(radiosX - tipsX) < 0.5 && radiosX > labelEnd
         let readOnce = !launch.isAccessibilityElement()
         // The notes' rows, and the window column's under Show project colors, start with an empty label in the column, which
         // VoiceOver never reaches.
@@ -157,10 +161,10 @@ extension SelfTest {
             if let field = next as? NSTextField, field.stringValue.isEmpty { blanks.append(field) }
             views.append(contentsOf: next.subviews)
         }
-        let silent = blanks.count == 8 && blanks.allSatisfy { !$0.isAccessibilityElement() }
+        let silent = blanks.count == 10 && blanks.allSatisfy { !$0.isAccessibilityElement() }
         let beside = besideRadios && besideAsk && besideScrollback
         check(titles && column && beside && oneEdge && readOnce && silent,
-              "Settings › General: At launch, At quit, Sessions, Windows, Projects and Privacy beside their controls, in a 110 pt label column as in the other tabs",
+              "Settings › General: At launch, At quit, Sessions, Windows, Projects, Tips and Privacy beside their controls, in a 110 pt label column as in the other tabs",
               "titles \(titles), widths \(widths), beside \(besideRadios) \(besideAsk) \(besideScrollback), radios at \(radiosX), checkboxes at \(askX) \(scrollbackX) \(colorsX) \(columnX), label ends at \(labelEnd), VoiceOver once \(readOnce), empty labels silent \(silent)")
         // The three choices, one under another at one edge, none over another.
         let radios: [NSRect] = view.opens.map(placed)

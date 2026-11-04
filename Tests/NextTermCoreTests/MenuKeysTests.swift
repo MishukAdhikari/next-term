@@ -72,7 +72,7 @@ struct MenuKeysTests {
 
     /// Tasks sits right after Agents, and Add Task… has ⌃⌘T in every set: no set gives that key to anything else.
     @Test func tasksComesAfterAgentsAndAddTaskIsControlCommandT() {
-        #expect(MenuBar.titles == ["File", "Edit", "View", "Agents", "Tasks", "Secrets", "Git", "Notifications", "Window"])
+        #expect(MenuBar.titles == ["File", "Edit", "View", "Agents", "Tasks", "Secrets", "Git", "Notifications", "Window", "Help"])
         let tasks = MenuBar.neighbours(of: "Tasks"), notifications = MenuBar.neighbours(of: "Notifications")
         #expect(tasks.before == "Agents" && tasks.after == "Secrets")
         #expect(notifications.before == "Git" && notifications.after == "Window" && MenuBar.neighbours(of: "File").before == nil)

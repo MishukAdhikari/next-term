@@ -132,6 +132,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         set {
             guard newValue != windowColumnExpanded else { return }
             UserDefaults.standard.set(newValue, forKey: WindowColumnSettings.expandedKey)
+            // Pinned or folded back, by any route: the column's basics are known.
+            MainActor.assumeIsolated { HintCenter.shared.retire(.columnBasics, reason: .actionPerformed) }
             windowColumns.settingsChanged()
             NotificationCenter.default.post(name: Self.windowColumnChanged, object: nil)
         }
@@ -145,6 +147,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
               let window = (NSApp.keyWindow?.windowController as? TerminalWindowController)?.window else { return }
         GitToast.show(WindowColumnSettings.unseenLine(shown: showsWindowColumn), in: window)
     }
+
+    /// Help › Show Tips Again, as Settings › General's Reset Tips: tips seen or closed show again, each on its trigger.
+    @objc func showTipsAgain(_ sender: Any?) { MainActor.assumeIsolated { HintCenter.shared.reset() } }
 
     /// View › Collapse Window Column, or Expand Window Column while it is folded: every window at once.
     @objc func toggleWindowColumnExpanded(_ sender: Any?) { windowColumnExpanded.toggle() }
@@ -510,6 +515,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     /// The window column to `side` in every window (View menu, set_layout): on the sidebar's side it follows the sidebar again.
     func setWindowColumnSide(_ side: SidebarSide) {
+        // Moved, by any route: the hint on moving it is never needed again.
+        if (side == .right) != windowColumnOnRight { MainActor.assumeIsolated { HintCenter.shared.retire(.columnSide, reason: .actionPerformed) } }
         windowColumnSide = side == sidebarSide ? nil : side
         controllers.forEach { $0.applyLayout() }
     }
@@ -663,6 +670,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         DispatchQueue.global(qos: .utility).async { ImagePaste.removeOld(in: ImagePaste.parent, now: Date()) }
         // The window column hidden before its time was kept: the two weeks before it is offered again start now.
         WindowColumnOffer.stampHidden(shown: showsWindowColumn, now: Date(), .standard)
+        // The first launch with hints: those whose feature is in use already retire, and the rest wait for their trigger.
+        let columnSideChosen: Bool = windowColumnSide != nil
+        let columnExpandedEver: Bool = UserDefaults.standard.object(forKey: WindowColumnSettings.expandedKey) != nil
+        MainActor.assumeIsolated { HintCenter.shared.seed(columnSideChosen: columnSideChosen, columnExpandedEver: columnExpandedEver) }
         // Skill updates, once a day, for Agents › Skills…' count.
         MainActor.assumeIsolated { SkillsUpdateCheck.start() }
         if let command { handle(command) }
@@ -1799,6 +1810,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// nothing beeps.
     @objc func goToNextAgentNeedingYou(_ sender: Any?) {
         refreshWindowIndex()
+        // Used, by the menu, its key or the Dock: the hint on it is never needed again.
+        MainActor.assumeIsolated { HintCenter.shared.retire(.nextAgent, reason: .actionPerformed) }
         // A panel of the window's own has the keyboard (Peek, ⌘P, a sheet): that window is still the one in front.
         let keyWindow: NSWindow? = NSApp.keyWindow?.windowController == nil ? NSApp.mainWindow : NSApp.keyWindow
         let key = keyWindow?.windowController as? TerminalWindowController
@@ -2564,6 +2577,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         item(window, "Welcome to Next Term", #selector(showWelcome(_:)), "", target: self)
         item(window, "Skills", #selector(showSkills(_:)), "", target: self)
         NSApp.windowsMenu = window
+
+        // macOS adds its search field to it. Show Tips Again is where Mac users look for tips they closed.
+        let help = submenu(main, "Help")
+        item(help, "Show Tips Again", #selector(showTipsAgain(_:)), "", target: self)
+        NSApp.helpMenu = help
 
         return main
     }

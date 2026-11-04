@@ -458,6 +458,8 @@ final class WindowColumnHost: NSView {
         column.covered = true
         updateAwake()
         if opening { onList = pointerOnList() }
+        // Opened on hover: resting on the column to see the windows is known.
+        if opening { HintCenter.shared.retire(.columnBasics, reason: .actionPerformed) }
         if opening {
             panel.update(list: column.list, change: .structure, current: column.current, expanded: true)
             panel.frame = NSRect(origin: .zero, size: listFrame().size)

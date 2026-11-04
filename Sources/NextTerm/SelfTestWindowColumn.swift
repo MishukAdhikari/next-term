@@ -26,7 +26,8 @@ extension SelfTest {
         let saved = (shown: defaults.object(forKey: WindowColumnSettings.shownKey), expanded: defaults.object(forKey: WindowColumnSettings.expandedKey),
                      colors: defaults.object(forKey: ProjectColors.key), next: defaults.object(forKey: ProjectColors.nextKey),
                      colorsShown: defaults.object(forKey: ProjectColors.shownKey), side: app.sidebarSide, sidebar: app.sidebarVisible,
-                     offers: WindowColumnOffer.keys.map { defaults.object(forKey: $0) })
+                     offers: WindowColumnOffer.keys.map { defaults.object(forKey: $0) },
+                     hints: HintRules.keys.map { defaults.object(forKey: $0) })
         let fm = FileManager.default
         let base = canonicalPath(NSTemporaryDirectory()) + "/nt-wincol-\(getpid())"
         try? fm.removeItem(atPath: base)
@@ -57,6 +58,8 @@ extension SelfTest {
             restoreDefault(saved.shown, WindowColumnSettings.shownKey)
             restoreDefault(saved.expanded, WindowColumnSettings.expandedKey)
             for (key, value) in zip(WindowColumnOffer.keys, saved.offers) { restoreDefault(value, key) }
+            // Moving the column, pinning it and resting on it retire their hints: as they were.
+            for (key, value) in zip(HintRules.keys, saved.hints) { restoreDefault(value, key) }
             restoreDefault(saved.colors, ProjectColors.key)
             restoreDefault(saved.next, ProjectColors.nextKey)
             restoreDefault(saved.colorsShown, ProjectColors.shownKey)
