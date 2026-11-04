@@ -108,6 +108,18 @@ final class GoToAnythingPanel: NSPanel, NSTableViewDataSource, NSTableViewDelega
         }
     }
 
+    #if DEBUG
+    /// For the self-test: the panel open now, the rows it shows, a search typed, and Return.
+    static var open: GoToAnythingPanel? { shown }
+    var shownTitles: [String] { items.map(\.title) }
+    var selectedRow: Int { table.selectedRow }
+    func type(_ text: String) {
+        search.stringValue = text
+        refilter()
+    }
+    func pressReturn() { choose(table.selectedRow) }
+    #endif
+
     // MARK: the panel
 
     private func build() {
