@@ -100,6 +100,35 @@ extension SelfTest {
                 try? NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
             }
         }
+        // Along the strip to a second tab cut short and back, as a hand reads the tabs: each shows its own name, the first
+        // again though the strip never said the pointer left it.
+        let second = "Another tab whose name is also far too long to fit in its place, so it is cut short too"
+        let other: TerminalTab = c.addTab(directory: NSTemporaryDirectory(), select: false)
+        other.userTitle = second
+        c.refresh()
+        await pause(0.3)
+        window.layoutIfNeeded()
+        let otherIndex: Int = c.groups.firstIndex { $0.contains(other) } ?? 0
+        var across = false, back = false
+        if let next = c.tabBar.screenFrame(at: otherIndex), let here = c.tabBar.screenFrame(at: index) {
+            func slide(to target: NSRect) async {
+                let screenHeight: CGFloat = NSScreen.screens.first?.frame.height ?? 0
+                let from = CGPoint(x: NSEvent.mouseLocation.x, y: screenHeight - target.midY)
+                for step in 1...10 {
+                    let at = CGPoint(x: from.x + (target.midX - from.x) * CGFloat(step) / 10, y: from.y)
+                    CGWarpMouseCursorPosition(at)
+                    CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: at, mouseButton: .left)?.post(tap: .cghidEventTap)
+                    await pause(0.04)
+                }
+            }
+            await slide(to: next)
+            across = await wait(3) { HoverTip.shared.shownText == second }
+            note("tab hover, across: " + c.tabBar.hoverState(at: otherIndex) + ", frame \(next), first \(here), pointer \(NSEvent.mouseLocation), index \(otherIndex) of \(c.groups.count)")
+            await slide(to: here)
+            back = await wait(3) { HoverTip.shared.shownText == long }
+        }
+        check(across && back, "tab hover: along the strip to another tab cut short shows its name, and back again the first's",
+              "across \(across), back \(back), showing “\(HoverTip.shared.shownText ?? "")”")
         // Off it, down into the terminal, a step at a time.
         for step in 1...10 {
             let at = CGPoint(x: point.x, y: point.y + CGFloat(step) * 14)
@@ -109,6 +138,7 @@ extension SelfTest {
         }
         let gone: Bool = await wait(HoverTip.shownFor + 1) { HoverTip.shared.shownText == nil }
         note("tab hover, after: " + c.tabBar.hoverState(at: index).components(separatedBy: ", label").first! + ", pointer \(NSEvent.mouseLocation)")
+        c.remove(other)
         check(shown && gone, "tab hover: a tab's name cut short shows whole under it while the pointer rests there, and goes once it leaves, in seconds at most",
               "shown \(shown) (“\(HoverTip.shared.shownText ?? "")”), gone \(gone)")
     }

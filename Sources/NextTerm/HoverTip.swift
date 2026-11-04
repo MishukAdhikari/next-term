@@ -22,6 +22,19 @@ final class HoverTip {
     /// "pointer left" to the tab, so the moves are how it knows.
     private weak var movesWindow: NSWindow?
     private var movesBefore = false
+    /// A tab whose name has had its showing (it ran its time, or a click, key or scroll put it away) while the pointer is
+    /// still on it: it shows again only once the pointer has been off it, as a macOS tooltip does.
+    /// The pointer leaving it (TabBarView follows it) frees it: `hide(from:)`.
+    private weak var spent: NSView?
+
+    /// The pointer is on `view`, come in or moving there: its name shows after `delay`, unless it shows or waits already,
+    /// or has had its showing. The title strip tells a tab neither that the pointer left nor, after that, that it came
+    /// back, so a tab calls this on every move, not only when the pointer comes in.
+    func rest(_ text: String, on view: NSView) {
+        guard owner !== view, spent !== view else { return }
+        unspend()
+        schedule(text, under: view)
+    }
 
     /// Shows `text` under `view` once the pointer has rested there `delay` seconds.
     func schedule(_ text: String, under view: NSView) {
@@ -37,6 +50,7 @@ final class HoverTip {
 
     /// Puts it away, or only if `view` is what it shows under.
     func hide(from view: NSView? = nil) {
+        if let view, view === spent { unspend() }
         if let view, view !== owner { return }
         pending?.cancel()
         pending = nil
@@ -47,6 +61,12 @@ final class HoverTip {
         movesWindow = nil
         if let panel, let parent = panel.parent { parent.removeChildWindow(panel) }
         panel?.orderOut(nil)
+    }
+
+    /// A click on `view`: its name goes, and stays away while the pointer stays there.
+    func clicked(_ view: NSView) {
+        hide()
+        spend(view)
     }
 
     /// What it shows now, for the self-test; nil while hidden.
@@ -70,8 +90,9 @@ final class HoverTip {
         movesWindow = window
         window.acceptsMouseMovedEvents = true
         let expiry = DispatchWorkItem { [weak self, weak view] in
-            guard let self, self.owner === view else { return }
+            guard let self, let view, self.owner === view else { return }
             self.hide()
+            self.spend(view)
         }
         pending = expiry
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.shownFor, execute: expiry)
@@ -89,10 +110,26 @@ final class HoverTip {
 
     /// A move that leaves the tab, or any click, scroll or key: it goes.
     private func check(_ event: NSEvent) {
-        guard event.type == .mouseMoved, let view = owner, let window = view.window else { return hide() }
-        let inside: Bool = view.bounds.contains(view.convert(window.mouseLocationOutsideOfEventStream, from: nil))
-        if !inside { hide() }
+        guard let view = owner else { return hide() }
+        guard event.type == .mouseMoved else {
+            hide()
+            return spend(view)
+        }
+        if !Self.pointer(on: view) { hide() }
     }
+
+    private static func pointer(on view: NSView) -> Bool {
+        guard let window = view.window else { return false }
+        return view.bounds.contains(view.convert(window.mouseLocationOutsideOfEventStream, from: nil))
+    }
+
+    /// `view`'s showing is over while the pointer stays on it: nothing more until the pointer has been off it.
+    private func spend(_ view: NSView) {
+        guard Self.pointer(on: view) else { return }
+        spent = view
+    }
+
+    private func unspend() { spent = nil }
 
     private func make() -> NSPanel {
         let panel = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)

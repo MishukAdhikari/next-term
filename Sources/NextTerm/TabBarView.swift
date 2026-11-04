@@ -469,6 +469,53 @@ final class TabBarView: NSView, ProjectGlowing {
         tabViews.firstIndex { $0 === view }
     }
 
+    // MARK: the pointer in the title strip
+
+    /// The window's title-bar band tells the views under it neither that the pointer came nor that it left, nor sends
+    /// its moves, so a tab there only hears the pointer come up from below. From then on the bar looks where the pointer
+    /// is, twenty times a second, until it is off the bar: each tab it rests on lights up and shows its whole name when
+    /// cut short. Nothing runs while the pointer is elsewhere.
+    private var pointerWatch: Timer?
+    private weak var pointed: TabItemView?
+    static let pointerLooks: TimeInterval = 0.05
+
+    fileprivate func pointerCame(to view: TabItemView) {
+        point(at: view)
+        guard pointerWatch == nil else { return }
+        let timer = Timer(timeInterval: Self.pointerLooks, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.followPointer() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        pointerWatch = timer
+    }
+
+    /// The tab under the pointer now; off the bar, or the window gone or behind another app's, none, and the watch ends.
+    private func followPointer() {
+        guard let window, window.isVisible else { return pointerGone() }
+        let at: NSPoint = convert(window.mouseLocationOutsideOfEventStream, from: nil)
+        // On the bar, and on this window, not another one over it.
+        guard bounds.contains(at), NSWindow.windowNumber(at: NSEvent.mouseLocation, belowWindowWithWindowNumber: 0) == window.windowNumber
+        else { return pointerGone() }
+        point(at: tabViews.first { !$0.isHidden && $0.convert($0.bounds, to: self).contains(at) })
+    }
+
+    private func point(at view: TabItemView?) {
+        if pointed !== view { pointed?.pointerLeft() }
+        pointed = view
+        view?.pointerRests()
+    }
+
+    private func pointerGone() {
+        point(at: nil)
+        pointerWatch?.invalidate()
+        pointerWatch = nil
+    }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        super.viewWillMove(toWindow: newWindow)
+        if newWindow == nil { pointerGone() }
+    }
+
     fileprivate func itemMouseDown(_ view: TabItemView, event: NSEvent) {
         guard let index = index(of: view) else { return }
         if event.clickCount == 2 {
@@ -788,24 +835,39 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         trackingAreas.forEach(removeTrackingArea)
-        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self))
+        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .mouseMoved, .activeAlways, .inVisibleRect], owner: self))
     }
 
-    override func mouseEntered(with event: NSEvent) {
-        hovering = true
-        // Its name cut short (or a shorter one in its place): the whole name under it, as the title strip shows no tooltip.
-        if let title = item?.title, isInTitleStrip, isNameCut(title) {
-            HoverTip.shared.schedule(AgentTitle.withoutSpinnerFrame(title), under: self)
-        }
+    override func mouseEntered(with event: NSEvent) { came() }
+    override func mouseMoved(with event: NSEvent) { came() }
+
+    /// The pointer on it: the bar follows it from here (TabBarView.pointerCame), as the title strip says nothing more.
+    private func came() {
+        if let bar { bar.pointerCame(to: self) } else { pointerRests() }
     }
 
-    override func mouseExited(with event: NSEvent) {
+    /// The pointer rests on it, come in or moving there.
+    fileprivate func pointerRests() {
+        if !hovering { hovering = true }
+        restTip()
+    }
+
+    /// The pointer went to another tab or off the bar.
+    fileprivate func pointerLeft() {
         hovering = false
         HoverTip.shared.hide(from: self)
     }
 
+    /// Its name cut short (or a shorter one in its place): the whole name under it, as the title strip shows no tooltip.
+    private func restTip() {
+        guard let title = item?.title, isInTitleStrip, isNameCut(title) else { return }
+        HoverTip.shared.rest(AgentTitle.withoutSpinnerFrame(title), on: self)
+    }
+
+    override func mouseExited(with event: NSEvent) { pointerLeft() }
+
     override func mouseDown(with event: NSEvent) {
-        HoverTip.shared.hide(from: self)
+        HoverTip.shared.clicked(self)
         bar?.itemMouseDown(self, event: event)
     }
 
