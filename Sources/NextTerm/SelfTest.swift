@@ -918,7 +918,8 @@ enum SelfTest {
 
         let lightsInset = c.tabBar.leadingInset
         c.toggleProjectSidebar(nil)
-        check(!c.isSidebarVisible && c.tabBar.leadingInset == 78, "⌘B hides the sidebar and the tabs move clear of the traffic lights")
+        check(!c.isSidebarVisible && clearsLights(c.tabBar, c), "⌘B hides the sidebar and the tabs move clear of the traffic lights",
+              lightsDetail(c.tabBar, c))
         check(c.tabBar.showsSidebarButton != c.editorArea.tabBar.showsSidebarButton, "the bar at the top-left offers a button to show it again")
         await screenshot(c, suffix: "-sidebar-hidden")
         c.toggleProjectSidebar(nil)
@@ -4055,6 +4056,22 @@ enum SelfTest {
         }
     }
 
+    /// A bar at the window's top-left corner clear of the traffic lights: it starts where they end (16 points past the
+    /// zoom button, measured, as the lights' place changes with the macOS release; WindowColumnRail.lightsEnd), less the
+    /// window column on the left that sits before it, and in the window that is past the zoom button.
+    static func clearsLights(_ bar: TabBarView, _ c: TerminalWindowController) -> Bool {
+        let expected: CGFloat = max(8, c.lightsEnd - c.windowColumnUnderLights)
+        let start: CGFloat = bar.convert(NSPoint(x: bar.leadingInset, y: 0), to: nil).x
+        let zoom: CGFloat = c.window?.standardWindowButton(.zoomButton)?.frame.maxX ?? 0
+        return bar.leadingInset == expected && start >= zoom + 16 - 0.5
+    }
+
+    static func lightsDetail(_ bar: TabBarView, _ c: TerminalWindowController) -> String {
+        let start: CGFloat = bar.convert(NSPoint(x: bar.leadingInset, y: 0), to: nil).x
+        let zoom: CGFloat = c.window?.standardWindowButton(.zoomButton)?.frame.maxX ?? 0
+        return "inset \(bar.leadingInset), starts at \(start) in the window, lights end \(c.lightsEnd) (zoom \(zoom)), column \(c.windowColumnUnderLights)"
+    }
+
     // MARK: editor
 
     private static func editorChecks(_ c: TerminalWindowController, proj: URL, tab: TerminalTab) async {
@@ -4581,7 +4598,8 @@ enum SelfTest {
         let sidebarFrame = c.sidebar.convert(c.sidebar.bounds, to: nil), editorFrame = area.convert(area.bounds, to: nil)
         check(sidebarFrame.minX >= editorFrame.maxX - 1 && abs(sidebarFrame.width - app.sidebarWidth) < 2,
               "the sidebar can go on the right, at its width", "sidebar \(sidebarFrame.integral)")
-        check(area.tabBar.leadingInset == 78 && c.sidebar.headerInset == 8, "with the sidebar on the right, the editor's tabs clear the traffic lights")
+        check(clearsLights(area.tabBar, c) && c.sidebar.headerInset == 8, "with the sidebar on the right, the editor's tabs clear the traffic lights",
+              lightsDetail(area.tabBar, c) + ", sidebar header \(c.sidebar.headerInset)")
         await screenshot(c, suffix: "-sidebar-right")
         app.terminalPosition = savedPosition
         app.sidebarSide = savedSide
