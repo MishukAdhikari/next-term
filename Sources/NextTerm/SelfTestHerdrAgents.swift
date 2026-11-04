@@ -212,10 +212,20 @@ extension SelfTest {
 
         // The queue: Needs You first, a digit each, the time it has waited. ⇧⌘U and the Dock menu find the same agent in the
         // index of every window, as one of its own.
+        // One queue: herdr's two agents, and every agent tab of the self-test's own still running (the IDE links' stand-in
+        // Claude in the launch run), each an item of its own.
         let menu = HerdrAgentMenu.menu()
         let titles = agentItems(menu).map(\.title)
-        check(titles.first?.hasPrefix("codex — Needs your decision") == true && titles.count == 2 && agentItems(menu).first?.keyEquivalent == "1",
-              "herdr agents: Go to Agent… lists the agents, the one needing you first, with digits", titles.joined(separator: "; "))
+        let queued = HerdrAgentMenu.queue().items
+        let herdrNames = queued.compactMap { item -> String? in
+            if case .herdr(tab: tab.id.uuidString, pane: _) = item.target { return item.name }
+            return nil
+        }
+        let digits = agentItems(menu).prefix(9).map(\.keyEquivalent)
+        check(titles.first?.hasPrefix("codex — Needs your decision") == true && herdrNames.sorted() == ["Claude: auth", "codex"]
+              && titles.count == queued.count && digits == (0..<digits.count).map { String($0 + 1) },
+              "herdr agents: Go to Agent… lists the agents, the one needing you first, with digits",
+              titles.joined(separator: "; ") + " (herdr's: \(herdrNames))")
         check(menu.items.contains { $0.isAlternate && $0.title.hasPrefix("Peek at codex") }, "herdr agents: ⌥ turns each item into Peek")
         let waited = HerdrAgentMenu.queue().needsYou.first
         check(waited?.menuTitle(now: (waited?.needsSince ?? 0) + 70).hasSuffix("waiting 1 min") == true,
