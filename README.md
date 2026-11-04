@@ -277,6 +277,13 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   so a change an agent made meanwhile is never overwritten.
 - **File operations.** Rename (Return), drag to move (Option to copy), New File / New Folder, Move to Trash,
   all undoable with ⌘Z. Drag a file onto a terminal to type its path.
+- **Go to Anything (⌘K).** Wherever a terminal doesn't have the keyboard, ⌘K lists every terminal tab, this
+  window's first, then every other window's and the projects you used before, each with its window, what runs and
+  its agent's mark. Type a few letters of a tab's name, its folder or its program and press Return: its window comes
+  forward and the tab has the keyboard. Clear Terminal is the first row, so ⌘K and Return still clears with the
+  editor in front, and in a terminal ⌘K clears as always. The second time you clear with ⌘K, Next Term asks once
+  whether ⌘K should open Go to Anything in a terminal too (Clear Terminal then moves to ⇧⌘K); Settings › Keyboard
+  Shortcuts changes either key.
 - **Go to File (⌘P).** Type a few letters of a file's name or path and the list follows every keystroke:
   `usrctl` finds `UserController.php`; a whole file name, the start of a word and runs of letters rank
   first, and files you opened lately come first. `name:42` opens it at line 42. Instant on large
@@ -408,6 +415,7 @@ One window per project, and a few keys to move between them:
 | New remote tab (on one of your servers) | ⌥⌘T |
 | Switch to or open a project (the Welcome window: ↩ go there, ⌘↩ new window, ⌘1–⌘9 the first nine; ⌘O again there for any folder) / Close project | ⌘O / File menu |
 | Go to File (`name` or `name:line`) | ⌘P |
+| Go to Anything: any tab or project by name (outside a terminal) | ⌘K |
 | Go to the next agent needing you, in any window (again for the one after) | ⇧⌘U |
 | Resume an agent session (↩ resume or go to its tab, ⌘↩ fork) | ⌥⌘O |
 | Close tab (or the focused pane in a split tab) | ⌘W |
@@ -427,7 +435,7 @@ One window per project, and a few keys to move between them:
 | Use the selection for Find | ⌘E |
 | Replace in the open file | ⌥⌘F |
 | Find in Files / Replace in Files | ⌘⇧F / ⌘⇧R |
-| Clear (in a Markdown file, ⌘K makes a link) | ⌘K |
+| Clear (in a terminal; in a Markdown file ⌘K makes a link, elsewhere it opens Go to Anything) | ⌘K |
 | Take the suggestion while typing / one word of it / hide it | → (or End, ⌃E, ⌃F) / ⌥→ / Esc |
 | Forget the suggestion showing (never suggested again) | ⇧⌘⌫ |
 | Font size | ⌘+ / ⌘- / ⌘0 |
