@@ -16,7 +16,7 @@ public enum MenuKeys {
             "showSettings:": cmd(","), "hide:": cmd("h"), "hideOtherApplications:": optCmd("h"), "terminate:": cmd("q"),
             // File
             "newTab:": cmd("t"), "newWindow:": cmd("n"), "newRemoteTab:": optCmd("t"), "reopenClosedTab:": shiftCmd("t"),
-            "openProjectPanel:": cmd("o"), "goToFile:": cmd("p"), "saveDocument:": cmd("s"), "saveAllDocuments:": optCmd("s"),
+            "openProjectPanel:": cmd("o"), "goToFile:": cmd("p"), "goToAnything:": cmd("k"), "saveDocument:": cmd("s"), "saveAllDocuments:": optCmd("s"),
             "splitRight:": cmd("d"), "splitDown:": shiftCmd("d"), "renameTab:": optCmd("r"), "closeTab:": cmd("w"),
             "closeWindow:": shiftCmd("w"),
             // Edit

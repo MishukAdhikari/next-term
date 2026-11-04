@@ -2713,6 +2713,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         if KeyboardShortcuts.shared.preset.clearsOnlyInTerminal && isEditorFocused { return }
         guard let tab = activeTab else { return }
         clear(tab)
+        // The second ⌘K in a terminal asks once whether ⌘K should open Go to Anything there too (plan 034).
+        if !isEditorFocused { ClearKeyChoice.noteClear(in: self) }
     }
 
     /// Wipes a terminal's screen and scrollback locally; at a prompt, asks the shell to redraw it. The tab is the pane
