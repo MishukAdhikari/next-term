@@ -14,9 +14,10 @@ import Testing
     /// commands that have no key.
     static let menuDefaults: [String: KeyChord?] = {
         var map: [String: KeyChord?] = MenuKeys.defaults.mapValues { $0 }
-        for id in ["closeProject:", "copyPathWithLine:", "revealInSidebar:", "toggleSoftWrap:", "toggleSidebarSide:", "equalizePanes:",
+        for id in ["closeProject:", "copyPathWithLine:", "revealInSidebar:", "toggleSoftWrap:", "equalizePanes:",
                    "closeOtherTabs:", "closeTabsToTheRight:", "revealInFinder:", "copyFilePath:", "copyRelativeFilePath:",
-                   "moveTabToNewWindow:", "mergeAllWindows:", "toggleTabBar:", "toggleWindowColumnSide:"] {
+                   "moveTabToNewWindow:", "mergeAllWindows:", "toggleTabBar:", "chooseSidebarSide:left", "chooseSidebarSide:right",
+                   "chooseWindowColumnSide:left", "chooseWindowColumnSide:right"] {
             map[id] = .some(nil)
         }
         return map

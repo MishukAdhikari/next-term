@@ -162,7 +162,7 @@ extension SelfTest {
         // The switch's memory, and its menu item.
         editor.toggleMarkdownPreview()
         check(!editor.showsLivePreview && app.markdownViewChoices.choice(for: doc.path) == false && !null(0),
-              "markdown: View › Markdown Live Preview shows the file as source, remembered for it")
+              "markdown: View › Editor › Markdown Live Preview shows the file as source, remembered for it")
         let item = NSMenuItem(title: "", action: #selector(TerminalWindowController.toggleMarkdownPreview(_:)), keyEquivalent: "")
         check(c.validateMenuItem(item) && item.state == .off && item.title == "Markdown Live Preview", "markdown: its menu item is on, unchecked")
         c.toggleMarkdownPreview(nil)

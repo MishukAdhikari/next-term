@@ -77,7 +77,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// Where the terminal sits relative to the editor.
     typealias TerminalPosition = NextTermCore.TerminalPosition
 
-    enum SidebarSide: String { case left, right }
+    enum SidebarSide: String {
+        case left, right
+        /// As View's position menus list it.
+        var title: String { self == .left ? "Left" : "Right" }
+    }
 
     var terminalPosition: TerminalPosition {
         get { TerminalPosition(stored: UserDefaults.standard.string(forKey: "terminalPosition")) }
@@ -402,12 +406,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         set { UserDefaults.standard.set(newValue, forKey: "softWrap") }
     }
 
-    /// View › Suggestions While Typing: on or off for every tab, as Settings › Terminal › While typing sets it (stored).
+    /// View › Privacy › Suggestions While Typing: on or off for every tab, as Settings › Terminal › While typing sets it (stored).
     @objc func toggleSuggestionsWhileTyping(_ sender: Any?) {
         GhostPreferences.set(!GhostPreferences.isOn)
     }
 
-    /// View › Private Mode (suggestions while typing): none show and nothing is recorded, for every tab, until it is
+    /// View › Privacy › Private Mode (suggestions while typing): none show and nothing is recorded, for every tab, until it is
     /// turned off or Next Term quits.
     @objc func togglePrivateMode(_ sender: Any?) {
         GhostPreferences.setPrivateMode(!GhostPreferences.privateMode)
@@ -428,7 +432,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
     }
 
-    /// Markdown files open in Live Preview (on unless turned off in Settings › Editor). A file's own choice from View ›
+    /// Markdown files open in Live Preview (on unless turned off in Settings › Editor). A file's own choice from View › Editor ›
     /// Markdown Live Preview wins (markdownViewChoices); changing this, every open file without one follows.
     var markdownLivePreview: Bool {
         get { UserDefaults.standard.object(forKey: "markdownLivePreview") as? Bool ?? true }
@@ -477,6 +481,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         controllers.forEach { $0.editorArea.applyBlame(announce: announce && $0.window?.isKeyWindow == true) }
     }
 
+    /// View › Project Sidebar Position › Left or Right.
+    @objc func chooseSidebarSide(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let side = SidebarSide(rawValue: raw), side != sidebarSide else { return }
+        toggleSidebarSide(sender)
+    }
+
+    /// View › Window Column Position › Left or Right: on the sidebar's side, it follows the sidebar again.
+    @objc func chooseWindowColumnSide(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let side = SidebarSide(rawValue: raw) else { return }
+        setWindowColumnSide(side)
+    }
+
     @objc func toggleSidebarSide(_ sender: Any?) {
         sidebarSide = sidebarSide == .left ? .right : .left
         controllers.forEach { $0.applyLayout() }
@@ -491,12 +507,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     /// Where the window column is: its own side, else the project sidebar's.
     var windowColumnOnRight: Bool { (windowColumnSide ?? sidebarSide) == .right }
-
-    /// View › Window Column on the Right: the column moves to the other edge. On the sidebar's side again, it follows the
-    /// sidebar again.
-    @objc func toggleWindowColumnSide(_ sender: Any?) {
-        setWindowColumnSide(windowColumnOnRight ? .left : .right)
-    }
 
     /// The window column to `side` in every window (View menu, set_layout): on the sidebar's side it follows the sidebar again.
     func setWindowColumnSide(_ side: SidebarSide) {
@@ -1673,8 +1683,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         if item.action == #selector(setTerminalPosition(_:)) {
             item.state = item.representedObject as? String == terminalPosition.rawValue ? .on : .off
         }
-        if item.action == #selector(toggleSidebarSide(_:)) { item.state = sidebarSide == .right ? .on : .off }
-        if item.action == #selector(toggleWindowColumnSide(_:)) { item.state = windowColumnOnRight ? .on : .off }
+        if item.action == #selector(chooseSidebarSide(_:)) { item.state = item.representedObject as? String == sidebarSide.rawValue ? .on : .off }
+        if item.action == #selector(chooseWindowColumnSide(_:)) {
+            item.state = item.representedObject as? String == (windowColumnOnRight ? "right" : "left") ? .on : .off
+        }
         if item.action == #selector(setTerminalTabs(_:)) {
             item.state = item.representedObject as? String == terminalTabs.rawValue ? .on : .off
         }
@@ -2394,6 +2406,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
         let view = submenu(main, "View")
         view.delegate = ProjectTabMenuTitles.shared
+        // What shows: the sidebar, the editor or terminal in front, the terminal folded, the window column. Then where each
+        // goes, then a submenu per kind of setting, so the menu reads at a glance. Keys work in submenus as anywhere.
         item(view, "Hide Project Sidebar", #selector(TerminalWindowController.toggleProjectSidebar(_:)), "b") // title follows the state
         item(view, "Focus Editor", #selector(TerminalWindowController.toggleEditorFocus(_:)), "`", [.control]) // title follows the focus
         item(view, "Collapse Terminal", #selector(TerminalWindowController.toggleTerminalCollapsed(_:)), "j") // title follows the state
@@ -2401,8 +2415,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // ⌃⇧⌘S hides it and brings it back, ⌃⌘S folds it.
         item(view, "Hide Window Column", #selector(toggleWindowColumn(_:)), "s", [.command, .shift, .control], target: self) // title follows the setting
         item(view, "Collapse Window Column", #selector(toggleWindowColumnExpanded(_:)), "s", [.command, .control], target: self) // and the fold
-        item(view, "Show File in Project Sidebar", #selector(TerminalWindowController.revealInSidebar(_:)), "")
         view.addItem(.separator())
+        let sidebarSides = NSMenu(title: "Project Sidebar Position")
+        let columnSides = NSMenu(title: "Window Column Position")
+        for side in [SidebarSide.left, .right] {
+            item(sidebarSides, side.title, #selector(chooseSidebarSide(_:)), "", target: self).representedObject = side.rawValue
+            item(columnSides, side.title, #selector(chooseWindowColumnSide(_:)), "", target: self).representedObject = side.rawValue
+        }
+        view.addItem(withTitle: "Project Sidebar Position", action: nil, keyEquivalent: "").submenu = sidebarSides
+        view.addItem(withTitle: "Window Column Position", action: nil, keyEquivalent: "").submenu = columnSides
         let positions = NSMenu(title: "Terminal Position")
         for position in TerminalPosition.allCases {
             let entry = item(positions, position.title, #selector(setTerminalPosition(_:)), "", target: self)
@@ -2410,21 +2431,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
         view.addItem(withTitle: "Terminal Position", action: nil, keyEquivalent: "").submenu = positions
         view.addItem(withTitle: "Terminal Tabs", action: nil, keyEquivalent: "").submenu = TabListMenus.view(target: self)
-        item(view, "Show Changes", #selector(TerminalWindowController.showChanges(_:)), "g", [.command, .option])
-        // ⌃⌘ as Git Diff's ⌃⌘G: U for Unified. The blame toggles are A for Annotate (Xcode's Authors key) and L for Line.
-        item(view, "Unified Diffs", #selector(DiffLayoutMenu.toggleUnifiedDiffs(_:)), "u", [.command, .control], target: DiffLayoutMenu.shared) // checked: one column
-        item(view, "Annotate with Git Blame", #selector(toggleBlameAnnotations(_:)), "a", [.command, .shift, .control], target: self)
-        item(view, "Current Line Blame", #selector(toggleCurrentLineBlame(_:)), "l", [.command, .shift, .control], target: self)
         view.addItem(.separator())
+        item(view, "Show Changes", #selector(TerminalWindowController.showChanges(_:)), "g", [.command, .option])
+        // Not "Git": the menu bar has a Git menu already.
+        let gitView = NSMenu(title: "Diffs & Blame")
+        // ⌃⌘ as Git Diff's ⌃⌘G: U for Unified. The blame toggles are A for Annotate (Xcode's Authors key) and L for Line.
+        item(gitView, "Unified Diffs", #selector(DiffLayoutMenu.toggleUnifiedDiffs(_:)), "u", [.command, .control], target: DiffLayoutMenu.shared) // checked: one column
+        item(gitView, "Annotate with Git Blame", #selector(toggleBlameAnnotations(_:)), "a", [.command, .shift, .control], target: self)
+        item(gitView, "Current Line Blame", #selector(toggleCurrentLineBlame(_:)), "l", [.command, .shift, .control], target: self)
+        view.addItem(withTitle: "Diffs & Blame", action: nil, keyEquivalent: "").submenu = gitView
+        let editorView = NSMenu(title: "Editor")
         // ⌥⌘W, as TextMate has it: VS Code's ⌥Z types a letter on some keyboards (ż in Polish), so it can't be a default here.
-        item(view, "Soft Wrap", #selector(toggleSoftWrap(_:)), "w", [.command, .option], target: self)
-        item(view, "Hide .env Values", #selector(TerminalWindowController.toggleEnvValues(_:)), "") // checked: the file in front
+        item(editorView, "Soft Wrap", #selector(toggleSoftWrap(_:)), "w", [.command, .option], target: self)
         // ⇧⌘V, the Markdown preview's key in VS Code. Checked for the file in front; off for any other file.
-        item(view, "Markdown Live Preview", #selector(TerminalWindowController.toggleMarkdownPreview(_:)), "v", [.command, .shift])
-        item(view, "Suggestions While Typing", #selector(toggleSuggestionsWhileTyping(_:)), "", target: self).toolTip =
+        item(editorView, "Markdown Live Preview", #selector(TerminalWindowController.toggleMarkdownPreview(_:)), "v", [.command, .shift])
+        item(editorView, "Hide .env Values", #selector(TerminalWindowController.toggleEnvValues(_:)), "") // checked: the file in front
+        item(editorView, "Show File in Project Sidebar", #selector(TerminalWindowController.revealInSidebar(_:)), "")
+        view.addItem(withTitle: "Editor", action: nil, keyEquivalent: "").submenu = editorView
+        let privacy = NSMenu(title: "Privacy")
+        item(privacy, "Suggestions While Typing", #selector(toggleSuggestionsWhileTyping(_:)), "", target: self).toolTip =
             "A command you ran before, dimmed after the cursor at a zsh prompt. Off, none shows and no command is recorded."
-        item(view, "Private Mode", #selector(togglePrivateMode(_:)), "", target: self).toolTip =
+        item(privacy, "Private Mode", #selector(togglePrivateMode(_:)), "", target: self).toolTip =
             "No suggestions while typing, and no command of yours recorded, until you turn it off or quit Next Term."
+        view.addItem(withTitle: "Privacy", action: nil, keyEquivalent: "").submenu = privacy
+        view.addItem(.separator())
         let heights = NSMenu(title: "Line Height")
         for value in Self.lineHeights {
             let title = ["1.0", "1.15", "1.25", "1.35 (default)", "1.5", "1.75", "2.0"][Self.lineHeights.firstIndex(of: value) ?? 0]
@@ -2440,8 +2470,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         view.addItem(withTitle: "Agent Spinner", action: nil, keyEquivalent: "").submenu = spinner
         // The window's colour along its top row; also a right-click there, and Show Project Colors in Settings › General.
         view.addItem(withTitle: ProjectColorMenu.title, action: nil, keyEquivalent: "").submenu = ProjectColorMenu.submenu()
-        item(view, "Project Sidebar on the Right", #selector(toggleSidebarSide(_:)), "", target: self)
-        item(view, "Window Column on the Right", #selector(toggleWindowColumnSide(_:)), "", target: self)
         view.addItem(.separator())
         item(view, "Bigger", #selector(increaseFontSize(_:)), "+", target: self)
         let biggerAlt = item(view, "Bigger", #selector(increaseFontSize(_:)), "=", target: self)

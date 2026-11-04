@@ -933,13 +933,6 @@ extension SelfTest {
 
     // MARK: helpers
 
-    /// Every item of the View menu, its submenus' too.
-    static func viewMenuItems() -> [NSMenuItem] {
-        guard let view = NSApp.mainMenu?.items.first(where: { $0.title == "View" })?.submenu else { return [] }
-        func all(_ menu: NSMenu) -> [NSMenuItem] { menu.items.flatMap { [$0] + ($0.submenu.map(all) ?? []) } }
-        return all(view)
-    }
-
     static func defaultsValue(_ key: String) -> Bool? { UserDefaults.standard.object(forKey: key) as? Bool }
 
     /// A right-click at `point` in `view`'s own coordinates.

@@ -125,11 +125,11 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   agent reading the tab never take it for typed text, and before it shows it is checked: a `cd` to a folder that
   is gone, a missing file or program, or a command that never ran well is not suggested. It comes from Next
   Term's own record of the commands you ran in its zsh tabs, on this Mac: never an agent's, never a line with a
-  secret, and nothing while View › Private Mode is on; until that record has your commands, zsh's own history
-  in the shell fills in. Right after a command, the empty prompt shows the one that usually follows it, when that
-  is clear. Where zsh-autosuggestions (or Atuin through it) shows its own, Next Term shows none and asks once
-  which you want, without touching your `.zshrc`. View › Suggestions While Typing turns it off or on, and
-  Settings › Terminal › While typing does too, says how many commands are kept and clears them.
+  secret, and nothing while View › Privacy › Private Mode is on; until that record has your commands, zsh's own
+  history in the shell fills in. Right after a command, the empty prompt shows the one that usually follows it,
+  when that is clear. Where zsh-autosuggestions (or Atuin through it) shows its own, Next Term shows none and
+  asks once which you want, without touching your `.zshrc`. View › Privacy › Suggestions While Typing turns it
+  off or on, and Settings › Terminal › While typing does too, says how many commands are kept and clears them.
 - **Remote tabs on your servers.** File › New Remote Tab… (⌥⌘T) opens a tab on your VPS over your own ssh
   and `~/.ssh/config`. With tmux or herdr on the server, agents keep working while the Mac sleeps or is off,
   and the tab reattaches when it reconnects. Host keys are never accepted silently, nothing is installed on
@@ -256,9 +256,9 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
 - **Git Log.** The commit history as a graph in an editor tab (⌥⌘L): lanes per line of history, branch
   and tag badges, filters by branch, author, date, paths and message or hash, and each commit's changed
   files, with a double-click for a file's diff in that commit. It follows the repository as agents commit.
-- **Git blame.** View › Annotate with Git Blame shows who last changed each line, how long ago and the
-  commit, beside the line numbers; click to see that commit in the Git Log. View › Current Line Blame
-  adds a note after the line with the caret.
+- **Git blame.** View › Diffs & Blame › Annotate with Git Blame shows who last changed each line, how long ago
+  and the commit, beside the line numbers; click to see that commit in the Git Log. View › Diffs & Blame ›
+  Current Line Blame adds a note after the line with the caret.
 - **Changes in the gutter.** A bar beside the line numbers marks the lines added (green) or changed (blue)
   since the last commit, and a red wedge where lines were deleted, as you type or an agent writes. Click a
   mark for the file's changes side by side.
@@ -270,11 +270,11 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   tree with their +/− on the left, the selected file's diff on the right, or every file's on one page with
   long unchanged runs folded. Compare all the branch's changes since it left main, what isn't committed
   yet, or one commit. A click on the sidebar header's +/− opens it too.
-- **Changes side by side or unified (⌥⌘G).** A file's diff in the Git Diff tab: the old version beside the
-  new, rows aligned, or one column top to bottom (View › Unified Diffs); the changed words marked,
-  syntax-coloured. All changes, unstaged or staged; step through them and stage, unstage or revert one
-  hunk at a time (⌘Z undoes a revert). Each action first checks the file is still what the diff showed,
-  so a change an agent made meanwhile is never overwritten.
+- **Changes side by side or unified (⌥⌘G).** A file's diff in the Git Diff tab: the old version beside the new,
+  rows aligned, or one column top to bottom (View › Diffs & Blame › Unified Diffs); the changed words marked,
+  syntax-coloured. All changes, unstaged or staged; step through them and stage, unstage or revert one hunk at a
+  time (⌘Z undoes a revert). Each action first checks the file is still what the diff showed, so a change an
+  agent made meanwhile is never overwritten.
 - **File operations.** Rename (Return), drag to move (Option to copy), New File / New Folder, Move to Trash,
   all undoable with ⌘Z. Drag a file onto a terminal to type its path.
 - **Go to File (⌘P).** Type a few letters of a file's name or path and the list follows every keystroke:
@@ -493,9 +493,9 @@ Next Term's menu.
   Spotlight leaves out): each line, when it last ran, how often, its exit, its folder and repository, and the
   commands that followed it. A command Next Term or an agent ran is never recorded, nor a line that holds a
   secret (one of your stored keys, a token or a password), starts with a space, or spans lines, nor anything
-  while suggestions are off or View › Private Mode is on (which lasts until you turn it off or quit). zsh's
-  history file is never read or changed. Edit › Forget This Suggestion removes one, and Settings › Terminal ›
-  While typing › Clear History… removes them all. Agents never see Next Term's suggestion.
+  while suggestions are off or View › Privacy › Private Mode is on (which lasts until you turn it off or quit).
+  zsh's history file is never read or changed. Edit › Forget This Suggestion removes one, and Settings ›
+  Terminal › While typing › Clear History… removes them all. Agents never see Next Term's suggestion.
 - **Secrets** (the Secrets menu, and Settings › Secrets) keeps API and MCP keys in a vault on your Mac, each
   value sealed on disk, with the key that opens them guarded by the Secure Enclave (on a Mac without one, by
   the login keychain, which Settings calls less protected); the names, what each key is for, who added it, the

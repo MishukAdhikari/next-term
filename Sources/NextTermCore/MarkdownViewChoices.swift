@@ -1,6 +1,6 @@
 import Foundation
 
-/// Each Markdown file's own choice from View › Markdown Live Preview (Live Preview or Source), by its path, for the newest
+/// Each Markdown file's own choice from View › Editor › Markdown Live Preview (Live Preview or Source), by its path, for the newest
 /// 500 files chosen; any other file follows Settings › Editor. A renamed file is a new path and follows Settings again.
 public struct MarkdownViewChoices: Equatable, Sendable {
     public static let limit = 500

@@ -3,7 +3,7 @@ import NextTermCore
 import Shiki
 
 /// Side by Side or Unified: one choice for every diff, remembered, from the switch at the top of any diff
-/// or View › Unified Diffs.
+/// or View › Diffs & Blame › Unified Diffs.
 enum DiffLayout: String {
     case sideBySide, unified
 
@@ -21,7 +21,7 @@ enum DiffLayout: String {
     }
 }
 
-/// View › Unified Diffs: checked while diffs show in one column.
+/// View › Diffs & Blame › Unified Diffs: checked while diffs show in one column.
 final class DiffLayoutMenu: NSObject, NSMenuItemValidation {
     static let shared = DiffLayoutMenu()
 
@@ -512,7 +512,7 @@ final class UnifiedDiffPart: NSObject, NSTextViewDelegate {
         control.target = self
         control.action = #selector(switched)
         control.selectedSegment = isOn ? 1 : 0
-        control.toolTip = "Both versions side by side, or one column top to bottom: every diff follows (View › Unified Diffs)"
+        control.toolTip = "Both versions side by side, or one column top to bottom: every diff follows (View › Diffs & Blame › Unified Diffs)"
         control.setAccessibilityLabel("Diff layout")
         if let at = header.arrangedSubviews.firstIndex(of: anchor) {
             header.insertArrangedSubview(control, at: at)

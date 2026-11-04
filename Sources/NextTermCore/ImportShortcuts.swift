@@ -52,8 +52,6 @@ public enum ImportShortcuts {
             "revealInSidebar:": "Show File in Project Sidebar",
             "showChanges:": "Show Changes",
             "toggleSoftWrap:": "Soft Wrap",
-            "toggleSidebarSide:": "Project Sidebar on the Right",
-            "toggleWindowColumnSide:": "Window Column on the Right",
             "increaseFontSize:": "Bigger",
             "decreaseFontSize:": "Smaller",
             "resetFontSize:": "Actual Size",
@@ -92,6 +90,10 @@ public enum ImportShortcuts {
         ]
         for position in ["bottom", "right", "left", "top"] {
             titles["setTerminalPosition:" + position] = "Terminal Position › " + position.capitalized
+        }
+        for side in ["left", "right"] {
+            titles["chooseSidebarSide:" + side] = "Project Sidebar Position › " + side.capitalized
+            titles["chooseWindowColumnSide:" + side] = "Window Column Position › " + side.capitalized
         }
         for n in 1...8 { titles["selectTabByNumber:#\(n)"] = "Select Tab \(n)" }
         return titles

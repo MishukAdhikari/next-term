@@ -184,13 +184,13 @@ extension SelfTest {
         let menuItem = KeyboardShortcuts.shared.commands.first { $0.id == "toggleUnifiedDiffs:" }?.item
         if let menuItem { _ = DiffLayoutMenu.shared.validateMenuItem(menuItem) }
         check(UserDefaults.standard.string(forKey: "diffLayout") == "unified" && menuItem?.state == .on,
-              "the choice is remembered, and View › Unified Diffs is checked", "\(UserDefaults.standard.string(forKey: "diffLayout") ?? "nil"), menu \(menuItem?.title ?? "missing")")
+              "the choice is remembered, and View › Diffs & Blame › Unified Diffs is checked", "\(UserDefaults.standard.string(forKey: "diffLayout") ?? "nil"), menu \(menuItem?.title ?? "missing")")
         tab.select(path: "notes/todo.txt")
         check(await wait(5) { c.editorArea.activeDiff?.showsUnified == true && c.editorArea.activeDiff?.unifiedRows.count == 2 },
               "another file opens unified too", c.editorArea.activeDiff?.title ?? "no diff")
         DiffLayoutMenu.shared.toggleUnifiedDiffs(nil)
         check(await wait(5) { DiffLayout.current == .sideBySide && c.editorArea.activeDiff?.showsUnified == false && c.editorArea.activeDiff?.sideTexts.1.contains("two") == true },
-              "View › Unified Diffs again: side by side", c.editorArea.activeDiff?.title ?? "no diff")
+              "View › Diffs & Blame › Unified Diffs again: side by side", c.editorArea.activeDiff?.title ?? "no diff")
 
         // ↑ and ↓ in the list go from file to file, past the folders.
         list.select(path: "notes/todo.txt")

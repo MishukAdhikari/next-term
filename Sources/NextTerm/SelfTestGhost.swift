@@ -524,7 +524,7 @@ extension SelfTest {
         GhostPreferences.setPrivateMode(true)
         let item = NSMenuItem(title: "Private Mode", action: #selector(AppDelegate.togglePrivateMode(_:)), keyEquivalent: "")
         _ = AppDelegate.shared.validateMenuItem(item)
-        check(!(await shows()) && item.state == .on, "suggestions: Private Mode shows none, and View › Private Mode is ticked")
+        check(!(await shows()) && item.state == .on, "suggestions: Private Mode shows none, and View › Privacy › Private Mode is ticked")
         await ghostClear(tab)
         typeKeys(window, "echo nt-ghost-private")
         pressKey(window, "\r", code: 36)
@@ -535,7 +535,7 @@ extension SelfTest {
         check(await shows(), "suggestions: Private Mode off, they come back")
         check(UserDefaults.standard.object(forKey: "ghostTextPrivateMode") == nil, "suggestions: Private Mode is never stored, so a launch starts without it")
 
-        // View › Suggestions While Typing: ticked while on; it turns them off, as Settings does, and on again.
+        // View › Privacy › Suggestions While Typing: ticked while on; it turns them off, as Settings does, and on again.
         let viewItem = NSMenuItem(title: "Suggestions While Typing", action: #selector(AppDelegate.toggleSuggestionsWhileTyping(_:)), keyEquivalent: "")
         _ = AppDelegate.shared.validateMenuItem(viewItem)
         let tickedOn = viewItem.state == .on
@@ -543,7 +543,7 @@ extension SelfTest {
         _ = AppDelegate.shared.validateMenuItem(viewItem)
         let shownOff = await shows()
         check(tickedOn && viewItem.state == .off && !GhostPreferences.isOn && !shownOff,
-              "suggestions: View › Suggestions While Typing is ticked, and turns them off")
+              "suggestions: View › Privacy › Suggestions While Typing is ticked, and turns them off")
         AppDelegate.shared.toggleSuggestionsWhileTyping(nil)
         let shownOn = await shows()
         check(GhostPreferences.isOn && shownOn, "suggestions: and on again from the View menu")

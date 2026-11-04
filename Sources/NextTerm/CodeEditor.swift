@@ -444,7 +444,7 @@ final class LineNumberRuler: NSRulerView {
     }
     /// A change mark was clicked.
     var onMarkClick: ((_ line: Int) -> Void)?
-    /// Who last changed each line, in a column left of the numbers (View › Annotate with Git Blame).
+    /// Who last changed each line, in a column left of the numbers (View › Diffs & Blame › Annotate with Git Blame).
     var showsBlame = false {
         didSet {
             guard showsBlame != oldValue else { return }

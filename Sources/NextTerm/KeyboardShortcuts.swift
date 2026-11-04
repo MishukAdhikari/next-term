@@ -1014,7 +1014,7 @@ final class EditorSettingsView: NSView {
         envValues.toolTip = "For screen sharing: values show as dots, and the file itself does not change. The line you click or type in shows its value."
         markdownPreview.target = self
         markdownPreview.action = #selector(markdownPreviewChanged)
-        markdownPreview.toolTip = "Headings, bold, links, lists, tasks and quotes show styled where you type, with their syntax hidden except on the lines you are on. The file itself never changes. View › Markdown Live Preview switches one file to its source and back."
+        markdownPreview.toolTip = "Headings, bold, links, lists, tasks and quotes show styled where you type, with their syntax hidden except on the lines you are on. The file itself never changes. View › Editor › Markdown Live Preview switches one file to its source and back."
         singleClick.target = self
         singleClick.action = #selector(singleClickChanged)
         singleClick.toolTip = "A click opens a file in a preview tab and opens or closes a folder; a double-click keeps the file as a tab. Off: a click selects, and a double-click opens."

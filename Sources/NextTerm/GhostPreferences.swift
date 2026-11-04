@@ -1,7 +1,7 @@
 import Foundation
 import NextTermCore
 
-/// Suggestions while typing: whether they are on, View › Private Mode, and who shows them where zsh-autosuggestions draws
+/// Suggestions while typing: whether they are on, View › Privacy › Private Mode, and who shows them where zsh-autosuggestions draws
 /// its own (Atuin's through it), remembered on this Mac by plugin with Tab completion's rules (GhostOwner).
 enum GhostPreferences {
     static let onKey = "ghostText"
@@ -27,7 +27,7 @@ enum GhostPreferences {
         NotificationCenter.default.post(name: changed, object: nil)
     }
 
-    /// View › Private Mode: no suggestion shows and nothing is recorded, until it is turned off or Next Term quits. Never
+    /// View › Privacy › Private Mode: no suggestion shows and nothing is recorded, until it is turned off or Next Term quits. Never
     /// stored, so a new launch starts without it.
     nonisolated(unsafe) private(set) static var privateMode = false
 

@@ -1536,7 +1536,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         }
         applyTerminalTabs()
         updateCollapseButton()
-        // The window column on its own side when the user chose one (View › Window Column on the Right), else on the
+        // The window column on its own side when the user chose one (View › Window Column Position › Right), else on the
         // sidebar's: the far right with it, the order mirrored.
         columnHost.columnOnRight = AppDelegate.shared.windowColumnOnRight
         placeWindowColumn()
@@ -2481,13 +2481,13 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         }
     }
 
-    /// View › Hide .env Values, on or off for the file in front only (Settings › Editor does all).
+    /// View › Editor › Hide .env Values, on or off for the file in front only (Settings › Editor does all).
     @objc func toggleEnvValues(_ sender: Any?) {
         guard let editor = editorArea.activeEditor, editor.isEnvFile else { return NSSound.beep() }
         editor.toggleEnvValues()
     }
 
-    /// View › Markdown Live Preview, for the Markdown file in front: Live Preview or Source, remembered for that file
+    /// View › Editor › Markdown Live Preview, for the Markdown file in front: Live Preview or Source, remembered for that file
     /// (Settings › Editor sets what the others open in).
     @objc func toggleMarkdownPreview(_ sender: Any?) {
         guard let editor = editorArea.activeEditor, editor.preview != nil else { return NSSound.beep() }

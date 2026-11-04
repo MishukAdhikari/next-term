@@ -287,7 +287,7 @@ extension CodeEditorView {
         return app.markdownViewChoices.choice(for: document.path) ?? app.markdownLivePreview
     }
 
-    /// View › Markdown Live Preview: this file between Live Preview and Source, remembered for it. Only the drawing
+    /// View › Editor › Markdown Live Preview: this file between Live Preview and Source, remembered for it. Only the drawing
     /// changes: not the text, the dirty flag or the undo stack.
     func toggleMarkdownPreview() {
         guard let preview, let app = AppDelegate.shared else { return }

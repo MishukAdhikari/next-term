@@ -146,6 +146,13 @@ enum SelfTest {
         try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
     }
 
+    /// Every item of the View menu, its submenus' too: most of its settings sit a level down (Editor, Privacy…).
+    static func viewMenuItems() -> [NSMenuItem] {
+        guard let view = NSApp.mainMenu?.items.first(where: { $0.title == "View" })?.submenu else { return [] }
+        func all(_ menu: NSMenu) -> [NSMenuItem] { menu.items.flatMap { [$0] + ($0.submenu.map(all) ?? []) } }
+        return all(view)
+    }
+
     /// Brings the app to the front with `window` key, as a hand's keys and clicks need (and as a window is
     /// "used"), asking again while another app keeps taking the front. False when it could not have it within
     /// `seconds`: the caller skips what needs it, with a note. With the app in front and the window still not
@@ -2148,7 +2155,7 @@ enum SelfTest {
 
     /// Settings › Editor › Hide values in .env files: each value is drawn as bullets, on its row, while the
     /// text stays as it is (copy, undo); the caret's line shows its value once you type in it, and only
-    /// that line of a private key; it hides again when the editor or its window loses the keyboard. View ›
+    /// that line of a private key; it hides again when the editor or its window loses the keyboard. View › Editor ›
     /// Hide .env Values for one file, with a checkmark. A .env that links to a file elsewhere counts too.
     private static func envValueChecks(_ c: TerminalWindowController, proj: URL) async {
         guard let window = c.window, let app = AppDelegate.shared else { return }
@@ -2259,12 +2266,9 @@ enum SelfTest {
                   "\(hiddenWrap.ink) pixels of ink, at the edge: \(hiddenWrap.atEdge)")
         }
 
-        // View › Hide .env Values: checked while this file's values are hidden.
-        var menuItem: NSMenuItem?
-        for top in NSApp.mainMenu?.items ?? [] where menuItem == nil {
-            menuItem = top.submenu?.items.first(where: { $0.action == #selector(TerminalWindowController.toggleEnvValues(_:)) })
-        }
-        check(menuItem?.title == "Hide .env Values", "View › Hide .env Values is in the menu", menuItem?.title ?? "missing")
+        // View › Editor › Hide .env Values: checked while this file's values are hidden.
+        let menuItem = viewMenuItems().first { $0.action == #selector(TerminalWindowController.toggleEnvValues(_:)) }
+        check(menuItem?.title == "Hide .env Values", "View › Editor › Hide .env Values is in the menu", menuItem?.title ?? "missing")
         let item = menuItem ?? NSMenuItem(title: "", action: #selector(TerminalWindowController.toggleEnvValues(_:)), keyEquivalent: "")
         check(c.validateMenuItem(item) && item.state == .on, "and is checked for a .env file whose values are hidden")
         c.toggleEnvValues(nil)
@@ -3751,7 +3755,7 @@ enum SelfTest {
         await pause(0.2)
     }
 
-    /// View › Annotate with Git Blame: who last changed each line, beside the numbers; edited lines are not
+    /// View › Diffs & Blame › Annotate with Git Blame: who last changed each line, beside the numbers; edited lines are not
     /// committed, and the lines below keep their commit.
     private static func blameChecks(_ c: TerminalWindowController, proj: URL) async {
         guard let git = GitRunner.locateGit(), let app = AppDelegate.shared else { return }
@@ -3823,7 +3827,7 @@ enum SelfTest {
         // The caret line's note.
         if !app.currentLineBlame { app.toggleCurrentLineBlame(nil) }
         let note = editor.blameNoteText(line: 3) ?? "none"
-        check(note.hasPrefix("Bob, ") && note.hasSuffix(" · Add a third line"), "View › Current Line Blame notes the caret line’s commit", note)
+        check(note.hasPrefix("Bob, ") && note.hasSuffix(" · Add a third line"), "View › Diffs & Blame › Current Line Blame notes the caret line’s commit", note)
 
         // Off again, and the file as committed.
         if app.currentLineBlame { app.toggleCurrentLineBlame(nil) }
@@ -4373,17 +4377,17 @@ enum SelfTest {
             area.applyWrap()
             check(rows() == 1 && wideEditor.textView.frame.width > wideEditor.scrollView.contentSize.width,
                   "without it, the line scrolls sideways", "\(rows()) rows")
-            // The View menu shows the state (validation reaches the app delegate).
-            if let view = NSApp.mainMenu?.items.first(where: { $0.title == "View" })?.submenu,
-               let wrapItem = view.items.first(where: { $0.action == #selector(AppDelegate.toggleSoftWrap(_:)) }) {
+            // View › Editor shows the state (validation reaches the app delegate).
+            if let wrapItem = viewMenuItems().first(where: { $0.action == #selector(AppDelegate.toggleSoftWrap(_:)) }),
+               let view = wrapItem.menu {
                 app.softWrap = true
                 view.update()
                 let shownOn = wrapItem.state == .on
                 app.softWrap = false
                 view.update()
-                check(shownOn && wrapItem.state == .off, "View ▸ Soft Wrap has a checkmark exactly when it is on")
+                check(shownOn && wrapItem.state == .off, "View › Editor › Soft Wrap has a checkmark exactly when it is on")
             } else {
-                check(false, "View ▸ Soft Wrap is in the menu")
+                check(false, "View › Editor › Soft Wrap is in the menu")
             }
             app.softWrap = saved
             area.applyWrap()

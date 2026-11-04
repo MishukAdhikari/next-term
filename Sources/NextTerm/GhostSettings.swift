@@ -121,7 +121,7 @@ final class GhostSettingsView: NSStackView {
         }
         return "Next Term suggests a command you ran before, dimmed after the cursor: → or End takes it, ⌥→ one word, Esc hides it,"
             + " and Return runs only what you typed. It keeps the commands you run in its zsh tabs, on this Mac only: never agents’"
-            + " commands, lines that hold a secret or start with a space, or anything while View › Private Mode is on. It never reads"
+            + " commands, lines that hold a secret or start with a space, or anything while View › Privacy › Private Mode is on. It never reads"
             + " or changes zsh’s history file; until it has your commands, zsh’s own history in each shell fills in."
     }
 
