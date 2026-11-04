@@ -505,10 +505,8 @@ extension DatabasePane {
         }
         showSaved(row, table: change.table, key: change.key)
         if kind == .save {
-            // Editing ends now that it is written: no step is left that could only do nothing. Nor is one
-            // registered to be taken off at once: the undo manager drops a group its last action leaves only
-            // once the group is closed, at the end of this turn of the run loop, so a step taken off in the
-            // turn it was registered leaves its group behind, empty, still on Edit › Undo as Edit Cell.
+            // Editing ends now that it is written: no step is left that could only do nothing, so none is
+            // registered to be taken off at once.
             let undo = isEditingAllowed && !ending ? registerStep(applied.reversed(row: row), kind: .undo) : nil
             edit.draft = nil
             edit.cell = nil
@@ -536,13 +534,28 @@ extension DatabasePane {
     }
 
     /// One "Edit Cell" step on the window's undo manager: `change` written by the same checked rule.
+    ///
+    /// A save's step is a group of its own, closed at once. Left to the group the undo manager opens by event, it stays
+    /// open until the run loop next waits, which a busy main thread (terminals printing, timers) puts off; a step taken
+    /// off meanwhile (Stop Editing, the tab closed) leaves that group behind, empty, and Edit › Undo says Undo Edit Cell
+    /// and does nothing. A closed group whose last action goes is dropped. The step back that an undo or a redo
+    /// registers goes in the group that undo or redo opened, as before.
     @discardableResult
     func registerStep(_ change: SQLiteEdit, kind: WriteKind) -> CellUndoStep? {
         guard let undo = window?.undoManager else { return nil }
         let step = CellUndoStep(pane: self, change: change, kind: kind)
         edit.steps.append(step)
+        let ownGroup: Bool = undo.groupingLevel == 0 && undo.groupsByEvent && !undo.isUndoing && !undo.isRedoing
+        if ownGroup {
+            undo.groupsByEvent = false
+            undo.beginUndoGrouping()
+        }
         undo.registerUndo(withTarget: step) { $0.run() }
         undo.setActionName("Edit Cell")
+        if ownGroup {
+            undo.endUndoGrouping()
+            undo.groupsByEvent = true
+        }
         return step
     }
 
