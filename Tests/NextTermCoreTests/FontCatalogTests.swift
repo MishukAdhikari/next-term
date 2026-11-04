@@ -34,10 +34,14 @@ import Testing
     /// One catalog reads the installed families once, so a long font list in a settings file stays quick
     /// however many fonts the Mac has.
     @Test func manyLookupsStayQuick() {
-        let fonts = FontCatalog.system
-        let started = Date()
-        for index in 0..<200 { _ = fonts.lookup(index.isMultiple(of: 2) ? "Menlo" : "No Such Font \(index)") }
-        #expect(Date().timeIntervalSince(started) < 0.5)
+        // Against one read of the list on this machine, not the clock alone: a catalog's first lookup reads it (about
+        // 10 ms here), and 200 lookups on a new catalog, that read included, take about 1.2 times one. Reading the
+        // list again on each lookup would take about 200 times.
+        let lookups = Timing.ratio({
+            let fonts = FontCatalog.system
+            for index in 0..<200 { _ = fonts.lookup(index.isMultiple(of: 2) ? "Menlo" : "No Such Font \(index)") }
+        }, to: { _ = FontCatalog.system.lookup("Menlo") })
+        #expect(lookups < 20, "\(lookups) reads of the font list")
     }
 
     @Test func monospacedFamiliesForTheMenus() {
