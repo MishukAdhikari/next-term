@@ -48,6 +48,7 @@ extension ImportVSCode {
             "workbench.action.terminal.clear": "clearBuffer:",
             "workbench.action.toggleSidebarVisibility": "toggleProjectSidebar:",
             "workbench.files.action.showActiveFileInExplorer": "revealInSidebar:",
+            "workbench.action.toggleSidebarPosition": "toggleSidebarSide:",
             "workbench.action.terminal.toggleTerminal": "toggleEditorFocus:",
             "workbench.action.togglePanel": "toggleTerminalCollapsed:",
             "git.openChange": "showChanges:",

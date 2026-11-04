@@ -118,8 +118,10 @@ final class WindowColumns: NSObject {
     }
 
     /// The column's hints' triggers (ColumnHints): it has just come (H3), or a mark has appeared in a window (H2).
+    /// Never while a restore builds its windows: the column coming back with them at launch, or after an update, is not
+    /// the user reaching it, and the marks they bring back are not new.
     private func hintTriggers(from old: WindowColumnList, wasVisible: Bool) {
-        guard visible else { return }
+        guard visible, expecting == 0 else { return }
         let new: WindowColumnList = list
         MainActor.assumeIsolated {
             if !wasVisible { ColumnHints.shared.columnAppeared() }

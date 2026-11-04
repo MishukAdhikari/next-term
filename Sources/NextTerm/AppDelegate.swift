@@ -498,9 +498,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         setWindowColumnSide(side)
     }
 
+    /// View › Project Sidebar Position › Move to the Other Side, and the sidebar's ⋯.
     @objc func toggleSidebarSide(_ sender: Any?) {
         sidebarSide = sidebarSide == .left ? .right : .left
         controllers.forEach { $0.applyLayout() }
+    }
+
+    /// View › Window Column Position › Move to the Other Side: the column to the other edge; on the sidebar's side again,
+    /// it follows the sidebar again.
+    @objc func toggleWindowColumnSide(_ sender: Any?) {
+        setWindowColumnSide(windowColumnOnRight ? .left : .right)
     }
 
     /// The window column's side, when the user chose one apart from the project sidebar's; nil, it is on the sidebar's
@@ -2436,6 +2443,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         for side in [SidebarSide.left, .right] {
             item(sidebarSides, side.title, #selector(chooseSidebarSide(_:)), "", target: self).representedObject = side.rawValue
             item(columnSides, side.title, #selector(chooseWindowColumnSide(_:)), "", target: self).representedObject = side.rawValue
+        }
+        // The commands that were View › Project Sidebar on the Right and Window Column on the Right, by the same ids: a
+        // key the user gave either (or VS Code's Toggle Primary Side Bar Position, imported) still switches the side.
+        for (menu, action) in [(sidebarSides, #selector(toggleSidebarSide(_:))), (columnSides, #selector(toggleWindowColumnSide(_:)))] {
+            menu.addItem(.separator())
+            item(menu, "Move to the Other Side", action, "", target: self)
         }
         view.addItem(withTitle: "Project Sidebar Position", action: nil, keyEquivalent: "").submenu = sidebarSides
         view.addItem(withTitle: "Window Column Position", action: nil, keyEquivalent: "").submenu = columnSides

@@ -16,8 +16,8 @@ import Testing
         var map: [String: KeyChord?] = MenuKeys.defaults.mapValues { $0 }
         for id in ["closeProject:", "copyPathWithLine:", "revealInSidebar:", "toggleSoftWrap:", "equalizePanes:",
                    "closeOtherTabs:", "closeTabsToTheRight:", "revealInFinder:", "copyFilePath:", "copyRelativeFilePath:",
-                   "moveTabToNewWindow:", "mergeAllWindows:", "toggleTabBar:", "chooseSidebarSide:left", "chooseSidebarSide:right",
-                   "chooseWindowColumnSide:left", "chooseWindowColumnSide:right"] {
+                   "moveTabToNewWindow:", "mergeAllWindows:", "toggleTabBar:", "toggleSidebarSide:", "toggleWindowColumnSide:",
+                   "chooseSidebarSide:left", "chooseSidebarSide:right", "chooseWindowColumnSide:left", "chooseWindowColumnSide:right"] {
             map[id] = .some(nil)
         }
         return map
@@ -89,6 +89,15 @@ import Testing
         #expect(ImportShortcuts.terminalCommands.subtracting(titles).isEmpty)
         // The same command ids the menus give (the self-test checks them against the real menus too).
         #expect(Set(Self.menuDefaults.keys).isSuperset(of: titles.filter { !$0.hasPrefix("setTerminalPosition:") }))
+    }
+
+    /// The View menu's positions became submenus: the two switches they replaced keep their ids, so a key a user gave
+    /// either still works, and VS Code's Toggle Primary Side Bar Position still imports onto the sidebar's.
+    @Test func theSideSwitchesKeepTheirIDs() {
+        #expect(ImportShortcuts.titles["toggleSidebarSide:"] == "Project Sidebar Position › Move to the Other Side")
+        #expect(ImportShortcuts.titles["toggleWindowColumnSide:"] == "Window Column Position › Move to the Other Side")
+        #expect(ImportVSCode.commandMap["workbench.action.toggleSidebarPosition"] == "toggleSidebarSide:")
+        #expect(ImportShortcuts.titles["chooseWindowColumnSide:right"] == "Window Column Position › Right")
     }
 
     @Test func replaceInTheOpenFile() {

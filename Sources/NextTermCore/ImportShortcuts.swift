@@ -95,6 +95,8 @@ public enum ImportShortcuts {
             titles["chooseSidebarSide:" + side] = "Project Sidebar Position › " + side.capitalized
             titles["chooseWindowColumnSide:" + side] = "Window Column Position › " + side.capitalized
         }
+        titles["toggleSidebarSide:"] = "Project Sidebar Position › Move to the Other Side"
+        titles["toggleWindowColumnSide:"] = "Window Column Position › Move to the Other Side"
         for n in 1...8 { titles["selectTabByNumber:#\(n)"] = "Select Tab \(n)" }
         return titles
     }()
