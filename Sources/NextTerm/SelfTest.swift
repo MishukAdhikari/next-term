@@ -98,6 +98,7 @@ enum SelfTest {
         // The window column only in its own part (windowColumn): the other parts' geometry was written without it.
         WindowColumns.suppressed = true
         WindowColumns.offersSuppressed = true // and no offer to show or hide it, but in its own checks
+        ColumnHints.suppressed = true // nor its hints, but in their own part (hints)
         // No window joins another as a tab, whatever this Mac's "Prefer tabs" says, but in its own part (windowTabs): the
         // other parts' windows are each a window of their own.
         WindowTabbing.suppressed = true
@@ -674,7 +675,7 @@ enum SelfTest {
               "a self-test's tabs read its own zsh config, never the user's", "test config \(ownConfig): " + zdotTab.screenTail(4).joined(separator: " | "))
         c.remove(zdotTab)
         #if DEBUG
-        // One part on the project set up so far (NEXTTERM_SELFTEST_ONLY=gitAndViewKeys, import, rollback, held, closeWorktree, worktrees, markdown, mcpWrite, parallel (with scrollback), skills, notifications, services, secrets, opencode, tasks, welcome, tabList, terminalPosition, completion, ghostText, gitRefresh, clicks, mouse, remote, mcp, newTerminal, cellSnap, projectColor, windowNav, windowColumn or database), for its own failures
+        // One part on the project set up so far (NEXTTERM_SELFTEST_ONLY=gitAndViewKeys, import, rollback, held, closeWorktree, worktrees, markdown, mcpWrite, parallel (with scrollback), skills, notifications, services, secrets, opencode, tasks, welcome, tabList, terminalPosition, completion, ghostText, gitRefresh, clicks, mouse, remote, mcp, newTerminal, cellSnap, projectColor, windowNav, windowColumn, hints or database), for its own failures
         // without the whole run's 25 minutes.
         switch ProcessInfo.processInfo.environment["NEXTTERM_SELFTEST_ONLY"] {
         case "gitAndViewKeys": return await gitAndViewKeyChecks(c, proj: proj)
@@ -712,6 +713,7 @@ enum SelfTest {
         case "projectColor": return await projectColorChecks() // View › Project Color: the glow, worktrees, None, the switch
         case "windowNav": return await windowNavChecks() // titles, ⇧⌘U, ⌘O's rows and the Dock menu across windows
         case "windowColumn": return await windowColumnChecks() // the window column in every window, on either side, and its budget
+        case "hints": return await hintsChecks() // the window column's three hints: showing, counting, retiring, the off switch and Reset Tips
         case "tabHover": return await tabHoverChecks(c) // a tab's whole name under it in the title strip
         case "firstRun": return await firstRunChecks() // the first run's agent setup: the cards and the apply_setup window
         case "windowTabs": return await windowTabsChecks(c) // a system tab bar over a project window: everything moves below it
@@ -884,6 +886,7 @@ enum SelfTest {
         await windowNavChecks()
         #if DEBUG
         await windowColumnChecks()
+        await hintsChecks()
         #endif
         await parallelTabsChecks(c, proj: proj)
         await arrivalChecks(c, proj: proj)

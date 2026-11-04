@@ -63,6 +63,7 @@ final class WindowColumns: NSObject {
         for controller in windows {
             controller.windowColumn.contrastChanged()
             controller.columnHost.list?.contrastChanged()
+            controller.columnHost.hint?.contrastChanged() // beside the rail; one in the column or list is theirs
         }
     }
 
@@ -108,9 +109,22 @@ final class WindowColumns: NSObject {
         rebuildCount += 1
         #endif
         let entries: [WindowIndex.Window] = app.windowIndex.windows
+        let old: WindowColumnList = list
+        let was: Bool = visible
         list = WindowColumnList.build(windows: entries, colors: colors(), showsWorking: showsWorking, folded: folded)
         visible = decideVisible(count: entries.count)
         tell(.structure)
+        hintTriggers(from: old, wasVisible: was)
+    }
+
+    /// The column's hints' triggers (ColumnHints): it has just come (H3), or a mark has appeared in a window (H2).
+    private func hintTriggers(from old: WindowColumnList, wasVisible: Bool) {
+        guard visible else { return }
+        let new: WindowColumnList = list
+        MainActor.assumeIsolated {
+            if !wasVisible { ColumnHints.shared.columnAppeared() }
+            ColumnHints.shared.rowsChanged(from: old, to: new)
+        }
     }
 
     /// The pinned column's inner edge dragged to `width` in the window `from`: that window follows the drag, and every
@@ -152,6 +166,7 @@ final class WindowColumns: NSObject {
             }
             return
         }
+        let old: WindowColumnList = list
         list = next
         switch change {
         case .none:
@@ -160,6 +175,7 @@ final class WindowColumns: NSObject {
             rebuild()
         case .rows:
             tell(change)
+            hintTriggers(from: old, wasVisible: visible)
         }
     }
 
@@ -194,8 +210,10 @@ final class WindowColumns: NSObject {
 
     /// Settings › General's checkbox, View › Hide Window Column, or the fold: every window at once.
     func settingsChanged() {
+        let was: Bool = visible
         visible = decideVisible(count: app.windowIndex.windows.count)
         tell(.none)
+        hintTriggers(from: list, wasVisible: was)
     }
 
     // MARK: the offer to show or hide it

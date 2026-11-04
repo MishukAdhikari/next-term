@@ -12,8 +12,15 @@ final class HintCenter {
     static let changed = Notification.Name("NextTermHintsChanged")
 
     private let defaults: UserDefaults
-    /// The hint up now, and when it came up on the uptime clock, for its exposure.
-    private(set) var visible: (hint: Hint, since: TimeInterval)?
+    /// The hint up now, when it came up on the uptime clock, and whether its showing has counted yet.
+    private(set) var visible: (hint: Hint, since: TimeInterval, counted: Bool)?
+
+    /// Seconds since the last key, and a window's age: the moment's two clocks. The self-test stands in, to show a hint
+    /// in a window it has just opened, or to type without typing.
+    static var sinceKey: () -> TimeInterval = { UserKeys.since }
+    static var windowAge: (TerminalWindowController) -> TimeInterval = { ProcessInfo.processInfo.systemUptime - $0.madeAt }
+    /// How long a hint stays up before its showing counts: HintRules.exposure. The self-test stands in.
+    static var exposureDelay: TimeInterval = HintRules.exposure
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -55,23 +62,32 @@ final class HintCenter {
 
     /// What `controller` holds now for `hint`'s rules.
     func situation(_ hint: Hint, in controller: TerminalWindowController) -> HintRules.Situation {
-        let uptime: TimeInterval = ProcessInfo.processInfo.systemUptime
         let state: TabState? = controller.activeTab?.status.state
         return HintRules.Situation(tipsOn: tipsOn, record: record(hint), lastAnyShownAt: HintRules.lastAnyShownAt(defaults), now: Date(),
-                                   noticeVisible: visible != nil || GitToast.isShowing, sinceKey: UserKeys.since,
-                                   agentBusy: state == .working || state == .attention, windowAge: uptime - controller.madeAt)
+                                   noticeVisible: visible != nil || GitToast.isShowing, sinceKey: Self.sinceKey(),
+                                   agentBusy: state == .working || state == .attention, windowAge: Self.windowAge(controller))
     }
 
-    /// `hint` came up: nothing else shows until it goes (noteHidden).
+    /// `hint` came up: nothing else shows until it goes (noteHidden). Still up after a second, its showing counts then,
+    /// so a hint left up a long while counts once and the count is right even if the app quits under it.
     func noteShown(_ hint: Hint) {
-        visible = (hint, ProcessInfo.processInfo.systemUptime)
+        let since: TimeInterval = ProcessInfo.processInfo.systemUptime
+        visible = (hint, since, false)
         post()
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.exposureDelay) { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, let shown = self.visible, shown.hint == hint, shown.since == since, !shown.counted else { return }
+                self.visible?.counted = true
+                self.noteExposure(hint, seconds: HintRules.exposure)
+            }
+        }
     }
 
-    /// `hint` went: the time it was up counts as a showing from 1 s on.
+    /// `hint` went: the time it was up counts as a showing from 1 s on, unless it counted while up.
     func noteHidden(_ hint: Hint) {
         guard let shown = visible, shown.hint == hint else { return }
         visible = nil
+        if shown.counted { return post() }
         noteExposure(hint, seconds: ProcessInfo.processInfo.systemUptime - shown.since)
     }
 
@@ -87,12 +103,13 @@ final class HintCenter {
     }
 
     /// `hint` retires for good: its feature was used by any route, its × was clicked, or its 60 days passed. A
-    /// retired hint keeps its first reason, and one up goes.
+    /// retired hint keeps its first reason, and one up goes, even at its last showing (retired by its count already).
     func retire(_ hint: Hint, reason: HintRules.Retirement) {
         let current: HintRules.Record = record(hint)
-        guard current.retired == nil else { return }
-        HintRules.save(HintRules.retire(current, reason), hint, defaults)
-        if visible?.hint == hint { visible = nil }
+        let up: Bool = visible?.hint == hint
+        guard current.retired == nil || up else { return }
+        if current.retired == nil { HintRules.save(HintRules.retire(current, reason), hint, defaults) }
+        if up { visible = nil }
         post()
     }
 

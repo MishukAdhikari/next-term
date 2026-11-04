@@ -1831,6 +1831,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// seen since, the window as it is.
     @objc func goToWaitingWindow(_ sender: NSMenuItem) {
         refreshWindowIndex()
+        // Gone to from the Dock, as Go to Next Agent Needing You goes: its hint is never needed again.
+        MainActor.assumeIsolated { HintCenter.shared.retire(.nextAgent, reason: .actionPerformed) }
         if let waiting = windowIndex.firstWaiting(in: sender.tag) { return go(to: waiting) }
         let controller = controllers.first { $0.indexID == sender.tag && !$0.hasClosed }
         NSApp.activate(ignoringOtherApps: true)

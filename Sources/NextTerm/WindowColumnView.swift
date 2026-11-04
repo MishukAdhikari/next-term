@@ -101,6 +101,15 @@ final class WindowColumnView: NSView, ProjectGlowing {
     private var chevronTip: ShortcutToolTip?
     /// How many buttons fit, as last laid out.
     private var shownCount = 0
+    /// Unfolded, a hint's line just above the foot (ColumnHints): the rows give up the room it needs past the foot's own.
+    var hint: HintLine? {
+        didSet {
+            guard hint !== oldValue else { return }
+            oldValue?.removeFromSuperview()
+            if let hint { addSubview(hint) }
+            needsLayout = true
+        }
+    }
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -269,7 +278,17 @@ final class WindowColumnView: NSView, ProjectGlowing {
         let footHeight: CGFloat = expanded ? WindowColumnGrid.row : foot
         let footFrame = NSRect(x: x, y: bounds.height - footHeight, width: width, height: footHeight)
         if footButton.frame != footFrame { footButton.frame = footFrame }
-        let column = MarkColumn(count: buttons.count, height: bounds.height - foot, top: count.maxY, slot: WindowColumnGrid.row,
+        // A hint's line over the foot's last row; the foot's spare room under the rows takes part of it.
+        var hintRoom: CGFloat = 0
+        if let hint, expanded {
+            hintRoom = max(0, HintLine.height - (foot - footHeight))
+            hint.onRight = onRight
+            hint.beside = false
+            let frame = NSRect(x: x, y: footFrame.minY - HintLine.height, width: width, height: HintLine.height)
+            if hint.frame != frame { hint.frame = frame }
+        }
+        hint?.isHidden = !expanded
+        let column = MarkColumn(count: buttons.count, height: bounds.height - foot - hintRoom, top: count.maxY, slot: WindowColumnGrid.row,
                                 margin: WindowColumnGrid.margin)
         shownCount = column.shownCount
         for (index, button) in buttons.enumerated() {
@@ -415,6 +434,7 @@ final class WindowColumnView: NSView, ProjectGlowing {
         buttons.forEach { $0.contrastChanged() }
         moreButton.contrastChanged()
         footButton.contrastChanged()
+        hint?.contrastChanged()
     }
 
     // MARK: mouse
@@ -532,6 +552,7 @@ final class WindowColumnView: NSView, ProjectGlowing {
         var views: [NSView] = chevron.isHidden ? [] : [chevron]
         views += buttons.filter { !$0.isHidden } as [NSView]
         if !moreButton.isHidden { views.append(moreButton) }
+        if let hint, !hint.isHidden { views += hint.subviews }
         if !footButton.isHidden { views.append(footButton) }
         // A button view is not what VoiceOver reads (its cell is): the unignored ones stand in for them.
         return NSAccessibility.unignoredChildren(from: views)

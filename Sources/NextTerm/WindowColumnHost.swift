@@ -33,6 +33,7 @@ final class WindowColumnHost: NSView {
         didSet {
             guard topCover != oldValue else { return }
             hideList(animated: false) // laid out for the old top
+            hintPlaceWent()
             coverStrip.isHidden = topCover == 0
             place(force: true)
         }
@@ -49,6 +50,7 @@ final class WindowColumnHost: NSView {
         didSet {
             guard columnOnRight != oldValue else { return }
             hideList(animated: false) // laid out for the other side
+            hintPlaceWent()
             column.onRight = columnOnRight
             place(force: true)
         }
@@ -92,6 +94,13 @@ final class WindowColumnHost: NSView {
     /// The reveal under way: the shade's width going from `from` to `to` over `duration`, then `done`.
     private var reveal: (from: CGFloat, to: CGFloat, start: CFTimeInterval, duration: CFTimeInterval, opening: Bool)?
     private var revealTimer: Timer?
+    /// Counts the list's openings: a wait for it to have stayed open (H1's trigger) whose count has moved on does nothing.
+    private var listOpenings = 0
+
+    /// The hint ColumnHints put up in this window, and where: at the open list's foot (`inList`), at the pinned column's,
+    /// or beside the rail's foot over the content's edge.
+    private(set) var hint: HintLine?
+    private(set) var hintInList = false
 
     init(content: NSView) {
         self.content = content
@@ -140,6 +149,7 @@ final class WindowColumnHost: NSView {
         hoverMoves += 1
         onRail = false
         hideList(animated: false)
+        hintPlaceWent()
     }
 
     /// Pinned with a width to drag, the handle straddles the column's inner edge below the title bar's strip; else it is
@@ -257,18 +267,75 @@ final class WindowColumnHost: NSView {
             updateAwake()
         }
         placeEdge(form: decided.form)
+        placeHintBeside()
         if decided.form != .folded {
             hideList(animated: false) // pinned open, or hidden: no list over the content
         } else if listShowing {
             setShade(width: reveal == nil ? listFrame().width : shadeWidth)
         }
         guard decided != shown else { return }
+        // Hidden, folded or pinned: the hint's place is gone, and a hint the new form wants comes on its trigger.
+        if decided.form != shown.form { hintPlaceWent() }
         // Shown folded with the pointer elsewhere: its dots settle a few seconds on.
         if decided.form == .folded, shown.form != .folded { updateAwake() }
         // Folded under the pointer: the list it would open is the column just folded. It waits for the pointer to leave.
         if shown.form == .expanded && decided.form == .folded { waitsForExit = pointerOnColumn() }
         shown = decided
         onShownChange?(decided)
+    }
+
+    // MARK: a hint
+
+    /// Puts `line` up: at the open list's foot (`inList`); else at the pinned column's foot when its words fit there, or
+    /// beside the column's foot, over the content's edge, when they don't or the column is the rail. False when there
+    /// is no such place now (the column hidden, or no list open), and nothing is put up.
+    func showHint(_ line: HintLine, inList: Bool) -> Bool {
+        guard hint == nil, visible, !column.isHidden, shown.form != .hidden else { return false }
+        if inList {
+            guard listShowing, !closing, let list else { return false }
+            list.hint = line
+        } else {
+            guard !listShowing else { return false }
+            line.onRight = columnOnRight
+            if shown.form == .expanded, line.fits(width: column.frame.width - WindowColumnWidth.hairline) {
+                column.hint = line
+            } else {
+                line.beside = true
+                addSubview(line) // over the split view, as the list is
+            }
+        }
+        hint = line
+        hintInList = inList
+        placeHintBeside()
+        line.appear()
+        return true
+    }
+
+    /// Takes the hint down, wherever it is (ColumnHints, which counts its showing).
+    func removeHint() {
+        guard let line = hint else { return }
+        hint = nil
+        hintInList = false
+        if list?.hint === line { list?.hint = nil }
+        if column.hint === line { column.hint = nil }
+        line.removeFromSuperview()
+    }
+
+    /// Beside the column, its plate at the foot's middle, from the column's inner edge into the content: never wider than
+    /// the content leaves room for.
+    private func placeHintBeside() {
+        guard let line = hint, line.beside, !column.isHidden else { return }
+        let width: CGFloat = min(line.besideWidth, max(0, content.frame.width - 16))
+        let x: CGFloat = columnOnRight ? column.frame.minX - width : column.frame.maxX
+        let frame = NSRect(x: x, y: ((WindowColumnGrid.foot - HintLine.height) / 2).rounded(), width: width, height: HintLine.height)
+        if line.frame != frame { line.frame = frame }
+    }
+
+    /// Where the hint was is gone (the list closed, the column folded, pinned, hidden or moved, the window closing): it
+    /// goes, and its showing counts as long as it was up.
+    private func hintPlaceWent() {
+        guard hint != nil else { return }
+        ColumnHints.shared.placeWent(in: self)
     }
 
     // MARK: the list on hover
@@ -458,8 +525,20 @@ final class WindowColumnHost: NSView {
         column.covered = true
         updateAwake()
         if opening { onList = pointerOnList() }
-        // Opened on hover: resting on the column to see the windows is known.
-        if opening { HintCenter.shared.retire(.columnBasics, reason: .actionPerformed) }
+        // Opened on hover: resting on the column to see the windows is known. A hint beside the rail would be under the
+        // list: it goes. Open a second, the list may say it can move to the other edge (H1).
+        if opening {
+            HintCenter.shared.retire(.columnBasics, reason: .actionPerformed)
+            if hint != nil, !hintInList { hintPlaceWent() }
+            listOpenings += 1
+            let opened: Int = listOpenings
+            DispatchQueue.main.asyncAfter(deadline: .now() + ColumnHints.listDwell) { [weak self] in
+                MainActor.assumeIsolated {
+                    guard let self, self.listOpenings == opened, self.listShowing, !self.closing else { return }
+                    ColumnHints.shared.listStayedOpen(in: self)
+                }
+            }
+        }
         if opening {
             panel.update(list: column.list, change: .structure, current: column.current, expanded: true)
             panel.frame = NSRect(origin: .zero, size: listFrame().size)
@@ -493,6 +572,7 @@ final class WindowColumnHost: NSView {
     private func closed() {
         stopReveal()
         onList = false
+        if hintInList { hintPlaceWent() }
         listShade?.isHidden = true
         column.covered = false
         closedAt = dismissedByKey ? nil : CACurrentMediaTime()
