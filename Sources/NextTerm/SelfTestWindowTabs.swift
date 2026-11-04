@@ -101,6 +101,15 @@ extension SelfTest {
               "window tabs: the project behind counts as unseen, and the one in front is the front window",
               "host seen \(host.canBeSeen), front \(TerminalWindow.front?.title ?? "none")")
         await screenshot(other, suffix: "-merged")
+        // The tab bar a while later, and with the window no longer in front (a reported fade).
+        await pause(6)
+        await screenshot(other, suffix: "-merged-later")
+        NSApp.hide(nil)
+        await pause(1)
+        NSApp.unhide(nil)
+        second.makeKeyAndOrderFront(nil)
+        await pause(1)
+        await screenshot(other, suffix: "-merged-back")
         let ids: Set<Int> = [c.indexID, other.indexID]
         check(c.columnHost.column.merged == ids && other.columnHost.column.merged == ids,
               "window tabs: each merged window's column knows the windows merged with it, for the bracket beside their rows",

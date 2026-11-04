@@ -52,6 +52,7 @@ enum MCPWriteControl {
         case "split_pane": splitPane(arguments, context, reply: reply)
         case "close_pane": closePane(arguments, context, reply: reply)
         case "zoom_pane": zoomPane(arguments, context, reply: reply)
+        case "reopen_before_update": reopenBeforeUpdate(context, reply: reply)
         case "set_layout": setLayout(arguments, context, reply: reply)
         case "settings_get": reply(MCPControl.ok(settingsList(context)))
         case "settings_set": setSettings(arguments, context, reply: reply)

@@ -207,6 +207,9 @@ enum SelfTestRestore {
 
     // MARK: the steps
 
+    /// Projects opened beside the harness's two windows before the update quit, all merged with them.
+    static let extraProjects = 3
+
     private static func updateQuit(_ harness: Harness, restore: LaunchRestoreResult) async {
         record("STEP update-quit, version \(Updater.shared.current?.description ?? "none")")
         try? JSONEncoder().encode(realState()).write(to: harness.realState)
@@ -267,6 +270,23 @@ enum SelfTestRestore {
             }
             try? FileManager.default.removeItem(at: SelfTest.copilotLockFolder)
         }
+        // Three more projects, each in a window of its own, then every window merged into one with Merge All Windows, the
+        // project's tab in front, as a user merges them (plan 032): the update brings them all back, merged.
+        for index in 1...Self.extraProjects {
+            let folder = harness.folder.appendingPathComponent("extra-\(index)")
+            try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            let extra = app.openFolder(folder.path, newWindow: true)
+            _ = await SelfTest.wait(20) { extra.tabs.first?.status.integrated == true }
+        }
+        if let host = controller.window {
+            host.makeKeyAndOrderFront(nil)
+            host.mergeAllWindows(nil)
+            host.makeKeyAndOrderFront(nil)
+            let all: Int = app.controllers.count
+            let merged = await SelfTest.wait(3) { host.tabGroup?.windows.count == all && host.tabGroup?.selectedWindow === host }
+            check(merged && all == 2 + Self.extraProjects, "every window merges into one before the update quit, the project's tab in front",
+                  "group \(host.tabGroup?.windows.count ?? 0) of \(all)")
+        }
         // An MCP client asks before the quit, and leaves a wait for the running command in flight across it.
         await mcpBeforeUpdateQuit(harness, busy: tab)
         Updater.shared.showAvailable()
@@ -282,6 +302,29 @@ enum SelfTestRestore {
         await SelfTest.pause(60)
         check(false, "the update quit goes ahead")
         finish()
+    }
+
+    /// The windows from before the update, kept beside the session: none missing now; one closed is missing, and reopening
+    /// it brings it back with its tabs (BeforeUpdate). Last in the step: it closes and opens a window.
+    private static func beforeUpdateChecks(_ harness: Harness) async {
+        let app = AppDelegate.shared!
+        let kept: Bool = (try? SessionRestore.shared.files?.read(BeforeUpdate.fileName, maxSize: 8 << 20)) != nil
+        let noneMissing: Bool = BeforeUpdateControl.missingNow().isEmpty
+        let extraPath: String = harness.folder.appendingPathComponent("extra-\(Self.extraProjects)").path
+        if let extra = app.controllers.first(where: { $0.project == extraPath }), let extraWindow = extra.window {
+            let tabsBefore: Int = extra.tabs.count
+            extraWindow.close()
+            _ = await SelfTest.wait(3) { extra.hasClosed }
+            let missingOne: Bool = BeforeUpdateControl.missingNow().map(\.project) == [extraPath]
+            let reopened: Int = BeforeUpdateControl.reopen()
+            let back = app.controllers.first { $0.project == extraPath && !$0.hasClosed }
+            check(kept && noneMissing && missingOne && reopened == 1 && back != nil && back?.tabs.count == tabsBefore
+                      && BeforeUpdateControl.missingNow().isEmpty,
+                  "the windows from before the update are kept; one closed since is missing, and reopening brings it back with its tabs",
+                  "kept \(kept), none missing \(noneMissing), missing one \(missingOne), reopened \(reopened), tabs \(back?.tabs.count ?? 0) of \(tabsBefore)")
+        } else {
+            check(false, "the windows from before the update are kept", "kept \(kept), none missing \(noneMissing)")
+        }
     }
 
     private static func afterUpdate(_ harness: Harness, restore: LaunchRestoreResult) async {
@@ -315,9 +358,10 @@ enum SelfTestRestore {
         let windows = await SelfTest.wait(10) { !app.controllers.isEmpty }
         let welcome = app.welcomeController?.window?.isVisible == true
         let projects: [String] = app.controllers.compactMap(\.project)
-        let reopened: Bool = projects == [harness.project.path]
+        let openedProjects: [String] = [harness.project.path] + (1...Self.extraProjects).map { harness.folder.appendingPathComponent("extra-\($0)").path }
+        let reopened: Bool = Set(projects) == Set(openedProjects) && projects.count == openedProjects.count
         check(restore == .openedWindows && windows && reopened && !welcome,
-              "the relaunch after the update brings back the project that was open, and no Welcome window",
+              "the relaunch after the update brings back every project that was open, and no Welcome window",
               "\(restore), projects \(projects), Welcome \(welcome)")
         await restoreChecks(harness, restore: restore)
         await mcpAfterUpdate(harness)
@@ -325,7 +369,7 @@ enum SelfTestRestore {
         let remote = defaults?.data(forKey: "remoteTabs").map { String(decoding: $0, as: UTF8.self) } ?? "none"
         let noFlag = defaults?.object(forKey: oldRelaunchFlag) == nil
         let suiteFile = FileManager.default.fileExists(atPath: harness.defaultsSuite + ".plist")
-        check(saved == [harness.project.path] && remote == "[]" && noFlag && suiteFile,
+        check(Set(saved) == Set(openedProjects) && remote == "[]" && noFlag && suiteFile,
               "the projects open at quit and the kept remote tabs are in the harness's defaults, and no quit wrote the relaunch flag",
               "projects \(saved), remote tabs \(remote), no flag \(noFlag), suite file \(suiteFile)")
 
@@ -355,6 +399,7 @@ enum SelfTestRestore {
         } else {
             check(false, "the first step recorded the user's own state")
         }
+        await beforeUpdateChecks(harness)
         welcomeQuit()
     }
 
@@ -512,8 +557,8 @@ enum SelfTestRestore {
         let header = snapshot?.header
         let awaiting = header?.clean == false && header?.resumeConsent == nil && header?.awaitingMarker != nil
         let windows = snapshot?.windows.count ?? 0
-        check(awaiting && windows == 2 && names.contains(UpdateMarker.fileName),
-              "the update quit saved both windows, waiting for its marker, with no consent id, and wrote the marker",
+        check(awaiting && windows == 2 + extraProjects && names.contains(UpdateMarker.fileName),
+              "the update quit saved every window, waiting for its marker, with no consent id, and wrote the marker",
               "clean \(header?.clean ?? true), consent \(header?.resumeConsent != nil), awaiting \(header?.awaitingMarker != nil), windows \(windows)")
         let lingering: [String] = names.filter { (name: String) -> Bool in
             name.hasPrefix(".") || name.hasSuffix(SessionFiles.previousSuffix)
@@ -575,8 +620,34 @@ enum SelfTestRestore {
         var fractions: [CGFloat] = []
         if let group, case .split(let split) = group.root { fractions = split.dividers }
         let split = fractions.count == 1 && abs((fractions.first ?? 0) - 0.3) < 0.01
-        check(app.controllers.count == 2 && split, "both windows come back, and a split left at 0.3 comes back at 0.3",
-              "windows \(app.controllers.count), dividers \(fractions)")
+        let expected: Int = 2 + Self.extraProjects
+        check(app.controllers.count == expected && split, "every window comes back, and a split left at 0.3 comes back at 0.3",
+              "windows \(app.controllers.count) of \(expected), dividers \(fractions)")
+        // Merged before the quit, merged again: one window, the project's tab in front, the others behind it with their
+        // tabs, every tab's shell there, one frame for all.
+        let others = app.controllers.filter { $0 !== window }
+        if let host = window?.window, let other = others.first?.window {
+            _ = await SelfTest.wait(3) { host.tabGroup?.windows.count == expected }
+            let together: Bool = host.tabGroup?.windows.count == expected
+                && app.controllers.allSatisfy { controller in host.tabGroup?.windows.contains { $0 === controller.window } == true }
+            let front: Bool = host.tabGroup?.selectedWindow === host && others.allSatisfy { $0.window?.isBackgroundTab == true } && host.isVisible
+            let filled: Bool = app.controllers.allSatisfy { controller in !controller.tabs.isEmpty && controller.tabs.allSatisfy { $0.view.window === controller.window } }
+            let oneFrame: Bool = others.allSatisfy { $0.window?.frame == host.frame }
+            check(together && front && filled && oneFrame,
+                  "windows merged before the update come back merged: the project's tab in front, the others behind it with their tabs, one frame",
+                  "together \(together), front \(front), filled \(filled), frames \(host.frame) and \(other.frame), "
+                      + "tabs \(app.controllers.map(\.tabs.count)), group \(host.tabGroup?.windows.count ?? 0)")
+            // The tab behind, chosen: it shows its own project's tabs, laid out under the tab bar.
+            other.makeKeyAndOrderFront(nil)
+            _ = await SelfTest.wait(3) { host.tabGroup?.selectedWindow === other }
+            let shown: Bool = host.tabGroup?.selectedWindow === other && (others.first?.columnHost.topCover ?? 0) > 0
+                && (others.first?.activeTab?.view.isHiddenOrHasHiddenAncestor == false)
+            check(shown, "the tab behind, chosen, shows its own tabs under the tab bar",
+                  "selected \(host.tabGroup?.selectedWindow === other), cover \(others.first?.columnHost.topCover ?? 0)")
+            host.makeKeyAndOrderFront(nil)
+        } else {
+            check(false, "windows merged before the update come back merged", "windows \(app.controllers.count)")
+        }
         guard let first = group?.panes.first, let second = group?.panes.dropFirst().first else {
             return check(false, "the project window's split tab comes back with both panes")
         }

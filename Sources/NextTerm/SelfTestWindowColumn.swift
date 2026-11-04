@@ -238,6 +238,19 @@ extension SelfTest {
         app.setWindowColumnSide(.left)
         check(app.windowColumnSide == nil && !first.windowColumn.onRight,
               "window column: moved back to the sidebar's side, it follows the sidebar again", "side \(String(describing: app.windowColumnSide))")
+        // The mirror: the sidebar on the right, the column alone on the left, under the traffic lights with its strip over
+        // its count, and the files' header without the lights' room.
+        app.toggleSidebarSide(nil)
+        app.setWindowColumnSide(.left)
+        first.window?.layoutIfNeeded()
+        let leftColumn: NSRect = first.windowColumn.frame
+        let rightFiles: NSRect = first.sidebar.convert(first.sidebar.bounds, to: host)
+        let mirrored: Bool = leftColumn.minX < 0.5 && abs(rightFiles.maxX - (host.bounds.maxX)) < 0.5 && !first.windowColumn.onRight
+            && first.windowColumn.topInset == TabBarView.height && app.windowColumnSide == .left
+        await screenshot(first, suffix: "-column-apart-left")
+        check(mirrored, "window column: on the left with the project files on the right, at the left edge under the traffic lights",
+              "column \(leftColumn), files \(rightFiles), column inset \(first.windowColumn.topInset), side \(String(describing: app.windowColumnSide))")
+        app.toggleSidebarSide(nil)
     }
 
     // MARK: AE3: the setting off

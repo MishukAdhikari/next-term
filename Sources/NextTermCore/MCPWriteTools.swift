@@ -58,6 +58,7 @@ extension MCPServer {
                      "add_host", "remove_host", "edit_host", "end_session", "new_remote_tab", "install_skill", "remove_skill", "open_in_editor", "show_settings",
                      "propose_edit", "write_file", "create_file", "stage", "commit", "run_command", "focus_tab", "split_pane",
                      "close_pane", "zoom_pane", "set_layout", "settings_set", "apply_import", "undo_import", "apply_setup", "add_task",
+                     "reopen_before_update",
                      "request_secret", "store_secret", "run_with_secrets", "import_secrets"]
         var tags: [String: Scope] = [:]
         for name in read { tags[name] = .read }
@@ -113,6 +114,10 @@ extension MCPServer {
              description: "Makes one pane of a split tab fill the tab while the others keep running behind it (zoomed true, the default), or brings every pane back (zoomed false), as Window › Maximize Pane does. The zoomed pane takes its window's keyboard; bringing the panes back leaves the keyboard where it is. The user is asked on the Mac first; a call that changes nothing answers at once.",
              inputSchema: #"{"type": "object", "properties": {\#(tabArgument), "zoomed": {"type": "boolean", "description": "Default true."}, \#(reasonArgument)}, "required": ["tab_id"], "additionalProperties": false}"#,
              readOnly: false, destructive: false, idempotent: true, timeout: 60),
+        Tool(name: "reopen_before_update", title: "Reopen the windows from before the update",
+             description: "Reopens the windows that were open when the last update was installed and did not come back after its relaunch, each with a tab for each of its tabs on this Mac, in their folders and with the titles the user gave them; windows that were merged are merged again. The user is asked on the Mac first; with nothing to reopen it answers at once. Next Term keeps that list for a day, and 5 minutes once every window is back.",
+             inputSchema: #"{"type": "object", "properties": {\#(reasonArgument)}, "additionalProperties": false}"#,
+             readOnly: false, destructive: false, idempotent: true, timeout: 60, alwaysLoad: false),
         Tool(name: "set_layout", title: "Set the layout",
              description: "Changes the layout as the View menu does. terminal_position (bottom, right, left or top), sidebar_side (left or right), terminal_tabs (top, or left or right for a list of the tabs down that side of the terminal), window_column (shown or hidden: a rail with a dot for each open window at every window's outer edge, while two or more are open; resting the pointer on it shows the list) and window_column_folded (false pins it unfolded to a row per window with its name and marks) and window_column_side (left or right: by default the project sidebar's side) apply to every window. sidebar (shown or hidden) and terminal_folded (true folds the terminal to its tab bar, or to a rail beside the editor) apply to one window: your window, or the one with project open. The user is asked on the Mac first; a call that changes nothing answers at once with the layout.",
              inputSchema: #"{"type": "object", "properties": {"terminal_position": {"type": "string", "enum": ["bottom", "right", "left", "top"]}, "sidebar_side": {"type": "string", "enum": ["left", "right"]}, "terminal_tabs": {"type": "string", "enum": ["top", "left", "right"]}, "window_column": {"type": "string", "enum": ["shown", "hidden"]}, "window_column_folded": {"type": "boolean"}, "window_column_side": {"type": "string", "enum": ["left", "right"]}, "sidebar": {"type": "string", "enum": ["shown", "hidden"]}, "terminal_folded": {"type": "boolean"}, \#(projectArgument), \#(reasonArgument)}, "additionalProperties": false}"#,

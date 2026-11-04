@@ -134,6 +134,19 @@ extension MCPWriteControl {
         }
     }
 
+    /// reopen_before_update: the windows open before the last update that did not come back, asked about first.
+    static func reopenBeforeUpdate(_ context: Context, reply: @escaping Reply) {
+        let missing = BeforeUpdateControl.missingNow()
+        guard !missing.isEmpty else { return reply(MCPControl.ok(["reopened": 0, "note": "Every window from before the update is open."])) }
+        let names: [String] = missing.map { window in window.project.map { ($0 as NSString).lastPathComponent } ?? "a window with no project" }
+        let details = "\(missing.count) window\(missing.count == 1 ? "" : "s") from before the update reopen\(missing.count == 1 ? "s" : ""): \(names.joined(separator: ", ")), each with its tabs in their folders."
+        approve(Ask(title: "An agent asks to reopen the windows from before the update", details: details), context, reply: reply) { approved, window in
+            window?.finish()
+            let opened = BeforeUpdateControl.reopen()
+            reply(MCPControl.ok(["reopened": opened, "approved": approved]))
+        }
+    }
+
     static func zoomPane(_ arguments: [String: Any], _ context: Context, reply: @escaping Reply) {
         let tab: TerminalTab, controller: TerminalWindowController, group: PaneGroup
         switch paneTarget(arguments) {

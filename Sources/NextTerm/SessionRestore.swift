@@ -257,6 +257,8 @@ final class SessionRestore {
             }
         }
         let windows = SessionCapture.windows(controllers, scrollback: named)
+        // An update's quit: the windows kept apart too, until its relaunch has shown them all back (BeforeUpdate).
+        if case .update = intent { BeforeUpdateControl.save(windows, in: files) }
         let scrollback: [QuitScrollback] = captures.map { (capture: SessionScrollback.Capture) -> QuitScrollback in
             QuitScrollback(id: capture.id) { capture.text() }
         }

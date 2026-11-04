@@ -33,6 +33,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     var lastSoundAt = Date.distantPast
     /// Next Term › Undo Agent Setup…, shown while an agent's setup can be undone (AgentSetupUndo).
     var undoAgentSetupItem: NSMenuItem?
+    /// File › Reopen Windows from Before the Update, shown while some did not come back (BeforeUpdate).
+    var reopenBeforeUpdateItem: NSMenuItem?
 
     /// The editor's font size, which terminals use too while they have no size of their own.
     var fontSize: CGFloat {
@@ -623,6 +625,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             return SelfTestRestore.run(restore: restore)
         }
         #endif
+        // Once the restore has shown its windows: any from before an update that did not come back (BeforeUpdate).
+        DispatchQueue.main.asyncAfter(deadline: .now() + 15) { MainActor.assumeIsolated { BeforeUpdateControl.launchCheck() } }
         if SelfTest.isRequested {
             // A normal launch, with the Welcome window whatever is saved and no import offer. The self-test's first
             // check opens the window the others use.
@@ -1641,6 +1645,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         for controller in controllers { for tab in controller.tabs { tab.view.optionAsMetaKey = Preferences.optionAsMeta } }
     }
 
+    /// Shown while windows from before the last update are missing (BeforeUpdateControl.changed).
+    @objc private func beforeUpdateChanged() {
+        MainActor.assumeIsolated { reopenBeforeUpdateItem?.isHidden = BeforeUpdateControl.missing.isEmpty }
+    }
+
+    /// File › Reopen Windows from Before the Update.
+    @objc func reopenBeforeUpdate(_ sender: Any?) {
+        MainActor.assumeIsolated { _ = BeforeUpdateControl.reopen() }
+    }
+
     /// File › Close Window with a window of Next Term's own in front (Settings, Skills, Secrets, a panel): it closes, as
     /// AppKit's Close Window closes it. A project window answers it itself (TerminalWindowTabs).
     @objc func closeWindow(_ sender: Any?) {
@@ -1648,6 +1662,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        if item.action == #selector(reopenBeforeUpdate(_:)) {
+            let none: Bool = MainActor.assumeIsolated { BeforeUpdateControl.missing.isEmpty }
+            item.isHidden = none
+            return !none
+        }
         if item.action == #selector(closeWindow(_:)) { return NSApp.keyWindow?.styleMask.contains(.closable) == true }
         if item.action == #selector(reopenClosedTab(_:)) { return !ClosedTabs.isEmpty }
         if item.action == #selector(toggleOptionAsMeta(_:)) { item.state = Preferences.optionAsMeta ? .on : .off }
@@ -2306,6 +2325,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // Next Term's own action, not AppKit's performClose:, which macOS renames "Close Tab" in a merged window and
         // gives its own Close Window beside: one Close Window, closing the whole window (TerminalWindowTabs).
         item(shell, "Close Window", #selector(TerminalWindowController.closeWindow(_:)), "w", [.command, .shift])
+        // Shown while windows from before the last update did not come back (BeforeUpdate).
+        reopenBeforeUpdateItem = item(shell, "Reopen Windows from Before the Update", #selector(reopenBeforeUpdate(_:)), "", target: self)
+        reopenBeforeUpdateItem?.isHidden = true
+        NotificationCenter.default.addObserver(self, selector: #selector(beforeUpdateChanged), name: BeforeUpdateControl.changed, object: nil)
 
         let edit = submenu(main, "Edit")
         item(edit, "Undo", Selector(("undo:")), "z")
