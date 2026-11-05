@@ -30,6 +30,8 @@ public final class MCPHubSession: @unchecked Sendable {
     private let version: String
     private let lock = NSLock()
     private var upstreams: [String: MCPHubUpstream] = [:]
+    /// The session ended (`stop`): no server is made or started from then on.
+    private var stopped = false
 
     /// `environment`: the bridge's own, which a server's starts from. `nxtrm`: the program and first arguments `nxtrm`
     /// stands for.
@@ -47,13 +49,14 @@ public final class MCPHubSession: @unchecked Sendable {
     /// The tools listed after Next Term's own: none until a server applies.
     public var tools: [MCPServer.Tool] { isActive ? MCPHubCatalog.tools : [] }
 
-    /// Ends every server it started.
+    /// Ends every server it started, and any a call in flight is starting.
     public func stop() {
         lock.lock()
+        stopped = true
         let running = Array(upstreams.values)
         upstreams = [:]
         lock.unlock()
-        DispatchQueue.concurrentPerform(iterations: running.count) { running[$0].stop() }
+        DispatchQueue.concurrentPerform(iterations: running.count) { running[$0].retire() }
     }
 
     // MARK: the catalog
@@ -189,7 +192,7 @@ public final class MCPHubSession: @unchecked Sendable {
             }
         }
         lock.unlock()
-        stale.forEach { $0.stop() }
+        stale.forEach { $0.retire() }
     }
 
     /// A ready server's tools, starting it if it isn't running; a name the plan doesn't have asks the app again first.
@@ -206,7 +209,9 @@ public final class MCPHubSession: @unchecked Sendable {
             return .failure(.init("\(name) is in \(server.list), a project's list the user hasn't approved in Next Term; it doesn't start until then."))
         case .remote: return .failure(.init("\(name) is a remote server, and Next Term doesn't reach remote servers yet."))
         }
-        guard let upstream = upstream(server) else { return .failure(.init(launchFailure(server))) }
+        guard let upstream = upstream(server) else {
+            return .failure(.init(isStopped ? "\(name) was stopped: its session is ending." : launchFailure(server)))
+        }
         return upstream.tools(until: deadline)
     }
 
@@ -217,15 +222,24 @@ public final class MCPHubSession: @unchecked Sendable {
     }
 
     /// The server's upstream, made the first time it is needed (it starts later, on its first need); nil when its
-    /// program can't be found.
+    /// program can't be found, or the session ended. One made for another launch is ended, never left running unlisted.
     private func upstream(_ server: MCPHubPlan.Server) -> MCPHubUpstream? {
         guard let wanted = try? launch(server, in: currentPlan).get() else { return nil }
         lock.lock()
-        defer { lock.unlock() }
-        if let made = upstreams[server.name], made.launch == wanted { return made }
+        guard !stopped else { lock.unlock(); return nil }
+        if let made = upstreams[server.name], made.launch == wanted { lock.unlock(); return made }
+        let replaced = upstreams[server.name]
         let made = MCPHubUpstream(name: server.name, launch: wanted, limits: limits, clientVersion: version)
         upstreams[server.name] = made
+        lock.unlock()
+        replaced?.retire()
         return made
+    }
+
+    private var isStopped: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return stopped
     }
 
     private func launchFailure(_ server: MCPHubPlan.Server) -> String {

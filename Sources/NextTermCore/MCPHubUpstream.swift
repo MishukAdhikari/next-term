@@ -9,7 +9,9 @@ import Darwin
 ///
 /// Everything that can go wrong ends in a sentence for the agent, never a hang or a crash: a program not found, no answer
 /// within the limits, an exit (with the last of what it wrote to stderr), output that isn't MCP (counted, the first line
-/// quoted), and a message over `Limits.message`, which stops it.
+/// quoted), an MCP version Next Term doesn't speak, a message over `Limits.message`, and one Next Term couldn't finish
+/// writing because the server stopped reading, which both stop it. What it wrote is quoted with anything that looks like
+/// a key masked (MCPRedaction): it goes on to the agent's vendor.
 public final class MCPHubUpstream: @unchecked Sendable {
     public struct Limits: Sendable {
         /// From starting the program to its tool list. `nxtrm secret run` may wait up to 25 seconds for the user's approval.
@@ -70,6 +72,8 @@ public final class MCPHubUpstream: @unchecked Sendable {
     private var stderrTail = Data()
     private var garbage = 0
     private var firstGarbage: String?
+    /// Ended for good (`retire`): the session it was started for is over, so no need starts it again.
+    private var retired = false
 
     public init(name: String, launch: Launch, limits: Limits = .standard, clientVersion: String) {
         self.name = name
@@ -107,6 +111,7 @@ public final class MCPHubUpstream: @unchecked Sendable {
         defer { starting.unlock() }
         lock.lock()
         if let listed, ended == nil { lock.unlock(); return .success(listed) }
+        if retired { lock.unlock(); return .failure(Failure("\(name) was stopped.")) }
         lock.unlock()
         let result = start(until: min(deadline, Date().addingTimeInterval(limits.start)))
         lock.lock()
@@ -139,17 +144,18 @@ public final class MCPHubUpstream: @unchecked Sendable {
     }
 
     /// Ends it: its stdin closes, which ends a well-behaved server; one still running a moment later is terminated, then
-    /// killed.
-    public func stop() {
+    /// killed. The next need starts it again.
+    public func stop(because why: String? = nil) {
         lock.lock()
         let running = process
         process = nil
         let fd = input
         input = -1
         listed = nil
-        if running != nil { ended = "\(name) was stopped." }
+        if running != nil { ended = why ?? "\(name) was stopped." }
+        if running != nil, let why { lastFailure = why } // stopped for a fault of its own: mcp_servers says so
         lock.unlock()
-        if fd >= 0 { close(fd) }
+        closeInput(fd)
         guard let running else { return }
         for (wait, signal) in [(0.5, SIGTERM), (1.0, SIGKILL)] {
             let until = Date().addingTimeInterval(wait)
@@ -157,6 +163,14 @@ public final class MCPHubUpstream: @unchecked Sendable {
             guard running.isRunning else { return }
             kill(running.processIdentifier, signal)
         }
+    }
+
+    /// Ends it for good, as its session ends: a need from then on, or one starting it meanwhile, starts nothing.
+    public func retire() {
+        lock.lock()
+        retired = true
+        lock.unlock()
+        stop()
     }
 
     // MARK: starting
@@ -188,6 +202,9 @@ public final class MCPHubUpstream: @unchecked Sendable {
         }
         let fd = stdin.fileHandleForWriting.fileDescriptor
         _ = fcntl(fd, F_SETNOSIGPIPE, 1) // a server gone while we write: an error, not this process's end
+        // Never blocking: a server that stops reading its stdin fills the pipe, and a write then waits for room only
+        // until its need's deadline (`send`).
+        _ = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK)
         lock.lock()
         process = child
         input = dup(fd)
@@ -195,6 +212,7 @@ public final class MCPHubUpstream: @unchecked Sendable {
         stderrTail = Data()
         garbage = 0
         firstGarbage = nil
+        let ending = retired
         lock.unlock()
         // Its own descriptor (`dup`), closed when it stops; Process closes the child's ends of the pipes itself.
         try? stdin.fileHandleForWriting.close()
@@ -203,6 +221,10 @@ public final class MCPHubUpstream: @unchecked Sendable {
         reader.start()
         let errors = Thread { [weak self] in self?.readErrors(stderr.fileHandleForReading) }
         errors.start()
+        if ending { // retired while it was being started
+            stop()
+            return .failure(Failure("\(name) was stopped."))
+        }
 
         let hello: [String: Any] = [
             "protocolVersion": MCPServer.supportedVersions[1], "capabilities": [String: Any](),
@@ -218,6 +240,18 @@ public final class MCPHubUpstream: @unchecked Sendable {
         if let error = started["error"] as? [String: Any] {
             stop()
             return .failure(Failure("\(name) refused to start: \(error["message"] as? String ?? "no reason given")."))
+        }
+        // The version it answered is the one both sides then speak; one Next Term doesn't know, it can't (MCP's
+        // lifecycle: the client disconnects).
+        guard let answered = started["result"] as? [String: Any] else {
+            stop()
+            return .failure(Failure("\(name) answered Next Term's start with something that isn't MCP's."))
+        }
+        guard let version = answered["protocolVersion"] as? String, MCPServer.supportedVersions.contains(version) else {
+            stop()
+            let named = (answered["protocolVersion"] as? String).map { "MCP version \($0)" } ?? "no MCP version"
+            return .failure(Failure("\(name) answered with \(named), and Next Term speaks "
+                + MCPServer.supportedVersions.joined(separator: ", ") + "."))
         }
         notify("notifications/initialized")
         var tools: [[String: Any]] = []
@@ -264,7 +298,7 @@ public final class MCPHubUpstream: @unchecked Sendable {
         nextID += 1
         pending[id] = waiter
         lock.unlock()
-        guard send(["jsonrpc": "2.0", "id": id, "method": method, "params": params]) else {
+        guard send(["jsonrpc": "2.0", "id": id, "method": method, "params": params], until: deadline) else {
             lock.lock()
             pending[id] = nil
             let why = ended ?? "\(name) stopped reading what Next Term sends it."
@@ -287,33 +321,63 @@ public final class MCPHubUpstream: @unchecked Sendable {
         return .success(waiter.answer ?? [:])
     }
 
+    /// A notification, or an answer to the server's own request: given a second to be written.
     private func notify(_ method: String, _ params: [String: Any]? = nil) {
         var message: [String: Any] = ["jsonrpc": "2.0", "method": method]
         if let params { message["params"] = params }
-        _ = send(message)
+        _ = send(message, until: Date().addingTimeInterval(1))
     }
 
-    /// Writes one message: false when it couldn't be written (the server is gone).
-    private func send(_ message: [String: Any]) -> Bool {
+    /// Writes one message: false when it couldn't be written by `deadline` (the server is gone, stopped, or not reading).
+    /// Half a message is no message: the server is stopped, since what it reads next would be garbled.
+    private func send(_ message: [String: Any], until deadline: Date) -> Bool {
         guard JSONSerialization.isValidJSONObject(message),
               var data = try? JSONSerialization.data(withJSONObject: message, options: [.withoutEscapingSlashes]) else { return false }
         data.append(0x0A)
-        writing.lock()
-        defer { writing.unlock() }
+        guard writing.lock(before: deadline) else { return false } // another write waits for room until its own
         lock.lock()
         let fd = input
         lock.unlock()
-        guard fd >= 0 else { return false }
-        return data.withUnsafeBytes { raw -> Bool in
+        guard fd >= 0 else { writing.unlock(); return false }
+        let (sent, partly) = data.withUnsafeBytes { raw -> (Bool, Bool) in
             var offset = 0
             while offset < raw.count {
                 let written = write(fd, raw.baseAddress! + offset, raw.count - offset)
                 if written < 0, errno == EINTR { continue }
-                if written <= 0 { return false }
+                if written < 0, errno == EAGAIN {
+                    // The pipe is full: wait for room a slice at a time, so a stop meanwhile (`input` no longer this
+                    // descriptor) ends the wait at once.
+                    let left = deadline.timeIntervalSinceNow
+                    lock.lock()
+                    let open = input == fd
+                    lock.unlock()
+                    guard left > 0, open else { return (false, offset > 0) }
+                    var room = pollfd(fd: fd, events: Int16(POLLOUT), revents: 0)
+                    _ = poll(&room, 1, Int32(min(left, 0.1) * 1000) + 1)
+                    continue
+                }
+                if written <= 0 { return (false, offset > 0) }
                 offset += written
             }
-            return true
+            return (true, false)
         }
+        writing.unlock()
+        if partly {
+            lock.lock()
+            let same = input == fd
+            lock.unlock()
+            if same { stop(because: "\(name) stopped reading what Next Term sends it, so Next Term stopped it.") }
+        }
+        return sent
+    }
+
+    /// Closes the descriptor `input` was, once no write is using it: a number closed under a write could be another
+    /// server's pipe by the time the write goes on.
+    private func closeInput(_ fd: Int32) {
+        guard fd >= 0 else { return }
+        writing.lock()
+        close(fd)
+        writing.unlock()
     }
 
     /// Its stdout, line by line, until it closes.
@@ -351,7 +415,7 @@ public final class MCPHubUpstream: @unchecked Sendable {
             lock.unlock()
             var text = "\(name) stopped"
             if let status { text += reason == .uncaughtSignal ? " (signal \(status))" : " (exit status \(status))" }
-            if !said.isEmpty { text += ". The last it wrote to stderr: " + String(said.suffix(600)) }
+            if !said.isEmpty { text += ". The last it wrote to stderr: " + MCPRedaction.redact(String(said.suffix(600))).text }
             why = text + "."
         }
         end(why ?? "\(name) stopped.", child: child)
@@ -379,15 +443,16 @@ public final class MCPHubUpstream: @unchecked Sendable {
         guard let message = (try? JSONSerialization.jsonObject(with: trimmed)) as? [String: Any] else {
             lock.lock()
             garbage += 1
-            if firstGarbage == nil { firstGarbage = String(decoding: trimmed.prefix(160), as: UTF8.self) }
+            if firstGarbage == nil { firstGarbage = MCPRedaction.redact(String(decoding: trimmed.prefix(160), as: UTF8.self)).text }
             lock.unlock()
             return
         }
         if let method = message["method"] as? String {
             // A request of its own: Next Term offers no capability a server may ask of it, so only a ping is answered.
             guard let id = message["id"], !(id is NSNull) else { return }
-            if method == "ping" { _ = send(["jsonrpc": "2.0", "id": id, "result": [String: Any]()]) }
-            else { _ = send(["jsonrpc": "2.0", "id": id, "error": ["code": -32601, "message": "Next Term doesn't offer \(method)"]]) }
+            let soon = Date().addingTimeInterval(1)
+            if method == "ping" { _ = send(["jsonrpc": "2.0", "id": id, "result": [String: Any]()], until: soon) }
+            else { _ = send(["jsonrpc": "2.0", "id": id, "error": ["code": -32601, "message": "Next Term doesn't offer \(method)"]], until: soon) }
             return
         }
         guard let id = (message["id"] as? NSNumber)?.intValue else { return }
@@ -415,7 +480,7 @@ public final class MCPHubUpstream: @unchecked Sendable {
         let fd = input
         input = -1
         lock.unlock()
-        if fd >= 0 { close(fd) }
+        closeInput(fd)
         for waiter in waiting.values {
             waiter.failure = why
             waiter.done.signal()

@@ -286,6 +286,58 @@ import Testing
         #expect(isError && said.contains("broken stopped (exit status 1)") && said.contains("missing module"))
     }
 
+    /// A server that answers its start with `version`, lists one tool, then does `then` (a shell line) and reads nothing more.
+    func oneShot(_ name: String, version: String = "2025-06-18", then: String) throws -> String {
+        let file = (script as NSString).deletingLastPathComponent + "/\(name).sh"
+        let id = #"id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p')"#
+        try ("#!/bin/sh\nread -r line; \(id)\n"
+            + #"printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"\#(version)","capabilities":{}}}\n' "$id""# + "\n"
+            + "read -r line\nread -r line; \(id)\n"
+            + #"printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"take","inputSchema":{"type":"object"}}]}}\n' "$id""# + "\n"
+            + then + "\n").write(toFile: file, atomically: true, encoding: .utf8)
+        return file
+    }
+
+    @Test func aServerThatStopsReadingCantHoldACallPastItsLimit() throws {
+        let deaf = try oneShot("deaf", then: "exec sleep 30")
+        let hub = session(plan([fakeServer("deaf", script: deaf)]), limits: MCPHubUpstream.Limits(start: 5, call: 1.5))
+        defer { hub.stop() }
+        // More than a pipe holds, to a server that never reads it: the write waits for room only until the deadline.
+        let started = Date()
+        let (said, isError) = text(hub.call("mcp_call", ["server": "deaf", "tool": "take", "arguments": ["text": String(repeating: "a", count: 1 << 20)]]))
+        #expect(isError && said.contains("deaf stopped reading what Next Term sends it"))
+        #expect(Date().timeIntervalSince(started) < 4)
+        // Half a message garbles the next: the server was stopped, and says so until it starts again.
+        let row = (json(hub.call("mcp_servers", [:]))["servers"] as? [[String: Any]])?.first
+        #expect(row?["state"] as? String == "failed")
+    }
+
+    @Test func aServerOnAnMCPVersionNextTermDoesntSpeakIsRefused() throws {
+        let future = try oneShot("future", version: "1999-01-01", then: "cat >/dev/null")
+        let hub = session(plan([fakeServer("future", script: future)]))
+        defer { hub.stop() }
+        let (said, isError) = text(hub.call("mcp_tools", ["server": "future"]))
+        #expect(isError && said.contains("future answered with MCP version 1999-01-01, and Next Term speaks 2025-11-25"))
+    }
+
+    @Test func aKeyAServerWritesToStderrIsMasked() throws {
+        let leaky = (script as NSString).deletingLastPathComponent + "/leaky.sh"
+        try "#!/bin/sh\necho 'auth failed for sk-ant-api03-abcdefghijklmnopqrstuvwxyz' >&2\nexit 1\n"
+            .write(toFile: leaky, atomically: true, encoding: .utf8)
+        let hub = session(plan([fakeServer("leaky", script: leaky)]))
+        defer { hub.stop() }
+        let (said, isError) = text(hub.call("mcp_call", ["server": "leaky", "tool": "x"]))
+        #expect(isError && said.contains("auth failed for •••") && !said.contains("sk-ant-api03"))
+    }
+
+    @Test func aStoppedSessionStartsNothing() {
+        let hub = session(plan([fakeServer()]))
+        #expect(text(hub.call("mcp_call", ["server": "fake", "tool": "echo"])) == ("hello from fake", false))
+        hub.stop()
+        let (said, isError) = text(hub.call("mcp_call", ["server": "fake", "tool": "echo"]))
+        #expect(isError && said.contains("its session is ending"))
+    }
+
     // MARK: mid-session
 
     @Test func aServerConnectedMidSessionIsReachedThroughTheCatalog() {
