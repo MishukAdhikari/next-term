@@ -118,14 +118,15 @@ import Testing
         try FileManager.default.createDirectory(atPath: repo + "/.git", withIntermediateDirectories: true)
         try FileManager.default.createDirectory(atPath: repo + "/.next-term", withIntermediateDirectories: true)
         let userFile = home + "/user.json"
-        try #"{"mcpServers": {"local": {"command": "npx"}, "web": {"url": "https://example.com/mcp"}, "quiet": {"command": "a", "nextTerm": {"enabled": false}}, "bad": {"command": 3}}}"#
+        try #"{"mcpServers": {"local": {"command": "npx"}, "web": {"url": "https://example.com/mcp"}, "older": {"type": "sse", "url": "https://example.com/sse"}, "quiet": {"command": "a", "nextTerm": {"enabled": false}}, "bad": {"command": 3}}}"#
             .write(toFile: userFile, atomically: true, encoding: .utf8)
         try #"{"mcpServers": {"team": {"command": "make", "args": ["mcp"]}}}"#
             .write(toFile: repo + "/" + MCPHubScope.projectFile, atomically: true, encoding: .utf8)
         let resolution = MCPHubScope.servers(folder: repo, home: home, userFile: userFile)
         let made = MCPHubPlan.make(resolution, folder: repo, path: ["/bin"])
-        #expect(made.servers.map(\.name) == ["local", "team", "web", "quiet"])
-        #expect(made.servers.map(\.state) == [.ready, .needsApproval, .remote, .off])
+        #expect(made.servers.map(\.name) == ["local", "older", "team", "web", "quiet"])
+        // A server at a URL is ready, for the app to reach; an older HTTP+SSE one isn't reached at all.
+        #expect(made.servers.map(\.state) == [.ready, .remote, .needsApproval, .ready, .off])
         #expect(made.problems.count == 1 && made.problems[0].hasPrefix("bad in \(userFile)"))
         #expect(made.isActive)
         // Approved as it is now, a project's server can start; a changed list waits again.
@@ -185,7 +186,7 @@ import Testing
         }
         #expect(refused(["server": "quiet", "tool": "x"]).contains("turned off"))
         #expect(refused(["server": "team", "tool": "x"]).contains("hasn't approved"))
-        #expect(refused(["server": "web", "tool": "x"]).contains("remote"))
+        #expect(refused(["server": "web", "tool": "x"]).contains("older HTTP+SSE transport"))
         #expect(refused(["server": "nobody", "tool": "x"]).contains("No MCP server named nobody"))
         #expect(refused(["server": "fake"]).contains("takes a server and a tool"))
         #expect(refused(["server": "fake", "tool": "echo", "arguments": "text"]).contains("arguments is an object"))

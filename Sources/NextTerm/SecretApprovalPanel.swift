@@ -45,7 +45,11 @@ final class SecretApprovalPanel: NSWindowController, NSWindowDelegate {
         var choices: [SecretRequests.How] = [.once, .fifteenMinutes]
         /// The keys set to ask for Touch ID every time they're used, which leave only Allow once: said under it.
         var askingEveryUse: [String] = []
+        /// A remote MCP server's keys: `command` is its URL, and Next Term sends the keys in the headers itself.
+        var reachesURL = false
     }
+
+    static let headersNote = "Next Term sends the key in its requests to this server itself. The agent gets only the server\u{2019}s answers."
 
     static let fifteenMinutesNote = "Only this agent, these keys, this exact command and folder. Anything different asks again."
     static let wrapperRestartNote = "Covers starting it again. A server already running keeps going."
@@ -277,7 +281,7 @@ final class SecretApprovalPanel: NSWindowController, NSWindowDelegate {
         let facts = content.askedBy
         var lines: [String] = []
         if content.runsAsShell { lines.append("Runs as a shell command (/bin/sh -c)") }
-        if !content.command.isEmpty { lines.append(SecretRun.environmentNote(keys: content.keys.count)) }
+        if !content.command.isEmpty { lines.append(content.reachesURL ? Self.headersNote : SecretRun.environmentNote(keys: content.keys.count)) }
         if facts.checkedNxtrm { lines.append("Asked through Next Term\u{2019}s own nxtrm (checked)") }
         if let title = facts.programTitle.map({ Self.sanitized($0, limit: 80) }), !title.isEmpty {
             lines.append("Tab title (set by a program): \(title)")

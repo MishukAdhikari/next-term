@@ -1,7 +1,8 @@
 import Foundation
 
 /// The MCP hub in one agent session's bridge (`nxtrm mcp`): the plan the app gave as the session started, the local
-/// servers started for it (MCPHubUpstream, one per server, on first need), and the catalog's answers (MCPHubCatalog).
+/// servers started for it (MCPHubUpstream, one per server, on first need), the remote ones the app reaches for it
+/// (`remote`, MCPHubPlan.remoteTool), and the catalog's answers (MCPHubCatalog).
 /// Its servers end with it (`stop`), as the session ends (R16): one copy each per session, so a server that keeps state
 /// for its client keeps it for this agent alone.
 ///
@@ -21,12 +22,17 @@ public final class MCPHubSession: @unchecked Sendable {
     /// Told when a server's start ends otherwise than its last one did: its name, its list, and why it failed (nil: it
     /// runs, with this many tools). The bridge passes it on to the app, for Settings › MCP Servers to show.
     public typealias Report = @Sendable (_ server: String, _ list: String, _ failure: String?, _ tools: Int) -> Void
+    /// Asks the app to reach a remote server (MCPHubPlan.remoteTool's arguments), waiting at most `wait` seconds: its
+    /// answer's text and whether it is an error, or nil when the app didn't answer. The keys stay in the app: a server
+    /// at a URL gets them in its headers from there, and nothing the bridge holds or the agent can read has them.
+    public typealias Remote = @Sendable (_ arguments: [String: Any], _ wait: TimeInterval) -> (text: String, isError: Bool)?
 
     /// Whether the catalog is offered: fixed as the session starts.
     public let isActive: Bool
     private var plan: MCPHubPlan
     private let refresh: Refresh
     private let report: Report?
+    private let remote: Remote?
     /// What `nxtrm` is to this bridge: its own program, so `nxtrm secret run` needs nothing on PATH.
     private let nxtrm: [String]
     private let environment: [String: String]
@@ -36,15 +42,18 @@ public final class MCPHubSession: @unchecked Sendable {
     private var upstreams: [String: MCPHubUpstream] = [:]
     /// The session ended (`stop`): no server is made or started from then on.
     private var stopped = false
+    /// How each remote server's last need ended, for mcp_servers: the app reaches them, so this is what the bridge saw.
+    private var remoteStatus: [String: MCPHubUpstream.Status] = [:]
 
     /// `environment`: the bridge's own, which a server's starts from. `nxtrm`: the program and first arguments `nxtrm`
     /// stands for.
     public init(plan: MCPHubPlan?, refresh: @escaping Refresh, nxtrm: [String], environment: [String: String],
-                limits: MCPHubUpstream.Limits = .standard, version: String, report: Report? = nil) {
+                limits: MCPHubUpstream.Limits = .standard, version: String, report: Report? = nil, remote: Remote? = nil) {
         self.plan = plan ?? MCPHubPlan(folder: "")
         isActive = plan?.isActive ?? false
         self.refresh = refresh
         self.report = report
+        self.remote = remote
         self.nxtrm = nxtrm
         self.environment = environment
         self.limits = limits
@@ -85,11 +94,24 @@ public final class MCPHubSession: @unchecked Sendable {
         }
         let listed: [[String: Any]] = current.servers.map { server in
             var item: [String: Any] = ["name": server.name, "state": server.state.rawValue, "list": server.list]
-            if server.state == .remote { item["url"] = server.url } else { item["command"] = server.commandLine }
+            if server.isRemote { item["url"] = server.url } else { item["command"] = server.commandLine }
             if server.state == .needsApproval {
                 item["note"] = "Its project's list is waiting for the user's approval in Next Term; it doesn't start until then."
             }
-            if server.state == .ready {
+            if server.state == .remote {
+                item["note"] = "It uses the older HTTP+SSE transport, which Next Term doesn't reach; its Streamable HTTP URL (often ending in /mcp) works instead."
+            }
+            if server.state == .ready, server.isRemote {
+                switch remoteState(server.name) {
+                case .running(let count):
+                    item["state"] = "running"
+                    item["tools"] = count
+                case .failed(let why):
+                    item["state"] = "failed"
+                    item["error"] = why
+                case .notStarted: break
+                }
+            } else if server.state == .ready {
                 switch upstream(server)?.status {
                 case .running(let count)?:
                     item["state"] = "running"
@@ -163,6 +185,16 @@ public final class MCPHubSession: @unchecked Sendable {
         guard listed.contains(where: { $0["name"] as? String == tool }) else {
             return MCPHubCatalog.text(missing(tool, on: name, among: listed), isError: true)
         }
+        if let server = currentPlan.server(named: name), server.isRemote {
+            switch reach(server, ["op": "call", "tool": tool, "arguments": arguments["arguments"] as? [String: Any] ?? [:]], until: deadline) {
+            case .failure(let failure): return MCPHubCatalog.text(failure.text, isError: true)
+            case .success(let answer):
+                guard let result = answer["result"] as? [String: Any] else {
+                    return MCPHubCatalog.text("Next Term's answer for \(name) had no tool result in it.", isError: true)
+                }
+                return MCPHubCatalog.fit(result)
+            }
+        }
         guard let upstream = upstream(named: name) else { return MCPHubCatalog.text("\(name) is gone from Next Term's list.", isError: true) }
         switch upstream.call(tool, arguments: arguments["arguments"] as? [String: Any] ?? [:], until: deadline) {
         case .failure(let failure): return MCPHubCatalog.text(failure.text, isError: true)
@@ -212,7 +244,17 @@ public final class MCPHubSession: @unchecked Sendable {
         case .off: return .failure(.init("\(name) is turned off for this folder in Next Term."))
         case .needsApproval:
             return .failure(.init("\(name) is in \(server.list), a project's list the user hasn't approved in Next Term; it doesn't start until then."))
-        case .remote: return .failure(.init("\(name) is a remote server, and Next Term doesn't reach remote servers yet."))
+        case .remote:
+            return .failure(.init("\(name) uses the older HTTP+SSE transport, which Next Term doesn't reach; ask the user to use its "
+                + "Streamable HTTP URL (often ending in /mcp) in Next Term › Settings › MCP Servers."))
+        }
+        if server.isRemote {
+            return reach(server, ["op": "tools"], until: deadline).flatMap { answer in
+                guard let tools = answer["tools"] as? [[String: Any]] else {
+                    return .failure(.init("Next Term's answer for \(name) had no tool list in it."))
+                }
+                return .success(tools)
+            }
         }
         guard let upstream = upstream(server) else {
             if isStopped { return .failure(.init("\(name) was stopped: its session is ending.")) }
@@ -231,6 +273,46 @@ public final class MCPHubSession: @unchecked Sendable {
             }
         }
         return result
+    }
+
+    // MARK: remote servers
+
+    /// One need of a remote server, through the app: its answer as an object, or why not. The bridge waits a little
+    /// longer than the app does, so the app's own sentence about a wait that ran out is the one the agent gets.
+    private func reach(_ server: MCPHubPlan.Server, _ need: [String: Any], until deadline: Date) -> Result<[String: Any], MCPHubUpstream.Failure> {
+        guard let remote else { return .failure(.init("\(server.name) is reached by Next Term, and this session can't ask it.")) }
+        let seconds = max(1, deadline.timeIntervalSinceNow)
+        var arguments = need
+        arguments["server"] = server.name
+        arguments["list"] = server.list
+        arguments["url"] = server.url
+        arguments["seconds"] = seconds
+        let result: Result<[String: Any], MCPHubUpstream.Failure>
+        if let answer = remote(arguments, seconds + 5) {
+            if answer.isError {
+                result = .failure(.init(answer.text))
+            } else if let object = (try? JSONSerialization.jsonObject(with: Data(answer.text.utf8))) as? [String: Any] {
+                result = .success(object)
+            } else {
+                result = .failure(.init("Next Term's answer for \(server.name) couldn't be read."))
+            }
+        } else {
+            result = .failure(.init("Next Term didn't answer for \(server.name), which it reaches for this session; it may be restarting. Try again in a moment."))
+        }
+        lock.lock()
+        switch result {
+        case .success(let answer):
+            if let tools = answer["tools"] as? [[String: Any]] { remoteStatus[server.name] = .running(tools: tools.count) }
+        case .failure(let failure): remoteStatus[server.name] = .failed(failure.text) // a tool's own error is a result, not this
+        }
+        lock.unlock()
+        return result
+    }
+
+    private func remoteState(_ name: String) -> MCPHubUpstream.Status {
+        lock.lock()
+        defer { lock.unlock() }
+        return remoteStatus[name] ?? .notStarted
     }
 
     private func upstream(named name: String) -> MCPHubUpstream? {

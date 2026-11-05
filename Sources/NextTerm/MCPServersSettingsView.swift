@@ -329,7 +329,7 @@ final class MCPServersSettingsView: NSView, NSTableViewDataSource, NSTableViewDe
             cell.toolTip = cell.stringValue
             cell.textColor = .secondaryLabelColor
         case "state":
-            cell.toolTip = MCPHubOverview.stateTip(row.state)
+            cell.toolTip = MCPHubOverview.stateTip(row.state, remote: row.isRemote)
             switch row.state {
             case .failed, .broken, .needsApproval: cell.textColor = .systemOrange
             case .off, .offHere, .shadowed, .remote: cell.textColor = .tertiaryLabelColor
@@ -346,7 +346,7 @@ final class MCPServersSettingsView: NSView, NSTableViewDataSource, NSTableViewDe
         case "name": return row.name
         case "applies": return MCPHubOverview.appliesText(row, home: NSHomeDirectory())
         case "runs": return row.server.map(MCPHubOverview.runsText) ?? "\u{2014}"
-        case "state": return MCPHubOverview.stateText(row.state)
+        case "state": return MCPHubOverview.stateText(row.state, remote: row.isRemote)
         default: return ""
         }
     }
@@ -394,7 +394,7 @@ final class MCPServersSettingsView: NSView, NSTableViewDataSource, NSTableViewDe
 
     private func updateButtons() {
         let row = selected
-        detail.stringValue = row.map { MCPHubOverview.stateTip($0.state) } ?? ""
+        detail.stringValue = row.map { MCPHubOverview.stateTip($0.state, remote: $0.isRemote) } ?? ""
         detail.isHidden = row == nil
         let usable = row?.server != nil
         editButton.isEnabled = usable

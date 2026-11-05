@@ -7,16 +7,18 @@ import Foundation
 ///
 /// The hub is `isActive` only once a server the bridge can start applies: until then the bridge answers exactly as it
 /// did before the hub (R17). A project's list is someone's commit, so its servers wait for the user's approval of that
-/// list as it is now (`approved`: its file and digest); a remote server waits for the step that runs them in the app.
+/// list as it is now (`approved`: its file and digest). A remote server at a URL (`isRemote`) is reached by the app, never
+/// the bridge, so its keys stay in the app (MCPHubRemote): the plan carries its URL as its list has it, `${secret:NAME}`
+/// and all, and never its headers.
 public struct MCPHubPlan: Codable, Equatable, Sendable {
     public enum State: String, Codable, Sendable {
-        /// The bridge starts it on first need.
+        /// The bridge starts it on first need; for a remote one, asks the app to reach it.
         case ready
         /// The user turned it off here.
         case off
         /// From a project's list the user hasn't approved as it is now.
         case needsApproval = "needs_approval"
-        /// A remote server: Next Term doesn't reach those yet.
+        /// A remote server of the older HTTP+SSE kind (`sse`), which Next Term doesn't reach.
         case remote
     }
 
@@ -27,7 +29,7 @@ public struct MCPHubPlan: Codable, Equatable, Sendable {
         public var command: String
         public var args: [String]
         public var env: [String: String]
-        /// A remote server's URL.
+        /// A remote server's URL, as its list has it: a `${secret:NAME}` in it is filled in by the app alone.
         public var url: String
         /// The list it is from.
         public var list: String
@@ -42,6 +44,9 @@ public struct MCPHubPlan: Codable, Equatable, Sendable {
             self.url = url
             self.list = list
         }
+
+        /// Reached at a URL by the app (MCPHubPlan.remoteTool), not started by the bridge.
+        public var isRemote: Bool { !url.isEmpty }
 
         /// What it starts, one line, for a listing: the program and its arguments, each quoted as a shell needs it.
         public var commandLine: String { ([command] + args).map(ShellQuote.quote).joined(separator: " ") }
@@ -75,7 +80,7 @@ public struct MCPHubPlan: Codable, Equatable, Sendable {
             let state: State
             if off {
                 state = .off
-            } else if found.transport != .stdio {
+            } else if found.transport == .sse {
                 state = .remote
             } else if applied.source.place == .project, !approved.contains(applied.source.file + "\u{0}" + applied.source.digest) {
                 state = .needsApproval
@@ -99,6 +104,12 @@ public struct MCPHubPlan: Codable, Equatable, Sendable {
     /// The tool the bridge tells the app with how a server's start ended (MCPHubSession.Report): never listed either,
     /// and kept only in the app's memory, for Settings › MCP Servers' state.
     public static let reportTool = "mcp_hub_report"
+
+    /// The tool the bridge asks the app to reach a remote server with (MCPHubRemoteControl): never listed, and answered
+    /// only for an agent in a Next Term tab where that server applies. Its arguments: `server`, `list`, `url` (as the plan
+    /// has them, checked against the lists as they are now), `op` (`tools` or `call`, with `tool` and `arguments`) and
+    /// `seconds`, the most the bridge waits. Its answer: `{"tools": [...]}`, `{"result": {...}}`, or an error's sentence.
+    public static let remoteTool = "mcp_hub_remote"
 
     /// The plan as the app's answer carries it.
     public var text: String {

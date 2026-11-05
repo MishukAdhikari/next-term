@@ -484,9 +484,15 @@ final class MCPBridgeHub: @unchecked Sendable {
                 _ = MCPBridge.attempt(MCPHubPlan.reportTool, arguments, socket: socket, wait: 2)
             }
         }
+        // A remote server is reached by the app, which alone fills its keys in: the bridge runs as the user under the
+        // agent, so a key it held, or could ask the socket for, the agent could read too.
+        let remote: MCPHubSession.Remote = { arguments, wait in
+            guard case .success(let answer) = MCPBridge.attempt(MCPHubPlan.remoteTool, arguments, socket: socket, wait: wait) else { return nil }
+            return (answer.text, answer.isError)
+        }
         DispatchQueue.global(qos: .userInitiated).async {
             let session = MCPHubSession(plan: fetch(), refresh: fetch, nxtrm: nxtrm, environment: environment, version: version,
-                                        report: report)
+                                        report: report, remote: remote)
             self.lock.lock()
             self.made = session
             self.lock.unlock()

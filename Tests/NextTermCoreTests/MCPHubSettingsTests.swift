@@ -118,13 +118,22 @@ import Testing
               "github": {"command": "nxtrm", "args": ["secret", "run", "GH", "--", "npx", "-y", "gh-mcp"]},
               "quiet": {"command": "a", "nextTerm": {"enabled": false}},
               "linear": {"url": "https://mcp.linear.app/mcp"},
+              "older": {"type": "sse", "url": "https://mcp.example.com/sse"},
               "broken": {"command": "a", "env": {"API_TOKEN": "\(token)"}}
             }}
             """, to: userFile)
         let user = MCPHubScope.sources(folder: nil, home: home, userFile: userFile).user
         let failed = [MCPHubOverview.runKey(list: userFile, server: "github"): MCPHubOverview.Run(failure: "npx was not found", tools: 0)]
         let rows = MCPHubOverview.personal(user, runs: failed)
-        #expect(states(rows) == ["github Didn\u{2019}t start", "quiet Off", "linear Not reached yet", "broken Can\u{2019}t be used"])
+        #expect(states(rows) == ["github Didn\u{2019}t start", "quiet Off", "linear Ready", "older Not reached (SSE)", "broken Can\u{2019}t be used"])
+        // A server at a URL is reached, not started: its state says so, and its last need's failure is its own.
+        #expect(rows[2].isRemote && !rows[0].isRemote)
+        #expect(MCPHubOverview.stateTip(rows[2].state, remote: true).contains("the agent never gets them"))
+        #expect(MCPHubOverview.stateTip(rows[3].state).contains("/mcp"))
+        let refused = [MCPHubOverview.runKey(list: userFile, server: "linear"): MCPHubOverview.Run(failure: "linear refused the key", tools: 0)]
+        let linear = MCPHubOverview.personal(user, runs: refused)[2]
+        #expect(MCPHubOverview.stateText(linear.state, remote: linear.isRemote) == "Couldn\u{2019}t reach")
+        #expect(MCPHubOverview.stateTip(linear.state, remote: linear.isRemote).hasSuffix("couldn\u{2019}t reach it: linear refused the key"))
         #expect(MCPHubOverview.stateTip(rows[0].state).contains("npx was not found"))
         #expect(MCPHubOverview.runsText(try #require(rows[0].server)) == "nxtrm secret run GH -- npx -y gh-mcp")
         #expect(MCPHubOverview.appliesText(rows[0], home: home) == "All projects")

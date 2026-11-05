@@ -8,7 +8,7 @@ public enum MCPHubCatalog {
 
     public static let tools: [MCPServer.Tool] = [
         MCPServer.Tool(name: "mcp_servers", title: "List connected MCP servers",
-                       description: "The MCP servers the user connected in Next Term that apply in this folder, each with its state: ready (it starts the first time it is used), running (with its tool count), failed (and why), off (the user turned it off here), needs_approval (from a project's list the user hasn't approved) or remote (Next Term doesn't reach remote servers yet). mcp_tools lists and describes their tools; mcp_call calls one.",
+                       description: "The MCP servers the user connected in Next Term that apply in this folder, each with its command or URL and its state: ready (it starts, or is reached, the first time it is used), running (with its tool count), failed (and why), off (the user turned it off here), needs_approval (from a project's list the user hasn't approved) or remote (an older HTTP+SSE server Next Term doesn't reach). mcp_tools lists and describes their tools; mcp_call calls one.",
                        inputSchema: #"{"type": "object", "properties": {}, "additionalProperties": false}"#,
                        readOnly: true, destructive: false, idempotent: true, timeout: 15, alwaysLoad: false),
         MCPServer.Tool(name: "mcp_tools", title: "Find a connected server's tools",
@@ -16,7 +16,7 @@ public enum MCPHubCatalog {
                        inputSchema: #"{"type": "object", "properties": {\#(serverArgument), "tool": {"type": "string", "description": "With server: the tool to describe."}, "query": {"type": "string", "description": "Words to find in tools' names and descriptions."}}, "additionalProperties": false}"#,
                        readOnly: false, destructive: false, idempotent: true, timeout: 60, alwaysLoad: false),
         MCPServer.Tool(name: "mcp_call", title: "Call a connected server's tool",
-                       description: "Calls a tool of an MCP server the user connected in Next Term, and answers what the tool answered. mcp_servers lists the servers; mcp_tools gives a tool's arguments. The server starts the first time it is used, in this folder, with its keys from Next Term's Secrets. A result over 100,000 characters is cut, and says so.",
+                       description: "Calls a tool of an MCP server the user connected in Next Term, and answers what the tool answered. mcp_servers lists the servers; mcp_tools gives a tool's arguments. A local server starts the first time it is used, in this folder; Next Term reaches a remote one itself. Either gets its keys from Next Term's Secrets, never through you. A result over 100,000 characters is cut, and says so.",
                        inputSchema: #"{"type": "object", "properties": {\#(serverArgument), "tool": {"type": "string", "description": "The tool's name, as mcp_tools lists it."}, "arguments": {"type": "object", "description": "The tool's arguments, as its input schema has them."}}, "required": ["server", "tool"], "additionalProperties": false}"#,
                        readOnly: false, destructive: true, idempotent: false, timeout: 60, openWorld: true, alwaysLoad: false),
     ]

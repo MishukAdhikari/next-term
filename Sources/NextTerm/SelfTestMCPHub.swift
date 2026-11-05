@@ -94,7 +94,46 @@ extension SelfTest {
         check(sortedJSON((elsewhere[2]?["result"] as? [String: Any])?["tools"]) == ownTools,
               "MCP hub: an agent in a folder the server isn't for gets Next Term's own tools and no catalog", "\(toolNames(elsewhere[2]).count) tools")
 
+        await mcpHubRemoteChecks(c, folder: inScope, userFile: userFile, initialize: initialize)
+
         check(agentConfigDigests() == configs, "MCP hub: no agent's config file changed")
+    }
+
+    /// Step 7: a server at a URL (a fake on this Mac, MCPHubFakeRemote), reached by the app for the agent's bridge, over
+    /// Streamable HTTP with a session; and one that wants a key Next Term doesn't send, whose 401 tells the agent where
+    /// the user checks it. Settings' state for each is what the need ended in.
+    private static func mcpHubRemoteChecks(_ c: TerminalWindowController, folder: URL, userFile: String, initialize: [String: Any]) async {
+        guard let open = try? MCPHubFakeRemote(), let locked = try? MCPHubFakeRemote() else {
+            return check(false, "MCP hub: the fake remote servers listen on this Mac")
+        }
+        defer { open.stop(); locked.stop() }
+        open.sessions = true
+        locked.bearer = "never-sent"
+        let scope = MCPHubServer.Projects.only([canonicalPath(folder.path)])
+        for server in [MCPHubServer.remote("remote", url: open.url.absoluteString, projects: scope),
+                       MCPHubServer.remote("locked", url: locked.url.absoluteString, projects: scope)] {
+            _ = MCPHubScope.save(.set(server), to: userFile, place: .user)
+        }
+        let requests: [[String: Any]] = [
+            initialize,
+            ["jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": ["name": "mcp_call", "arguments": ["server": "remote", "tool": "echo", "arguments": ["say": "hi"]]]],
+            ["jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": ["name": "mcp_tools", "arguments": ["server": "locked"]]],
+            ["jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": ["name": "mcp_servers", "arguments": [String: Any]()]],
+        ]
+        let answers = await bridgeInTab(c, folder: folder, requests: requests, name: "remote", userFile: userFile)
+        check(resultText(answers[2]) == "hello from remote", "MCP hub: mcp_call reaches a server at a URL through the app", resultText(answers[2]))
+        let seen = open.seen
+        check(seen.map(\.method).prefix(4) == ["initialize", "notifications/initialized", "tools/list", "tools/call"]
+                && seen.dropFirst().allSatisfy { $0.headers["mcp-session-id"] != nil && $0.headers["user-agent"]?.hasPrefix("NextTerm/") == true },
+              "MCP hub: the app speaks Streamable HTTP to it, with one session", seen.map(\.method).joined(separator: ", "))
+        check(resultText(answers[3]).contains("Settings › MCP Servers"), "MCP hub: a 401 tells the agent where the user checks the key",
+              resultText(answers[3]))
+        check(resultText(answers[4]).contains("\"running\""), "MCP hub: mcp_servers lists the remote server running", resultText(answers[4]))
+        let ran = MCPHubControl.lastRuns[MCPHubOverview.runKey(list: userFile, server: "remote")]
+        let refused = MCPHubControl.lastRuns[MCPHubOverview.runKey(list: userFile, server: "locked")]
+        check(ran == MCPHubOverview.Run(failure: nil, tools: 3) && refused?.failure?.contains("HTTP 401") == true,
+              "MCP hub: Settings shows the remote servers ready and failed, with why", "\(String(describing: ran)) \(String(describing: refused))")
+        for name in ["remote", "locked"] { _ = MCPHubScope.save(.remove(name), to: userFile, place: .user) }
     }
 
     /// Runs `nxtrm mcp` in a new tab in `folder`, as an agent there starts it, with `requests` on its stdin and the

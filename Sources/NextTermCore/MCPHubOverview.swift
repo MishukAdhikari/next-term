@@ -6,9 +6,10 @@ import Foundation
 /// and how each server's last start in an agent's session ended (`runs`, by `runKey`), which only the app knows.
 public enum MCPHubOverview {
     public enum State: Equatable, Sendable {
-        /// It starts the first time an agent needs it; with the tool count of its last start, when it had one.
+        /// It starts (or, at a URL, is reached) the first time an agent needs it; with the tool count of its last start,
+        /// when it had one.
         case ready(tools: Int?)
-        /// Its last start in an agent's session failed, and why.
+        /// Its last start in an agent's session failed (or, at a URL, its last need didn't reach it), and why.
         case failed(String)
         /// Its entry turns it off.
         case off
@@ -16,7 +17,7 @@ public enum MCPHubOverview {
         case offHere
         /// From a project's list the user hasn't approved as it is now.
         case needsApproval
-        /// A remote server: kept, not reached yet.
+        /// A remote server of the older HTTP+SSE kind: kept, never reached.
         case remote
         /// It breaks a rule, or is in its file twice: never used.
         case broken([String])
@@ -46,6 +47,9 @@ public enum MCPHubOverview {
         public let place: MCPHubFile.Place
         public let digest: String
         public let state: State
+
+        /// At a URL: reached by the app rather than started.
+        public var isRemote: Bool { server.map { $0.transport != .stdio } ?? false }
     }
 
     // MARK: Personal
@@ -66,7 +70,7 @@ public enum MCPHubOverview {
             case .failure(let broken):
                 rows.append(Row(name: entry.key, server: nil, list: user.file, place: .user, digest: user.digest, state: .broken(broken.reasons)))
             case .success(let server):
-                let state: State = !server.enabled ? .off : server.transport != .stdio ? .remote : ran(server.name, user.file, runs)
+                let state: State = !server.enabled ? .off : server.transport == .sse ? .remote : ran(server.name, user.file, runs)
                 rows.append(Row(name: server.name, server: server, list: user.file, place: .user, digest: user.digest, state: state))
             }
         }
@@ -111,31 +115,36 @@ public enum MCPHubOverview {
 
     // MARK: words
 
-    /// The state in a few words, for the table.
-    public static func stateText(_ state: State) -> String {
+    /// The state in a few words, for the table. `remote`: a server at a URL, which is reached rather than started.
+    public static func stateText(_ state: State, remote: Bool = false) -> String {
         switch state {
         case .ready(let tools?): return "Ready · \(tools) \(tools == 1 ? "tool" : "tools")"
         case .ready(nil): return "Ready"
-        case .failed: return "Didn\u{2019}t start"
+        case .failed: return remote ? "Couldn\u{2019}t reach" : "Didn\u{2019}t start"
         case .off: return "Off"
         case .offHere: return "Off in this project"
         case .needsApproval: return "Needs your approval"
-        case .remote: return "Not reached yet"
+        case .remote: return "Not reached (SSE)"
         case .broken: return "Can\u{2019}t be used"
         case .shadowed: return "Replaced by another"
         }
     }
 
     /// The state in a sentence, for its tooltip.
-    public static func stateTip(_ state: State) -> String {
+    public static func stateTip(_ state: State, remote: Bool = false) -> String {
         switch state {
+        case .ready(let tools?) where remote:
+            return "Next Term reached it for an agent, with \(tools) \(tools == 1 ? "tool" : "tools"). Every agent in Next Term uses the same connection."
+        case .ready(nil) where remote:
+            return "Next Term reaches it the first time an agent in Next Term uses it, with its keys from Secrets; the agent never gets them."
+        case .failed(let why) where remote: return "The last time an agent used it, Next Term couldn\u{2019}t reach it: \(why)"
         case .ready(let tools?): return "It started in an agent\u{2019}s session with \(tools) \(tools == 1 ? "tool" : "tools"). It starts for each session that uses it."
         case .ready(nil): return "It starts the first time an agent in Next Term uses it, in that agent\u{2019}s folder."
         case .failed(let why): return "Its last start in an agent\u{2019}s session failed: \(why)"
         case .off: return "Turned off: agents don\u{2019}t get it."
         case .offHere: return "You turned it off in this project: agents here don\u{2019}t get it."
         case .needsApproval: return "It comes with the project. Nothing in the project\u{2019}s list starts until you approve the list as it is now."
-        case .remote: return "Next Term keeps it, and doesn\u{2019}t reach servers at a URL yet."
+        case .remote: return "It uses the older HTTP+SSE transport, which Next Term doesn\u{2019}t reach. Most servers also answer at a Streamable HTTP URL, often ending in /mcp: use that one."
         case .broken(let reasons): return reasons.joined(separator: " ")
         case .shadowed: return "A server of the same name nearer this project is used instead."
         }

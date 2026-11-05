@@ -291,7 +291,7 @@ import Testing
         #expect(servers.map { $0["name"] as? String } == ["github", "linear"])
         #expect(servers[0]["kind"] as? String == "local" && servers[0]["applies"] as? String == "all projects" && servers[0]["state"] as? String == "ready")
         #expect(servers[0]["tools"] as? Int == 3)
-        #expect(servers[1]["kind"] as? String == "remote" && servers[1]["applies"] as? [String] == ["~/Code/app"] && servers[1]["state"] as? String == "not_reached")
+        #expect(servers[1]["kind"] as? String == "remote" && servers[1]["applies"] as? [String] == ["~/Code/app"] && servers[1]["state"] as? String == "ready")
         let text = MCPServer.json(answer)
         #expect(!text.contains("GITHUB_TOKEN") && !text.contains("LINEAR_API_KEY") && !text.contains("secret"))
         let empty = MCPServer.listServersAnswer(personal: [], project: nil, home: home)

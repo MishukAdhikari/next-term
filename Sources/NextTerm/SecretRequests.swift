@@ -116,6 +116,9 @@ final class SecretRequests {
         /// A title of its own (store_secret's), instead of "… asks to run …".
         var titleOverride: String?
         var kind: Kind = .use
+        /// A remote MCP server's keys (MCPHubRemoteControl): Next Term sends them in its requests' headers itself, so the
+        /// panel shows the URL, not a command, and nothing runs with them in its environment.
+        var reachesURL = false
         /// The asking agent's session, when Next Term can follow it to its end (SecretGrant.session): what "Allow for this
         /// session" binds to. Nil offers no such choice.
         var session: String?
@@ -406,10 +409,11 @@ final class SecretRequests {
         }
         var content = SecretApprovalPanel.Content(
             title: SecretApprovalPanel.title(request), keys: keys, command: request.command,
-            runsAsShell: !request.isWrapper && request.isUse, folder: request.folder, warnings: request.warnings,
+            runsAsShell: !request.isWrapper && request.isUse && !request.reachesURL, folder: request.folder, warnings: request.warnings,
             agentWords: request.agentWords, askedBy: request.askedBy, argv: request.argv, isWrapper: request.isWrapper,
             isRemote: request.isRemote, notice: request.notice, waiting: max(0, queue.count - 1))
         let asking: [String] = SecretApprovalChoices.askingEveryUse(request.names, in: store.index)
+        content.reachesURL = request.reachesURL
         content.choices = offered(request) // one source for the panel's choices and the Allow's
         content.askingEveryUse = request.isRemote ? [] : asking
         if !request.isUse {
