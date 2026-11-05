@@ -46,6 +46,49 @@ import Testing
         #expect(fake.seen.count == seen.count)
     }
 
+    /// Runs `body` while twice as many GCD threads as this Mac has CPUs spin at user-initiated QoS (at most 10 seconds),
+    /// so GCD has no CPU free for a concurrent queue at that QoS or below: what a parallel test run's busiest moment, or
+    /// a busy app, does. The spinning ends as soon as `body` returns.
+    func whileGCDIsBusy(_ body: () -> Void) {
+        final class Stop: @unchecked Sendable {
+            private let lock = NSLock()
+            private var stopped = false
+            var isSet: Bool { lock.lock(); defer { lock.unlock() }; return stopped }
+            func set() { lock.lock(); stopped = true; lock.unlock() }
+        }
+        let stop = Stop(), group = DispatchGroup(), spinning = DispatchSemaphore(value: 0)
+        let count = ProcessInfo.processInfo.activeProcessorCount * 2
+        for _ in 0..<count {
+            DispatchQueue.global(qos: .userInitiated).async(group: group) {
+                spinning.signal()
+                let end = Date().addingTimeInterval(10)
+                while !stop.isSet, Date() < end {}
+            }
+        }
+        // As many as GCD admits are spinning once a CPU's worth has started.
+        for _ in 0..<ProcessInfo.processInfo.activeProcessorCount { _ = spinning.wait(timeout: .now() + 2) }
+        body()
+        stop.set()
+        group.wait()
+    }
+
+    /// An answer that has arrived is read at once even while the process is busy: the session's delegate runs on a
+    /// queue GCD always gives a thread (MCPHubRemote.delegateQueue). On an OperationQueue's own queue it waited for a
+    /// free CPU, 18 to 30 seconds in a parallel test run, and the start timed out with its answer already in.
+    @Test func anAnswerIsReadWhileTheProcessIsBusy() throws {
+        let fake = try MCPHubFakeRemote()
+        let remote = MCPHubRemote(name: "busy", clientVersion: "1.0")
+        var result: Result<[[String: Any]], MCPHubRemote.Failure>?
+        var took: TimeInterval = 0
+        whileGCDIsBusy {
+            let started = Date()
+            result = remote.tools(endpoint(fake), until: soon(5))
+            took = Date().timeIntervalSince(started)
+        }
+        #expect(try result?.get().count == 3)
+        #expect(took < 3)
+    }
+
     @Test func anOlderVersionIsSpokenAndAnUnknownOneRefused() throws {
         let fake = try MCPHubFakeRemote()
         fake.version = "2025-03-26"
