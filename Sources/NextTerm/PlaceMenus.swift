@@ -40,6 +40,12 @@ enum LayoutItems {
         return made
     }
 
+    /// Window › Merge All Windows: every project window a tab of `window` (nil: the window in front), off while there is
+    /// nothing to merge, as AppKit validates it. AppKit's own action, so its key is Window's.
+    static func mergeAllWindows(into window: NSWindow?) -> NSMenuItem {
+        item("Merge All Windows", #selector(NSWindow.mergeAllWindows(_:)), "", [], target: window)
+    }
+
     /// The terminal to `position` (Bottom, Right, Left, Top), checked where it is.
     static func terminalPosition(_ position: AppDelegate.TerminalPosition) -> NSMenuItem {
         let made = item(position.title, #selector(AppDelegate.setTerminalPosition(_:)), "", target: AppDelegate.shared)
@@ -92,17 +98,23 @@ enum PlaceMenus {
         return finished(menu, for: window)
     }
 
-    /// The window column: Collapse or Expand Window Column and Move to the other edge, then Hide Window Column. On its
-    /// top row (`window` given), the window's Project Color after them.
-    static func windowColumn(for window: TerminalWindowController?) -> NSMenu {
+    /// The window column's top row: its own menu (`column`), then the window's Project Color.
+    static func windowColumn(for window: TerminalWindowController) -> NSMenu {
+        finished(column(window: window), for: window)
+    }
+
+    /// The window column: Collapse or Expand Window Column and Move to the other edge, then Merge All Windows (into
+    /// `window`), then Hide Window Column.
+    static func column(window: TerminalWindowController?) -> NSMenu {
         let menu = NSMenu(title: "Window Column")
         menu.addItem(LayoutItems.windowColumnFold())
         let other: AppDelegate.SidebarSide = AppDelegate.shared.windowColumnOnRight ? .left : .right
         menu.addItem(LayoutItems.windowColumnSide(other, title: "Move to the \(other.title) Edge"))
         menu.addItem(.separator())
+        menu.addItem(LayoutItems.mergeAllWindows(into: window?.window))
+        menu.addItem(.separator())
         menu.addItem(LayoutItems.windowColumn())
-        guard let window else { return userKeys(menu) }
-        return finished(menu, for: window)
+        return userKeys(menu)
     }
 
     /// Project Color after a separator, while the window has a project; the user's keys on every item.

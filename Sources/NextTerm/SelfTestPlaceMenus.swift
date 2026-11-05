@@ -4,7 +4,7 @@ import NextTermCore
 /// Each place's right-click on the top row shows that place's own commands from View, grouped, then the window's
 /// Project Color as a submenu: the project sidebar (Hide Project Sidebar, Move Project Sidebar to the other side), the
 /// terminal's bar and its folded rail (Collapse or Expand Terminal, Terminal Position, Terminal Tabs), the window column
-/// (Collapse Window Column, Move to the other edge, Hide Window Column). The editor's bar keeps the Project Color choices
+/// (Collapse Window Column, Move to the other edge, Merge All Windows, Hide Window Column). The editor's bar keeps the Project Color choices
 /// alone. Titles follow the state, checkmarks the setting, each key is the menu bar's, and each command acts on the
 /// window clicked. A window with no project has the commands and no Project Color.
 extension SelfTest {
@@ -90,8 +90,8 @@ extension SelfTest {
         let otherEdge: String = app.windowColumnOnRight ? "Left" : "Right"
         let column: NSMenu? = c.windowColumn.onTopRowMenu?()
         let columnTitles: [String] = column.map(titles) ?? []
-        check(columnTitles == [fold, "Move to the \(otherEdge) Edge", "—", "Hide Window Column", "—", "Project Color"]
-              && titles(WindowColumnView.columnMenu()) == Array(columnTitles.prefix(4)),
+        check(columnTitles == [fold, "Move to the \(otherEdge) Edge", "—", "Merge All Windows", "—", "Hide Window Column", "—", "Project Color"]
+              && titles(WindowColumnView.columnMenu()) == Array(columnTitles.prefix(6)),
               "place menus: the window column's top row has its own menu, then Project Color", columnTitles.joined(separator: " | "))
         if let column, !c.windowColumn.isHiddenOrHasHiddenAncestor { await screenshot(column, in: c.windowColumn, suffix: "-menu-window-column") }
 
@@ -104,6 +104,45 @@ extension SelfTest {
         var differ: [String] = []
         for menu in [sidebar, terminal, column].compactMap({ $0 }) { compareKeys(menu, &differ) }
         check(differ.isEmpty, "place menus: each command's key is the one the menu bar shows", differ.joined(separator: ", "))
+    }
+
+    /// The window column's Merge All Windows, as Window › Merge All Windows: on while two project windows are apart, it
+    /// makes the other a project tab of the window clicked, and is off then, with nothing left to merge.
+    static func columnMergeChecks(_ c: TerminalWindowController) async {
+        let app: AppDelegate = AppDelegate.shared
+        guard let host = c.window, await bringToFront(host), NSApp.isActive else {
+            return note("column merge checks skipped: Next Term isn't the app in front")
+        }
+        let root = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("nt-colmerge-\(getpid())")
+        try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let saved: (mode: NSWindow.TabbingMode, id: String) = (host.tabbingMode, host.tabbingIdentifier)
+        host.tabbingMode = .automatic // made while windows were kept apart
+        host.tabbingIdentifier = WindowTabbing.projectIdentifier
+        let other = app.openWindow(directory: root.path, project: root.path)
+        defer {
+            if other.window?.tabGroup?.windows.count ?? 0 > 1 { other.window?.moveTabToNewWindow(nil) }
+            if !other.hasClosed { for tab in other.tabs { other.remove(tab) } } // its last tab takes the window
+            host.tabbingMode = saved.mode
+            host.tabbingIdentifier = saved.id
+            c.titleBarChanged(force: true)
+            try? FileManager.default.removeItem(at: root)
+        }
+        _ = await wait(20) { other.tabs.first?.status.integrated == true }
+        _ = await bringToFront(host)
+        // The menu kept while its item is used: an item holds its menu weakly.
+        var menu: NSMenu? = nil
+        func merge() -> NSMenuItem? {
+            menu = c.windowColumn.onTopRowMenu?()
+            menu?.update()
+            return menu?.items.first { $0.title == "Merge All Windows" }
+        }
+        let on: Bool = merge()?.isEnabled == true
+        if let item = merge(), let menu { menu.performActionForItem(at: menu.index(of: item)) }
+        let merged: Bool = await wait(3) { host.tabGroup?.windows.count == 2 && other.window?.tabGroup === host.tabGroup }
+        let off: Bool = merge()?.isEnabled == false
+        check(on && merged && off,
+              "window column: Merge All Windows in its right-click makes the other project window a tab of this one, and is off then",
+              "on \(on), group \(host.tabGroup?.windows.count ?? 0), off after \(off)")
     }
 
     /// A window with no project: the places' commands, with no Project Color and nothing on the editor's bar.

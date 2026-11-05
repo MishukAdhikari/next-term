@@ -2568,7 +2568,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         item(window, "Show Previous Project Tab", #selector(NSWindow.selectPreviousTab(_:)), "[", [.command, .control])
         item(window, "Show Next Project Tab", #selector(NSWindow.selectNextTab(_:)), "]", [.command, .control])
         item(window, "Move Project to New Window", #selector(NSWindow.moveTabToNewWindow(_:)), "")
-        item(window, "Merge All Windows", #selector(NSWindow.mergeAllWindows(_:)), "")
+        window.addItem(LayoutItems.mergeAllWindows(into: nil)) // as the window column's right-click has it
         window.addItem(.separator())
         let arrow = { (key: Int) in String(Character(UnicodeScalar(key)!)) }
         item(window, "Select Pane on the Left", #selector(TerminalWindowController.selectPaneLeft(_:)), arrow(NSLeftArrowFunctionKey), [.command, .option])

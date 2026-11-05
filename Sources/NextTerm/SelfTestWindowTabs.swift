@@ -14,6 +14,7 @@ extension SelfTest {
         }
         await tabBarLayoutChecks(c)
         await mergedWindowChecks(c)
+        await columnMergeChecks(c) // the window column's right-click has Merge All Windows too
     }
 
     /// A system tab bar over a project window (one tab, as Show Tab Bar shows it): the window's top row (the terminal's

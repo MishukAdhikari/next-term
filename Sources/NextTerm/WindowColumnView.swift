@@ -512,12 +512,12 @@ final class WindowColumnView: NSView, ProjectGlowing {
     /// The top row: the column's menu with the window's Project Color (`onTopRowMenu`). Below it, the column's own menu.
     override func menu(for event: NSEvent) -> NSMenu? {
         if isTitleBar(convert(event.locationInWindow, from: nil)) { return onTopRowMenu?() }
-        return Self.columnMenu()
+        return Self.columnMenu(window: window?.windowController as? TerminalWindowController)
     }
 
-    /// The column's menu (PlaceMenus.windowColumn): Collapse or Expand Window Column and Move to the other edge, then
-    /// Hide Window Column, as View has them.
-    static func columnMenu() -> NSMenu { PlaceMenus.windowColumn(for: nil) }
+    /// The column's menu (PlaceMenus.column): Collapse or Expand Window Column and Move to the other edge, then Merge All
+    /// Windows (into `window`), then Hide Window Column, as View and Window have them.
+    static func columnMenu(window: TerminalWindowController? = nil) -> NSMenu { PlaceMenus.column(window: window) }
 
     @objc private func chevronClicked() { onToggle?() }
 

@@ -115,15 +115,18 @@ extension SelfTest {
         check(hidden && offTitle == "Show Window Column" && kept && back && onTitle == "Hide Window Column",
               "window column: ⌃⇧⌘S hides the column in every window and brings it back, the menu and the setting following",
               "hidden \(hidden), menu \(offTitle), count kept \(kept), back \(back), menu \(onTitle)")
-        // The column's own right-click menu, in two groups: Collapse or Expand and Move to the other edge, then Hide, with
+        // The column's own right-click menu, in three groups: Collapse or Expand and Move to the other edge, then Merge All
+        // Windows, then Hide, with
         // the keys as the user has them; Move moves it, as View › Window Column Position does, and names the edge back.
         let menu = WindowColumnView.columnMenu()
         let onRight: Bool = app.windowColumnOnRight
         let other: String = onRight ? "Left" : "Right"
         let titles: [String] = menu.items.map { $0.isSeparatorItem ? "—" : $0.title }
         let keys: [String] = menu.items.filter { !$0.isSeparatorItem }.map { KeyboardShortcuts.chord(of: $0)?.display ?? "" }
-        check(titles == ["Collapse Window Column", "Move to the \(other) Edge", "—", "Hide Window Column"] && keys == ["⌃⌘S", "", "⌃⇧⌘S"],
-              "window column: its right-click menu groups Collapse and Move to the \(other) Edge, then Hide, with ⌃⌘S and ⌃⇧⌘S",
+        let merge: String = KeyboardShortcuts.shared.chord(for: "mergeAllWindows:")?.display ?? ""
+        check(titles == ["Collapse Window Column", "Move to the \(other) Edge", "—", "Merge All Windows", "—", "Hide Window Column"]
+              && keys == ["⌃⌘S", "", merge, "⌃⇧⌘S"],
+              "window column: its right-click menu groups Collapse and Move to the \(other) Edge, then Merge All Windows, then Hide, with ⌃⌘S and ⌃⇧⌘S",
               "\(titles.joined(separator: " | ")); keys \(keys.joined(separator: ", "))")
         if let move = menu.items.first(where: { $0.title.hasPrefix("Move to the") }) { menu.performActionForItem(at: menu.index(of: move)) }
         let moved: Bool = app.windowColumnOnRight != onRight
