@@ -23,16 +23,47 @@ public enum MCPHubOverview {
         case broken([String])
         /// A list nearer in the order has a server of its name (MCPHubScope).
         case shadowed
+        /// At a URL: the server asked for a sign-in (a 401 with a Bearer challenge), and Next Term has none for it.
+        case needsSignIn
+        /// At a URL: signed in through Next Term, with the tool count of its last need when it had one.
+        case signedIn(tools: Int?)
+        /// At a URL: Next Term's sign-in lapsed (refused, or its refresh token spent); the user reconnects.
+        case signedOut
+        /// At a URL: the server asked for more access than the sign-in has, these scopes; the user reconnects.
+        case needsMoreAccess([String])
+    }
+
+    /// A sign-in Next Term keeps for a server at a URL (SignInFile), as Settings shows it.
+    public enum SignIn: Equatable, Sendable {
+        case signedIn
+        case signedOut
+        case needsMoreAccess([String])
+
+        public init(_ state: SignInFile.State) {
+            switch state {
+            case .signedIn, .refreshing: self = .signedIn // a refresh in flight is still signed in
+            case .signedOut: self = .signedOut
+            case .needsMoreAccess(let scopes): self = .needsMoreAccess(scopes)
+            }
+        }
+    }
+
+    /// Where `signIns` finds a server's sign-in: its URL's canonical form (MCPHubOAuthURL.canonical).
+    public static func signInKey(_ url: String) -> String {
+        URL(string: url).map(MCPHubOAuthURL.canonical) ?? url
     }
 
     /// How a server's last start in an agent's session ended.
     public struct Run: Equatable, Sendable {
         public var failure: String?
         public var tools: Int
+        /// The failure was a 401 asking for a sign-in Next Term doesn't have.
+        public var needsSignIn: Bool
 
-        public init(failure: String?, tools: Int) {
+        public init(failure: String?, tools: Int, needsSignIn: Bool = false) {
             self.failure = failure
             self.tools = tools
+            self.needsSignIn = needsSignIn
         }
     }
 
@@ -55,7 +86,7 @@ public enum MCPHubOverview {
     // MARK: Personal
 
     /// Every entry of the user's list, in the file's order.
-    public static func personal(_ user: MCPHubScope.Source?, runs: [String: Run] = [:]) -> [Row] {
+    public static func personal(_ user: MCPHubScope.Source?, runs: [String: Run] = [:], signIns: [String: SignIn] = [:]) -> [Row] {
         guard let user, case .success(let read) = user.read else { return [] }
         var rows: [Row] = [], seen = Set<String>()
         for entry in read.document.entries {
@@ -70,7 +101,7 @@ public enum MCPHubOverview {
             case .failure(let broken):
                 rows.append(Row(name: entry.key, server: nil, list: user.file, place: .user, digest: user.digest, state: .broken(broken.reasons)))
             case .success(let server):
-                let state: State = !server.enabled ? .off : server.transport == .sse ? .remote : ran(server.name, user.file, runs)
+                let state: State = !server.enabled ? .off : server.transport == .sse ? .remote : ran(server, user.file, runs, signIns)
                 rows.append(Row(name: server.name, server: server, list: user.file, place: .user, digest: user.digest, state: state))
             }
         }
@@ -82,7 +113,7 @@ public enum MCPHubOverview {
     /// What applies to an agent in `folder`, as its plan has it: the servers that apply, in name order, then the ones
     /// turned off, the shadowed ones and the ones that can't be used.
     public static func project(_ folder: String, user: MCPHubScope.Source?, projects: [MCPHubScope.Source], home: String,
-                               runs: [String: Run] = [:]) -> (rows: [Row], unreadable: [MCPHubScope.Unreadable]) {
+                               runs: [String: Run] = [:], signIns: [String: SignIn] = [:]) -> (rows: [Row], unreadable: [MCPHubScope.Unreadable]) {
         let resolution = MCPHubScope.resolve(folder: folder, user: user, projects: projects, home: home)
         let plan = MCPHubPlan.make(resolution, folder: folder, path: [], approved: resolution.approved)
         func row(_ applied: MCPHubScope.Applied, _ state: State) -> Row {
@@ -93,7 +124,7 @@ public enum MCPHubOverview {
             switch plan.server(named: applied.name)?.state {
             case .needsApproval?: return row(applied, .needsApproval)
             case .remote?: return row(applied, .remote)
-            default: return row(applied, ran(applied.name, applied.source.file, runs))
+            default: return row(applied, ran(applied.server, applied.source.file, runs, signIns))
             }
         }
         rows += resolution.off.map { row($0, resolution.offHere.contains($0.name) ? .offHere : .off) }
@@ -107,10 +138,23 @@ public enum MCPHubOverview {
         return (rows, resolution.unreadable)
     }
 
-    static func ran(_ name: String, _ list: String, _ runs: [String: Run]) -> State {
-        guard let run = runs[runKey(list: list, server: name)] else { return .ready(tools: nil) }
-        if let failure = run.failure { return .failed(failure) }
-        return .ready(tools: run.tools)
+    /// The state its last need left, and for a server at a URL, its sign-in: a lapse or more access first, since the
+    /// next need would end there; a sign-in whose need then failed for another reason shows that reason.
+    static func ran(_ server: MCPHubServer, _ list: String, _ runs: [String: Run], _ signIns: [String: SignIn] = [:]) -> State {
+        let run = runs[runKey(list: list, server: server.name)]
+        let signIn = server.transport == .stdio ? nil : signIns[signInKey(server.url)]
+        switch signIn {
+        case .signedOut?: return .signedOut
+        case .needsMoreAccess(let scopes)?: return .needsMoreAccess(scopes)
+        case .signedIn?:
+            if let failure = run?.failure, run?.needsSignIn != true { return .failed(failure) }
+            return .signedIn(tools: run.flatMap { $0.failure == nil ? $0.tools : nil })
+        case nil:
+            guard let run else { return .ready(tools: nil) }
+            if run.needsSignIn { return .needsSignIn }
+            if let failure = run.failure { return .failed(failure) }
+            return .ready(tools: run.tools)
+        }
     }
 
     // MARK: words
@@ -127,6 +171,11 @@ public enum MCPHubOverview {
         case .remote: return "Not reached (SSE)"
         case .broken: return "Can\u{2019}t be used"
         case .shadowed: return "Replaced by another"
+        case .needsSignIn: return "Needs sign-in"
+        case .signedIn(let tools?): return "Signed in \u{00B7} \(tools) \(tools == 1 ? "tool" : "tools")"
+        case .signedIn(nil): return "Signed in"
+        case .signedOut: return "Signed out \u{2014} Reconnect\u{2026}"
+        case .needsMoreAccess: return "Needs more access \u{2014} Reconnect\u{2026}"
         }
     }
 
@@ -147,6 +196,14 @@ public enum MCPHubOverview {
         case .remote: return "It uses the older HTTP+SSE transport, which Next Term doesn\u{2019}t reach. Most servers also answer at a Streamable HTTP URL, often ending in /mcp: use that one."
         case .broken(let reasons): return reasons.joined(separator: " ")
         case .shadowed: return "A server of the same name nearer this project is used instead."
+        case .needsSignIn:
+            return "It asks you to sign in. Sign in once, and Next Term keeps you signed in for every agent; the agents never get the sign-in."
+        case .signedIn(let tools?):
+            return "Next Term is signed in to it for your agents, and reached it with \(tools) \(tools == 1 ? "tool" : "tools"). The agents never get the sign-in."
+        case .signedIn(nil): return "Next Term is signed in to it for your agents. The agents never get the sign-in."
+        case .signedOut: return "Next Term\u{2019}s sign-in lapsed. Reconnect to sign in again; until then agents can\u{2019}t use it."
+        case .needsMoreAccess(let scopes):
+            return "It needs more access than you gave (\(scopes.joined(separator: " "))). Reconnect to give it; until then agents can\u{2019}t use it for that."
         }
     }
 

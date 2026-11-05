@@ -117,6 +117,13 @@ public final class MCPHubFakeAuth: @unchecked Sendable {
         lock.unlock()
     }
 
+    /// Every registered client is forgotten, as a registration's life running out.
+    public func expireRegistrations() {
+        lock.lock()
+        for id in clients.keys { clients[id] = .distantPast }
+        lock.unlock()
+    }
+
     /// Whether `token` is a live access token for `resource`, and its scopes.
     public func validate(_ token: String, resource: String) -> (valid: Bool, scope: String) {
         lock.lock()

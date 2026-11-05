@@ -148,6 +148,11 @@ extension MCPServer {
         case .remote: return ["state": "not_reached"]
         case .broken(let reasons): return ["state": "broken", "why": reasons.joined(separator: " ")]
         case .shadowed: return ["state": "shadowed"]
+        case .needsSignIn: return ["state": "needs_sign_in"]
+        case .signedIn(let tools?): return ["state": "signed_in", "tools": tools]
+        case .signedIn(nil): return ["state": "signed_in"]
+        case .signedOut: return ["state": "signed_out"]
+        case .needsMoreAccess(let scopes): return ["state": "needs_more_access", "scopes": scopes]
         }
     }
 

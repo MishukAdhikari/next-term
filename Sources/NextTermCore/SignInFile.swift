@@ -167,6 +167,13 @@ public enum SignInFile {
         return .success(body)
     }
 
+    /// The body read with no key and no MAC check, for Settings' states alone: nothing read here is trusted for a
+    /// need, a consent or a token, which read it with `read`.
+    public static func peek(_ data: Data?) -> Body? {
+        guard let data, let outer = try? JSONDecoder().decode(Outer.self, from: data) else { return nil }
+        return try? decoder.decode(Body.self, from: outer.body)
+    }
+
     public static func encode(_ body: Body, key: SymmetricKey) throws -> Data {
         let inner = try encoder.encode(body)
         let mac = Data(HMAC<SHA256>.authenticationCode(for: inner, using: indexKey(key)))

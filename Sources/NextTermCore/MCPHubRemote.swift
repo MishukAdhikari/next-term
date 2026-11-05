@@ -14,23 +14,26 @@ import Foundation
 ///   or a Tailscale name, checked before each request and again against the address the connection used. No redirect is followed to
 ///   another server, nor one that would turn a call into a GET, so a key is never sent where its URL didn't say.
 /// - **Keys refused.** A 401 or 403 is `Failure.Kind.unauthorized`, with the server's WWW-Authenticate: the sentence
-///   tells the agent to have the user check the key in Settings › MCP Servers. Signing in with OAuth comes later, at
-///   that seam: the challenge names the server's resource metadata, and the token it gets is one more filled header.
+///   tells the agent to have the user check the key in Settings › MCP Servers. A server Next Term signs in to (OAuth,
+///   MCPHubSignIn) gets its token as one more filled header, `Endpoint.signedIn`, and a refused one is a Reconnect.
 ///
 /// The older HTTP+SSE transport (2024-11-05: a GET stream, and POSTs to the endpoint it names) is not spoken; an `sse`
 /// entry stays listed as one Next Term doesn't reach (MCPHubPlan.State.remote). No GET stream is opened for the
 /// server's own messages either: Next Term offers servers nothing to ask of it, and a tool list is asked again when old.
 public final class MCPHubRemote: @unchecked Sendable {
-    /// The URL and headers for one need, keys filled in. `keyed`: a key from Secrets is in them, for what a 401 says.
+    /// The URL and headers for one need, keys filled in. `keyed`: a key from Secrets is in them; `signedIn`: Next Term's
+    /// sign-in token is (MCPHubRemoteControl.credentials), for what a 401 says.
     public struct Endpoint: Sendable {
         public var url: URL
         public var headers: [String: String]
         public var keyed: Bool
+        public var signedIn: Bool
 
-        public init(url: URL, headers: [String: String] = [:], keyed: Bool = false) {
+        public init(url: URL, headers: [String: String] = [:], keyed: Bool = false, signedIn: Bool = false) {
             self.url = url
             self.headers = headers
             self.keyed = keyed
+            self.signedIn = signedIn
         }
     }
 
@@ -397,7 +400,7 @@ public final class MCPHubRemote: @unchecked Sendable {
                 return .failure(Failure(Self.cloudflareAccess(name, status: status, sent: endpoint.headers),
                                         kind: .unauthorized(status: status, challenge: headers["www-authenticate"])))
             }
-            return .failure(unauthorized(status, challenge: headers["www-authenticate"], keyed: endpoint.keyed))
+            return .failure(unauthorized(status, challenge: headers["www-authenticate"], keyed: endpoint.keyed, signedIn: endpoint.signedIn))
         }
         if status == 404, session != nil { return .failure(Self.expired) }
         guard (200..<300).contains(status) else {
@@ -416,16 +419,19 @@ public final class MCPHubRemote: @unchecked Sendable {
         return .success(Reply(status: status, headers: headers, message: answer))
     }
 
-    /// What the agent is told of a 401 or 403: the user checks the key in Settings › MCP Servers.
-    func unauthorized(_ status: Int, challenge: String?, keyed: Bool) -> Failure {
+    /// What the agent is told of a 401 or 403: the user checks the key in Settings › MCP Servers, or reconnects a
+    /// sign-in (which MCPHubRemoteControl refreshes once first, and words itself when that fails too).
+    func unauthorized(_ status: Int, challenge: String?, keyed: Bool, signedIn: Bool = false) -> Failure {
         let code = "HTTP \(status)"
         let text: String
-        if keyed {
+        if signedIn {
+            text = "\(name) refused Next Term\u{2019}s sign-in (\(code)). Ask the user to choose Reconnect for \(name) in Next Term › Settings › MCP Servers."
+        } else if keyed {
             text = "\(name) refused the key Next Term sent (\(code)). Ask the user to check \(name)'s key in Next Term › Settings › MCP Servers, "
                 + "and in Settings › Secrets that the key is the right one and still valid."
         } else {
             text = "\(name) asks for a key or a sign-in (\(code)), and Next Term sends none. Ask the user to give \(name) its key in "
-                + "Next Term › Settings › MCP Servers (a header with a key from Secrets); Next Term doesn't sign in to servers yet."
+                + "Next Term › Settings › MCP Servers (a header with a key from Secrets)."
         }
         return Failure(text, kind: .unauthorized(status: status, challenge: challenge))
     }

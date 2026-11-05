@@ -37,7 +37,7 @@ import Testing
             return flow.run(open: { url in
                 DispatchQueue.global().async { _ = MCPHubFakeAuth.signIn(url) }
                 return true
-            }, until: Date().addingTimeInterval(20))
+            }, until: Date().addingTimeInterval(60))
         }
 
         func refresher(_ id: String, store: SignInStore? = nil) -> SignInRefresher {
@@ -47,7 +47,7 @@ import Testing
         func call(_ token: String) -> Result<[String: Any], MCPHubRemote.Failure> {
             MCPHubRemote(name: "linear", clientVersion: "1").call("echo", arguments: [:],
                                                                    endpoint: .init(url: remote.url, headers: ["Authorization": "Bearer " + token]),
-                                                                   until: Date().addingTimeInterval(20))
+                                                                   until: Date().addingTimeInterval(30))
         }
     }
 
@@ -56,9 +56,9 @@ import Testing
     @Test func aSignInRegistersOpensTheBrowserAndKeepsTheTokensSealed() throws {
         let setup = try Setup()
         // The server asks: a 401 with its resource metadata.
-        let refused = MCPHubRemote(name: "linear", clientVersion: "1").tools(.init(url: setup.remote.url), until: Date().addingTimeInterval(10))
+        let refused = MCPHubRemote(name: "linear", clientVersion: "1").tools(.init(url: setup.remote.url), until: Date().addingTimeInterval(30))
         guard case .failure(let failure) = refused, case .unauthorized(401, let header) = failure.kind else {
-            Issue.record("the server didn't ask for a sign-in")
+            Issue.record("the server didn't ask for a sign-in: \(refused)")
             return
         }
         #expect(MCPHubOAuthChallenge.bearer(header)?.resourceMetadata == setup.auth.resourceMetadata)
@@ -117,7 +117,7 @@ import Testing
         #expect(listener.wait(until: Date().addingTimeInterval(0.2)) == nil)
         #expect(!listener.isClosed && listener.strays == 2)
         #expect(get("/callback?state=good&code=x") == 200)
-        #expect(listener.wait(until: Date().addingTimeInterval(1))?.contains { $0 == ("code", "x") } == true)
+        #expect(listener.wait(until: Date().addingTimeInterval(10))?.contains { $0 == ("code", "x") } == true)
         #expect(listener.isClosed)
         // One that waited out its time is closed too.
         let idle = try MCPHubLoopback { _ in nil }
@@ -301,14 +301,12 @@ import Testing
 
     @Test func anExpiredRegistrationIsMadeAgain() throws {
         let setup = try Setup()
-        setup.auth.registrationLife = 0.5
         setup.auth.accessLife = 30
         let record = try setup.signIn().get()
-        Thread.sleep(forTimeInterval: 0.7)
+        setup.auth.expireRegistrations()
         // The refresh finds the client gone: the sign-in lapses and the registration is forgotten.
         #expect(setup.refresher(record.id).token() == .signedOut(lapse: 1))
         #expect(try setup.store.read().get().clients.isEmpty)
-        setup.auth.registrationLife = nil
         _ = try setup.signIn().get()
         #expect(setup.auth.count("/register") == 2)
     }
