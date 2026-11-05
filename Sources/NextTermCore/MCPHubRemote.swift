@@ -83,9 +83,19 @@ public final class MCPHubRemote: @unchecked Sendable {
         configuration.waitsForConnectivity = false
         configuration.timeoutIntervalForResource = max(limits.call, limits.start) + 10
         router = Router(limit: limits.message)
+        urlSession = URLSession(configuration: configuration, delegate: router, delegateQueue: Self.delegateQueue("remote"))
+    }
+
+    /// The queue a URL session's delegate is called on, for a session whose caller waits on a semaphore for what the
+    /// delegate says: one serial dispatch queue of its own under it. An OperationQueue's own queue is a concurrent one,
+    /// which GCD runs only while a CPU is free of the process's other work at its QoS or above, so a busy moment (a dozen
+    /// threads computing, a test run's suites in parallel) held an answer that had already arrived for 18 to 30 seconds
+    /// and the call timed out. A serial queue is overcommitting: GCD gives it a thread whenever it has work.
+    static func delegateQueue(_ label: String) -> OperationQueue {
         let queue = OperationQueue()
         queue.maxConcurrentOperationCount = 1
-        urlSession = URLSession(configuration: configuration, delegate: router, delegateQueue: queue)
+        queue.underlyingQueue = DispatchQueue(label: "nextterm.mcp-hub." + label, qos: .userInitiated)
+        return queue
     }
 
     deinit { urlSession.invalidateAndCancel() }
