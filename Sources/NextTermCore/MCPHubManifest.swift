@@ -144,9 +144,14 @@ public struct MCPHubManifest: Codable, Equatable, Sendable {
 
     /// A server as one list has it now: the list, its name, what it runs or reaches, keys as written (never a value).
     public static func identity(_ server: MCPHubServer, list: String) -> String {
-        let parts = [list, server.name, server.transport.rawValue, server.command] + server.args
-            + server.env.keys.sorted().map { $0 + "=" + (server.env[$0] ?? "") } + [server.url]
-            + server.headers.keys.sorted().map { $0 + ": " + (server.headers[$0] ?? "") }
+        // In steps with their types: as one expression it is too much for the type checker on a slower machine (CI).
+        let env: [String] = server.env.keys.sorted().map { (key: String) -> String in key + "=" + (server.env[key] ?? "") }
+        let headers: [String] = server.headers.keys.sorted().map { (key: String) -> String in key + ": " + (server.headers[key] ?? "") }
+        var parts: [String] = [list, server.name, server.transport.rawValue, server.command]
+        parts += server.args
+        parts += env
+        parts.append(server.url)
+        parts += headers
         return SHA256.hash(data: Data(parts.joined(separator: "\u{0}").utf8)).prefix(8).map { String(format: "%02x", $0) }.joined()
     }
 
