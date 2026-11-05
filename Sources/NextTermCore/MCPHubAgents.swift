@@ -235,9 +235,9 @@ public enum MCPHubAgents {
         return (offer, seen)
     }
 
-    /// The offer's sentence: “Codex has a new MCP server, “linear”. Use it in every agent in Next Term?”
+    /// The offer's sentence: “linear” is new in Codex. Use it in every agent? The server's name leads, so a narrow
+    /// window that cuts the sentence short still says which server it is.
     public static func offerText(_ server: Server) -> String {
-        let verb = server.agents.count == 1 ? "has" : "have"
-        return "\(server.agentsText) \(verb) a new MCP server, \u{201C}\(server.pastedName)\u{201D}. Use it in every agent in Next Term?"
+        "\u{201C}\(server.pastedName)\u{201D} is new in \(server.agentsText). Use it in every agent?"
     }
 }

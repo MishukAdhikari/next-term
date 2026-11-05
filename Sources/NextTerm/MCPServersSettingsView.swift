@@ -265,7 +265,7 @@ final class MCPServersSettingsView: NSView, NSTableViewDataSource, NSTableViewDe
             : "Agents you start in Next Term reach these servers through its own MCP connection. Their own configs are never changed."
         note.stringValue = unreadable.map { "\(SkillStep.short($0.file)) can\u{2019}t be used: \($0.problem.reason)." }.joined(separator: " ")
         if note.stringValue.isEmpty, !rows.isEmpty, !AppDelegate.shared.agentControl {
-            note.stringValue = "Agents reach these servers only while \u{201C}Let agents control Next Term\u{201D} is on, in Settings \u{203A} General."
+            note.stringValue = "Agents reach these servers only while \u{201C}Let agents control Next Term\u{201D} is on, in Settings \u{203A} Editor."
         }
         note.isHidden = note.stringValue.isEmpty
         table.reloadData()

@@ -142,7 +142,7 @@ import Testing
         try text.write(toFile: codex.path, atomically: true, encoding: .utf8)
         let second = MCPHubAgents.due(files(sources), seen: first.seen, added: [])
         #expect(second.offer.map(\.name) == ["sentry"])
-        #expect(MCPHubAgents.offerText(second.offer[0]) == "Codex has a new MCP server, \u{201C}sentry\u{201D}. Use it in every agent in Next Term?")
+        #expect(MCPHubAgents.offerText(second.offer[0]) == "\u{201C}sentry\u{201D} is new in Codex. Use it in every agent?")
         // Once offered (seen as it shows), never again, whatever the answer.
         var seen = second.seen
         seen.servers.insert("sentry")
@@ -195,7 +195,7 @@ import Testing
 
     @Test func anOfferForAServerInTwoAgentsNamesBoth() throws {
         let github = try #require(MCPHubAgents.servers(in: try agentFiles()).first { $0.name == "github" })
-        #expect(MCPHubAgents.offerText(github) == "Claude Code and Cursor have a new MCP server, \u{201C}github\u{201D}. Use it in every agent in Next Term?")
+        #expect(MCPHubAgents.offerText(github) == "\u{201C}github\u{201D} is new in Claude Code and Cursor. Use it in every agent?")
     }
 
     // MARK: add_mcp_server and list_mcp_servers (R10)

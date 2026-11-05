@@ -161,7 +161,7 @@ extension SelfTest {
         if let row {
             // The offer's notice for it: Add… is its one primary, and it takes no keyboard.
             GitToast.show(MCPHubAgents.offerText(row), in: window, button: "Add\u{2026}", action: {}, other: "Not Now", otherAction: {}, primary: true)
-            check(GitToast.text == "Codex has a new MCP server, \u{201C}found-demo\u{201D}. Use it in every agent in Next Term?",
+            check(GitToast.text == "\u{201C}found-demo\u{201D} is new in Codex. Use it in every agent?",
                   "MCP agents: the new-server offer names the agent and the server", GitToast.text ?? "none")
             // The notice is a panel of its own, a child of the window: the window's capture leaves it out.
             await screenshot(window.childWindows?.last ?? window, suffix: "-mcp-offer")
