@@ -609,6 +609,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // open when the setting was turned off, and closed after Next Term.
         if agentControl { startAgentControl() } else { MCPRegistration.update(on: false, claudeAppOnly: true) }
         MCPRegistration.watchClaudeApp()
+        // An MCP server added to an agent's own config from now on: one calm offer to use it in every agent (MCPHubOffer).
+        MainActor.assumeIsolated { MCPHubOffer.start() }
         // The menus as built are the defaults, read before they are the menu bar (which keeps one item per key).
         let menu = buildMenu()
         KeyboardShortcuts.shared.capture(menu)

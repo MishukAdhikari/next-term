@@ -21,11 +21,11 @@ extension MCPServer {
 
     public static func isTaskTool(_ name: String) -> Bool { taskTools.contains { $0.name == name } }
 
-    /// The tools listed for tool search to find rather than kept loaded: apply_import, undo_import, apply_setup, add_task and
-    /// reopen_before_update.
+    /// The tools listed for tool search to find rather than kept loaded: apply_import, undo_import, apply_setup, add_task,
+    /// add_mcp_server and list_mcp_servers, and reopen_before_update.
     /// The tools' own `alwaysLoad` must agree (a unit test checks both).
     public static func isDeferred(_ name: String) -> Bool {
-        deferredImportTools.contains(name) || isSetupTool(name) || isTaskTool(name) || name == "reopen_before_update"
+        deferredImportTools.contains(name) || isSetupTool(name) || isTaskTool(name) || isHubTool(name) || name == "reopen_before_update"
     }
 
     /// add_task's refusal for a call with no project to put the task in.

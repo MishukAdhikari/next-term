@@ -146,7 +146,7 @@ import Testing
         // Every schema is a JSON object schema (the raw strings parse).
         #expect(tools.allSatisfy { ($0["inputSchema"] as? [String: Any])?["type"] as? String == "object" })
         let loaded = tools.filter { !MCPServer.isDeferred($0["name"] as? String ?? "") }
-        let loadedCount: Int = tools.count - 3 - MCPServer.setupTools.count - MCPServer.taskTools.count // 3: apply_import, undo_import, reopen_before_update
+        let loadedCount: Int = tools.count - 3 - MCPServer.setupTools.count - MCPServer.taskTools.count - MCPServer.hubTools.count // 3: apply_import, undo_import, reopen_before_update
         #expect(loaded.count == loadedCount)
         let kept: [Bool] = loaded.map { tool in
             let meta: [String: Any] = tool["_meta"] as? [String: Any] ?? [:]
@@ -1757,8 +1757,9 @@ struct SplitMix: RandomNumberGenerator {
     @Test func toolCountAndTheInstructionsOnlyNameThem() {
         // 31 + 13 (run_command the 13th) + 4 + 5 (Secrets' five, import_secrets the fifth), and add_task, as many as without
         // herdr's agents' ids; then edit_host and end_session (plan 010a U6a), rename_tab (U5a) and start_agent (U5b), and
-        // apply_setup, and reopen_before_update.
-        #expect(MCPServer.tools.count == 58 + MCPServer.setupTools.count + MCPServer.taskTools.count)
+        // apply_setup, and reopen_before_update; then the MCP hub's add_mcp_server and list_mcp_servers.
+        #expect(MCPServer.tools.count == 58 + MCPServer.setupTools.count + MCPServer.taskTools.count + MCPServer.hubTools.count)
+        #expect(MCPServer.hubTools.count == 2)
         #expect(!MCPServer.tools.contains { $0.name.contains("herdr") })
         // Five characters more, and no sentence: list_tabs' description says the rest.
         #expect(MCPServer.instructions.contains("list_tabs shows every project, tab and herdr agent with its state"))

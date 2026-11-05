@@ -33,15 +33,15 @@ public enum MCPServer {
     static let orchestration = """
         list_tabs shows every project, tab and herdr agent with its state. Start \
         an agent with new_tab (a folder and a command such as "claude", "codex" or "opencode"), give it a task with \
-        send_to_tab, then wait_for_tab until it stops and read_tab. An agent awaiting a decision shows \
+        send_to_tab, wait_for_tab until it stops, then read_tab. An agent awaiting a decision shows \
         "attention" and a question_id for answer_agent. Never type into your own tab ("you": true). \
         read_file, find_in_files, git_status, get_diff and get_editor_selection read projects and the editor. \
-        list_hosts, new_remote_tab, host_sessions and host_changes work on the user's servers. list_skills \
+        list_hosts, new_remote_tab, host_sessions and host_changes work on the user's hosts. list_skills \
         and get_skill give your project's, the user's and Next Term's skills: read one that fits and your \
-        agent doesn't load. propose_edit shows an edit for the user to accept. write_file, \
+        agent doesn't load. propose_edit shows the user an edit to accept. write_file, \
         create_file, stage, commit, focus_tab, split_pane, close_pane, zoom_pane, set_layout, settings_set, \
-        install_skill, remove_skill, apply_import, undo_import, apply_setup and add_task ask the user on the Mac first, and change \
-        nothing if declined. For settings from another app use list_import_sources and preview_import, \
+        install_skill, remove_skill, apply_import, undo_import, apply_setup, add_task and add_mcp_server ask the user on the Mac \
+        first; a decline changes nothing. For another app's settings use list_import_sources and preview_import, \
         never its files. A tab Next Term brings back after an update or a quit keeps its id.
         """
 
@@ -94,7 +94,7 @@ public enum MCPServer {
         /// Reaches another machine (a server over ssh), not only this Mac.
         public var openWorld = false
         /// Listed for Claude Code to keep loaded (`anthropic/alwaysLoad`). Tools used once in a while (apply_import,
-        /// undo_import, apply_setup and add_task, MCPServer.isDeferred) leave it off, so they cost nothing until tool search finds them.
+        /// undo_import, apply_setup, add_task and the MCP hub's two, MCPServer.isDeferred) leave it off, so they cost nothing until tool search finds them.
         public var alwaysLoad = true
     }
 
@@ -247,7 +247,7 @@ public enum MCPServer {
              description: "Opens a file in Next Term's editor, at a line and column if given (1-based).",
              inputSchema: #"{"type": "object", "properties": {"path": {"type": "string", "description": "Absolute file path."}, "line": {"type": "integer", "minimum": 1}, "column": {"type": "integer", "minimum": 1}}, "required": ["path"], "additionalProperties": false}"#,
              readOnly: false, destructive: false, idempotent: true, timeout: 15),
-    ] + controlTools + importTools + setupTools + taskTools + secretTools
+    ] + controlTools + hubTools + importTools + setupTools + taskTools + secretTools
 
     public static func tool(named name: String) -> Tool? { tools.first { $0.name == name } }
 

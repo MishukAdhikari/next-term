@@ -747,6 +747,12 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
         terminalSettings?.completionPane.rows.suggestions.pointOut(false)
     }
 
+    /// Settings › MCP Servers (the MCP hub's new-server offer opens its sheet there).
+    var mcpServers: MCPServersSettingsView? {
+        let tabs = window?.contentView as? NSTabView
+        return tabs?.tabViewItems.first { $0.identifier as? String == "mcp" }?.view as? MCPServersSettingsView
+    }
+
     /// The tab shown, by its identifier (for the self-test of show_settings).
     var shownTab: String? { (window?.contentView as? NSTabView)?.selectedTabViewItem?.identifier as? String }
 

@@ -11,6 +11,11 @@ import NextTermCore
 /// edits, removes and turns one off. Project approves a project's list as it is now, and turns a server off for the
 /// project alone. Every change has one Undo (MCPHubEdits). Until the user adds a server there is no list, and the tab
 /// is one line and one button.
+///
+/// Personal also lists, under Found in your agents (R9), the servers set up in the agents' own configs and the open
+/// projects' (MCPHubAgentServers), one row a server naming each agent, the ones in the list already left out. Add… opens
+/// Paste a Config…'s sheet for it, so its keys go to Secrets the same way; the agent's file is only read. With no server
+/// of the user's own, the tab is the intro, Add and Paste at the top, and that list.
 final class MCPServersSettingsView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     /// The open projects, for the self-test (its projects are its own).
     static var projectsForTest: [String]?
@@ -28,6 +33,14 @@ final class MCPServersSettingsView: NSView, NSTableViewDataSource, NSTableViewDe
     let toggleButton = NSButton(title: "Turn Off", target: nil, action: nil)
     let approveButton = NSButton(title: "Approve\u{2026}", target: nil, action: nil)
     let undoButton = NSButton(title: "Undo", target: nil, action: nil)
+    let foundTitle = NSTextField(labelWithString: "Found in your agents")
+    let foundIntro = NSTextField(wrappingLabelWithString: "Set up in your agents\u{2019} own configs. Add one to use it in every agent in Next Term; their configs stay as they are.")
+    let foundTable = NSTableView()
+    private let foundSection = NSStackView()
+    /// The servers Found in your agents lists: in the agents' configs, not in the user's list.
+    private(set) var foundRows: [MCPHubAgents.Server] = []
+    private let scroll = NSScrollView()
+    private var buttons = NSStackView()
     private let content = NSStackView()
     private let empty = NSStackView()
     let emptyText = NSTextField(wrappingLabelWithString: "")
@@ -105,7 +118,6 @@ final class MCPServersSettingsView: NSView, NSTableViewDataSource, NSTableViewDe
         table.allowsMultipleSelection = false
         table.target = self
         table.doubleAction = #selector(edit)
-        let scroll = NSScrollView()
         scroll.documentView = table
         scroll.hasVerticalScroller = true
         scroll.borderType = .bezelBorder
@@ -118,9 +130,11 @@ final class MCPServersSettingsView: NSView, NSTableViewDataSource, NSTableViewDe
             button.action = action
             button.bezelStyle = .rounded
         }
-        let buttons = NSStackView(views: [editButton, removeButton, toggleButton, approveButton, NSView(), undoButton])
+        buttons = NSStackView(views: [editButton, removeButton, toggleButton, approveButton, NSView(), undoButton])
         buttons.spacing = 8
-        for view in [pickerRow, intro, scroll, detail, buttons, note] { content.addArrangedSubview(view) }
+        buildFound()
+        for view in [pickerRow, intro, scroll, detail, buttons, foundSection, note] { content.addArrangedSubview(view) }
+        content.setCustomSpacing(18, after: buttons)
         content.orientation = .vertical
         content.alignment = .leading
         content.spacing = 10
@@ -151,11 +165,44 @@ final class MCPServersSettingsView: NSView, NSTableViewDataSource, NSTableViewDe
             detail.widthAnchor.constraint(equalTo: content.widthAnchor, constant: -32),
             buttons.widthAnchor.constraint(equalTo: content.widthAnchor, constant: -32),
             note.widthAnchor.constraint(equalTo: content.widthAnchor, constant: -32),
+            foundSection.widthAnchor.constraint(equalTo: content.widthAnchor, constant: -32),
             scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 180),
             empty.centerXAnchor.constraint(equalTo: centerXAnchor),
             empty.centerYAnchor.constraint(equalTo: centerYAnchor),
             empty.widthAnchor.constraint(lessThanOrEqualTo: widthAnchor, constant: -64),
         ])
+    }
+
+    /// Found in your agents: a heading, a line, and a short table whose last column is each server's Add….
+    private func buildFound() {
+        foundTitle.font = .systemFont(ofSize: NSFont.systemFontSize, weight: .semibold)
+        foundIntro.textColor = .secondaryLabelColor
+        foundIntro.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        let columns: [(String, String, CGFloat)] = [("name", "Server", 130), ("agents", "Set up in", 130), ("runs", "Runs", 200), ("add", "", 64)]
+        for (id, title, width) in columns {
+            let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(id))
+            column.title = title
+            column.width = width
+            column.minWidth = id == "add" ? 64 : 60
+            foundTable.addTableColumn(column)
+        }
+        foundTable.columnAutoresizingStyle = .firstColumnOnlyAutoresizingStyle
+        foundTable.dataSource = self
+        foundTable.delegate = self
+        foundTable.allowsEmptySelection = true
+        foundTable.rowHeight = 24
+        foundTable.setAccessibilityLabel("Found in your agents")
+        let foundScroll = NSScrollView()
+        foundScroll.documentView = foundTable
+        foundScroll.hasVerticalScroller = true
+        foundScroll.borderType = .bezelBorder
+        foundScroll.heightAnchor.constraint(equalToConstant: 128).isActive = true
+        for view in [foundTitle, foundIntro, foundScroll] { foundSection.addArrangedSubview(view) }
+        foundSection.orientation = .vertical
+        foundSection.alignment = .leading
+        foundSection.spacing = 6
+        foundIntro.widthAnchor.constraint(equalTo: foundSection.widthAnchor).isActive = true
+        foundScroll.widthAnchor.constraint(equalTo: foundSection.widthAnchor).isActive = true
     }
 
     // MARK: data
@@ -204,7 +251,11 @@ final class MCPServersSettingsView: NSView, NSTableViewDataSource, NSTableViewDe
             let user = MCPHubScope.sources(folder: nil, home: home, userFile: userFile).user
             rows = MCPHubOverview.personal(user, runs: runs)
             if case .failure(let problem)? = user?.read { unreadable = [MCPHubScope.Unreadable(file: userFile, problem: problem)] }
+            // Read again where an agent's file changed; a change comes back as MCPHubControl.changed.
+            MCPHubAgentServers.refresh(projects: open)
+            foundRows = MCPHubAgents.notAdded(MCPHubAgentServers.found, user: user)
         }
+        if showsProject { foundRows = [] }
         let name = project.map(ProjectSkillsView.title) ?? ""
         intro.stringValue = showsProject
             ? "What agents get in \(name): your servers, and the ones its .next-term/mcp.json lists for its team. A project\u{2019}s list starts nothing until you approve it."
@@ -215,11 +266,16 @@ final class MCPServersSettingsView: NSView, NSTableViewDataSource, NSTableViewDe
         }
         note.isHidden = note.stringValue.isEmpty
         table.reloadData()
+        foundTable.reloadData()
         if let kept, let index = rows.firstIndex(where: { $0.name == kept.0 && $0.list == kept.1 }) {
             table.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
         }
         // After a change, the table stays, with its Undo, even when it left nothing.
-        showEmpty(unreadable.isEmpty && rows.isEmpty && MCPHubEdits.last == nil, open: open)
+        let noList = unreadable.isEmpty && rows.isEmpty && MCPHubEdits.last == nil
+        // With none of the user's own and some in their agents: the intro, Add and Paste, and those.
+        for view in [scroll, buttons] as [NSView] { view.isHidden = noList && !showsProject }
+        foundSection.isHidden = foundRows.isEmpty
+        showEmpty(noList && foundRows.isEmpty, open: open)
         updateButtons()
     }
 
@@ -257,9 +313,10 @@ final class MCPServersSettingsView: NSView, NSTableViewDataSource, NSTableViewDe
 
     var selected: MCPHubOverview.Row? { rows.indices.contains(table.selectedRow) ? rows[table.selectedRow] : nil }
 
-    func numberOfRows(in tableView: NSTableView) -> Int { rows.count }
+    func numberOfRows(in tableView: NSTableView) -> Int { tableView === foundTable ? foundRows.count : rows.count }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row index: Int) -> NSView? {
+        if tableView === foundTable { return foundCell(tableColumn, row: index) }
         guard let column = tableColumn, rows.indices.contains(index) else { return nil }
         let row = rows[index]
         let cell = NSTextField(labelWithString: cellText(row, column: column.identifier.rawValue))
@@ -291,7 +348,36 @@ final class MCPServersSettingsView: NSView, NSTableViewDataSource, NSTableViewDe
         }
     }
 
-    func tableViewSelectionDidChange(_ notification: Notification) { updateButtons() }
+    /// A Found in your agents cell: its name, the agents, what it runs, or its Add….
+    private func foundCell(_ column: NSTableColumn?, row index: Int) -> NSView? {
+        guard let column, foundRows.indices.contains(index) else { return nil }
+        let server = foundRows[index]
+        if column.identifier.rawValue == "add" {
+            let button = NSButton(title: "Add\u{2026}", target: self, action: #selector(addFoundRow(_:)))
+            button.bezelStyle = .rounded
+            button.controlSize = .small
+            button.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+            button.tag = index
+            button.setAccessibilityLabel("Add \(server.pastedName)")
+            return button
+        }
+        let text: String
+        switch column.identifier.rawValue {
+        case "name": text = server.pastedName
+        case "agents": text = server.agentsText
+        default: text = server.runs
+        }
+        let cell = NSTextField(labelWithString: text)
+        cell.lineBreakMode = .byTruncatingTail
+        cell.toolTip = column.identifier.rawValue == "agents" ? server.files.map(SkillStep.short).joined(separator: "\n") : text
+        if column.identifier.rawValue != "name" { cell.textColor = .secondaryLabelColor }
+        return cell
+    }
+
+    func tableViewSelectionDidChange(_ notification: Notification) {
+        guard (notification.object as? NSTableView) !== foundTable else { return }
+        updateButtons()
+    }
 
     private func updateButtons() {
         let row = selected
@@ -324,6 +410,24 @@ final class MCPServersSettingsView: NSView, NSTableViewDataSource, NSTableViewDe
     // MARK: actions
 
     @objc func add() { beginServerSheet(nil) }
+
+    @objc private func addFoundRow(_ sender: NSButton) {
+        guard foundRows.indices.contains(sender.tag) else { return }
+        addFound(foundRows[sender.tag])
+    }
+
+    /// Add… for a server in an agent's config (a row of Found in your agents, or the new-server offer): Paste a
+    /// Config…'s sheet with that server, on Personal.
+    func addFound(_ server: MCPHubAgents.Server) {
+        guard let window, window.attachedSheet == nil else { return }
+        if showsProject { show(0) }
+        let sheet = MCPPasteSheet(project: nil, preset: server) { [weak self] said in
+            self?.sheet = nil
+            self?.said(said)
+        }
+        self.sheet = sheet
+        if let sheetWindow = sheet.window { window.beginSheet(sheetWindow, completionHandler: nil) }
+    }
 
     @objc func paste() {
         guard let window, window.attachedSheet == nil else { return }

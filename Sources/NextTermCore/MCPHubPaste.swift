@@ -3,11 +3,12 @@ import Foundation
 /// Settings › MCP Servers › Paste a Config…: the servers in a snippet copied from a server's README, ready to add to the
 /// user's list. Every common shape is read:
 /// - `{"mcpServers": {"github": {…}, …}}` (Claude Code, Cursor and most READMEs), or VS Code's `{"servers": {…}}`, also
-///   inside its `"mcp"`;
+///   inside its `"mcp"`, or OpenCode's `{"mcp": {…}}`;
 /// - the servers alone, `{"github": {…}}`, or a member cut out of a bigger file, `"github": {…}`;
 /// - one server alone, `{"command": "npx", "args": […]}`, named from its package or its URL's host.
 /// Comments and trailing commas are taken (JSONC.plain), and so is a Markdown fence around it. VS Code's and Windsurf's
-/// own spellings become the common ones (`serverUrl`, `streamableHttp`).
+/// own spellings become the common ones (`serverUrl`, `streamableHttp`), and so do OpenCode's (`command` as one array,
+/// `environment`), for a server found in its config (MCPHubAgents).
 ///
 /// Keys never reach the list (R13): a value that looks like one, by Secrets' own detection, is taken out of the entry
 /// and listed as a `Key` with a name for Secrets; the entry gets it back as `nxtrm secret run NAME=VARIABLE --` in front
@@ -153,7 +154,7 @@ public enum MCPHubPaste {
     /// The servers a value holds, by name, in order.
     static func servers(in root: MCPHubFile.Value) -> [(String, MCPHubFile.Value)] {
         if isServer(root) { return [(guessedName(root), root)] }
-        for path in [["mcpServers"], ["servers"], ["mcp", "servers"], ["mcp", "mcpServers"]] {
+        for path in [["mcpServers"], ["servers"], ["mcp", "servers"], ["mcp", "mcpServers"], ["mcp"]] {
             var value: MCPHubFile.Value? = root
             for key in path { value = value?.member(key) }
             if let members = value?.members { return members.filter { isServer($0.value) }.map { ($0.key, $0.value) } }
@@ -162,7 +163,9 @@ public enum MCPHubPaste {
     }
 
     static func isServer(_ value: MCPHubFile.Value) -> Bool {
-        value.members != nil && ["command", "url", "serverUrl", "httpUrl"].contains { value.member($0)?.string != nil }
+        guard value.members != nil else { return false }
+        if case .array(let words)? = value.member("command"), words.first?.string != nil { return true } // OpenCode's
+        return ["command", "url", "serverUrl", "httpUrl"].contains { value.member($0)?.string != nil }
     }
 
     /// A name for a server pasted alone: its package (`@scope/server-github` gives `server-github`), or its URL's host.
@@ -186,6 +189,15 @@ public enum MCPHubPaste {
     /// One entry: spellings made the common ones, and its keys taken out.
     static func take(name: String, pasted: String, _ value: MCPHubFile.Value, stored: Set<String>) -> Found {
         var members = value.members ?? []
+        // OpenCode's: the program and its arguments in one array, and `environment` for `env`.
+        if let at = members.firstIndex(where: { $0.key == "command" }), case .array(let words) = members[at].value,
+           let program = words.first?.string, !members.contains(where: { $0.key == "args" }) {
+            members[at].value = .string(program)
+            members.insert(MCPHubFile.Member("args", .array(Array(words.dropFirst()))), at: at + 1)
+        }
+        if !members.contains(where: { $0.key == "env" }), let at = members.firstIndex(where: { $0.key == "environment" }) {
+            members[at].key = "env"
+        }
         // VS Code's and Windsurf's spellings.
         for at in members.indices {
             if members[at].key == "serverUrl" || members[at].key == "httpUrl" { members[at].key = "url" }

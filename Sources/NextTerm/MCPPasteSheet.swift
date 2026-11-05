@@ -6,6 +6,9 @@ import NextTermCore
 /// or each key it asks for, with the name it gets in Secrets. Add copies the keys into Secrets as Secrets' own import
 /// does (one confirm, one Touch ID, its Undo in Recent imports), then adds the servers with the keys as references
 /// (R13). A key that can't be taken out for the user (in an argument, in a URL) keeps its server out until it is fixed.
+///
+/// A server found in an agent's own config (Found in your agents, or the new-server offer) opens the same sheet with that
+/// server in place of the text (`preset`): its keys go the same way, and the agent's file stays as it is.
 final class MCPPasteSheet: NSWindowController, NSWindowDelegate, NSTextViewDelegate, NSTextFieldDelegate {
     static let title = "Paste a Config"
     static let intro = "Paste the mcpServers block from a server\u{2019}s README. Any key in it goes to Secrets, never into Next Term\u{2019}s list."
@@ -18,6 +21,8 @@ final class MCPPasteSheet: NSWindowController, NSWindowDelegate, NSTextViewDeleg
     let addButton = NSButton(title: "Add", target: nil, action: nil)
     let cancelButton = NSButton(title: "Cancel", target: nil, action: nil)
     private let project: String?
+    /// The server from an agent's config the sheet adds, instead of pasted text.
+    let preset: MCPHubAgents.Server?
     private(set) var found: [MCPHubPaste.Found] = []
     /// Each server's name field, and each key's name and value fields, in `found`'s order.
     private(set) var nameFields: [NSTextField] = []
@@ -25,13 +30,15 @@ final class MCPPasteSheet: NSWindowController, NSWindowDelegate, NSTextViewDeleg
     var confirmAlert: NSAlert?
     private(set) var isBusy = false
 
-    init(project: String?, done: @escaping (_ said: String?) -> Void) {
-        self.project = project
+    init(project: String?, preset: MCPHubAgents.Server? = nil, done: @escaping (_ said: String?) -> Void) {
+        self.project = preset?.project ?? project
+        self.preset = preset
         self.done = done
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 520), styleMask: [.titled, .resizable],
+        // With no text to paste, the sheet is the server and its keys alone.
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: preset == nil ? 520 : 340), styleMask: [.titled, .resizable],
                               backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
-        window.minSize = NSSize(width: 520, height: 420)
+        window.minSize = NSSize(width: 520, height: preset == nil ? 420 : 300)
         super.init(window: window)
         window.delegate = self
         build()
@@ -44,8 +51,8 @@ final class MCPPasteSheet: NSWindowController, NSWindowDelegate, NSTextViewDeleg
 
     private func build() {
         guard let view = window?.contentView else { return }
-        let heading = SecretApprovalPanel.label(Self.title, size: 14, weight: .semibold)
-        let intro = NSTextField(wrappingLabelWithString: Self.intro)
+        let heading = SecretApprovalPanel.label(preset.map { "Add \u{201C}\($0.pastedName)\u{201D}" } ?? Self.title, size: 14, weight: .semibold)
+        let intro = NSTextField(wrappingLabelWithString: preset.map(Self.presetIntro) ?? Self.intro)
         intro.font = .systemFont(ofSize: 12)
         intro.textColor = .secondaryLabelColor
 
@@ -90,6 +97,8 @@ final class MCPPasteSheet: NSWindowController, NSWindowDelegate, NSTextViewDeleg
         appliesPopUp.lastItem?.representedObject = "all"
         var folders = MCPServersSettingsView.openProjects()
         if let project, let at = folders.firstIndex(of: project) { folders.insert(folders.remove(at: at), at: 0) }
+        // A server an agent has for one project, in a project not open now: that project is offered first all the same.
+        if let project, !folders.contains(project) { folders.insert(project, at: 0) }
         for folder in folders {
             appliesPopUp.addItem(withTitle: "Only in " + ProjectSkillsView.title(folder))
             appliesPopUp.lastItem?.representedObject = folder
@@ -115,6 +124,7 @@ final class MCPPasteSheet: NSWindowController, NSWindowDelegate, NSTextViewDeleg
         stack.edgeInsets = NSEdgeInsets(top: 20, left: 20, bottom: 20, right: 20)
         stack.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(stack)
+        textScroll.isHidden = preset != nil
         NSLayoutConstraint.activate([
             stack.topAnchor.constraint(equalTo: view.topAnchor),
             stack.leadingAnchor.constraint(equalTo: view.leadingAnchor),
@@ -122,7 +132,7 @@ final class MCPPasteSheet: NSWindowController, NSWindowDelegate, NSTextViewDeleg
             stack.bottomAnchor.constraint(equalTo: view.bottomAnchor),
             intro.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -40),
             textScroll.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -40),
-            textScroll.heightAnchor.constraint(equalToConstant: 140),
+            textScroll.heightAnchor.constraint(equalToConstant: preset == nil ? 140 : 0),
             status.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -40),
             foundScroll.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -40),
             foundScroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 120),
@@ -140,12 +150,14 @@ final class MCPPasteSheet: NSWindowController, NSWindowDelegate, NSTextViewDeleg
     /// typed in them stay.
     func refresh() {
         let text = textView.string
-        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        guard preset != nil || !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             show([])
             status.stringValue = ""
             return updateButton()
         }
-        switch MCPHubPaste.read(text, stored: Set(MCPServerSheet.storedKeys)) {
+        let read = preset.map { Result<[MCPHubPaste.Found], MCPHubPaste.Problem>.success([$0.found]) }
+            ?? MCPHubPaste.read(text, stored: Set(MCPServerSheet.storedKeys))
+        switch read {
         case .failure(let problem):
             show([])
             status.stringValue = problem.sentence
@@ -222,6 +234,12 @@ final class MCPPasteSheet: NSWindowController, NSWindowDelegate, NSTextViewDeleg
                 foundStack.addArrangedSubview(line)
             }
         }
+    }
+
+    /// The intro for a server from an agent's config: whose it is, and that their file stays as it is.
+    static func presetIntro(_ server: MCPHubAgents.Server) -> String {
+        let whose = server.agents.count == 1 ? "\(server.agentsText)\u{2019}s config" : "the configs of \(server.agentsText)"
+        return "From \(whose), which stays as it is. Any key in it goes to Secrets, never into Next Term\u{2019}s list."
     }
 
     // MARK: what it would add
@@ -324,7 +342,8 @@ final class MCPPasteSheet: NSWindowController, NSWindowDelegate, NSTextViewDeleg
                 self.isBusy = true
                 self.updateButton()
                 Task { @MainActor in
-                    let failure = await MCPServerSheet.copyIn(planned, reason: SecretReason.copyIn(planned.count, from: "a pasted MCP config"))
+                    let from = self.preset.map { "\($0.agentsText)\u{2019}s MCP config" } ?? "a pasted MCP config"
+                    let failure = await MCPServerSheet.copyIn(planned, reason: SecretReason.copyIn(planned.count, from: from))
                     self.isBusy = false
                     if let failure {
                         self.status.stringValue = failure

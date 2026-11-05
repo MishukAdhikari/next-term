@@ -399,20 +399,23 @@ final class GitToast {
         present(text, in: window, button: button, isError: isError, begun: begun, action: action, other: nil, otherAction: nil)
     }
 
-    /// A notice that offers something: its button, then `other` after it ("Don’t Ask Again").
+    /// A notice that offers something: its button, then `other` after it ("Don’t Ask Again"). `primary`: the button is
+    /// the offer's one primary, in the accent colour (the MCP hub's new-server offer).
     static func show(_ text: String, in window: NSWindow?, button: String, action: @escaping () -> Void, other: String,
-                     otherAction: @escaping () -> Void) {
-        present(text, in: window, button: button, isError: false, begun: nil, action: action, other: other, otherAction: otherAction)
+                     otherAction: @escaping () -> Void, primary: Bool = false) {
+        present(text, in: window, button: button, isError: false, begun: nil, action: action, other: other, otherAction: otherAction,
+                primary: primary)
     }
 
     private static func present(_ text: String, in window: NSWindow?, button: String?, isError: Bool, begun: Int?,
-                                action: (() -> Void)?, other: String?, otherAction: (() -> Void)?) {
+                                action: (() -> Void)?, other: String?, otherAction: (() -> Void)?, primary: Bool = false) {
         guard let window else { return }
         // For a project merged behind another's tab (plan 032): it waits for that tab to come to the front, and never
         // pushes away the notice of the project in use.
         if window.isBackgroundTab {
             return hold(for: window) { [weak window] in
-                present(text, in: window, button: button, isError: isError, begun: begun, action: action, other: other, otherAction: otherAction)
+                present(text, in: window, button: button, isError: isError, begun: begun, action: action, other: other, otherAction: otherAction,
+                        primary: primary)
             }
         }
         guard GitNotice.replaces(shown, hasButton: button != nil, isError: isError, begun: begun) else { return }
@@ -426,6 +429,7 @@ final class GitToast {
             let control = NSButton(title: button, target: GitToastTarget.shared, action: #selector(GitToastTarget.pressed))
             control.bezelStyle = .rounded
             control.controlSize = .small
+            if primary { control.bezelColor = .controlAccentColor }
             views.append(control)
         }
         if let other {

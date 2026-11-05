@@ -8,6 +8,11 @@ import NextTermCore
 /// (the self-test's own vault) and only a reference in the list; a project's list waits until it is approved, then
 /// starts for agents there. Screenshots: the tab empty and with servers, the project's side, and each sheet. The
 /// user's own list, Secrets and projects are never read or written here.
+///
+/// Steps 5 and 6: Found in your agents lists a server in an agent's config (a Codex file of the self-test's own, never
+/// the user's agents), and its Add… opens the paste sheet with it and adds it, the file as it was; the new-server offer's
+/// notice, with Add… its one primary; and the agent tools, list_mcp_servers' answer and add_mcp_server's refusals,
+/// which ask nothing.
 extension SelfTest {
     static func mcpHubSettingsChecks() async {
         let manager = FileManager.default
@@ -18,8 +23,10 @@ extension SelfTest {
         try? hubFakeServer.write(toFile: script, atomically: true, encoding: .utf8)
         let userFile = dir.appendingPathComponent("hub/mcp.json").path
         let savedFile = MCPHubControl.userFile, savedProjects = MCPServersSettingsView.projectsForTest
+        let savedAgents = MCPHubAgentServers.sourcesForTest
         MCPHubControl.userFile = userFile
         MCPServersSettingsView.projectsForTest = [project]
+        MCPHubAgentServers.sourcesForTest = []
         let view = MCPServersSettingsView(frame: NSRect(x: 0, y: 0, width: 620, height: 560))
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 620, height: 560), styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
@@ -31,6 +38,8 @@ extension SelfTest {
             window.orderOut(nil)
             MCPHubControl.userFile = savedFile
             MCPServersSettingsView.projectsForTest = savedProjects
+            MCPHubAgentServers.sourcesForTest = savedAgents
+            GitToast.dismiss()
             try? manager.removeItem(at: dir)
         }
 
@@ -130,6 +139,61 @@ extension SelfTest {
                   "\(plan.servers.map { "\($0.name) \($0.state.rawValue)" })")
         }
         view.show(0)
+        await agentsChecks(view, window: window, dir: dir, script: script, userFile: userFile)
+    }
+
+    /// Found in your agents, the new-server offer's notice, and the agent tools.
+    private static func agentsChecks(_ view: MCPServersSettingsView, window: NSWindow, dir: URL, script: String, userFile: String) async {
+        let codex = dir.appendingPathComponent("codex/config.toml").path
+        try? FileManager.default.createDirectory(atPath: (codex as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+        let config = "[mcp_servers.found-demo]\ncommand = \"/bin/sh\"\nargs = [\"\(script)\"]\n"
+        try? config.write(toFile: codex, atomically: true, encoding: .utf8)
+        MCPHubAgentServers.sourcesForTest = [SecretImport.Source(path: codex, client: .codex, format: .toml, containers: [["mcp_servers"]])]
+        view.reload()
+        _ = await wait(5) { view.foundRows.contains { $0.name == "found-demo" } }
+        let row = view.foundRows.first { $0.name == "found-demo" }
+        check(row?.agentsText == "Codex" && row?.runs.contains(script) == true && !view.foundTable.isHidden,
+              "MCP agents: Found in your agents lists a server in Codex\u{2019}s config, naming Codex",
+              view.foundRows.map { "\($0.name) in \($0.agentsText)" }.joined(separator: ", "))
+        await screenshot(window, suffix: "-mcp-settings-found")
+
+        if let row {
+            // The offer's notice for it: Add… is its one primary, and it takes no keyboard.
+            GitToast.show(MCPHubAgents.offerText(row), in: window, button: "Add\u{2026}", action: {}, other: "Not Now", otherAction: {}, primary: true)
+            check(GitToast.text == "Codex has a new MCP server, \u{201C}found-demo\u{201D}. Use it in every agent in Next Term?",
+                  "MCP agents: the new-server offer names the agent and the server", GitToast.text ?? "none")
+            await screenshot(window, suffix: "-mcp-offer")
+            GitToast.dismiss()
+
+            view.addFound(row)
+            guard let sheet = view.sheet as? MCPPasteSheet, let sheetWindow = sheet.window else {
+                return check(false, "MCP agents: Add\u{2026} opens the paste sheet with the server")
+            }
+            check(sheet.preset?.name == "found-demo" && sheet.found.map(\.name) == ["found-demo"] && sheet.addButton.isEnabled,
+                  "MCP agents: Add\u{2026} opens the paste sheet with the agent\u{2019}s server in place of the text", sheet.status.stringValue)
+            await screenshot(sheetWindow, suffix: "-mcp-settings-found-add")
+            let before = try? Data(contentsOf: URL(fileURLWithPath: codex))
+            sheet.confirm()
+            _ = await wait(5) { view.rows.contains { $0.name == "found-demo" } }
+            check(view.rows.contains { $0.name == "found-demo" } && !view.foundRows.contains { $0.name == "found-demo" }
+                  && (try? Data(contentsOf: URL(fileURLWithPath: codex))) == before,
+                  "MCP agents: once added it is in the list, no longer under Found in your agents, and Codex\u{2019}s file is as it was")
+        }
+
+        // The agent tools: list_mcp_servers names the servers with their state, never a key; add_mcp_server refuses a key
+        // and an unknown one before anything is asked.
+        let listed = MCPHubAgentTools.list(caller: nil).text
+        check(listed.contains("\"found-demo\"") && listed.contains("\"state\"") && !listed.contains("DEMO_API_KEY"),
+              "MCP agents: list_mcp_servers names each server and its state, never a key", listed)
+        var answers: [MCPServer.CallResult] = []
+        MCPHubAgentTools.add(["name": "x", "command": "npx", "env": ["GITHUB_TOKEN": "ghp_" + String(repeating: "Q7zX", count: 9)]], caller: nil) {
+            answers.append($0)
+        }
+        MCPHubAgentTools.add(["name": "y", "command": "npx", "secrets": ["NT_SELFTEST_NO_SUCH_KEY"]], caller: nil) { answers.append($0) }
+        check(answers.count == 2 && answers.allSatisfy(\.isError) && answers[0].text.contains("request_secret")
+              && answers[1].text.contains("is not in Secrets") && MCPWriteControl.pending == nil,
+              "MCP agents: add_mcp_server refuses a key, and a key that isn\u{2019}t stored, without asking", answers.map(\.text).joined(separator: " | "))
+        MCPHubAgentServers.sourcesForTest = []
     }
 }
 #endif

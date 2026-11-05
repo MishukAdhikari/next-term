@@ -180,7 +180,8 @@ import Testing
                      "'Authorization: Bearer ${NXTRM_API_TOKEN}'", "Keep the single quotes", "a name only the wrapper sets",
                      "mcp-remote@0.15.2", "Pin every package to an exact version", "bearer_token_env_var", "startup_timeout_sec = 60",
                      "Never start the agent itself", "`request_secret`", "Never ask the user to paste a key into the chat",
-                     "Read only that entry", "Never open, print or search an agent's MCP config", "missing environment variables", "`run_command`", "The user's own instructions win", "If you have no `next-term` tools"] {
+                     "Read only that entry", "Never open, print or search an agent's MCP config", "missing environment variables", "`run_command`", "The user's own instructions win", "If you have no `next-term` tools",
+                     "`add_mcp_server`", "`list_mcp_servers`"] {
             #expect(text.contains(said), "\(said)")
         }
         #expect(!text.contains("printf") && !text.contains("echo $"))
