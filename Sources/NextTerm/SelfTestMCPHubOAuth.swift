@@ -32,7 +32,7 @@ extension SelfTest {
         var agent = "claude"
         MCPHubSignIns.agentForTest = { _ in agent }
         MCPHubSignIns.openForTest = { url in
-            DispatchQueue.global().async { _ = MCPHubFakeAuth.signIn(url) }
+            MCPHubFakeAuth.signInSoon(url)
             return true
         }
         let view = MCPServersSettingsView(frame: NSRect(x: 0, y: 0, width: 640, height: 560))

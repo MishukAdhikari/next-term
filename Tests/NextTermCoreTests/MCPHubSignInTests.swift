@@ -35,7 +35,7 @@ import Testing
         func signIn(scopes: [String]? = nil) -> Result<SignInFile.Record, MCPHubOAuth.Failure> {
             let flow = MCPHubSignIn(name: "linear", server: remote.url, challenge: challenge, store: store, fetch: http.asFetch, scopes: scopes)
             return flow.run(open: { url in
-                DispatchQueue.global().async { _ = MCPHubFakeAuth.signIn(url) }
+                MCPHubFakeAuth.signInSoon(url)
                 return true
             }, until: Date().addingTimeInterval(60))
         }

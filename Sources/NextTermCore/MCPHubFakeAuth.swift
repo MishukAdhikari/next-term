@@ -142,7 +142,9 @@ public final class MCPHubFakeAuth: @unchecked Sendable {
             func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
                             newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) { completionHandler(nil) }
         }
-        let session = URLSession(configuration: .ephemeral, delegate: Stop(), delegateQueue: nil)
+        // Its own serial queue under the delegate, as Next Term's sessions have (MCPHubRemote.delegateQueue): the default
+        // concurrent one waits for a free CPU, and a busy test run (CI) held the browser past the sign-in's wait.
+        let session = URLSession(configuration: .ephemeral, delegate: Stop(), delegateQueue: MCPHubRemote.delegateQueue("fake-browser"))
         var location: URL?
         session.dataTask(with: url) { _, response, _ in
             if let http = response as? HTTPURLResponse, let text = http.value(forHTTPHeaderField: "Location") { location = URL(string: text) }
@@ -153,12 +155,18 @@ public final class MCPHubFakeAuth: @unchecked Sendable {
         return location
     }
 
+    /// `signIn` on a thread of its own, as a browser runs apart from Next Term: never a global queue, which a busy
+    /// process (a parallel test run) can leave waiting for a free CPU past the sign-in's wait.
+    public static func signInSoon(_ url: URL) {
+        Thread { _ = signIn(url) }.start()
+    }
+
     /// `approve`, then the redirect opened as the browser would: GET to the loopback listener. The page's text.
     public static func signIn(_ url: URL) -> String? {
         guard let back = approve(url) else { return nil }
         let done = DispatchSemaphore(value: 0)
         var page: String?
-        URLSession(configuration: .ephemeral).dataTask(with: back) { data, _, _ in
+        URLSession(configuration: .ephemeral, delegate: nil, delegateQueue: MCPHubRemote.delegateQueue("fake-browser")).dataTask(with: back) { data, _, _ in
             page = data.map { String(decoding: $0, as: UTF8.self) }
             done.signal()
         }.resume()
