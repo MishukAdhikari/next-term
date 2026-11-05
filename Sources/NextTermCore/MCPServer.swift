@@ -251,8 +251,8 @@ public enum MCPServer {
 
     public static func tool(named name: String) -> Tool? { tools.first { $0.name == name } }
 
-    static func listing() -> [[String: Any]] {
-        tools.map { tool in
+    static func listing(_ listed: [Tool] = tools) -> [[String: Any]] {
+        listed.map { tool in
             [
                 "name": tool.name,
                 "title": tool.title,
@@ -283,8 +283,11 @@ public enum MCPServer {
         }
     }
 
-    /// Answers one JSON-RPC message (nil for notifications). `call` runs a tool; it may block.
+    /// Answers one JSON-RPC message (nil for notifications). `call` runs a tool; it may block. `extra`: tools listed after
+    /// Next Term's own, each call to one answered whole by `callExtra` (the MCP hub's catalog, MCPHubCatalog); none
+    /// leaves every answer as it is without them.
     public static func respond(to message: [String: Any], version: String, instructions said: String = instructions,
+                               extra: [Tool] = [], callExtra: (_ name: String, _ arguments: [String: Any]) -> [String: Any] = { _, _ in [:] },
                                call: (_ name: String, _ arguments: [String: Any]) -> CallResult) -> [String: Any]? {
         guard let method = message["method"] as? String else { return nil } // a response to us: none expected
         guard let id = message["id"], !(id is NSNull) else { return nil } // a notification
@@ -305,8 +308,11 @@ public enum MCPServer {
         case "ping":
             return result([String: Any]())
         case "tools/list":
-            return result(["tools": listing()])
+            return result(["tools": extra.isEmpty ? listing() : listing() + listing(extra)])
         case "tools/call":
+            if let name = params["name"] as? String, extra.contains(where: { $0.name == name }) {
+                return result(callExtra(name, params["arguments"] as? [String: Any] ?? [:]))
+            }
             guard let name = params["name"] as? String, tool(named: name) != nil else {
                 return error(-32602, "Unknown tool: \(params["name"] as? String ?? "")")
             }

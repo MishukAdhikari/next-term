@@ -377,6 +377,8 @@ enum MCPControl {
             MainActor.assumeIsolated {
                 MCPWriteControl.call(tool, arguments, caller: caller, approval: approval, requester: requester, connection: connection, reply: reply)
             }
+        // Never listed: the bridge's question as its session starts, of which hub servers apply to its agent (MCPHubControl).
+        case MCPHubPlan.tool: MainActor.assumeIsolated { MCPHubControl.plan(caller: caller, reply: reply) }
         default: reply(fail("Unknown tool \(tool)"))
         }
     }

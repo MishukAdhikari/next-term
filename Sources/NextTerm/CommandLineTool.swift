@@ -311,6 +311,10 @@ enum CommandLineTool {
 /// `nxtrm mcp`: MCP over stdio for an agent, one JSON-RPC message per line. `initialize` and `tools/list`
 /// are answered here at once; each tool call goes to the running app over its socket. Ends when the
 /// agent closes stdin.
+///
+/// The MCP hub rides it (MCPBridgeHub): as it starts, the bridge asks the app which servers the user connected apply to
+/// its agent. While none does, every answer is as it was before the hub; once one does, tools/list ends with the
+/// catalog, whose calls the bridge answers itself, running the servers as its children.
 enum MCPBridge {
     private static let output = NSLock()
 
@@ -330,6 +334,7 @@ enum MCPBridge {
         let progressEvery = MCPProgress.interval
         #endif
         let progress = MCPProgress.Tickers(every: progressEvery, send: send)
+        let hub = MCPBridgeHub(socket: socket, version: version, environment: environment)
         while let line = readLine(strippingNewline: true) {
             guard !line.trimmingCharacters(in: .whitespaces).isEmpty else { continue }
             guard let object = try? JSONSerialization.jsonObject(with: Data(line.utf8)) else {
@@ -343,16 +348,24 @@ enum MCPBridge {
                     // Calls can take long (wait_for_tab): answer pings and other calls meanwhile. One that carries a
                     // progress token gets progress until its answer is sent (MCPProgress).
                     progress.answer(message, in: calls) {
-                        MCPServer.respond(to: message, version: version, call: { forward($0, $1, socket: socket) })
+                        // Only a catalog tool's call waits for the hub's plan; Next Term's own go to the app as they did.
+                        let session = MCPHubCatalog.isCatalogTool(MCPBridgeHub.toolName(message)) ? hub.session : nil
+                        return MCPServer.respond(to: message, version: version, extra: session?.tools ?? [],
+                                                 callExtra: { session?.call($0, $1) ?? [:] }, call: { forward($0, $1, socket: socket) })
                     }
-                } else if let response = MCPServer.respond(to: message, version: version, instructions: instructions,
-                                                           call: { _, _ in MCPServer.CallResult(text: "") }) {
-                    send(response)
+                } else {
+                    // The tool list is the one place the hub shows: it waits for the plan (MCPBridgeHub.planWait at most).
+                    let session = message["method"] as? String == "tools/list" ? hub.session : nil
+                    if let response = MCPServer.respond(to: message, version: version, instructions: instructions, extra: session?.tools ?? [],
+                                                        call: { _, _ in MCPServer.CallResult(text: "") }) {
+                        send(response)
+                    }
                 }
             }
         }
         progress.stopAll() // stdin closed: the calls in flight send no more progress
         calls.wait() // stdin closed: finish the answers in flight (a caller may still read them), then go
+        hub.stop() // the session's servers end with it
         exit(0)
     }
 
@@ -394,8 +407,9 @@ enum MCPBridge {
         return .success(fd)
     }
 
-    /// One try: the app's answer, or how the socket failed.
-    private static func attempt(_ tool: String, _ arguments: [String: Any], socket path: String) -> Result<MCPServer.CallResult, MCPServer.SocketFailure> {
+    /// One try: the app's answer, or how the socket failed. `wait`: how long the answer may take (the tool's own by default).
+    static func attempt(_ tool: String, _ arguments: [String: Any], socket path: String,
+                        wait: TimeInterval? = nil) -> Result<MCPServer.CallResult, MCPServer.SocketFailure> {
         let fd: Int32
         switch connect(path) {
         case .success(let connected): fd = connected
@@ -405,7 +419,7 @@ enum MCPBridge {
         var noSigPipe: Int32 = 1
         setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, socklen_t(MemoryLayout<Int32>.size))
         let waitSeconds = tool == "wait_for_tab" ? Double(min(300, arguments["timeout_seconds"] as? Int ?? 50)) : (MCPServer.tool(named: tool)?.timeout ?? 30)
-        var timeout = timeval(tv_sec: Int(min(1900, waitSeconds + 30)), tv_usec: 0)
+        var timeout = timeval(tv_sec: Int(wait.map { max(1, $0) } ?? min(1900, waitSeconds + 30)), tv_usec: 0)
         setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
         let caller = MCPServer.herdrCaller(ProcessInfo.processInfo.environment) // the herdr pane this agent runs in, if any
         guard let request = MCPServer.request(tool: tool, arguments: arguments, caller: caller) else {
@@ -435,5 +449,92 @@ enum MCPBridge {
             return .failure(ended ? .endedWithoutAnswer : .timedOut)
         }
         return .success(result)
+    }
+}
+
+/// The MCP hub in a bridge: the plan the app gives for this agent, asked for as the bridge starts so tools/list rarely
+/// waits, and the session that runs its servers (MCPHubSession). No list of the user's (the app isn't even asked), no
+/// app, no tab, or no server: no plan, and the catalog stays out of every answer.
+final class MCPBridgeHub: @unchecked Sendable {
+    /// The longest the app's plan is waited for: within Codex's 10-second start-up wait, with room for the rest.
+    static let planWait: TimeInterval = 5
+
+    private let ready = DispatchSemaphore(value: 0)
+    private let lock = NSLock()
+    private var made: MCPHubSession?
+    private var terminate: DispatchSourceSignal?
+
+    init(socket: String, version: String, environment: [String: String]) {
+        let fetch: MCPHubSession.Refresh = { Self.plan(socket: socket) }
+        let nxtrm = [Bundle.main.executablePath ?? CommandLine.arguments[0], "--cli"]
+        // No list of the user's, no server (R17): the app isn't asked, and nothing waits. The file is made with the first
+        // server the user adds (MCPHubScope.save); a project's list starts nothing until the user approves it, and that
+        // approval, when it comes, is kept in the user's list too.
+        guard FileManager.default.fileExists(atPath: Self.userFile(environment)) else {
+            made = MCPHubSession(plan: nil, refresh: { nil }, nxtrm: nxtrm, environment: environment, version: version)
+            ready.signal()
+            return
+        }
+        DispatchQueue.global(qos: .userInitiated).async {
+            let session = MCPHubSession(plan: fetch(), refresh: fetch, nxtrm: nxtrm, environment: environment, version: version)
+            self.lock.lock()
+            self.made = session
+            self.lock.unlock()
+            if session.isActive { self.stopOnTerminate() }
+            self.ready.signal()
+        }
+    }
+
+    /// The session, once the plan came or its wait ran out (then, one with no plan: the catalog stays out).
+    var session: MCPHubSession? {
+        if ready.wait(timeout: .now() + Self.planWait) == .success { ready.signal() }
+        lock.lock()
+        defer { lock.unlock() }
+        return made
+    }
+
+    /// Ends the servers the session started.
+    func stop() {
+        lock.lock()
+        let session = made
+        lock.unlock()
+        session?.stop()
+    }
+
+    /// An agent that ends its servers with SIGTERM ends this bridge's servers too, before the bridge goes.
+    private func stopOnTerminate() {
+        signal(SIGTERM, SIG_IGN)
+        let source = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .global())
+        source.setEventHandler { [weak self] in
+            self?.stop()
+            exit(0)
+        }
+        source.resume()
+        terminate = source
+    }
+
+    /// The user's list, whose being there is the bridge's sign that a server may apply.
+    static func userFile(_ environment: [String: String]) -> String {
+        #if DEBUG
+        // The self-test's own list (SelfTestMCPHub), which its app reads through MCPHubControl.userFile.
+        if let file = environment[selfTestUserFileVariable], !file.isEmpty { return file }
+        #endif
+        return MCPHubScope.userPath()
+    }
+
+    #if DEBUG
+    static let selfTestUserFileVariable = "NEXTTERM_SELFTEST_MCP_HUB_FILE"
+    #endif
+
+    /// The app's plan for this bridge's agent, or nil (no app, no tab, no server).
+    static func plan(socket: String) -> MCPHubPlan? {
+        guard case .success(let answer) = MCPBridge.attempt(MCPHubPlan.tool, [:], socket: socket, wait: planWait), !answer.isError else {
+            return nil
+        }
+        return MCPHubPlan.decode(answer.text)
+    }
+
+    static func toolName(_ message: [String: Any]) -> String {
+        (message["params"] as? [String: Any])?["name"] as? String ?? ""
     }
 }

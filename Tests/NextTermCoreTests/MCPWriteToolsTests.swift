@@ -11,9 +11,10 @@ import Testing
     @Test func everyToolCarriesAScopeTag() {
         let untagged = MCPServer.tools.filter { $0.scope == nil }.map(\.name)
         #expect(untagged.isEmpty, "tag these read or write in MCPServer.scopeTags: \(untagged)")
-        // No tag for a tool that is gone, and no tool listed twice.
+        // No tag for a tool that is gone, and no tool listed twice. The MCP hub's catalog is tagged too, though only a
+        // bridge whose hub has a server lists it.
         let names = Set(MCPServer.tools.map(\.name))
-        #expect(Set(MCPServer.scopeTags.keys) == names)
+        #expect(Set(MCPServer.scopeTags.keys) == names.union(MCPHubCatalog.tools.map(\.name)))
         #expect(names.count == MCPServer.tools.count)
         for name in seeTools { #expect(MCPServer.tool(named: name)?.scope == .read, "\(name)") }
         // A tool that says it only reads is tagged read.
