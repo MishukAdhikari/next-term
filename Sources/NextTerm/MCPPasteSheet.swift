@@ -43,6 +43,18 @@ final class MCPPasteSheet: NSWindowController, NSWindowDelegate, NSTextViewDeleg
         window.delegate = self
         build()
         refresh()
+        if preset != nil {
+            fitToContent(window)
+        }
+    }
+
+    /// The sheet for one found server, as tall as what it shows (its key rows, any reason it can't be added).
+    private func fitToContent(_ window: NSWindow) {
+        guard let view = window.contentView else { return }
+        view.layoutSubtreeIfNeeded()
+        let height = min(max(view.fittingSize.height, 150), 520)
+        window.setContentSize(NSSize(width: window.frame.width, height: height))
+        window.minSize = NSSize(width: 520, height: height)
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
@@ -137,9 +149,15 @@ final class MCPPasteSheet: NSWindowController, NSWindowDelegate, NSTextViewDeleg
             textScroll.heightAnchor.constraint(equalToConstant: preset == nil ? 140 : 0),
             status.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -40),
             foundScroll.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -40),
-            foundScroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 120),
+            foundScroll.heightAnchor.constraint(greaterThanOrEqualToConstant: preset == nil ? 120 : 30),
             buttons.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -40),
         ])
+        guard preset != nil else { return }
+        // One server from an agent's config: the heading names it, so no count, and the sheet is as tall as its rows.
+        status.isHidden = true
+        let fits = foundScroll.heightAnchor.constraint(equalTo: flipped.heightAnchor)
+        fits.priority = .defaultHigh
+        fits.isActive = true
     }
 
     // MARK: reading

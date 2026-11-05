@@ -326,7 +326,9 @@ final class MCPServersSettingsView: NSView, NSTableViewDataSource, NSTableViewDe
         cell.lineBreakMode = .byTruncatingTail
         switch column.identifier.rawValue {
         case "runs":
-            cell.toolTip = cell.stringValue
+            // Its start and its end (a package, a script's name) stay; the whole line, keys' wrapper and all, is its tip.
+            cell.lineBreakMode = .byTruncatingMiddle
+            cell.toolTip = row.server.map(MCPHubOverview.runsText) ?? cell.stringValue
             cell.textColor = .secondaryLabelColor
         case "state":
             cell.toolTip = MCPHubOverview.stateTip(row.state, remote: row.isRemote)
@@ -345,7 +347,8 @@ final class MCPServersSettingsView: NSView, NSTableViewDataSource, NSTableViewDe
         switch column {
         case "name": return row.name
         case "applies": return MCPHubOverview.appliesText(row, home: NSHomeDirectory())
-        case "runs": return row.server.map(MCPHubOverview.runsText) ?? "\u{2014}"
+        // What it runs, as Found in your agents shows it: the command inside `nxtrm secret run`, whose keys are Secrets'.
+        case "runs": return row.server.map { $0.transport == .stdio ? MCPHubOverview.keys(of: $0).inner.map(ShellQuote.quote).joined(separator: " ") : $0.url } ?? "\u{2014}"
         case "state": return MCPHubOverview.stateText(row.state, remote: row.isRemote)
         default: return ""
         }
@@ -371,7 +374,7 @@ final class MCPServersSettingsView: NSView, NSTableViewDataSource, NSTableViewDe
         default: text = server.runs
         }
         let cell = NSTextField(labelWithString: text)
-        cell.lineBreakMode = .byTruncatingTail
+        cell.lineBreakMode = column.identifier.rawValue == "name" || column.identifier.rawValue == "agents" ? .byTruncatingTail : .byTruncatingMiddle
         cell.toolTip = column.identifier.rawValue == "agents" ? server.files.map(SkillStep.short).joined(separator: "\n") : text
         if column.identifier.rawValue != "name" { cell.textColor = .secondaryLabelColor }
         // Centred in the row, on the line of the Add… beside it, as a label alone would sit at the row's top.

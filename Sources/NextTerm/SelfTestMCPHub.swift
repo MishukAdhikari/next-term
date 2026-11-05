@@ -136,9 +136,12 @@ extension SelfTest {
             initialize,
             ["jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": ["name": "mcp_call", "arguments": ["server": "remote", "tool": "echo", "arguments": ["say": "hi"]]]],
             ["jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": ["name": "mcp_tools", "arguments": ["server": "locked"]]],
-            ["jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": ["name": "mcp_servers", "arguments": [String: Any]()]],
         ]
-        let answers = await bridgeInTab(c, folder: folder, requests: requests, name: "remote", userFile: userFile)
+        // mcp_servers once the calls are answered: the bridge answers calls side by side, so asked beside them it may
+        // come first and find the remote server not reached yet.
+        let answers = await bridgeInTab(c, folder: folder, requests: requests, name: "remote", userFile: userFile, then: [
+            ["jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": ["name": "mcp_servers", "arguments": [String: Any]()]],
+        ])
         check(resultText(answers[2]) == "hello from remote", "MCP hub: mcp_call reaches a server at a URL through the app", resultText(answers[2]))
         let seen = open.seen
         check(seen.map(\.method).prefix(4) == ["initialize", "notifications/initialized", "tools/list", "tools/call"]
@@ -165,12 +168,16 @@ extension SelfTest {
     /// Runs `nxtrm mcp` in a new tab in `folder`, as an agent there starts it, with `requests` on its stdin and the
     /// self-test's list for the user's: its answers, by id, once it ends.
     private static func bridgeInTab(_ c: TerminalWindowController, folder: URL, requests: [[String: Any]], name: String,
-                                    userFile: String) async -> [Int: [String: Any]] {
+                                    userFile: String, then later: [[String: Any]] = []) async -> [Int: [String: Any]] {
         let input = folder.deletingLastPathComponent().appendingPathComponent("\(name).jsonl")
+        let laterInput = folder.deletingLastPathComponent().appendingPathComponent("\(name)-then.jsonl")
         let output = folder.deletingLastPathComponent().appendingPathComponent("\(name)-answers.jsonl")
-        let lines = requests.compactMap { try? JSONSerialization.data(withJSONObject: $0, options: [.withoutEscapingSlashes]) }
-            .map { String(decoding: $0, as: UTF8.self) }
-        try? (lines.joined(separator: "\n") + "\n").write(to: input, atomically: true, encoding: .utf8)
+        func jsonl(_ requests: [[String: Any]]) -> String {
+            requests.compactMap { try? JSONSerialization.data(withJSONObject: $0, options: [.withoutEscapingSlashes]) }
+                .map { String(decoding: $0, as: UTF8.self) + "\n" }.joined()
+        }
+        try? jsonl(requests).write(to: input, atomically: true, encoding: .utf8)
+        try? jsonl(later).write(to: laterInput, atomically: true, encoding: .utf8)
         let tab = c.addTab(directory: folder.path, select: false)
         defer { c.remove(tab) }
         guard await wait(20, { tab.status.integrated }) else {
@@ -180,7 +187,11 @@ extension SelfTest {
         let program = ShellQuote.quote(Bundle.main.executablePath ?? CommandLine.arguments[0])
         let socket = ShellQuote.quote(MCPControlServer.shared.path)
         let list = MCPBridgeHub.selfTestUserFileVariable + "=" + ShellQuote.quote(userFile)
-        tab.view.send(txt: "\(MCPServer.socketVariable)=\(socket) \(list) \(program) --cli mcp < \(ShellQuote.quote(input.path)) > \(ShellQuote.quote(output.path)); echo HUB\"\"DONE\r")
+        let out = ShellQuote.quote(output.path)
+        // The later requests go once every earlier one is answered (one answer a line), 20 seconds at most.
+        let feed = "{ cat \(ShellQuote.quote(input.path)); n=0; while [ \"$(wc -l < \(out))\" -lt \(requests.count) ] && [ $n -lt 200 ]; "
+            + "do sleep 0.1; n=$((n+1)); done; cat \(ShellQuote.quote(laterInput.path)); }"
+        tab.view.send(txt: ": > \(out); \(feed) | \(MCPServer.socketVariable)=\(socket) \(list) \(program) --cli mcp > \(out); echo HUB\"\"DONE\r")
         _ = await wait(30) { tab.screenTail(6).contains { $0.contains("HUBDONE") } }
         let text = (try? String(contentsOf: output, encoding: .utf8)) ?? ""
         var answers: [Int: [String: Any]] = [:]
