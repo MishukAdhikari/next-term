@@ -426,6 +426,11 @@ public final class MCPHubRemote: @unchecked Sendable {
         return Failure(text, kind: .unauthorized(status: status, challenge: challenge))
     }
 
+    /// Where the answers to a server's own requests are sent from: a serial queue of its own, which GCD always gives a
+    /// thread (as `delegateQueue`). On a global queue at utility QoS a busy Mac held a ping's answer for longer than a
+    /// server waits for it.
+    private static let answering = DispatchQueue(label: "nextterm.mcp-hub.answers", qos: .userInitiated)
+
     /// The server's own requests that came in an event stream: a ping is answered, anything else refused, since Next
     /// Term offers servers nothing to ask of it. Not waited for.
     private func answerRequests(_ requests: [[String: Any]], endpoint: Endpoint) {
@@ -435,7 +440,7 @@ public final class MCPHubRemote: @unchecked Sendable {
             let answer: [String: Any] = method == "ping"
                 ? ["jsonrpc": "2.0", "id": id, "result": [String: Any]()]
                 : ["jsonrpc": "2.0", "id": id, "error": ["code": -32601, "message": "Next Term doesn't offer \(method)"]]
-            DispatchQueue.global(qos: .utility).async { [self] in
+            Self.answering.async { [self] in
                 _ = post(request: nil, answer, endpoint: endpoint, until: Date().addingTimeInterval(5))
             }
         }

@@ -135,6 +135,24 @@ import Testing
         #expect(answered)
     }
 
+    /// A server's ping in an event stream is answered while the process is busy: the answer goes from a queue GCD
+    /// always gives a thread (MCPHubRemote.answering), where a utility global queue held it past any server's patience.
+    @Test func aPingIsAnsweredWhileTheProcessIsBusy() throws {
+        let fake = try MCPHubFakeRemote()
+        fake.stream = true
+        let remote = MCPHubRemote(name: "streamy", clientVersion: "1.0")
+        var answered = false
+        whileGCDIsBusy {
+            _ = remote.call("echo", arguments: [:], endpoint: endpoint(fake), until: soon(5))
+            answered = (0..<60).contains { _ in
+                if fake.seen.contains(where: { $0.method == "(answer)" && $0.body.contains("server-1") }) { return true }
+                Thread.sleep(forTimeInterval: 0.05)
+                return false
+            }
+        }
+        #expect(answered)
+    }
+
     // MARK: keys
 
     @Test func aRefusedKeySaysToCheckItInSettings() throws {
