@@ -54,6 +54,17 @@ public enum MCPHubSignInWords {
         "The user didn\u{2019}t let Next Term use its sign-ins just now, so nothing was sent to \(name). Call again to be asked again."
     }
 
+    /// `text` with each of a need's sign-in tokens hidden, as written and as JSON writes it (`/` as `\/`), should a
+    /// server quote one back: for what the agent is told, Settings' line, and the cached tool list.
+    public static func hiding(_ tokens: [String], in text: String) -> String {
+        tokens.reduce(text) { text, token in
+            guard !token.isEmpty else { return text }
+            let escaped = token.replacingOccurrences(of: "/", with: "\\/")
+            return text.replacingOccurrences(of: token, with: "\u{2022}\u{2022}\u{2022}")
+                .replacingOccurrences(of: escaped, with: "\u{2022}\u{2022}\u{2022}")
+        }
+    }
+
     // MARK: the user's
 
     /// The notice for a lapse: one for each, never a modal.

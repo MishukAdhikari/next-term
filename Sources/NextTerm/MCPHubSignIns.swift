@@ -62,14 +62,14 @@ enum MCPHubSignIns {
         if let statesForTest { return statesForTest }
         #endif
         var found: [String: MCPHubOverview.SignIn] = [:]
-        for record in peek()?.records ?? [] { found[MCPHubOverview.signInKey(record.resource)] = MCPHubOverview.SignIn(record.state) }
+        for record in peek()?.records ?? [] { found[MCPHubOverview.signInKey(record.serverURL)] = MCPHubOverview.SignIn(record.state) }
         return found
     }
 
-    /// The sign-in for a server's URL, unchecked.
+    /// The sign-in for a server's URL, unchecked: never where a token is taken from (`withSignIn` finds it again in
+    /// the checked file).
     static func record(for url: String) -> SignInFile.Record? {
-        let key = MCPHubOverview.signInKey(url)
-        return peek()?.records.first { MCPHubOverview.signInKey($0.resource) == key }
+        peek()?.record(server: url)
     }
 
     static var isHeld: Bool { key != nil }
@@ -133,7 +133,7 @@ enum MCPHubSignIns {
 
     private static func refresher(_ record: SignInFile.Record, key: SymmetricKey) -> SignInRefresher? {
         if let made = refreshers[record.id] { return made }
-        guard let url = URL(string: record.resource) else { return nil }
+        guard let url = URL(string: record.serverURL) else { return nil }
         let made = SignInRefresher(id: record.id, store: store(key), fetch: MCPHubOAuthHTTP(server: url).asFetch)
         refreshers[record.id] = made
         return made
@@ -185,7 +185,7 @@ enum MCPHubSignIns {
                             NotificationCenter.default.post(name: MCPHubControl.changed, object: nil)
                             done(nil)
                         case .failure(let failure):
-                            done(failure.text == MCPHubSignIn.cancelledText ? nil : failure.text)
+                            done(failure.text) // a cancel too: "Sign-in was cancelled.", never "Signed in"…
                         }
                     }
                 }
@@ -223,19 +223,23 @@ enum MCPHubSignIns {
             var removed: (record: SignInFile.Record, tokens: SignInFile.Tokens?)?
             var client: MCPHubOAuthRegistration.Client?
             var key: SymmetricKey?
+            /// No sign-in left, as the checked file has it.
+            var none = false
         }
         let taken = Taken()
         let held = key
-        func remove(with key: SymmetricKey) throws {
+        // Run off the main thread (here or in the vault's change), so a closure of no actor's.
+        let remove: @Sendable (SymmetricKey) throws -> Void = { key in
             let signIns = SignInStore(folder: folder, key: key)
             if case .success(let body) = signIns.read() {
                 taken.client = body.registered(key: key).first { $0.issuer == record.issuer && $0.clientID == record.client.clientID }
             }
             taken.removed = try signIns.remove(id: record.id)
             taken.key = key
+            taken.none = (try? signIns.read().get())?.records.isEmpty ?? false
         }
         func finish() {
-            key = last ? nil : taken.key
+            key = taken.none ? nil : taken.key
             refreshers[record.id] = nil
             NotificationCenter.default.post(name: MCPHubControl.changed, object: nil)
             guard let removed = taken.removed, let tokens = removed.tokens else { return done("Signed out of \(name).") }
@@ -246,8 +250,18 @@ enum MCPHubSignIns {
             }
         }
         if let held, !last {
-            do { try remove(with: held) } catch { return done("Next Term couldn\u{2019}t sign out of \(name): \(error.localizedDescription)") }
-            return finish()
+            // Off the main thread: the file's lock may be held by a refresh waiting on its server.
+            DispatchQueue.global(qos: .userInitiated).async {
+                let failure: String?
+                do { try remove(held); failure = nil } catch { failure = error.localizedDescription }
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated {
+                        guard let failure else { return finish() }
+                        done("Next Term couldn\u{2019}t sign out of \(name): \(failure)")
+                    }
+                }
+            }
+            return
         }
         Task { @MainActor in
             do {
@@ -260,8 +274,8 @@ enum MCPHubSignIns {
                         guard let text = value.utf8String(), let data = Data(base64Encoded: text) else { throw SecretVault.Failure.tampered }
                         signInsKey = SymmetricKey(data: data)
                     }
-                    try remove(with: signInsKey)
-                    guard last else { return nil }
+                    try remove(signInsKey)
+                    guard taken.none else { return nil } // the checked file's count, not the unchecked one's
                     try? FileManager.default.removeItem(atPath: folder.path(SignInFile.name))
                     return try vault.delete(SecretVault.signInsName)
                 }, line: nil)
@@ -322,7 +336,7 @@ enum MCPHubSignIns {
     /// Revokes at the server: the refresh token, or the access token when there is none. Nil said when revoked.
     nonisolated private static func revoke(_ record: SignInFile.Record, tokens: SignInFile.Tokens, client: MCPHubOAuthRegistration.Client,
                                            name: String) -> String {
-        guard let url = URL(string: record.resource),
+        guard let url = URL(string: record.serverURL),
               let request = MCPHubOAuthFlow.revocationRequest(token: tokens.refresh ?? tokens.access,
                                                               hint: tokens.refresh == nil ? "access_token" : "refresh_token",
                                                               metadata: record.metadata, client: client) else {
@@ -373,7 +387,9 @@ enum MCPHubSignIns {
             guard let key else { return fail(MCPHubSignInWords.notUnlocked(name)) }
             let signIns = store(key)
             guard case .success(let body) = signIns.read() else { return fail(MCPHubSignInWords.tampered(name)) }
-            guard let record = body.record(id: found.id) else { return use(nil) }
+            // Found again by the server's URL in the checked file, never by the unchecked one's id: a file changed
+            // between the two reads can't hand this server another server's token.
+            guard let record = body.record(server: server.url) else { return use(nil) }
             consent(record, agent: agent, name: name, store: signIns, deadline: deadline, caller: caller, pid: pid, fail: fail) {
                 guard let refresher = refresher(record, key: key) else { return fail(MCPHubSignInWords.lapsed(name)) }
                 DispatchQueue.global(qos: .userInitiated).async {
@@ -432,14 +448,25 @@ enum MCPHubSignIns {
                                                   approveTitle: "Allow", declineTitle: "Don\u{2019}t Allow")
         func answer(_ allowed: Bool) {
             panels[ask] = nil
-            if allowed {
-                try? store.setConsent(id: record.id, agent: agent, allowed: true)
-                NotificationCenter.default.post(name: MCPHubControl.changed, object: nil)
-            } else {
-                refused.insert(ask)
+            func tell() {
+                let waiting = asking.removeValue(forKey: ask) ?? []
+                for each in waiting { each(allowed) }
             }
-            let waiting = asking.removeValue(forKey: ask) ?? []
-            for each in waiting { each(allowed) }
+            guard allowed else {
+                refused.insert(ask)
+                return tell()
+            }
+            // Written off the main thread: the file's lock may be held by a refresh waiting on its server.
+            let id = record.id
+            DispatchQueue.global(qos: .userInitiated).async {
+                try? store.setConsent(id: id, agent: agent, allowed: true)
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated {
+                        NotificationCenter.default.post(name: MCPHubControl.changed, object: nil)
+                        tell()
+                    }
+                }
+            }
         }
         let window = AgentApprovalWindow(request, approve: { window in
             window.finish()
@@ -454,13 +481,24 @@ enum MCPHubSignIns {
         guard let found = record(for: url) else { return done(nil) }
         withKey(reason: "change who uses your sign-in to \(found.name)", makes: false) { key in
             guard let key else { return done("Not approved, so nothing changed.") }
-            do {
-                try store(key).setConsent(id: found.id, agent: agent, allowed: false)
-                refused.remove(found.id + "\u{0}" + agent)
-                NotificationCenter.default.post(name: MCPHubControl.changed, object: nil)
-                done(nil)
-            } catch {
-                done(error.localizedDescription)
+            let signIns = store(key)
+            DispatchQueue.global(qos: .userInitiated).async { // the file's lock may be held by a refresh
+                let failure: String?
+                do {
+                    try signIns.setConsent(id: found.id, agent: agent, allowed: false)
+                    failure = nil
+                } catch {
+                    failure = error.localizedDescription
+                }
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated {
+                        if failure == nil {
+                            refused.remove(found.id + "\u{0}" + agent)
+                            NotificationCenter.default.post(name: MCPHubControl.changed, object: nil)
+                        }
+                        done(failure)
+                    }
+                }
             }
         }
     }

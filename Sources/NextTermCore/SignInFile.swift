@@ -69,6 +69,10 @@ public enum SignInFile {
         /// The server's name when it was signed in to, for notices.
         public var name: String
         public var resource: String
+        /// The MCP server's URL this sign-in is for, as Settings has it: the one URL its token is ever sent to. The
+        /// resource may be its origin alone (resource metadata at the root, RFC 9728 §3.3); nil in a record that
+        /// predates it, where it is the resource.
+        public var server: String?
         public var metadata: MCPHubOAuthDiscovery.Metadata
         public var client: MCPHubOAuthRegistration.Client
         public var generation: Int
@@ -85,6 +89,8 @@ public enum SignInFile {
         var box: Data
 
         public var issuer: String { metadata.issuer }
+        /// Where the token goes: `server`, else the resource.
+        public var serverURL: String { server ?? resource }
     }
 
     /// A registered client, its secret sealed.
@@ -96,6 +102,9 @@ public enum SignInFile {
     public struct Body: Codable, Equatable, Sendable {
         public var records: [Record]
         public var clients: [Client]
+        /// Counted up by every write, so an older copy of the file put back (its MAC still good under the same key)
+        /// reads as tampered: a consent taken away or a sign-in signed out never comes back, nor a spent refresh token.
+        public var sequence: Int?
 
         public init(records: [Record] = [], clients: [Client] = []) {
             self.records = records
@@ -103,7 +112,12 @@ public enum SignInFile {
         }
 
         public func record(id: String) -> Record? { records.first { $0.id == id } }
-        public func record(resource: String) -> Record? { records.first { $0.resource == resource } }
+        /// The sign-in for the MCP server at `url`, compared as `MCPHubOverview.signInKey` compares: the one a need of
+        /// that server may send a token from.
+        public func record(server url: String) -> Record? {
+            let key = MCPHubOverview.signInKey(url)
+            return records.first { MCPHubOverview.signInKey($0.serverURL) == key }
+        }
 
         /// Registered clients, their secrets opened with `key`.
         public func registered(key: SymmetricKey) -> [MCPHubOAuthRegistration.Client] {
@@ -181,9 +195,10 @@ public enum SignInFile {
     }
 
     /// A new record for a sign-in just made, its tokens sealed.
-    public static func record(name: String, metadata: MCPHubOAuthDiscovery.Metadata, client: MCPHubOAuthRegistration.Client,
+    public static func record(name: String, server: URL? = nil, metadata: MCPHubOAuthDiscovery.Metadata, client: MCPHubOAuthRegistration.Client,
                               tokens: MCPHubOAuthFlow.Tokens, scopes: [String], key: SymmetricKey, now: Date = Date()) throws -> Record {
-        var made = Record(id: UUID().uuidString.lowercased(), name: name, resource: metadata.resource, metadata: metadata, client: client,
+        var made = Record(id: UUID().uuidString.lowercased(), name: name, resource: metadata.resource, server: server?.absoluteString,
+                          metadata: metadata, client: client,
                           generation: 1, consents: [], state: .signedIn, scopes: scopes, granted: tokens.scopes,
                           accessExpires: tokens.expires.map(whole), stepUps: nil, signedInAt: whole(now), box: Data())
         made.client.secret = nil
@@ -282,7 +297,26 @@ public final class SignInStore: @unchecked Sendable {
     public func read() -> Result<SignInFile.Body, SignInFile.Failure> {
         guard folder.exists else { return .success(SignInFile.Body()) }
         guard let data = try? folder.read(SignInFile.name, cap: SignInFile.maxSize) else { return .failure(.tampered) }
-        return SignInFile.read(data, key: key)
+        return SignInFile.read(data, key: key).flatMap(current)
+    }
+
+    /// The highest `sequence` read or written this launch, for each file and key: a body below it is an older copy put
+    /// back. Kept in memory, so it holds within a launch (where Sign Out and Change… happen); a key made anew starts its own.
+    private static var seen: [String: Int] = [:]
+    private static let seenLock = NSLock()
+    private var seenKey: String {
+        let mark = HMAC<SHA256>.authenticationCode(for: Data("sequence".utf8), using: SignInFile.indexKey(key))
+        return folder.path(SignInFile.name) + "\u{0}" + Data(mark).base64EncodedString()
+    }
+
+    /// `body`, or `tampered` when it is older than one already seen.
+    private func current(_ body: SignInFile.Body) -> Result<SignInFile.Body, SignInFile.Failure> {
+        let sequence = body.sequence ?? 0
+        Self.seenLock.lock()
+        defer { Self.seenLock.unlock() }
+        if sequence < Self.seen[seenKey, default: 0] { return .failure(.tampered) }
+        Self.seen[seenKey] = sequence
+        return .success(body)
     }
 
     /// `change` on the body under the lock, written when it returns true. A tampered file is started over empty only
@@ -297,18 +331,23 @@ public final class SignInStore: @unchecked Sendable {
 
     /// `update`'s work, for a caller already holding the lock.
     func locked<T>(startsOver: Bool = false, _ change: (inout SignInFile.Body) throws -> (write: Bool, value: T)) throws -> T {
-        let current = try folder.read(SignInFile.name, cap: SignInFile.maxSize)
+        let stored = try folder.read(SignInFile.name, cap: SignInFile.maxSize)
         var body: SignInFile.Body
-        switch SignInFile.read(current, key: key) {
+        switch SignInFile.read(stored, key: key).flatMap(current) {
         case .success(let read): body = read
         case .failure(let failure):
             guard startsOver else { throw failure }
             body = SignInFile.Body()
+            Self.seenLock.lock()
+            body.sequence = Self.seen[seenKey]
+            Self.seenLock.unlock()
         }
         let (write, value) = try change(&body)
         if write {
+            body.sequence = (body.sequence ?? 0) + 1
             try folder.write(SignInFile.name, data: try SignInFile.encode(body, key: key),
-                             expecting: current.map { .contents($0) } ?? .noFile)
+                             expecting: stored.map { .contents($0) } ?? .noFile)
+            _ = current(body)
         }
         return value
     }
@@ -328,7 +367,7 @@ public final class SignInStore: @unchecked Sendable {
     public func add(_ record: SignInFile.Record, client: MCPHubOAuthRegistration.Client) throws -> SignInFile.Record {
         try update(startsOver: true) { body in
             var made = record
-            if let old = body.record(resource: record.resource) {
+            if let old = body.record(server: record.serverURL) {
                 made.consents = old.consents
                 body.records.removeAll { $0.id == old.id }
             }

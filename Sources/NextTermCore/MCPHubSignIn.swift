@@ -135,7 +135,7 @@ public final class MCPHubSignIn: @unchecked Sendable {
             }
         }
         do {
-            let record = try SignInFile.record(name: name, metadata: metadata, client: client, tokens: tokens, scopes: wanted, key: store.key)
+            let record = try SignInFile.record(name: name, server: server, metadata: metadata, client: client, tokens: tokens, scopes: wanted, key: store.key)
             return .success(try store.add(record, client: client))
         } catch {
             return .failure(MCPHubOAuth.Failure("Next Term couldn\u{2019}t keep the sign-in to \(name): \(error.localizedDescription)"))

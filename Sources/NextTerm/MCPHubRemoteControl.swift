@@ -191,11 +191,15 @@ enum MCPHubRemoteControl {
         let remote = connection(need)
         let at = MCPHubOverview.signInKey(need.server.url)
         DispatchQueue.global(qos: .userInitiated).async {
+            // The sign-in's tokens sent with this need, never in what the agent, Settings or the cached tool list is
+            // shown, should a server quote one.
+            var sent = signIn.map { [$0.token] } ?? []
+            func hidden(_ text: String) -> String { MCPHubSignInWords.hiding(sent, in: text) }
             func attempt(_ endpoint: MCPHubRemote.Endpoint) -> Result<[String: Any], MCPHubRemote.Failure> {
                 let listed = remote.tools(endpoint, until: need.deadline)
                 // Its tools as listed now, for the next sessions' direct tools (written only when they changed).
                 if case .success(let tools) = listed {
-                    let manifest = MCPHubManifest(listed: tools).masked { SecretMask.current.mask($0) }
+                    let manifest = MCPHubManifest(listed: tools).masked { hidden(SecretMask.current.mask($0)) }
                     MCPHubManifest.remember(manifest, server: need.server, list: need.list, userFile: need.userFile)
                 }
                 if need.op == "tools" { return listed.map { ["tools": $0] } }
@@ -208,9 +212,6 @@ enum MCPHubRemoteControl {
                 }
             }
             var answer = attempt(endpoint)
-            // The sign-in's tokens sent with this need, never in what the agent or Settings is shown, should a server quote one.
-            var sent = signIn.map { [$0.token] } ?? []
-            func hidden(_ text: String) -> String { sent.reduce(text) { $1.isEmpty ? $0 : $0.replacingOccurrences(of: $1, with: "\u{2022}\u{2022}\u{2022}") } }
             var needsSignIn = false
             var lapse: Int?
             var challenge: String?
@@ -224,17 +225,33 @@ enum MCPHubRemoteControl {
                         answer = .failure(MCPHubRemote.Failure(MCPHubSignInWords.moreAccess(need.server.name, scopes: bearer?.scopes ?? []),
                                                                kind: failure.kind))
                     } else if status == 401 {
-                        // Refreshed once, and sent once more; a second refusal is a lapse.
-                        if case .token(let fresh) = signIn.refresher.token(refused: signIn.token), fresh != signIn.token {
+                        // Refreshed once, and sent once more; a refusal of the newest token is a lapse. A sign-in
+                        // server out of reach spent nothing, so the sign-in stays and the agent calls again.
+                        let name = need.server.name
+                        func lapsed(_ kind: MCPHubRemote.Failure.Kind) {
+                            try? signIn.store.signOut(id: signIn.id)
+                            lapse = (try? signIn.store.read().get())?.record(id: signIn.id)?.generation ?? 0
+                            answer = .failure(MCPHubRemote.Failure(MCPHubSignInWords.lapsed(name), kind: kind))
+                        }
+                        switch SignInRefresher.afterRefusal(signIn.refresher.token(refused: signIn.token), refused: signIn.token) {
+                        case .again(let fresh):
                             var again = endpoint
                             again.headers["Authorization"] = "Bearer " + fresh
                             sent.append(fresh)
                             answer = attempt(again)
-                        }
-                        if case .failure(let still) = answer, case .unauthorized(401, _) = still.kind {
-                            try? signIn.store.signOut(id: signIn.id)
-                            lapse = (try? signIn.store.read().get())?.record(id: signIn.id)?.generation ?? 0
-                            answer = .failure(MCPHubRemote.Failure(MCPHubSignInWords.lapsed(need.server.name), kind: still.kind))
+                            if case .failure(let still) = answer, case .unauthorized(401, _) = still.kind { lapsed(still.kind) }
+                        case .signedOut(let marked?):
+                            lapse = marked
+                            answer = .failure(MCPHubRemote.Failure(MCPHubSignInWords.lapsed(name), kind: failure.kind))
+                        case .signedOut(nil): lapsed(failure.kind)
+                        case .needsMoreAccess(let scopes):
+                            answer = .failure(MCPHubRemote.Failure(MCPHubSignInWords.moreAccess(name, scopes: scopes), kind: failure.kind))
+                        case .unreachable:
+                            answer = .failure(MCPHubRemote.Failure(MCPHubSignInWords.unreachable(name), kind: failure.kind))
+                        case .missing:
+                            answer = .failure(MCPHubRemote.Failure(MCPHubSignInWords.needsSignIn(name), kind: failure.kind))
+                        case .tampered:
+                            answer = .failure(MCPHubRemote.Failure(MCPHubSignInWords.tampered(name), kind: failure.kind))
                         }
                     }
                 } else if status == 401, bearer != nil, !endpoint.keyed {

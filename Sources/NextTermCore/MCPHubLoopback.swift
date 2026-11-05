@@ -9,12 +9,14 @@ import Darwin
 /// - Only `GET /callback` whose query `accepts` takes (its `state` is this sign-in's) ends the wait; it is answered
 ///   with the small page `accepts` gives. Anything else gets a 404 and the wait goes on, so a stray request or a
 ///   guessed URL never ends a sign-in.
-/// - One request a connection, its head read up to 16 KB, two seconds to send it.
+/// - One request a connection, its head read up to 16 KB, two seconds in all to send it.
 public final class MCPHubLoopback: @unchecked Sendable {
     /// The page for a request's query, and whether it ends the wait; nil when the query isn't this sign-in's.
     public typealias Accepts = @Sendable ([(String, String)]) -> String?
 
     public static let life: TimeInterval = 600
+    /// How long a connection has to send its request's head.
+    static let headTime: TimeInterval = 2
 
     private let lock = NSLock()
     private var listener: Int32 = -1
@@ -89,11 +91,16 @@ public final class MCPHubLoopback: @unchecked Sendable {
         defer { Darwin.close(fd) }
         var noSigPipe: Int32 = 1
         setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, socklen_t(MemoryLayout<Int32>.size))
-        var wait = timeval(tv_sec: 2, tv_usec: 0)
-        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &wait, socklen_t(MemoryLayout<timeval>.size))
+        // Two seconds for the whole head, not for each read: a connection sending a byte now and then would otherwise
+        // hold the one thread that serves, and the browser's callback behind it, until the sign-in's life ran out.
+        let deadline = Date().addingTimeInterval(Self.headTime)
         var data = Data()
         var buffer = [UInt8](repeating: 0, count: 4096)
         while data.count < 16 * 1024, data.range(of: Data("\r\n\r\n".utf8)) == nil {
+            let left = deadline.timeIntervalSinceNow
+            if left <= 0 { break }
+            var wait = timeval(tv_sec: Int(left), tv_usec: Int32((left - left.rounded(.down)) * 1_000_000))
+            setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &wait, socklen_t(MemoryLayout<timeval>.size))
             let count = read(fd, &buffer, buffer.count)
             if count <= 0 { break }
             data.append(contentsOf: buffer[0..<count])

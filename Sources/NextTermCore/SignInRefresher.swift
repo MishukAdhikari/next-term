@@ -25,6 +25,31 @@ public final class SignInRefresher: @unchecked Sendable {
         case tampered
     }
 
+    /// What a need does once the server answered 401 to the token it sent and the refresher was asked for another.
+    public enum AfterRefusal: Equatable, Sendable {
+        /// Sent once more, with this token.
+        case again(String)
+        /// The sign-in lapsed: at `lapse` when the refresher marked it so, nil when the need marks it (the server
+        /// refused even its newest token).
+        case signedOut(lapse: Int?)
+        case needsMoreAccess([String])
+        /// The sign-in server couldn't be reached and nothing was spent: the sign-in stays, the agent calls again.
+        case unreachable(String)
+        case missing, tampered
+    }
+
+    /// `outcome`, the refresher's answer to `token(refused:)`, as what the need does.
+    public static func afterRefusal(_ outcome: Outcome, refused: String) -> AfterRefusal {
+        switch outcome {
+        case .token(let fresh): return fresh == refused ? .signedOut(lapse: nil) : .again(fresh)
+        case .signedOut(let lapse): return .signedOut(lapse: lapse)
+        case .needsMoreAccess(let scopes): return .needsMoreAccess(scopes)
+        case .unreachable(let why): return .unreachable(why)
+        case .missing: return .missing
+        case .tampered: return .tampered
+        }
+    }
+
     public let id: String
     let store: SignInStore
     let fetch: MCPHubOAuth.Fetch
