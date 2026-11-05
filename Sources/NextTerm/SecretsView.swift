@@ -222,8 +222,17 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
         footer.textColor = .secondaryLabelColor
         let docs = NSButton(title: "What Secrets protects, and what it doesn't", target: self, action: #selector(openDocs))
         docs.bezelStyle = .inline
+        signInsLabel.font = .systemFont(ofSize: 12)
+        signInsLabel.textColor = .secondaryLabelColor
+        signOutAllButton.target = self
+        signOutAllButton.action = #selector(signOutAll)
+        signOutAllButton.bezelStyle = .rounded
+        signOutAllButton.controlSize = .small
+        signInsRow.setViews([signInsLabel, signOutAllButton], in: .leading)
+        signInsRow.spacing = 8
+        signInsRow.alignment = .firstBaseline
         let rows: [NSView] = [statusLabel, startOverButton, agentControlLabel, tableScroll, emptyLabel, writeOnlyLabel, keyButtons,
-                              valueButtons, actionLabel, newKeySettings, skillSetting, reminderSettings, allowedBox, importsBox, pausedBox,
+                              valueButtons, actionLabel, signInsRow, newKeySettings, skillSetting, reminderSettings, allowedBox, importsBox, pausedBox,
                               footer, docs]
         for row in rows { content.addArrangedSubview(row) }
         let wide: [NSView] = [statusLabel, agentControlLabel, tableScroll, emptyLabel, writeOnlyLabel, keyButtons, valueButtons,
@@ -289,6 +298,10 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
 
     // MARK: data
 
+    let signInsLabel = NSTextField(labelWithString: "")
+    let signOutAllButton = NSButton(title: "Sign Out of All\u{2026}", target: nil, action: nil)
+    private let signInsRow = NSStackView()
+
     @objc func reload() {
         skillSetting.reload() // a copy added, edited or removed elsewhere shows as it is now
         let store = SecretsStore.shared
@@ -316,6 +329,23 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
         reloadAllowed()
         reloadImports()
         reloadPaused()
+        reloadSignIns()
+    }
+
+    /// The sign-ins to MCP servers, kept under a key of the vault's own that no list shows: one line, and Sign Out of
+    /// All…, only while there are some.
+    func reloadSignIns() {
+        let count = MCPHubSignIns.peek()?.records.count ?? 0
+        signInsRow.isHidden = count == 0
+        signInsLabel.stringValue = "Sign-ins to MCP servers: \(count) \(count == 1 ? "server" : "servers"), kept here for your agents."
+        signInsLabel.toolTip = "Next Term signs in to these in Settings \u{203A} MCP Servers, and keeps them signed in. No agent gets them."
+    }
+
+    @objc func signOutAll() {
+        MCPHubSignIns.signOutAll { [weak self] said in
+            self?.reload()
+            self?.say(said)
+        }
     }
 
     /// `unlisted`: a refused vault is one this Mac has no record of, not one whose file changed. `tooLarge`: its file is

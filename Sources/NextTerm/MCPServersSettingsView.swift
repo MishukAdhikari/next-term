@@ -16,6 +16,9 @@ import NextTermCore
 /// projects' (MCPHubAgentServers), one row a server naming each agent, the ones in the list already left out. Add… opens
 /// Paste a Config…'s sheet for it, so its keys go to Secrets the same way; the agent's file is only read. With no server
 /// of the user's own, the tab is the intro, Add and Paste at the top, and that list.
+///
+/// A server at a URL that asks for a sign-in has Sign In… under the table; signed in, Sign Out, and the agents allowed
+/// to use the sign-in in its detail with Change… beside them; lapsed, Reconnect… (MCPHubSignIns).
 final class MCPServersSettingsView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     /// The open projects, for the self-test (its projects are its own).
     static var projectsForTest: [String]?
@@ -33,6 +36,10 @@ final class MCPServersSettingsView: NSView, NSTableViewDataSource, NSTableViewDe
     let toggleButton = NSButton(title: "Turn Off", target: nil, action: nil)
     let approveButton = NSButton(title: "Approve\u{2026}", target: nil, action: nil)
     let undoButton = NSButton(title: "Undo", target: nil, action: nil)
+    let signInButton = NSButton(title: "Sign In\u{2026}", target: nil, action: nil)
+    let agentsButton = NSButton(title: "Change\u{2026}", target: nil, action: nil)
+    /// While the browser is out for a sign-in started here: its line under the table.
+    private(set) var signingIn: String?
     let foundTitle = NSTextField(labelWithString: "Found in your agents")
     let foundIntro = NSTextField(wrappingLabelWithString: "Set up in your agents\u{2019} own configs. Add one to use it in every agent in Next Term; their configs stay as they are.")
     let foundTable = NSTableView()
@@ -46,6 +53,7 @@ final class MCPServersSettingsView: NSView, NSTableViewDataSource, NSTableViewDe
     let emptyText = NSTextField(wrappingLabelWithString: "")
     let emptyButton = NSButton(title: "Add Server\u{2026}", target: nil, action: nil)
     private var pickerRow = NSStackView()
+    private var detailRow = NSStackView()
 
     private(set) var rows: [MCPHubOverview.Row] = []
     /// The project shown on Project, by its real path.
@@ -127,16 +135,22 @@ final class MCPServersSettingsView: NSView, NSTableViewDataSource, NSTableViewDe
 
         let actions: [(NSButton, Selector)] = [(addButton, #selector(add)), (pasteButton, #selector(paste)), (editButton, #selector(edit)),
                                                (removeButton, #selector(remove)), (toggleButton, #selector(toggle)),
-                                               (approveButton, #selector(approve)), (undoButton, #selector(undo)), (emptyButton, #selector(add))]
+                                               (approveButton, #selector(approve)), (undoButton, #selector(undo)), (emptyButton, #selector(add)),
+                                               (signInButton, #selector(signInOrOut)), (agentsButton, #selector(changeAgents))]
         for (button, action) in actions {
             button.target = self
             button.action = action
             button.bezelStyle = .rounded
         }
-        buttons = NSStackView(views: [editButton, removeButton, toggleButton, approveButton, NSView(), undoButton])
+        agentsButton.controlSize = .small
+        agentsButton.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        detailRow = NSStackView(views: [detail, agentsButton])
+        detailRow.spacing = 6
+        detailRow.alignment = .firstBaseline
+        buttons = NSStackView(views: [editButton, removeButton, toggleButton, approveButton, signInButton, NSView(), undoButton])
         buttons.spacing = 8
         buildFound()
-        for view in [pickerRow, intro, scroll, detail, buttons, foundSection, note] { content.addArrangedSubview(view) }
+        for view in [pickerRow, intro, scroll, detailRow, buttons, foundSection, note] { content.addArrangedSubview(view) }
         content.setCustomSpacing(18, after: buttons)
         content.orientation = .vertical
         content.alignment = .leading
@@ -165,7 +179,7 @@ final class MCPServersSettingsView: NSView, NSTableViewDataSource, NSTableViewDe
             pickerRow.widthAnchor.constraint(equalTo: content.widthAnchor, constant: -32),
             intro.widthAnchor.constraint(equalTo: content.widthAnchor, constant: -32),
             scroll.widthAnchor.constraint(equalTo: content.widthAnchor, constant: -32),
-            detail.widthAnchor.constraint(equalTo: content.widthAnchor, constant: -32),
+            detailRow.widthAnchor.constraint(equalTo: content.widthAnchor, constant: -32),
             buttons.widthAnchor.constraint(equalTo: content.widthAnchor, constant: -32),
             note.widthAnchor.constraint(equalTo: content.widthAnchor, constant: -32),
             foundSection.widthAnchor.constraint(equalTo: content.widthAnchor, constant: -32),
@@ -235,6 +249,7 @@ final class MCPServersSettingsView: NSView, NSTableViewDataSource, NSTableViewDe
         let home = NSHomeDirectory()
         let userFile = MCPHubEdits.userFile
         let runs = MCPHubControl.lastRuns
+        let signIns = MCPHubSignIns.states()
         let open = Self.openProjects()
         if project.map({ !open.contains($0) }) ?? true {
             let front = Self.projectsForTest == nil ? (TerminalWindow.front?.windowController as? TerminalWindowController)?.project.map(canonicalPath) : nil
@@ -246,13 +261,14 @@ final class MCPServersSettingsView: NSView, NSTableViewDataSource, NSTableViewDe
         if showsProject {
             if let project {
                 let found = MCPHubScope.sources(folder: project, home: home, userFile: userFile)
-                (rows, unreadable) = MCPHubOverview.project(project, user: found.user, projects: found.projects, home: home, runs: runs)
+                (rows, unreadable) = MCPHubOverview.project(project, user: found.user, projects: found.projects, home: home, runs: runs,
+                                                            signIns: signIns)
             } else {
                 rows = []
             }
         } else {
             let user = MCPHubScope.sources(folder: nil, home: home, userFile: userFile).user
-            rows = MCPHubOverview.personal(user, runs: runs)
+            rows = MCPHubOverview.personal(user, runs: runs, signIns: signIns)
             if case .failure(let problem)? = user?.read { unreadable = [MCPHubScope.Unreadable(file: userFile, problem: problem)] }
             // Read again where an agent's file changed; a change comes back as MCPHubControl.changed.
             MCPHubAgentServers.refresh(projects: open)
@@ -333,9 +349,9 @@ final class MCPServersSettingsView: NSView, NSTableViewDataSource, NSTableViewDe
         case "state":
             cell.toolTip = MCPHubOverview.stateTip(row.state, remote: row.isRemote)
             switch row.state {
-            case .failed, .broken, .needsApproval: cell.textColor = .systemOrange
+            case .failed, .broken, .needsApproval, .needsSignIn, .signedOut, .needsMoreAccess: cell.textColor = .systemOrange
             case .off, .offHere, .shadowed, .remote: cell.textColor = .tertiaryLabelColor
-            case .ready: cell.textColor = .secondaryLabelColor
+            case .ready, .signedIn: cell.textColor = .secondaryLabelColor
             }
         case "applies": cell.toolTip = SkillStep.short(row.list)
         default: break
@@ -397,8 +413,20 @@ final class MCPServersSettingsView: NSView, NSTableViewDataSource, NSTableViewDe
 
     private func updateButtons() {
         let row = selected
-        detail.stringValue = row.map { MCPHubOverview.stateTip($0.state, remote: $0.isRemote) } ?? ""
+        var said = row.map { MCPHubOverview.stateTip($0.state, remote: $0.isRemote) } ?? ""
+        let signedIn = row.flatMap { $0.isRemote ? $0.server.flatMap { MCPHubSignIns.record(for: $0.url) } : nil }
+        if let signedIn, case .signedIn = row?.state {
+            said += " Signs in at \(signedIn.metadata.issuerHost)."
+            if let used = MCPHubSignInWords.usedBy(signedIn.consents) { said += " " + used + "." }
+        }
+        detail.stringValue = said
         detail.isHidden = row == nil
+        detailRow.isHidden = row == nil
+        agentsButton.isHidden = signedIn?.consents.isEmpty ?? true
+        let action = signInAction(row)
+        signInButton.isHidden = action == nil
+        signInButton.title = action ?? ""
+        signInButton.isEnabled = action != nil
         let usable = row?.server != nil
         editButton.isEnabled = usable
         removeButton.isEnabled = row != nil
@@ -423,7 +451,74 @@ final class MCPServersSettingsView: NSView, NSTableViewDataSource, NSTableViewDe
         }
     }
 
+    /// The sign-in button's title for a row, or nil when it has none: Sign In… for a server that asks, Reconnect… for a
+    /// lapse or more access, Sign Out once signed in, Cancel Sign-In while the browser is out.
+    func signInAction(_ row: MCPHubOverview.Row?) -> String? {
+        guard let row, row.isRemote, let url = row.server?.url else { return nil }
+        if MCPHubSignIns.isSigningIn(url) { return "Cancel Sign-In" }
+        switch row.state {
+        case .needsSignIn: return "Sign In\u{2026}"
+        case .signedOut, .needsMoreAccess: return "Reconnect\u{2026}"
+        case .signedIn: return "Sign Out"
+        default: return nil
+        }
+    }
+
+    /// Selects the row of the server at `url`, on Personal, or says it isn't listed.
+    func select(url: String) {
+        if showsProject { show(0) }
+        let key = MCPHubOverview.signInKey(url)
+        guard let at = rows.firstIndex(where: { $0.server.map { MCPHubOverview.signInKey($0.url) } == key }) else { return }
+        table.selectRowIndexes(IndexSet(integer: at), byExtendingSelection: false)
+        table.scrollRowToVisible(at)
+        updateButtons()
+    }
+
     // MARK: actions
+
+    @objc func signInOrOut() {
+        guard let row = selected, let server = row.server else { return }
+        switch signInAction(row) {
+        case "Cancel Sign-In"?:
+            MCPHubSignIns.cancelSignIn(server.url)
+        case "Sign Out"?:
+            MCPHubSignIns.signOut(url: server.url, name: server.name) { [weak self] text in self?.said(text) }
+        case .some:
+            signingIn = server.name
+            updateButtons()
+            MCPHubSignIns.signIn(server, progress: { [weak self] line in
+                self?.note.stringValue = line
+                self?.note.isHidden = false
+                self?.updateButtons()
+            }, done: { [weak self] failure in
+                self?.signingIn = nil
+                self?.said(failure ?? "Signed in to \(server.name). Every agent in Next Term can use it once you allow it.")
+            })
+            updateButtons()
+        case nil:
+            return
+        }
+    }
+
+    /// Change…: the agents allowed to use the selected server's sign-in, each to remove.
+    @objc func changeAgents() {
+        guard let server = selected?.server, let record = MCPHubSignIns.record(for: server.url), !record.consents.isEmpty else { return }
+        let menu = NSMenu()
+        for agent in record.consents {
+            let item = NSMenuItem(title: "Stop \(MCPHubSignInWords.agentTitle(agent)) Using It", action: #selector(removeAgent(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = [server.url, agent]
+            menu.addItem(item)
+        }
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: agentsButton.bounds.height + 2), in: agentsButton)
+    }
+
+    @objc private func removeAgent(_ sender: NSMenuItem) {
+        guard let pair = sender.representedObject as? [String], pair.count == 2 else { return }
+        MCPHubSignIns.removeConsent(url: pair[0], agent: pair[1]) { [weak self] failure in
+            self?.said(failure ?? "\(MCPHubSignInWords.agentTitle(pair[1])) will be asked again before it uses the sign-in.")
+        }
+    }
 
     @objc func add() { beginServerSheet(nil) }
 
@@ -471,11 +566,33 @@ final class MCPServersSettingsView: NSView, NSTableViewDataSource, NSTableViewDe
         if let sheetWindow = sheet.window { window.beginSheet(sheetWindow, completionHandler: nil) }
     }
 
-    /// Remove takes the entry out of its list at once: Undo puts it back as it was.
+    /// Remove takes the entry out of its list at once: Undo puts it back as it was. The last entry for a URL Next Term
+    /// is signed in to takes the sign-in with it, revoked at the server (Undo then brings the server back signed out).
     @objc func remove() {
         guard let row = selected else { return }
         let failure = MCPHubEdits.apply("Remove \(row.name)", [.init(change: .remove(row.name), file: row.list, place: row.place)])
+        if failure == nil, let server = row.server, server.transport != .stdio, MCPHubSignIns.record(for: server.url) != nil,
+           !Self.isStillUsed(server.url) {
+            return MCPHubSignIns.signOut(url: server.url, name: server.name) { [weak self] text in
+                self?.said("Removed \(row.name). " + text)
+            }
+        }
         said(failure ?? "Removed \(row.name). Undo puts it back.")
+    }
+
+    /// Whether another entry, in the user's list or an open project's, still names `url`: a sign-in is shared by URL.
+    static func isStillUsed(_ url: String) -> Bool {
+        let key = MCPHubOverview.signInKey(url)
+        let home = NSHomeDirectory()
+        let userFile = MCPHubEdits.userFile
+        let user = MCPHubScope.sources(folder: nil, home: home, userFile: userFile).user
+        if MCPHubOverview.personal(user).contains(where: { $0.server.map { MCPHubOverview.signInKey($0.url) } == key }) { return true }
+        for project in openProjects() {
+            let found = MCPHubScope.sources(folder: project, home: home, userFile: userFile)
+            let rows = MCPHubOverview.project(project, user: nil, projects: found.projects, home: home).rows
+            if rows.contains(where: { $0.place == .project && $0.server.map { MCPHubOverview.signInKey($0.url) } == key }) { return true }
+        }
+        return false
     }
 
     @objc func toggle() {

@@ -8,6 +8,11 @@ import NextTermCore
 ///
 /// Editing changes only what the sheet shows: the entry's other keys, its other keys from Secrets and its variables stay
 /// as written (MCPHubServer.merged).
+///
+/// A new server at a URL with no key is asked once, unsigned, when its URL rests (MCPHubRemote's rules): when it asks
+/// for a sign-in, the Key row becomes one line saying so, and the primary becomes Sign In… (Add is gone, so there is
+/// still one primary). Sign In… opens the browser (MCPHubSignIns) and adds the server once signed in. "Use a key
+/// instead" brings the Key row back. With no answer, or no network, Add stays the primary.
 final class MCPServerSheet: NSWindowController, NSWindowDelegate, NSTextFieldDelegate {
     /// Where a server goes, as the Applies to menu lists them.
     enum Target: Equatable {
@@ -38,6 +43,16 @@ final class MCPServerSheet: NSWindowController, NSWindowDelegate, NSTextFieldDel
     let addButton = NSButton(title: "Add", target: nil, action: nil)
     let cancelButton = NSButton(title: "Cancel", target: nil, action: nil)
     let pasteButton = NSButton(title: "Paste a Config\u{2026}", target: nil, action: nil)
+    let signInLine = NSTextField(wrappingLabelWithString: "")
+    let keyInsteadButton = NSButton(title: "Use a key instead", target: nil, action: nil)
+    /// The server answered the unsigned probe with a Bearer challenge: the sheet offers Sign In….
+    private(set) var asksSignIn = false
+    private(set) var keyInstead = false
+    private var probed: String?
+    private var probeChallenge: String?
+    private var probeWork: DispatchWorkItem?
+    private var keyRow = NSStackView()
+    private var signInRow = NSStackView()
     private var newKeyRow = NSStackView()
     private var variableRow = NSStackView()
     private var form = NSStackView()
@@ -128,8 +143,20 @@ final class MCPServerSheet: NSWindowController, NSWindowDelegate, NSTextFieldDel
         let buttons = NSStackView(views: [pasteButton, NSView(), cancelButton, addButton])
         buttons.spacing = 8
 
+        keyRow = row("Key", keyPopUp)
+        signInLine.font = .systemFont(ofSize: 12)
+        signInLine.preferredMaxLayoutWidth = 300
+        keyInsteadButton.isBordered = false
+        keyInsteadButton.contentTintColor = .linkColor
+        keyInsteadButton.font = .systemFont(ofSize: 11)
+        keyInsteadButton.target = self
+        keyInsteadButton.action = #selector(useKeyInstead)
+        signInRow = row("Key", signInLine)
+        signInRow.addArrangedSubview(keyInsteadButton)
+        signInRow.alignment = .firstBaseline
+        signInRow.isHidden = true
         let stack = form
-        stack.setViews([heading, row("Name", nameField), row("Runs", kind), row("", runsField), row("Key", keyPopUp),
+        stack.setViews([heading, row("Name", nameField), row("Runs", kind), row("", runsField), keyRow, signInRow,
                                         newKeyRow, variableRow, row("Applies to", appliesPopUp), reasonLabel, buttons], in: .top)
         stack.orientation = .vertical
         stack.alignment = .leading
@@ -320,7 +347,16 @@ final class MCPServerSheet: NSWindowController, NSWindowDelegate, NSTextFieldDel
 
     func controlTextDidChange(_ notification: Notification) { refresh() }
 
+    /// Whether the sheet offers Sign In… in place of Add: a new server at a URL that asked for a sign-in, with no key.
+    var offersSignIn: Bool { asksSignIn && !keyInstead && editing == nil && isURL && keyName == nil }
+
     func refresh() {
+        probeIfResting()
+        keyRow.isHidden = offersSignIn
+        signInRow.isHidden = !offersSignIn
+        let named = nameField.stringValue.trimmingCharacters(in: .whitespaces)
+        signInLine.stringValue = "\(named.isEmpty ? "This server" : named) asks you to sign in. Next Term keeps you signed in for every agent."
+        addButton.title = offersSignIn ? "Sign In\u{2026}" : editing == nil ? "Add" : "Save"
         newKeyRow.isHidden = !isNewKey
         variableField.isHidden = isURL || keyName == nil
         variableCaption.isHidden = isURL || keyName == nil
@@ -331,6 +367,7 @@ final class MCPServerSheet: NSWindowController, NSWindowDelegate, NSTextFieldDel
         runsField.toolTip = isURL ? "A server on this Mac, or on the internet or your own network. " + MCPHubAddress.recommendation : nil
         if variableField.stringValue.isEmpty, let keyName { variableField.placeholderString = keyName }
         let why = reason
+        reasonLabel.textColor = .systemOrange
         reasonLabel.stringValue = why ?? ""
         reasonLabel.isHidden = (why ?? "").isEmpty
         addButton.isEnabled = why == nil && !isBusy
@@ -347,7 +384,50 @@ final class MCPServerSheet: NSWindowController, NSWindowDelegate, NSTextFieldDel
         window.setContentSize(NSSize(width: window.contentLayoutRect.width, height: height))
     }
 
-    @objc func cancel() { end(nil) }
+    // MARK: the probe
+
+    /// Once the URL rests 0.6 seconds, one unsigned request, as MCPHubRemote makes it: a 401 with a Bearer challenge
+    /// means the server asks for a sign-in. Asked once for each URL.
+    private func probeIfResting() {
+        guard editing == nil, isURL, keyName == nil, !keyInstead else { return }
+        let typed = runsField.stringValue.trimmingCharacters(in: .whitespaces)
+        guard typed != probed else { return }
+        probeWork?.cancel()
+        if asksSignIn { asksSignIn = false }
+        var candidate = MCPHubServer(name: "probe", transport: .http)
+        candidate.url = typed
+        guard let url = URL(string: typed), MCPHubRules.reasons(candidate, place: .user).isEmpty else { return }
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.probed = typed
+            DispatchQueue.global(qos: .userInitiated).async {
+                let answer = MCPHubRemote(name: "probe", clientVersion: "probe").tools(.init(url: url), until: Date().addingTimeInterval(8))
+                var challenge: String?
+                if case .failure(let failure) = answer, case .unauthorized(401, let header) = failure.kind,
+                   MCPHubOAuthChallenge.bearer(header) != nil { challenge = header }
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated {
+                        guard self.runsField.stringValue.trimmingCharacters(in: .whitespaces) == typed else { return }
+                        self.asksSignIn = challenge != nil
+                        self.probeChallenge = challenge
+                        self.refresh()
+                    }
+                }
+            }
+        }
+        probeWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: work)
+    }
+
+    @objc private func useKeyInstead() {
+        keyInstead = true
+        refresh()
+    }
+
+    @objc func cancel() {
+        if isBusy, offersSignIn { MCPHubSignIns.cancelSignIn(server.url) }
+        end(nil)
+    }
 
     /// Paste a Config… in place of this sheet: set by Settings, which opens it.
     var onPasteInstead: (() -> Void)?
@@ -365,6 +445,7 @@ final class MCPServerSheet: NSWindowController, NSWindowDelegate, NSTextFieldDel
         if let editing, editing.name != server.name { steps.append(.init(change: .remove(editing.name), file: editing.list, place: editing.place)) }
         steps.append(.init(change: .set(server), file: list.file, place: list.place))
         let title = editing == nil ? "Add \(server.name)" : "Edit \(server.name)"
+        if offersSignIn { return signIn(server, title: title, steps: steps) }
         guard isNewKey else { return end(MCPHubEdits.apply(title, steps)) }
         let planned = SecretCopyIn.Planned(name: newKeyName.stringValue, value: SecretBytes(utf8: newKeyValue.stringValue),
                                            purpose: Self.purpose(server.name), replaces: false)
@@ -382,6 +463,34 @@ final class MCPServerSheet: NSWindowController, NSWindowDelegate, NSTextFieldDel
             newKeyValue.stringValue = ""
             end(MCPHubEdits.apply(title, steps))
         }
+    }
+
+    /// Sign In…: the browser, and the server added once signed in; on a failure the sheet stays, with why.
+    private func signIn(_ server: MCPHubServer, title: String, steps: [MCPHubEdits.Step]) {
+        if let probeChallenge { MCPHubSignIns.challenges[MCPHubOverview.signInKey(server.url)] = probeChallenge }
+        isBusy = true
+        refresh()
+        MCPHubSignIns.signIn(server, progress: { [weak self] line in
+            self?.say(line, problem: false)
+        }, done: { [weak self] failure in
+            guard let self else { return }
+            self.isBusy = false
+            if let failure {
+                self.refresh()
+                return self.say(failure, problem: true)
+            }
+            guard self.window?.isVisible == true else { return } // cancelled meanwhile
+            let added = MCPHubEdits.apply(title, steps)
+            self.end(added ?? "Signed in to \(server.name). Every agent in Next Term can use it once you allow it.")
+        })
+    }
+
+    /// A line under the form: the browser's progress, or why not.
+    private func say(_ text: String, problem: Bool) {
+        reasonLabel.stringValue = text
+        reasonLabel.textColor = problem ? .systemOrange : .secondaryLabelColor
+        reasonLabel.isHidden = text.isEmpty
+        fit()
     }
 
     func end(_ said: String?) {

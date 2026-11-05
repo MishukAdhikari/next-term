@@ -13,13 +13,15 @@ import NextTermCore
 ///   server: the panel names the server and its URL, offers "Allow for this session" for the agent's session, and a
 ///   grant answers the session's later needs with no panel. A need that outlasts its call while the user decides is
 ///   told so; an approval that comes later is kept two minutes for that agent's next need of the server.
-/// - **One connection per server**, shared by every agent: one Mcp-Session-Id, and later one sign-in.
+/// - **One connection per server**, shared by every agent: one Mcp-Session-Id, and one sign-in (MCPHubSignIns).
 /// - **State.** Each need's end is Settings › MCP Servers' state for the server (MCPHubControl.lastRuns), and its tool
 ///   list, when it changed, the cached one the next sessions' direct tools are made from (MCPHubManifest).
 ///
-/// The seam for signing in (OAuth, a later step): `credentials` is where a server's token joins the filled headers, and
-/// a 401 or 403 comes back as MCPHubRemote.Failure.Kind.unauthorized with the server's challenge, where "Reconnect"
-/// would start; today it is a sentence telling the agent to have the user check the key in Settings › MCP Servers.
+/// - **Signing in** (OAuth, R14): between the keys and the request, the sign-in's state, the agent's consent and a token
+///   (MCPHubSignIns.withSignIn); `credentials` adds it as the one more filled header. A 401 to a request that carried
+///   a token is refreshed once and sent once more; a second 401 is a lapse, Reconnect in Settings and one notice. A 403
+///   `insufficient_scope` asks the user to reconnect with more access. A 401 with a Bearer challenge to a server Next
+///   Term has no sign-in for tells the agent to have the user sign in, and Settings shows Sign In….
 @MainActor
 enum MCPHubRemoteControl {
     /// The connection to each server, by `key`: a server whose URL or headers changed gets a new one.
@@ -61,7 +63,11 @@ enum MCPHubRemoteControl {
                     let need = Need(server: applied.server, list: list, folder: folder, op: op, tool: tool, arguments: toolArguments,
                                     deadline: deadline, userFile: file)
                     let caller = MCPControl.tab(withID: tabID)
-                    withKeys(need, caller: caller, pid: pid, fail: fail) { values in reach(need, values: values, reply: reply) }
+                    withKeys(need, caller: caller, pid: pid, fail: fail) { values in
+                        MCPHubSignIns.withSignIn(need.server, deadline: need.deadline, caller: caller, pid: pid, fail: fail) { signIn in
+                            reach(need, values: values, signIn: signIn, reply: reply)
+                        }
+                    }
                 }
             }
         }
@@ -173,31 +179,67 @@ enum MCPHubRemoteControl {
 
     // MARK: reaching
 
-    /// One need of the server, off the main thread, with its keys filled in; its end is the server's state in Settings.
-    private static func reach(_ need: Need, values: [String: String], reply: @escaping MCPControl.Reply) {
-        let endpoint: MCPHubRemote.Endpoint
-        switch MCPHubRemote.endpoint(for: credentials(need.server, values), values: values) {
+    /// One need of the server, off the main thread, with its keys filled in and its sign-in's token when it has one;
+    /// its end is the server's state in Settings.
+    private static func reach(_ need: Need, values: [String: String], signIn: MCPHubSignIns.Use?, reply: @escaping MCPControl.Reply) {
+        var endpoint: MCPHubRemote.Endpoint
+        switch MCPHubRemote.endpoint(for: credentials(need.server, values, token: signIn?.token), values: values) {
         case .failure(let failure): return reply(MCPServer.CallResult(text: failure.text, isError: true))
         case .success(let made): endpoint = made
         }
+        endpoint.signedIn = signIn != nil
         let remote = connection(need)
+        let at = MCPHubOverview.signInKey(need.server.url)
         DispatchQueue.global(qos: .userInitiated).async {
-            let answer: Result<[String: Any], MCPHubRemote.Failure>
-            let listed = remote.tools(endpoint, until: need.deadline)
-            // Its tools as listed now, for the next sessions' direct tools (written only when they changed).
-            if case .success(let tools) = listed {
-                let manifest = MCPHubManifest(listed: tools).masked { SecretMask.current.mask($0) }
-                MCPHubManifest.remember(manifest, server: need.server, list: need.list, userFile: need.userFile)
-            }
-            if need.op == "tools" {
-                answer = listed.map { ["tools": $0] }
-            } else {
+            func attempt(_ endpoint: MCPHubRemote.Endpoint) -> Result<[String: Any], MCPHubRemote.Failure> {
+                let listed = remote.tools(endpoint, until: need.deadline)
+                // Its tools as listed now, for the next sessions' direct tools (written only when they changed).
+                if case .success(let tools) = listed {
+                    let manifest = MCPHubManifest(listed: tools).masked { SecretMask.current.mask($0) }
+                    MCPHubManifest.remember(manifest, server: need.server, list: need.list, userFile: need.userFile)
+                }
+                if need.op == "tools" { return listed.map { ["tools": $0] } }
                 // A call is one need, so one approval: the tool's name is checked here, against the list just read.
-                answer = listed.flatMap { tools in
+                return listed.flatMap { tools in
                     let names = tools.compactMap { $0["name"] as? String }
                     guard names.contains(need.tool) else { return .success(["names": names]) }
                     return remote.call(need.tool, arguments: need.arguments, endpoint: endpoint, until: need.deadline)
                         .map { ["result": MCPHubCatalog.fit($0), "names": names] }
+                }
+            }
+            var answer = attempt(endpoint)
+            // The sign-in's tokens sent with this need, never in what the agent or Settings is shown, should a server quote one.
+            var sent = signIn.map { [$0.token] } ?? []
+            func hidden(_ text: String) -> String { sent.reduce(text) { $1.isEmpty ? $0 : $0.replacingOccurrences(of: $1, with: "\u{2022}\u{2022}\u{2022}") } }
+            var needsSignIn = false
+            var lapse: Int?
+            var challenge: String?
+            if case .failure(let failure) = answer, case .unauthorized(let status, let header) = failure.kind {
+                challenge = header
+                let bearer = MCPHubOAuthChallenge.bearer(header)
+                if let signIn {
+                    if status == 403, bearer?.isInsufficientScope == true {
+                        // More access: never fixed silently, since that needs the browser.
+                        _ = try? signIn.store.needsMoreAccess(id: signIn.id, scopes: bearer?.scopes ?? [])
+                        answer = .failure(MCPHubRemote.Failure(MCPHubSignInWords.moreAccess(need.server.name, scopes: bearer?.scopes ?? []),
+                                                               kind: failure.kind))
+                    } else if status == 401 {
+                        // Refreshed once, and sent once more; a second refusal is a lapse.
+                        if case .token(let fresh) = signIn.refresher.token(refused: signIn.token), fresh != signIn.token {
+                            var again = endpoint
+                            again.headers["Authorization"] = "Bearer " + fresh
+                            sent.append(fresh)
+                            answer = attempt(again)
+                        }
+                        if case .failure(let still) = answer, case .unauthorized(401, _) = still.kind {
+                            try? signIn.store.signOut(id: signIn.id)
+                            lapse = (try? signIn.store.read().get())?.record(id: signIn.id)?.generation ?? 0
+                            answer = .failure(MCPHubRemote.Failure(MCPHubSignInWords.lapsed(need.server.name), kind: still.kind))
+                        }
+                    }
+                } else if status == 401, bearer != nil, !endpoint.keyed {
+                    needsSignIn = true
+                    answer = .failure(MCPHubRemote.Failure(MCPHubSignInWords.needsSignIn(need.server.name), kind: failure.kind))
                 }
             }
             let run: MCPHubOverview.Run
@@ -205,15 +247,17 @@ enum MCPHubRemoteControl {
             switch answer {
             case .success(let object):
                 run = MCPHubOverview.Run(failure: nil, tools: remote.cachedTools?.count ?? 0)
-                result = MCPServer.CallResult(text: MCPServer.json(object))
+                result = MCPServer.CallResult(text: hidden(MCPServer.json(object)))
             case .failure(let failure):
                 // Masked here too, for Settings: a key quoted back in a server's words is never shown there either.
-                let text = SecretMask.current.mask(failure.text)
-                run = MCPHubOverview.Run(failure: text, tools: 0)
+                let text = hidden(SecretMask.current.mask(failure.text))
+                run = MCPHubOverview.Run(failure: text, tools: 0, needsSignIn: needsSignIn)
                 result = MCPServer.CallResult(text: text, isError: true)
             }
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
+                    if let challenge { MCPHubSignIns.challenges[at] = challenge }
+                    if let signIn, let lapse { MCPHubSignIns.lapsed(signIn.id, lapse: lapse, name: need.server.name, url: need.server.url) }
                     let key = MCPHubOverview.runKey(list: need.list, server: need.server.name)
                     if MCPHubControl.lastRuns[key] != run {
                         MCPHubControl.lastRuns[key] = run
@@ -225,9 +269,14 @@ enum MCPHubRemoteControl {
         }
     }
 
-    /// The server as it is reached: today its own URL and headers. Signing in (a later step) adds its token here, as one
-    /// more header filled from the vault, so the transport and every need above stay as they are.
-    static func credentials(_ server: MCPHubServer, _ values: [String: String]) -> MCPHubServer { server }
+    /// The server as it is reached: its own URL and headers, and its sign-in's token as one more header, so the
+    /// transport and every need above stay as they are. Made for one need, kept nowhere.
+    static func credentials(_ server: MCPHubServer, _ values: [String: String], token: String? = nil) -> MCPHubServer {
+        guard let token else { return server }
+        var signed = server
+        signed.headers["Authorization"] = "Bearer " + token
+        return signed
+    }
 
     /// The server's connection: the one made for it as it is written now, or a new one in place of any other.
     private static func connection(_ need: Need) -> MCPHubRemote {

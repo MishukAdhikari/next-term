@@ -852,6 +852,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         settings?.window?.makeKeyAndOrderFront(nil)
     }
 
+    #if DEBUG
+    /// Settings › MCP Servers as it shows now, for the self-test.
+    var showsMCPServersForTest: MCPServersSettingsView? { settings?.mcpServers }
+    #endif
+
+    /// A sign-in's lapse notice, clicked: Settings › MCP Servers with that server selected, Reconnect… beside it.
+    func showMCPServer(url: String) {
+        showSettings(tab: "mcp")
+        settings?.mcpServers?.select(url: url)
+    }
+
     /// What Agents › Suggest a Command… does while it is off: Settings › Terminal at its Suggestions row, which says so
     /// and how to turn it on.
     func showSuggestionSettings() {
@@ -2257,8 +2268,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             }
         }
         let reminder = SecretReminder(userInfo: response.notification.request.content.userInfo)
+        let signIn = response.notification.request.content.userInfo[MCPHubSignIns.noticeKey] as? String
         DispatchQueue.main.async { [self] in
             NSApp.activate(ignoringOtherApps: true)
+            if let signIn { // a sign-in lapsed: Reconnect… in Settings
+                showMCPServer(url: signIn)
+                return completionHandler()
+            }
             if let reminder { // a key rotation reminder: Rotate… for its key
                 SecretReminders.open(reminder)
                 return completionHandler()
