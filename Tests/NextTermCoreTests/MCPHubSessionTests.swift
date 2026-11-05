@@ -68,7 +68,8 @@ import Testing
 
     // MARK: R17
 
-    /// With no server, the bridge's answers are the ones step 1 pinned, byte for byte: the catalog adds nothing.
+    /// With no server, the bridge's answers are the pinned ones, byte for byte: the catalog adds nothing. The pin holds
+    /// Next Term's own tools whole, add_mcp_server and list_mcp_servers among them (R17, by the owner's decision).
     @Test func withNoServerTheBridgeAnswersAsBefore() throws {
         for hub in [session(nil), session(plan([])),
                     session(plan([MCPHubPlan.Server(name: "x", state: .off, command: "a", list: "/u")])),
@@ -88,7 +89,7 @@ import Testing
                 answer("prompts/list"),
             ]
             let data = try JSONSerialization.data(withJSONObject: answers, options: [.sortedKeys, .withoutEscapingSlashes])
-            #expect(SecretRun.digest(data) == "4c279107834cad04c5737de883494cf4ed1b34fa8057926407dca5d91e8461a8")
+            #expect(SecretRun.digest(data) == "7aa81652fec91a3ffe6643e6bb3059b28d4a180462410537e5a8f05b279d02b4")
             // A catalog tool is unknown, as it was.
             let called = MCPServer.respond(to: ["jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": ["name": "mcp_servers"]],
                                            version: "0", extra: hub.tools, callExtra: hub.call) { _, _ in MCPServer.CallResult(text: "") }
@@ -99,8 +100,7 @@ import Testing
     @Test func aServerAddsTheCatalogAfterNextTermsOwnTools() {
         let hub = session(plan([fakeServer()]))
         #expect(hub.isActive)
-        // A server means the user's list is there, so Next Term's own tools for it are listed too (MCPServer.listed).
-        let listed = MCPServer.respond(to: ["jsonrpc": "2.0", "id": 1, "method": "tools/list"], version: "0", hub: true, extra: hub.tools) { _, _ in
+        let listed = MCPServer.respond(to: ["jsonrpc": "2.0", "id": 1, "method": "tools/list"], version: "0", extra: hub.tools) { _, _ in
             MCPServer.CallResult(text: "")
         }
         let names = ((listed?["result"] as? [String: Any])?["tools"] as? [[String: Any]] ?? []).compactMap { $0["name"] as? String }

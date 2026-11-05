@@ -3,8 +3,8 @@ import Foundation
 /// add_mcp_server and list_mcp_servers (R10): an agent connects an MCP server in Next Term for every agent in its tabs,
 /// once the user approves on the Mac, seeing exactly what will run or be reached and where it applies; and reads which
 /// servers are connected, with their state, never a key. Next Term's own tools, not the hub's catalog (MCPHubCatalog):
-/// listed once the user has a list of servers (MCPServer.listed: before it, tools/list is as it was, R17), deferred (used
-/// once in a while, so tool search finds them), as apply_setup and add_task are. The app side is MCPHubAgentTools; this
+/// always listed, so an agent can add the first server (R17, by the owner's decision), deferred (used once in a while,
+/// so tool search finds them), as apply_setup and add_task are. The app side is MCPHubAgentTools; this
 /// Mac only.
 ///
 /// A key never goes in the list (R13): add_mcp_server takes stored keys by name in `secrets` (a command gets them

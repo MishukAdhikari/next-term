@@ -181,11 +181,11 @@ import Testing
         #expect(try String(contentsOfFile: userFile, encoding: .utf8) == "{\"mcpServers\": {,}}")
     }
 
-    // MARK: R17: until the first server, Next Term's MCP answers are as they were
+    // MARK: R17: until the first server, the hub adds nothing to Next Term's MCP answers
 
-    /// The bytes of `next-term`'s initialize (outside a tab, and in one), tools/list and prompts/list. The hub adds
-    /// nothing to them until a server exists: change this digest only for a change to Next Term's own tools or
-    /// instructions, never for the hub.
+    /// The bytes of `next-term`'s initialize (outside a tab, and in one), tools/list and prompts/list. The hub's catalog
+    /// adds nothing to them until a server exists; Next Term's own add_mcp_server and list_mcp_servers are always in
+    /// them (the owner's decision). Change this digest only for a change to Next Term's own tools or instructions.
     @Test func nextTermsAnswersAreUnchangedWithNoServer() throws {
         func answer(_ method: String, instructions: String = MCPServer.instructions) -> [String: Any] {
             MCPServer.respond(to: ["jsonrpc": "2.0", "id": 1, "method": method, "params": ["protocolVersion": "2025-06-18"]],
@@ -199,7 +199,7 @@ import Testing
             answer("prompts/list"),
         ]
         let data = try JSONSerialization.data(withJSONObject: answers, options: [.sortedKeys, .withoutEscapingSlashes])
-        #expect(SecretRun.digest(data) == "4c279107834cad04c5737de883494cf4ed1b34fa8057926407dca5d91e8461a8")
+        #expect(SecretRun.digest(data) == "7aa81652fec91a3ffe6643e6bb3059b28d4a180462410537e5a8f05b279d02b4")
         // And no hub file was read into them: with none, there is nothing.
         #expect(resolved(repo).isEmpty && !FileManager.default.fileExists(atPath: userFile))
     }

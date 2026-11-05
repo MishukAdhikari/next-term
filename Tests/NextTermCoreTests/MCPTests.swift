@@ -4,8 +4,8 @@ import Testing
 @testable import NextTermCore
 
 @Suite struct MCPServerTests {
-    func answer(_ message: [String: Any], hub: Bool = false) -> [String: Any]? {
-        MCPServer.respond(to: message, version: "1.2.3", hub: hub) { name, arguments in
+    func answer(_ message: [String: Any]) -> [String: Any]? {
+        MCPServer.respond(to: message, version: "1.2.3") { name, arguments in
             MCPServer.CallResult(text: "\(name) \(arguments["tab_id"] as? String ?? "")")
         }
     }
@@ -61,13 +61,11 @@ import Testing
     @Test func theInstructionsFitInTwoThousandAndFortyEightCharacters() {
         for inTab in [false, true] {
             for offering in [false, true] {
-                for hub in [false, true] {
-                    let said = MCPServer.instructions(inTab: inTab, offeringTabs: offering, hub: hub)
-                    #expect(said.utf16.count <= 2048, "\(said.utf16.count) characters, in a tab: \(inTab), offering tabs: \(offering), hub: \(hub)")
-                    #expect(said.hasSuffix("store_secret saves a key you already hold."))
-                    // One line break: Secrets' line, then the rest.
-                    #expect(said.components(separatedBy: "\n").count == 2)
-                }
+                let said = MCPServer.instructions(inTab: inTab, offeringTabs: offering)
+                #expect(said.utf16.count <= 2048, "\(said.utf16.count) characters, in a tab: \(inTab), offering tabs: \(offering)")
+                #expect(said.hasSuffix("store_secret saves a key you already hold."))
+                // One line break: Secrets' line, then the rest.
+                #expect(said.components(separatedBy: "\n").count == 2)
             }
         }
     }
@@ -100,8 +98,8 @@ import Testing
     }
 
     @Test func toolsAreListedWithHonestAnnotations() throws {
-        // Every tool, as listed once the user has a list of MCP servers (MCPServer.listed).
-        let reply = answer(["jsonrpc": "2.0", "id": "a", "method": "tools/list"], hub: true)
+        // Every tool, with or without a list of MCP servers.
+        let reply = answer(["jsonrpc": "2.0", "id": "a", "method": "tools/list"])
         let tools = try #require((reply?["result"] as? [String: Any])?["tools"] as? [[String: Any]])
         #expect(tools.count == MCPServer.tools.count)
         func hints(_ name: String) -> [String: Any] {

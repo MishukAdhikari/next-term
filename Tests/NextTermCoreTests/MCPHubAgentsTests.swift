@@ -214,30 +214,24 @@ import Testing
         }
     }
 
-    /// R17: until the user has a list of servers, tools/list and the instructions are as they were: neither tool, no
-    /// `mcp` in show_settings, the old words. Once there is one, both tools come, after Next Term's control tools.
-    @Test func theAgentToolsAreListedOnlyOnceTheUserHasAList() throws {
-        func listed(hub: Bool) -> [[String: Any]] {
-            let answer = MCPServer.respond(to: ["jsonrpc": "2.0", "id": 1, "method": "tools/list"], version: "0", hub: hub) { _, _ in
-                MCPServer.CallResult(text: "")
-            }
-            return (answer?["result"] as? [String: Any])?["tools"] as? [[String: Any]] ?? []
+    /// R17, by the owner's decision: both tools are always listed, deferred, so an agent can add the very first server;
+    /// show_settings always offers `mcp`, and the instructions always name add_mcp_server. No file is made for it.
+    @Test func theAgentToolsAreAlwaysListedDeferred() throws {
+        let answer = MCPServer.respond(to: ["jsonrpc": "2.0", "id": 1, "method": "tools/list"], version: "0") { _, _ in
+            MCPServer.CallResult(text: "")
         }
-        func enumOfShowSettings(_ tools: [[String: Any]]) -> [String] {
-            let tool = tools.first { $0["name"] as? String == "show_settings" }
-            let schema = tool?["inputSchema"] as? [String: Any], properties = schema?["properties"] as? [String: Any]
-            return (properties?["tab"] as? [String: Any])?["enum"] as? [String] ?? []
-        }
-        let before = listed(hub: false), after = listed(hub: true)
-        #expect(before.count == MCPServer.tools.count - 2 && after.count == MCPServer.tools.count)
-        #expect(!before.contains { MCPServer.isHubTool($0["name"] as? String ?? "") })
-        #expect(after.filter { MCPServer.isHubTool($0["name"] as? String ?? "") }.count == 2)
-        #expect(!enumOfShowSettings(before).contains("mcp") && enumOfShowSettings(after).contains("mcp"))
-        let described = before.first { $0["name"] as? String == "show_settings" }?["description"] as? String
-        #expect(described?.contains("skills, tasks (where") == true && described?.contains("MCP") == false)
+        let tools = (answer?["result"] as? [String: Any])?["tools"] as? [[String: Any]] ?? []
+        #expect(tools.count == MCPServer.tools.count)
+        let hub = tools.filter { MCPServer.isHubTool($0["name"] as? String ?? "") }
+        #expect(hub.compactMap { $0["name"] as? String } == ["add_mcp_server", "list_mcp_servers"]
+            || hub.compactMap { $0["name"] as? String } == ["list_mcp_servers", "add_mcp_server"])
+        #expect(hub.allSatisfy { ($0["_meta"] as? [String: Any])?["anthropic/alwaysLoad"] == nil })
+        let settings = tools.first { $0["name"] as? String == "show_settings" }
+        let schema = settings?["inputSchema"] as? [String: Any], properties = schema?["properties"] as? [String: Any]
+        #expect(((properties?["tab"] as? [String: Any])?["enum"] as? [String] ?? []).contains("mcp"))
+        #expect((settings?["description"] as? String)?.contains("mcp (MCP Servers") == true)
         for inTab in [false, true] {
-            #expect(!MCPServer.instructions(inTab: inTab, offeringTabs: true).contains("add_mcp_server"))
-            #expect(MCPServer.instructions(inTab: inTab, offeringTabs: true, hub: true).contains("add_task and add_mcp_server ask the user"))
+            #expect(MCPServer.instructions(inTab: inTab, offeringTabs: true).contains("add_task and add_mcp_server ask the user"))
         }
         #expect(MCPServer.instructions(inTab: false, offeringTabs: true) == MCPServer.instructions)
     }

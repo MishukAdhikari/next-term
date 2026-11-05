@@ -39,17 +39,22 @@ extension SelfTest {
             try? FileManager.default.removeItem(at: dir)
         }
         let configs = agentConfigDigests()
-        let today = MCPServer.respond(to: ["jsonrpc": "2.0", "id": 2, "method": "tools/list"], version: "0") { _, _ in MCPServer.CallResult(text: "") }
-        let todaysTools = sortedJSON((today?["result"] as? [String: Any])?["tools"])
+        let own = MCPServer.respond(to: ["jsonrpc": "2.0", "id": 2, "method": "tools/list"], version: "0") { _, _ in MCPServer.CallResult(text: "") }
+        let ownTools = sortedJSON((own?["result"] as? [String: Any])?["tools"])
 
-        // Before any server (R17): no list, and the bridge answers as it always did; nothing is made.
+        // Before any server (R17): no list and no catalog, nothing is made, and Next Term's own tools are all there,
+        // add_mcp_server and list_mcp_servers among them, so an agent can add the first server.
         let initialize: [String: Any] = ["jsonrpc": "2.0", "id": 1, "method": "initialize",
                                          "params": ["protocolVersion": "2025-06-18", "capabilities": [String: Any](),
                                                     "clientInfo": ["name": "self-test", "version": "1"]]]
         let listTools: [String: Any] = ["jsonrpc": "2.0", "id": 2, "method": "tools/list"]
         let none = await bridgeInTab(c, folder: inScope, requests: [initialize, listTools], name: "none", userFile: userFile)
-        check(sortedJSON((none[2]?["result"] as? [String: Any])?["tools"]) == todaysTools && !FileManager.default.fileExists(atPath: userFile),
-              "MCP hub: with no server, an agent gets exactly today's tool list and no list is made", "\(toolNames(none[2]).count) tools")
+        let noneNames = toolNames(none[2])
+        check(sortedJSON((none[2]?["result"] as? [String: Any])?["tools"]) == ownTools && noneNames == MCPServer.tools.map(\.name)
+                && noneNames.contains("add_mcp_server") && noneNames.contains("list_mcp_servers")
+                && !noneNames.contains { MCPHubCatalog.isCatalogTool($0) } && !FileManager.default.fileExists(atPath: userFile),
+              "MCP hub: with no server, an agent gets Next Term's own tools, add_mcp_server among them, no catalog, and no list is made",
+              "\(noneNames.count) tools")
 
         // Through the hub's own API, as Settings › MCP will: the file and its folder are made with the first server.
         let fake = MCPHubServer.local("fake", command: "/bin/sh", args: [script], env: ["HUB_TEST": "selftest"],
@@ -84,11 +89,9 @@ extension SelfTest {
             check(ended, "MCP hub: the server ends with the agent's session", "pid \(pid)")
         }
 
-        // An agent elsewhere: Next Term's own tools, byte for byte once sorted, and no catalog. The list is there now, so
-        // its own tools for MCP servers come with them (MCPServer.listed), in every folder.
-        let withList = MCPServer.respond(to: listTools, version: "0", hub: true) { _, _ in MCPServer.CallResult(text: "") }
+        // An agent elsewhere: Next Term's own tools, byte for byte once sorted, and no catalog.
         let elsewhere = await bridgeInTab(c, folder: outside, requests: [initialize, listTools], name: "out", userFile: userFile)
-        check(sortedJSON((elsewhere[2]?["result"] as? [String: Any])?["tools"]) == sortedJSON((withList?["result"] as? [String: Any])?["tools"]),
+        check(sortedJSON((elsewhere[2]?["result"] as? [String: Any])?["tools"]) == ownTools,
               "MCP hub: an agent in a folder the server isn't for gets Next Term's own tools and no catalog", "\(toolNames(elsewhere[2]).count) tools")
 
         check(agentConfigDigests() == configs, "MCP hub: no agent's config file changed")
