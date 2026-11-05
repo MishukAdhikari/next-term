@@ -2516,6 +2516,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let agents = submenu(main, "Agents")
         let skills = item(agents, SkillsMenuItem.title, #selector(showSkillsSettings(_:)), "", target: self)
         MainActor.assumeIsolated { SkillsMenuItem.follow(skills) } // with the count of skill updates
+        // The MCP servers every agent in Next Term reaches (Settings › MCP Servers), next to their skills.
+        item(agents, "MCP Servers…", #selector(showMCPServersSettings(_:)), "", target: self)
         agents.addItem(.separator())
         // Across every window, the agent waiting longest, then the next. ⇧⌘U, U for Unread, as agent apps have it; free in
         // every shortcut set (MenuKeys).

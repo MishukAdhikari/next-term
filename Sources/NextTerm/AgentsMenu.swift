@@ -6,6 +6,8 @@ import NextTermCore
 /// title ("Skills… (2 updates)"). Nothing shows with no update, or before any check has answered.
 extension AppDelegate {
     @objc func showSkillsSettings(_ sender: Any?) { showSettings(tab: "skills") }
+    /// Agents › MCP Servers…: Settings › MCP Servers, the servers every agent in Next Term reaches.
+    @objc func showMCPServersSettings(_ sender: Any?) { showSettings(tab: "mcp") }
 }
 
 @MainActor

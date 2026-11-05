@@ -693,6 +693,7 @@ enum SelfTest {
         case "mcpWrite": return await mcpWriteChecks(c, proj: proj) // the MCP tools that ask, settings, list_shortcuts, show_settings
         case "mcpHub": return await mcpHubChecks(c, proj: proj) // a fake local server reached through the real nxtrm mcp's catalog
         case "mcpHubSettings": return await mcpHubSettingsChecks() // Settings › MCP Servers: add, paste a key, approve a project's list
+        case "agentsMenu": return await agentsMenuChecks(c) // the Agents menu: Skills…, MCP Servers…, the moved commands and their keys
         case "notifications":
             notificationsMenuChecks()
             return agentSpinnerChecks()

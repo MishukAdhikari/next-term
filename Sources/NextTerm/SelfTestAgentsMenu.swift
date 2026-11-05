@@ -24,9 +24,9 @@ extension SelfTest {
               bar.map(\.title).joined(separator: ", "))
         guard let agents = bar.first(where: { $0.title == "Agents" })?.submenu else { return check(false, "agents menu: the menu bar has it") }
         let listed = agents.items.map { $0.isSeparatorItem ? "—" : $0.title }
-        let expected: [String] = ["Skills…", "—", "Go to Next Agent Needing You", "—", "Resume Agent Session…", "Send to Agent",
+        let expected: [String] = ["Skills…", "MCP Servers…", "—", "Go to Next Agent Needing You", "—", "Resume Agent Session…", "Send to Agent",
                                   "Suggest a Command…"]
-        check(listed == expected, "agents menu: Skills…, Go to Next Agent Needing You, then the agents' commands",
+        check(listed == expected, "agents menu: Skills… and MCP Servers…, Go to Next Agent Needing You, then the agents' commands",
               listed.joined(separator: ", "))
         // Go to Next Agent Needing You: ⇧⌘U, the app's (it works from any window, the Welcome window too), under Agents.
         let next = agents.items.first { $0.action == #selector(AppDelegate.goToNextAgentNeedingYou(_:)) }
@@ -62,6 +62,16 @@ extension SelfTest {
         if skillsCommand?.path != "Agents" || skillsCommand?.defaultChord != nil { wrong.append("Skills… \(skillsCommand?.path ?? "not listed")") }
         check(wrong.isEmpty, "agents menu: the moved commands keep their actions and keys, and Settings lists them under Agents",
               wrong.joined(separator: "; "))
+
+        // MCP Servers… sits right under Skills… and opens Settings at MCP Servers.
+        let titles: [String] = agents.items.prefix(3).map { $0.isSeparatorItem ? "—" : $0.title }
+        let mcp: NSMenuItem? = agents.items.first { $0.action == #selector(AppDelegate.showMCPServersSettings(_:)) }
+        mcp.map { agents.performActionForItem(at: agents.index(of: $0)) }
+        let settings: () -> SettingsWindowController? = { NSApp.windows.compactMap { $0.windowController as? SettingsWindowController }.first }
+        let opened: Bool = await wait(3) { settings()?.window?.isVisible == true && settings()?.shownTab == "mcp" }
+        check(titles == ["Skills…", "MCP Servers…", "—"] && opened, "agents menu: MCP Servers… sits under Skills… and opens Settings › MCP Servers",
+              "\(titles.joined(separator: " | ")), opened \(opened)")
+        settings()?.window?.close()
 
         await skillsItemChecks(agents)
         await savedKeyChecks(c, agents)
