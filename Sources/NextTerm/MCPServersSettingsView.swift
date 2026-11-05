@@ -118,6 +118,7 @@ final class MCPServersSettingsView: NSView, NSTableViewDataSource, NSTableViewDe
         table.allowsMultipleSelection = false
         table.target = self
         table.doubleAction = #selector(edit)
+        table.setAccessibilityLabel("MCP servers")
         scroll.documentView = table
         scroll.hasVerticalScroller = true
         scroll.borderType = .bezelBorder
@@ -491,8 +492,7 @@ final class MCPServersSettingsView: NSView, NSTableViewDataSource, NSTableViewDe
         let alert = NSAlert()
         let name = project.map(ProjectSkillsView.title) ?? "this project"
         alert.messageText = "Approve \(name)\u{2019}s MCP servers?"
-        var lines = entries.prefix(12).map { "\u{2022} \($0.name): " + MCPHubOverview.runsText($0.server) }
-        if entries.count > 12 { lines.append("\u{2022} and \(entries.count - 12) more") }
+        var lines = MCPHubOverview.approvalLines(entries)
         lines.append("")
         lines.append("They come with the project, in \(SkillStep.short(row.list)). Agents in Next Term start them in this project once you approve. A change to the list waits for you again.")
         alert.informativeText = lines.joined(separator: "\n")

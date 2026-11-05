@@ -17,7 +17,7 @@ enum MCPHubAgentServers {
 
     /// One reader's state: each file's servers as last read, with the file's signature then.
     final class Reader {
-        var files: [String: (signature: String, servers: [MCPHubAgents.Server])] = [:]
+        var files: [String: (signature: String, read: MCPHubAgents.FileRead)] = [:]
         var reading = false
         var again: (() -> Void)?
     }
@@ -26,22 +26,28 @@ enum MCPHubAgentServers {
     /// on the main thread; nothing changed, `done` gets the last list at once. A read asked for while one runs follows
     /// it. `stored`: the names in Secrets now, so a key's suggested name never takes a stored one's.
     static func read(_ sources: [SecretImport.Source], with reader: Reader, done: @escaping ([MCPHubAgents.Server]) -> Void) {
+        readFiles(sources, with: reader) { files in done(MCPHubAgents.merged(files.map(\.read.servers))) }
+    }
+
+    /// The same, file by file, as the offer needs them (MCPHubAgents.due): each source's path and how it read.
+    static func readFiles(_ sources: [SecretImport.Source], with reader: Reader,
+                          done: @escaping ([(path: String, read: MCPHubAgents.FileRead)]) -> Void) {
         let stored = Set(SecretsStore.shared.index?.names ?? [])
         let storedMark = stored.sorted().joined(separator: ",")
         let signatures = sources.map { signature(of: $0.path) + "|" + storedMark }
         let changed = sources.indices.filter { reader.files[sources[$0].path]?.signature != signatures[$0] }
-        let merged = { MCPHubAgents.merged(sources.map { reader.files[$0.path]?.servers ?? [] }) }
+        let merged = { sources.map { (path: $0.path, read: reader.files[$0.path]?.read ?? .unreadable) } }
         guard !changed.isEmpty else { return done(merged()) }
         guard !reader.reading else {
-            reader.again = { read(sources, with: reader, done: done) }
+            reader.again = { readFiles(sources, with: reader, done: done) }
             return
         }
         reader.reading = true
         let wanted = changed.map { (sources[$0], signatures[$0]) }
         Task.detached(priority: .utility) {
-            let read = wanted.map { source, signature in (source.path, signature, MCPHubAgents.servers(in: [source], stored: stored)) }
+            let read = wanted.map { source, signature in (source.path, signature, MCPHubAgents.read(source, stored: stored)) }
             await MainActor.run {
-                for (path, signature, servers) in read { reader.files[path] = (signature, servers) }
+                for (path, signature, file) in read { reader.files[path] = (signature, file) }
                 reader.reading = false
                 done(merged())
                 if let again = reader.again {

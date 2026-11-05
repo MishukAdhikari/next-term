@@ -5,7 +5,8 @@ import NextTermCore
 /// server, “linear”. Use it in every agent in Next Term?”, with Add… (Settings › MCP Servers' sheet for it, the paste
 /// path's key handling) and Not Now. Calm by its rules:
 /// - **Never for what was there.** The first time this version looks, every server in the agents' configs is the
-///   baseline, seen and never offered (it is listed under Found in your agents); so is one the user's list has.
+///   baseline, seen and never offered (it is listed under Found in your agents); so is one the user's list has. A file
+///   that couldn't be read then (too large, caught mid-save) is its own baseline the first time it reads.
 /// - **Once a server.** A server offered is seen from the moment the offer shows, whatever the answer, or none.
 /// - **At a quiet moment**, as hints come (HintCenter): never while the user types, while the agent in front works or
 ///   asks, or while another hint or notice is up; it waits, as a notice at the bottom of the window in front that takes
@@ -19,6 +20,8 @@ import NextTermCore
 enum MCPHubOffer {
     /// The servers seen: the baseline, and each one offered since. In UserDefaults, by name.
     static let seenKey = "mcpHubAgentServersSeen"
+    /// The agents' files whose servers were taken as the baseline (MCPHubAgents.Seen.files), by path.
+    static let seenFilesKey = "mcpHubAgentFilesSeen"
     /// The least time between two reads of the agents' files.
     static let spacing: TimeInterval = 30
     /// How long a due offer waits for a quieter moment before it looks again.
@@ -52,20 +55,29 @@ enum MCPHubOffer {
         lastRead = ProcessInfo.processInfo.systemUptime
         let sources = sources
         let userFile = MCPHubEdits.userFile
-        MCPHubAgentServers.read(sources, with: reader) { servers in
+        MCPHubAgentServers.readFiles(sources, with: reader) { files in
             let user = MCPHubScope.sources(folder: nil, home: NSHomeDirectory(), userFile: userFile).user
             let added = Set(MCPHubOverview.personal(user).map(\.name))
-            let seen = UserDefaults.standard.stringArray(forKey: seenKey).map(Set.init)
-            var (offer, now) = MCPHubAgents.due(servers, seen: seen, added: added)
+            let seen = storedSeen()
+            var (offer, now) = MCPHubAgents.due(files, seen: seen, added: added)
             if !AppDelegate.shared.agentControl {
-                now.formUnion(offer.map(\.name))
+                now.servers.formUnion(offer.map(\.name))
                 offer = []
             }
-            if now != seen { UserDefaults.standard.set(now.sorted(), forKey: seenKey) }
+            if now != seen {
+                UserDefaults.standard.set(now.servers.sorted(), forKey: seenKey)
+                UserDefaults.standard.set(now.files.sorted(), forKey: seenFilesKey)
+            }
             due = offer
             watch(sources)
             present()
         }
+    }
+
+    /// What was seen, as UserDefaults keeps it: nil before this version's first look.
+    private static func storedSeen() -> MCPHubAgents.Seen? {
+        guard let servers = UserDefaults.standard.stringArray(forKey: seenKey) else { return nil }
+        return MCPHubAgents.Seen(servers: Set(servers), files: Set(UserDefaults.standard.stringArray(forKey: seenFilesKey) ?? []))
     }
 
     private static func schedule(after seconds: TimeInterval) {

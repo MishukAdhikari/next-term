@@ -60,6 +60,20 @@ import Testing
         #expect(choices.approved == [MCPHubChoices.Approval(file: projectFile, digest: changed.digest)])
     }
 
+    /// Approve… shows every server of the list, with what each sets in its environment: a team's list that starts a
+    /// well-known server with NODE_OPTIONS loading a script of its own is approved only with that in view, and a 13th
+    /// server never hides behind "and 1 more".
+    @Test func approvingShowsEveryServerAndWhatItSets() throws {
+        var servers = (1...13).map { "\"s\($0)\": {\"command\": \"npx\", \"args\": [\"-y\", \"tool-\($0)@1.0.0\"]}" }
+        servers[0] = #""s1": {"command": "npx", "args": ["-y", "tool-1@1.0.0"], "env": {"NODE_OPTIONS": "--require ./x.js", "A": "1"}}"#
+        try write("{\"mcpServers\": {\(servers.joined(separator: ", "))}}", to: projectFile)
+        let rows = project(repo).filter { $0.list == projectFile }
+        let lines = MCPHubOverview.approvalLines(rows.compactMap { row in row.server.map { (row.name, $0) } })
+        #expect(lines.filter { $0.hasPrefix("\u{2022} ") }.count == 13 && lines.contains("\u{2022} s13: npx -y tool-13@1.0.0"))
+        let at = try #require(lines.firstIndex(of: "\u{2022} s1: npx -y tool-1@1.0.0"))
+        #expect(Array(lines[(at + 1)...(at + 2)]) == ["    A=1", "    NODE_OPTIONS=--require ./x.js"])
+    }
+
     @Test func aServerTurnedOffForAProjectIsOffThereAndInsideItOnly() throws {
         try write(#"{"mcpServers": {"github": {"command": "gh-server"}}}"#, to: userFile)
         try write(#"{"mcpServers": {"team": {"command": "team-server"}}}"#, to: projectFile)

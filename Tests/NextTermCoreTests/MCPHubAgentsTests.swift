@@ -123,30 +123,74 @@ import Testing
 
     // MARK: the offer (R11)
 
+    func files(_ sources: [SecretImport.Source]) -> [(path: String, read: MCPHubAgents.FileRead)] {
+        sources.map { ($0.path, MCPHubAgents.read($0)) }
+    }
+
     @Test func whatWasThereAtTheUpdateIsNeverOfferedAndANewServerIsOfferedOnce() throws {
         let sources = try agentFiles()
         let found = MCPHubAgents.servers(in: sources)
         // The first look of this version: everything there is the baseline, and nothing is offered.
-        let first = MCPHubAgents.due(found, seen: nil, added: [])
-        #expect(first.offer.isEmpty && first.seen == Set(found.map(\.name)))
-        #expect(MCPHubAgents.due(found, seen: first.seen, added: []).offer.isEmpty)
+        let first = MCPHubAgents.due(files(sources), seen: nil, added: [])
+        #expect(first.offer.isEmpty && first.seen.servers == Set(found.map(\.name)) && first.seen.files == Set(sources.map(\.path)))
+        #expect(MCPHubAgents.due(files(sources), seen: first.seen, added: []).offer.isEmpty)
 
         // Codex gets a new server: it is offered, naming Codex.
         let codex = sources[0]
         var text = try String(contentsOfFile: codex.path, encoding: .utf8)
         text += "\n[mcp_servers.sentry]\ncommand = \"npx\"\nargs = [\"-y\", \"sentry-mcp@0.9.0\"]\n"
         try text.write(toFile: codex.path, atomically: true, encoding: .utf8)
-        let now = MCPHubAgents.servers(in: sources)
-        let second = MCPHubAgents.due(now, seen: first.seen, added: [])
+        let second = MCPHubAgents.due(files(sources), seen: first.seen, added: [])
         #expect(second.offer.map(\.name) == ["sentry"])
         #expect(MCPHubAgents.offerText(second.offer[0]) == "Codex has a new MCP server, \u{201C}sentry\u{201D}. Use it in every agent in Next Term?")
         // Once offered (seen as it shows), never again, whatever the answer.
         var seen = second.seen
-        seen.insert("sentry")
-        #expect(MCPHubAgents.due(now, seen: seen, added: []).offer.isEmpty)
+        seen.servers.insert("sentry")
+        #expect(MCPHubAgents.due(files(sources), seen: seen, added: []).offer.isEmpty)
         // One the user added to Next Term first is seen, not offered.
-        let added = MCPHubAgents.due(now, seen: first.seen, added: ["sentry"])
-        #expect(added.offer.isEmpty && added.seen.contains("sentry"))
+        let added = MCPHubAgents.due(files(sources), seen: first.seen, added: ["sentry"])
+        #expect(added.offer.isEmpty && added.seen.servers.contains("sentry"))
+    }
+
+    /// An agent's file that couldn't be read at the first look (larger than Secrets reads, or caught mid-save) is no
+    /// baseline of nothing: the first time it reads, what it has is its baseline, never an offer. One that wasn't there
+    /// at all is: a server it gets later is new.
+    @Test func aFileUnreadableAtTheFirstLookIsNeverTakenForNew() throws {
+        let sources = try agentFiles()
+        let claude = sources[1]
+        let whole = try Data(contentsOf: URL(fileURLWithPath: claude.path))
+        try Data(whole.prefix(40)).write(to: URL(fileURLWithPath: claude.path)) // half saved
+        let cursorConfig = home + "/.cursor/new.json"
+        let later = SecretImport.Source(path: cursorConfig, client: .cursor, format: .json, containers: [["mcpServers"]])
+        #expect(MCPHubAgents.read(claude) == .unreadable && MCPHubAgents.read(later) == .missing)
+        // Too large to read is unreadable too, never missing.
+        #expect(MCPHubAgents.read(claude, read: { _ in nil }) == .unreadable)
+
+        let first = MCPHubAgents.due(files(sources + [later]), seen: nil, added: [])
+        #expect(first.offer.isEmpty && !first.seen.files.contains(claude.path) && first.seen.files.contains(cursorConfig))
+        #expect(!first.seen.servers.contains("app-db"))
+
+        // Its save done, Claude Code's servers are its baseline: nothing offered, app-db included.
+        try whole.write(to: URL(fileURLWithPath: claude.path))
+        let second = MCPHubAgents.due(files(sources + [later]), seen: first.seen, added: [])
+        #expect(second.offer.isEmpty && second.seen.servers.isSuperset(of: ["github", "app-db"]) && second.seen.files.contains(claude.path))
+
+        // A file that wasn't there at the first look: what it gets is new.
+        _ = try write(#"{"mcpServers": {"figma": {"command": "npx", "args": ["-y", "figma-mcp@1.0.0"]}}}"#, to: ".cursor/new.json")
+        #expect(MCPHubAgents.due(files(sources + [later]), seen: second.seen, added: []).offer.map(\.name) == ["figma"])
+    }
+
+    /// A key Found in your agents can't take out (one in an argument, or in the URL) is masked in what it runs, so
+    /// Settings never shows it.
+    @Test func aKeyLeftInAFoundServersCommandIsNeverShown() throws {
+        let file = try write("""
+            {"mcpServers": {"stripe": {"command": "npx", "args": ["-y", "stripe-mcp@1.0.0", "--api-key", "\(token)"]},
+             "hosted": {"url": "https://mcp.example.com/mcp?token=\(token)"}}}
+            """, to: ".cursor/mcp.json")
+        let found = MCPHubAgents.servers(in: [SecretImport.Source(path: file, client: .cursor, format: .json, containers: [["mcpServers"]])])
+        #expect(found.map(\.name) == ["stripe", "hosted"])
+        #expect(found.allSatisfy { !$0.runs.contains(token) })
+        #expect(found[0].runs.hasPrefix("npx -y stripe-mcp@1.0.0 --api-key "))
     }
 
     @Test func anOfferForAServerInTwoAgentsNamesBoth() throws {

@@ -36,13 +36,31 @@ public enum MCPHubAgents {
     /// (MCPHubPaste.read). A file that can't be read adds nothing.
     public static func servers(in sources: [SecretImport.Source], read: (String) -> Data? = SecretImport.readFile,
                                stored: Set<String> = []) -> [Server] {
-        merged(sources.map { source in
-            guard let data = read(source.path), let text = SecretImport.text(of: data) else { return [] }
-            return entries(of: source, text: text).compactMap { name, value, project in
-                guard !isNextTerms(name, value) else { return nil }
-                let found = MCPHubPaste.take(name: MCPHubRules.suggestedName(from: name), pasted: name, value, stored: stored)
-                return Server(agents: [source.client], files: [source.path], project: project ?? source.project, found: found, runs: runsText(found))
-            }
+        merged(sources.map { self.read($0, read: read, stored: stored).servers })
+    }
+
+    /// One agent's file as read: not there, there and not read (larger than Secrets reads, not text, not parsed: in the
+    /// middle of a save, say), or its servers. The offer tells the last two apart: a file it couldn't read is no baseline.
+    public enum FileRead: Equatable, Sendable {
+        case missing
+        case unreadable
+        case read([Server])
+
+        public var servers: [Server] {
+            if case .read(let servers) = self { return servers }
+            return []
+        }
+    }
+
+    /// The servers in one file.
+    public static func read(_ source: SecretImport.Source, read: (String) -> Data? = SecretImport.readFile,
+                            stored: Set<String> = []) -> FileRead {
+        guard let data = read(source.path) else { return FileManager.default.fileExists(atPath: source.path) ? .unreadable : .missing }
+        guard let text = SecretImport.text(of: data), let entries = entries(of: source, text: text) else { return .unreadable }
+        return .read(entries.compactMap { name, value, project in
+            guard !isNextTerms(name, value) else { return nil }
+            let found = MCPHubPaste.take(name: MCPHubRules.suggestedName(from: name), pasted: name, value, stored: stored)
+            return Server(agents: [source.client], files: [source.path], project: project ?? source.project, found: found, runs: runsText(found))
         })
     }
 
@@ -66,12 +84,13 @@ public enum MCPHubAgents {
         return servers.filter { !names.contains($0.name) && !runs.contains($0.runs) }
     }
 
-    /// Each server entry of a file, with the project it is set up for (Claude Code's per-project servers).
-    static func entries(of source: SecretImport.Source, text: String) -> [(name: String, value: MCPHubFile.Value, project: String?)] {
+    /// Each server entry of a file, with the project it is set up for (Claude Code's per-project servers). Nil when the
+    /// file doesn't parse.
+    static func entries(of source: SecretImport.Source, text: String) -> [(name: String, value: MCPHubFile.Value, project: String?)]? {
         switch source.format {
         case .toml: return tomlEntries(text)
         case .json, .strictJSON:
-            guard let document = JSONC(text), case .object(let root)? = document.root else { return [] }
+            guard let document = JSONC(text), case .object(let root)? = document.root else { return nil }
             var out: [(String, MCPHubFile.Value, String?)] = []
             for container in SecretImport.containers(of: source, root: root) {
                 let project = container.path.count == 3 && container.path[0] == "projects" ? container.path[1] : nil
@@ -87,8 +106,8 @@ public enum MCPHubAgents {
     /// Codex's `[mcp_servers.NAME]` tables as the common shape: `command`, `args`, `env` (inline, dotted or its own
     /// table), `url`, `http_headers` as `headers`, and `bearer_token_env_var` as the `Authorization` header asking for
     /// that key.
-    static func tomlEntries(_ text: String) -> [(name: String, value: MCPHubFile.Value, project: String?)] {
-        guard let outline = TOMLOutline(text) else { return [] }
+    static func tomlEntries(_ text: String) -> [(name: String, value: MCPHubFile.Value, project: String?)]? {
+        guard let outline = TOMLOutline(text) else { return nil }
         let reader = SecretImport.TOMLReader(outline)
         var out: [(String, MCPHubFile.Value, String?)] = []
         for table in SecretImport.tomlLayout(outline).tables where !table.isRepeated {
@@ -148,10 +167,13 @@ public enum MCPHubAgents {
         return strings(value.member("command"))
     }
 
-    /// What a found server runs, its keys left out: the command inside `nxtrm secret run`, or the URL.
+    /// What a found server runs, its keys left out: the command inside `nxtrm secret run`, or the URL. A key the paste
+    /// path can't take out (in an argument, in the URL: that server can't be added as it is) is masked, so Settings never
+    /// shows it.
     static func runsText(_ found: MCPHubPaste.Found) -> String {
-        if let url = found.entry.member("url")?.string { return url }
-        return inner(.local(found.name, command: commandWords(found.entry).first ?? "", args: Array(commandWords(found.entry).dropFirst())))
+        if let url = found.entry.member("url")?.string { return CommandSecrets.mask(url) }
+        let words = commandWords(found.entry)
+        return CommandSecrets.mask(inner(.local(found.name, command: words.first ?? "", args: Array(words.dropFirst()))))
     }
 
     /// The same for a server of the user's list.
@@ -171,17 +193,41 @@ public enum MCPHubAgents {
 
     // MARK: the offer (R11)
 
-    /// What is due for an offer now. `seen`: every server present when this version first looked (its baseline), and
-    /// each one offered since; nil the first time, when everything there is seen and nothing is offered, so an update
-    /// offers nothing (R11, R17). `added`: the names in the user's list, which are seen as they are found. Gives the
-    /// servers to offer (one each, by name, in the files' order) and `seen` with the ones already in the list added; the
-    /// caller adds each offered server to it as the offer shows, so none is ever offered twice.
-    public static func due(_ servers: [Server], seen: Set<String>?, added: Set<String>) -> (offer: [Server], seen: Set<String>) {
-        guard var seen else { return ([], Set(servers.map(\.name))) }
+    /// What the offer has seen: the servers' names, and the files whose servers were the baseline.
+    public struct Seen: Equatable, Sendable {
+        public var servers: Set<String>
+        public var files: Set<String>
+
+        public init(servers: Set<String> = [], files: Set<String> = []) {
+            self.servers = servers
+            self.files = files
+        }
+    }
+
+    /// What is due for an offer now, from each agent's file as read (`files`, in the order read). `seen`: nil the first
+    /// time this version looks. A file's servers are its baseline, seen and never offered, the first time it is read
+    /// (R11, R17): at that first look, or later for one that couldn't be read then (larger than Secrets reads, or caught
+    /// in the middle of a save), so an update never offers what was already there. A file not there at the first look
+    /// is a baseline with nothing in it: what it gets later is news. `added`: the names in the user's list, which are
+    /// seen as they are found. Gives the servers to offer (one a name, merged across files, in their order) and `seen`
+    /// as it is now; the caller adds each offered server to it as the offer shows, so none is ever offered twice.
+    public static func due(_ files: [(path: String, read: FileRead)], seen: Seen?, added: Set<String>) -> (offer: [Server], seen: Seen) {
+        let first = seen == nil
+        var seen = seen ?? Seen()
+        for (path, read) in files where !seen.files.contains(path) {
+            switch read {
+            case .missing:
+                if first { seen.files.insert(path) }
+            case .unreadable: break
+            case .read(let servers):
+                seen.servers.formUnion(servers.map(\.name))
+                seen.files.insert(path)
+            }
+        }
         var offer: [Server] = []
-        for server in servers where !seen.contains(server.name) {
+        for server in merged(files.map(\.read.servers)) where !seen.servers.contains(server.name) {
             if added.contains(server.name) {
-                seen.insert(server.name)
+                seen.servers.insert(server.name)
             } else if !offer.contains(where: { $0.name == server.name }) {
                 offer.append(server)
             }

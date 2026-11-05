@@ -146,6 +146,19 @@ public enum MCPHubOverview {
         server.transport == .stdio ? ([server.command] + server.args).map(ShellQuote.quote).joined(separator: " ") : server.url
     }
 
+    /// Approve…'s list of a project's servers: each one with what it runs or reaches, then what it sets in its
+    /// environment or headers, which change what runs as much as the command does (NODE_OPTIONS, a header naming a
+    /// stored key). Every one is listed: an approval covers the whole list, so none may hide behind a count.
+    public static func approvalLines(_ entries: [(name: String, server: MCPHubServer)]) -> [String] {
+        var lines: [String] = []
+        for (name, server) in entries {
+            lines.append("\u{2022} \(name): " + runsText(server))
+            let set = server.transport == .stdio ? server.env.map { "\($0.key)=\($0.value)" } : server.headers.map { "\($0.key): \($0.value)" }
+            lines += set.sorted().map { "    " + $0 }
+        }
+        return lines
+    }
+
     /// Where a server applies, for the table: all projects, the folders a user's server names, or the project whose
     /// list it is in.
     public static func appliesText(_ row: Row, home: String) -> String {
