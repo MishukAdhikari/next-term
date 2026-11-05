@@ -128,6 +128,7 @@ extension SelfTest {
         defer { open.stop(); locked.stop(); asks.stop(); auth.stop() }
         open.sessions = true
         locked.bearer = "never-sent"
+        locked.keyChallenge = nil // a server for keys only: a Bearer challenge would make it one that asks for a sign-in
         // One that asks for a sign-in (OAuth): with none in Next Term, the agent is told to have the user sign in.
         asks.auth = auth
         auth.resource = asks.url.absoluteString
@@ -172,7 +173,8 @@ extension SelfTest {
         check(resultText(next[3]) == "hello from remote", "MCP hub: a remote server's direct tool reaches it through the app", resultText(next[3]))
         let ran = MCPHubControl.lastRuns[MCPHubOverview.runKey(list: userFile, server: "remote")]
         let refused = MCPHubControl.lastRuns[MCPHubOverview.runKey(list: userFile, server: "locked")]
-        check(ran == MCPHubOverview.Run(failure: nil, tools: 3) && refused?.failure?.contains("HTTP 401") == true,
+        check(ran == MCPHubOverview.Run(failure: nil, tools: 3) && refused?.failure?.contains("HTTP 401") == true
+                && refused?.needsSignIn == false,
               "MCP hub: Settings shows the remote servers ready and failed, with why", "\(String(describing: ran)) \(String(describing: refused))")
         for name in ["remote", "locked", "asks"] { _ = MCPHubScope.save(.remove(name), to: userFile, place: .user) }
     }

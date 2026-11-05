@@ -177,8 +177,9 @@ enum MCPHubSignIns {
                         switch result {
                         case .success(let record):
                             refreshers[record.id] = nil
-                            // The need that asked for a sign-in is history now: Settings shows the sign-in.
-                            for (runKey, run) in MCPHubControl.lastRuns where run.needsSignIn && runKey.hasSuffix("\u{0}" + name) {
+                            // The need that failed for want of it (no sign-in, a lapse, too little access) is history
+                            // now: Settings shows the sign-in, never "Couldn't reach" after a Reconnect that worked.
+                            for (runKey, run) in MCPHubControl.lastRuns where run.failure != nil && runKey.hasSuffix("\u{0}" + name) {
                                 MCPHubControl.lastRuns[runKey] = nil
                             }
                             NSApp.activate(ignoringOtherApps: true) // back from the browser, where the user just was

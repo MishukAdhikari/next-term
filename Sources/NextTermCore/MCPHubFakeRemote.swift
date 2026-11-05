@@ -8,7 +8,8 @@ import Darwin
 /// 127.0.0.1 at a port of its own, one request a connection. Its tools: `echo` (says hello, with `said` back), `big`
 /// (300,000 characters) and `slow` (answers after `slowSeconds`). What it does otherwise is set on it:
 ///
-/// - `bearer`: the key it wants as `Authorization: Bearer …`; any other gets a 401 with a WWW-Authenticate.
+/// - `bearer`: the key it wants as `Authorization: Bearer …`; any other gets a 401 with `keyChallenge` as its
+///   WWW-Authenticate (an OAuth one naming resource metadata by default; nil sends none, as a server for keys only).
 /// - `sessions`: it gives an Mcp-Session-Id at initialize and wants it on every request after; `endSessions()` forgets
 ///   them, so the next request gets a 404.
 /// - `stream`: a tools/call is answered as an event stream, a notification and a ping of its own before the answer.
@@ -27,6 +28,7 @@ public final class MCPHubFakeRemote: @unchecked Sendable {
     }
 
     public var bearer: String?
+    public var keyChallenge: String? = #"Bearer resource_metadata="http://127.0.0.1/.well-known/oauth-protected-resource""#
     public var sessions = false
     public var stream = false
     public var version: String?
@@ -149,9 +151,7 @@ public final class MCPHubFakeRemote: @unchecked Sendable {
             }
         }
         if let bearer, headers["authorization"] != "Bearer \(bearer)" {
-            return send(fd, status: "401 Unauthorized",
-                        headers: ["WWW-Authenticate": #"Bearer resource_metadata="http://127.0.0.1/.well-known/oauth-protected-resource""#],
-                        body: "")
+            return send(fd, status: "401 Unauthorized", headers: keyChallenge.map { ["WWW-Authenticate": $0] } ?? [:], body: "")
         }
         guard verb == "POST" else { return send(fd, status: verb == "DELETE" ? "200 OK" : "405 Method Not Allowed", headers: [:], body: "") }
         var extra: [String: String] = [:]

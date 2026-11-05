@@ -415,14 +415,15 @@ final class MCPServersSettingsView: NSView, NSTableViewDataSource, NSTableViewDe
         let row = selected
         var said = row.map { MCPHubOverview.stateTip($0.state, remote: $0.isRemote) } ?? ""
         let signedIn = row.flatMap { $0.isRemote ? $0.server.flatMap { MCPHubSignIns.record(for: $0.url) } : nil }
+        var allowed = false // Change… goes with the agents it names, never beside a lapse, whose one action is Reconnect…
         if let signedIn, case .signedIn = row?.state {
             said += " Signs in at \(signedIn.metadata.issuerHost)."
-            if let used = MCPHubSignInWords.usedBy(signedIn.consents) { said += " " + used + "." }
+            if let used = MCPHubSignInWords.usedBy(signedIn.consents) { said += " " + used + "."; allowed = true }
         }
         detail.stringValue = said
         detail.isHidden = row == nil
         detailRow.isHidden = row == nil
-        agentsButton.isHidden = signedIn?.consents.isEmpty ?? true
+        agentsButton.isHidden = !allowed
         let action = signInAction(row)
         signInButton.isHidden = action == nil
         signInButton.title = action ?? ""

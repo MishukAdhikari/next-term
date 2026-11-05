@@ -10,7 +10,7 @@ import NextTermCore
 ///
 /// Add by URL offers Sign In… as its one primary; the sign-in completes; a Claude Code tab and a Codex tab each get one
 /// consent panel, then call `echo`; with tokens living two seconds, two tabs calling at once make one refresh; revoked
-/// at the server, the row reads Signed out — Reconnect…, one notice is recorded, and the agent's text says to
+/// at the server, the row reads Signed out, with Reconnect…, one notice is recorded, and the agent's text says to
 /// reconnect; Remove revokes once. Screenshots: the Add sheet's Sign In…, the consent panel, each state in Settings,
 /// and Settings opened from the Reconnect notice.
 extension SelfTest {
@@ -113,7 +113,7 @@ extension SelfTest {
         check(both.allSatisfy { $0 == "hello from remote" } && auth.count("/token") == before + 1,
               "MCP OAuth: two agents calling at once make one refresh", "\(auth.count("/token") - before) refreshes")
 
-        // Revoked at the server: Signed out — Reconnect…, one notice, and the agent is told to have the user reconnect.
+        // Revoked at the server: Signed out, one notice, and the agent is told to have the user reconnect.
         auth.revokeAll()
         let notices = AppDelegate.shared.testNotifications.count
         let lapsed = await call("oauth-lapsed")
@@ -123,8 +123,13 @@ extension SelfTest {
         let expected = NotificationSettings(defaults: .standard).programAlerts ? 1 : 0
         check(lapsed == MCPHubSignInWords.lapsed("linear") && state() == .signedOut && signInNotices.count == expected
               && (signInNotices.first.map { $0.content.title == MCPHubSignInWords.notice("linear").title } ?? true),
-              "MCP OAuth: a revoked sign-in reads Signed out \u{2014} Reconnect\u{2026}, with one notice, and the agent is told to reconnect",
+              "MCP OAuth: a revoked sign-in reads Signed out, with one notice, and the agent is told to reconnect",
               "\(lapsed) | \(String(describing: state())) | \(signInNotices.count) notices")
+        if let row = view.rows.firstIndex(where: { $0.name == "linear" }) {
+            view.table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+        }
+        check(view.signInButton.title == "Reconnect\u{2026}" && !view.signInButton.isHidden && view.agentsButton.isHidden,
+              "MCP OAuth: a lapsed sign-in offers Reconnect\u{2026} alone, with no Change\u{2026} beside the lapse")
         await screenshot(window, suffix: "-mcp-oauth-signed-out")
         // The notice, clicked: Settings › MCP Servers with the server selected, Reconnect… beside it.
         MCPHubSignIns.openReconnect(remote.url.absoluteString)

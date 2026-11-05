@@ -159,7 +159,8 @@ public enum MCPHubOverview {
 
     // MARK: words
 
-    /// The state in a few words, for the table. `remote`: a server at a URL, which is reached rather than started.
+    /// The state in a few words, for the table. `remote`: a server at a URL, which is reached rather than started. What
+    /// to do about it is the button under the table (Sign In…, Reconnect…), never words in the cell.
     public static func stateText(_ state: State, remote: Bool = false) -> String {
         switch state {
         case .ready(let tools?): return "Ready · \(tools) \(tools == 1 ? "tool" : "tools")"
@@ -174,8 +175,8 @@ public enum MCPHubOverview {
         case .needsSignIn: return "Needs sign-in"
         case .signedIn(let tools?): return "Signed in \u{00B7} \(tools) \(tools == 1 ? "tool" : "tools")"
         case .signedIn(nil): return "Signed in"
-        case .signedOut: return "Signed out \u{2014} Reconnect\u{2026}"
-        case .needsMoreAccess: return "Needs more access \u{2014} Reconnect\u{2026}"
+        case .signedOut: return "Signed out"
+        case .needsMoreAccess: return "Needs more access"
         }
     }
 
