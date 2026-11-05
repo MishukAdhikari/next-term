@@ -224,6 +224,11 @@ final class SecretRequests {
         // A key another copy of Next Term replaced, renamed or deleted ends the grants holding it (`keysChanged`) before
         // a grant can answer with its old value.
         SecretsStore.shared.reloadIfChanged()
+        // The sign-ins' key is Next Term's own: refused by name, with no panel, as a key that isn't there.
+        if let name = request.names.first(where: { $0 == SecretVault.signInsName }) {
+            reply(.failed(.vault(.noSuchKey(name))))
+            return nil
+        }
         let now = now()
         expire(at: now)
         endGrantsAskingEveryUse() // a key that asks every time is never answered by a lasting grant
