@@ -98,8 +98,9 @@ public final class MCPHubRemote: @unchecked Sendable {
         if let missing = names.first(where: { values[$0] == nil }) {
             return .failure(Failure("\(server.name) needs the key \(missing) from Secrets, and Next Term didn't get it."))
         }
-        var query = CharacterSet.urlQueryAllowed
-        query.remove(charactersIn: "&=+#?/")
+        // RFC 3986's unreserved characters alone, as SecretMask's percent-encoded form has them: a key in a sentence
+        // that quotes the URL (a redirect's, or one that can't be reached) is then masked like any other.
+        let query = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
         func filled(_ text: String, inURL: Bool) -> String {
             var out = text
             for name in Set(names) {
@@ -457,6 +458,7 @@ public final class MCPHubRemote: @unchecked Sendable {
         var answer: [String: Any]?
         var found = false
         var serverRequests: [[String: Any]] = []
+        static let mostServerRequests = 8
         var tooLarge = false
         var refusedRedirect: String?
         var remoteAddress: String?
@@ -517,7 +519,9 @@ public final class MCPHubRemote: @unchecked Sendable {
             let messages = (object as? [[String: Any]]) ?? ((object as? [String: Any]).map { [$0] } ?? [])
             for message in messages {
                 if message["method"] is String {
-                    serverRequests.append(message) // a request or a notification of the server's own
+                    // A request or a notification of the server's own: each request is answered with a POST of its
+                    // own, so a few at most, or one answer could make Next Term send thousands.
+                    if serverRequests.count < Self.mostServerRequests { serverRequests.append(message) }
                 } else if let expecting, (message["id"] as? NSNumber)?.intValue == expecting {
                     answer = message
                     found = true

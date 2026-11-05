@@ -270,4 +270,18 @@ import Testing
             return values
         }
     }
+
+    /// A server's words are capped by what reaches the agent: a tool named past 128 stays with the catalog, and a cut
+    /// counts Unicode scalars, so combining marks can't stretch 1,024 characters into megabytes.
+    @Test func aServersWordsAreCappedByWhatReachesTheAgent() {
+        let long = String(repeating: "n", count: MCPHubManifest.nameLimit + 1)
+        let manifest = MCPHubManifest(listed: [["name": long], ["name": "fine"]])
+        #expect(manifest.tools.map(\.name) == ["fine"] && manifest.isComplete)
+        let zalgo = String(repeating: "a" + String(repeating: "\u{0301}", count: 50), count: 2_000)
+        let tool = MCPHubManifest.Tool(listed: ["name": "z", "description": zalgo, "title": zalgo])
+        #expect(tool?.description?.unicodeScalars.count == MCPHubManifest.descriptionLimit)
+        #expect(tool?.title?.unicodeScalars.count == MCPHubManifest.titleLimit)
+        let checked = MCPHubManifest(tools: [MCPHubManifest.Tool(name: long), MCPHubManifest.Tool(name: "fine")], count: 2)
+        #expect(checked.tools.map(\.name) == ["fine"] && !checked.isComplete) // a bridge's report with one dropped: catalog only
+    }
 }

@@ -230,6 +230,26 @@ import Testing
         #expect(try MCPHubRemote.endpoint(for: .remote("open", url: "https://open.example.com/mcp"), values: [:]).get().keyed == false)
     }
 
+    /// A key in the URL is percent-encoded as SecretMask's own form of it, so a sentence quoting the URL is masked.
+    @Test func aKeyInTheURLIsEncodedAsTheMaskKnowsIt() throws {
+        let key = "k3y:with@odd!chars$(and)*more,;'~"
+        let server = MCPHubServer.remote("odd", url: "https://mcp.example.com/${secret:KEY}/mcp")
+        let made = try MCPHubRemote.endpoint(for: server, values: ["KEY": key]).get()
+        let masked = String(decoding: SecretMask.percentEncoded(Array(key.utf8)), as: UTF8.self)
+        #expect(made.url.absoluteString == "https://mcp.example.com/\(masked)/mcp")
+    }
+
+    /// The server's own requests in one answer are answered a few at most: one answer never makes Next Term send many.
+    @Test func aServersOwnRequestsAreCapped() {
+        let exchange = MCPHubRemote.Exchange(origin: URL(string: "https://mcp.example.com/mcp")!, expecting: 7, name: "busy", limit: 1 << 20)
+        exchange.isStream = true
+        var stream = ""
+        for id in 0..<500 { stream += "data: {\"jsonrpc\":\"2.0\",\"id\":\(1000 + id),\"method\":\"ping\"}\n\n" }
+        stream += "data: {\"jsonrpc\":\"2.0\",\"id\":7,\"result\":{}}\n\n"
+        #expect(exchange.received(Data(stream.utf8)))
+        #expect(exchange.found && exchange.serverRequests.count == MCPHubRemote.Exchange.mostServerRequests)
+    }
+
     // MARK: through an agent's session
 
     /// A plan's server at a URL is ready, its URL carried as written and never its headers, and an older SSE one isn't.
@@ -258,14 +278,17 @@ import Testing
             asked.add(arguments)
             let given = MCPHubRemote.Endpoint(url: URL(string: arguments["url"] as? String ?? "")!)
             let deadline = Date().addingTimeInterval((arguments["seconds"] as? Double) ?? 10)
-            if arguments["op"] as? String == "tools" {
-                switch remote.tools(given, until: deadline) {
-                case .success(let tools): return (MCPServer.json(["tools": tools]), false)
-                case .failure(let failure): return (failure.text, true)
-                }
+            let tools: [[String: Any]]
+            switch remote.tools(given, until: deadline) {
+            case .success(let found): tools = found
+            case .failure(let failure): return (failure.text, true)
             }
-            switch remote.call(arguments["tool"] as? String ?? "", arguments: arguments["arguments"] as? [String: Any] ?? [:], endpoint: given, until: deadline) {
-            case .success(let result): return (MCPServer.json(["result": result]), false)
+            if arguments["op"] as? String == "tools" { return (MCPServer.json(["tools": tools]), false) }
+            // As the app answers a call: the tool's name checked against the list, then the call, in one need.
+            let names = tools.compactMap { $0["name"] as? String }, tool = arguments["tool"] as? String ?? ""
+            guard names.contains(tool) else { return (MCPServer.json(["names": names]), false) }
+            switch remote.call(tool, arguments: arguments["arguments"] as? [String: Any] ?? [:], endpoint: given, until: deadline) {
+            case .success(let result): return (MCPServer.json(["result": result, "names": names]), false)
             case .failure(let failure): return (failure.text, true)
             }
         }
@@ -277,7 +300,8 @@ import Testing
         #expect(session.isActive)
         let called = session.call("mcp_call", ["server": "linear", "tool": "echo", "arguments": ["say": "hi"]])
         #expect(text(called) == "hello from remote" && called["isError"] as? Bool != true)
-        #expect(asked.all.map { $0["op"] as? String } == ["tools", "call"])
+        // One need of the app for a call, so a key allowed once is asked for once.
+        #expect(asked.all.map { $0["op"] as? String } == ["call"])
         #expect(asked.all.allSatisfy { $0["list"] as? String == "/u/mcp.json" && $0["server"] as? String == "linear" })
 
         let listed = (try? JSONSerialization.jsonObject(with: Data(text(session.call("mcp_servers", [:])).utf8))) as? [String: Any]
@@ -285,6 +309,10 @@ import Testing
         #expect(servers.first?["state"] as? String == "running" && servers.first?["tools"] as? Int == 3)
         #expect(servers.first?["url"] as? String == fake.url.absoluteString && servers.first?["command"] == nil)
         #expect((servers.last?["note"] as? String)?.contains("HTTP+SSE") == true)
+
+        let typo = session.call("mcp_call", ["server": "linear", "tool": "ecko"])
+        #expect(text(typo).contains("linear has no tool named ecko. Its tools: echo") && typo["isError"] as? Bool == true)
+        #expect(asked.all.count == 2)
 
         let older = session.call("mcp_tools", ["server": "older"])
         #expect(text(older).contains("older HTTP+SSE transport") && older["isError"] as? Bool == true)

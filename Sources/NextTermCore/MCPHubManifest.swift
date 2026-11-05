@@ -72,15 +72,16 @@ public struct MCPHubManifest: Codable, Equatable, Sendable {
     /// Its tools, the first `toolLimit` of them.
     public var tools: [Tool]
 
+    /// A tool named past `nameLimit` is left out: it stays with the catalog.
     public init(tools: [Tool], count: Int? = nil) {
-        self.tools = Array(tools.prefix(Self.toolLimit))
-        self.count = count ?? tools.count
+        let named = tools.filter { $0.name.utf8.count <= Self.nameLimit }
+        self.tools = Array(named.prefix(Self.toolLimit))
+        self.count = count ?? named.count
     }
 
     /// A `tools/list` answer's tools, as kept.
     public init(listed: [[String: Any]]) {
-        let tools = listed.compactMap(Tool.init(listed:))
-        self.init(tools: tools, count: tools.count)
+        self.init(tools: listed.compactMap(Tool.init(listed:)))
     }
 
     /// The same tools with `mask` over their words and schemas: stored keys' values never reach the file (R13), as they
@@ -102,13 +103,18 @@ public struct MCPHubManifest: Codable, Equatable, Sendable {
     /// purpose and arguments, not a manual (mcp_tools gives a tool's whole description, live).
     public static let descriptionLimit = 1_024
     public static let titleLimit = 100
+    /// The longest tool name kept, MCP's own 128: its name goes into every session's context too (a direct tool's title).
+    public static let nameLimit = 128
     /// The longest input schema kept, as JSON text; a larger one is reached through mcp_call alone.
     public static let schemaLimit = 16_384
     /// The most tools kept: far more than a session's budget of direct tools (MCPHubDirect.budget).
     public static let toolLimit = 200
 
+    /// Cut by Unicode scalars, not characters: a character can hold any number of combining marks, so a limit counted in
+    /// characters wouldn't limit what reaches the agent.
     static func cut(_ text: String, _ limit: Int) -> String {
-        text.count > limit ? String(text.prefix(limit - 1)) + "\u{2026}" : text
+        guard text.unicodeScalars.count > limit else { return text }
+        return String(String.UnicodeScalarView(text.unicodeScalars.prefix(limit - 1))) + "\u{2026}"
     }
 
     /// An input schema as JSON text, keys sorted: only an object schema (`"type": "object"`, what the agents' APIs take

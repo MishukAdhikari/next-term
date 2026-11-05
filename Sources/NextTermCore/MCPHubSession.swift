@@ -234,6 +234,22 @@ public final class MCPHubSession: @unchecked Sendable {
         if arguments["arguments"] != nil, !(arguments["arguments"] is [String: Any]) {
             return MCPHubCatalog.text("arguments is an object of the tool's arguments; mcp_tools gives its schema.", isError: true)
         }
+        if currentPlan.server(named: name) == nil { renew() }
+        // A ready remote server's call is one need of the app, which checks the tool's name itself: listing first would
+        // be a second need, and a second approval for a key allowed once.
+        if let server = currentPlan.server(named: name), server.isRemote, server.state == .ready {
+            switch reach(server, ["op": "call", "tool": tool, "arguments": arguments["arguments"] as? [String: Any] ?? [:]], until: deadline) {
+            case .failure(let failure): return MCPHubCatalog.text(failure.text, isError: true)
+            case .success(let answer):
+                guard let result = answer["result"] as? [String: Any] else {
+                    guard let names = answer["names"] as? [String] else {
+                        return MCPHubCatalog.text("Next Term's answer for \(name) had no tool result in it.", isError: true)
+                    }
+                    return MCPHubCatalog.text(missing(tool, on: name, among: names.map { ["name": $0] }), isError: true)
+                }
+                return MCPHubCatalog.fit(result)
+            }
+        }
         let listed: [[String: Any]]
         switch tools(of: name, until: deadline) {
         case .failure(let failure): return MCPHubCatalog.text(failure.text, isError: true)
@@ -241,16 +257,6 @@ public final class MCPHubSession: @unchecked Sendable {
         }
         guard listed.contains(where: { $0["name"] as? String == tool }) else {
             return MCPHubCatalog.text(missing(tool, on: name, among: listed), isError: true)
-        }
-        if let server = currentPlan.server(named: name), server.isRemote {
-            switch reach(server, ["op": "call", "tool": tool, "arguments": arguments["arguments"] as? [String: Any] ?? [:]], until: deadline) {
-            case .failure(let failure): return MCPHubCatalog.text(failure.text, isError: true)
-            case .success(let answer):
-                guard let result = answer["result"] as? [String: Any] else {
-                    return MCPHubCatalog.text("Next Term's answer for \(name) had no tool result in it.", isError: true)
-                }
-                return MCPHubCatalog.fit(result)
-            }
         }
         guard let upstream = upstream(named: name) else { return MCPHubCatalog.text("\(name) is gone from Next Term's list.", isError: true) }
         switch upstream.call(tool, arguments: arguments["arguments"] as? [String: Any] ?? [:], until: deadline) {
@@ -373,6 +379,7 @@ public final class MCPHubSession: @unchecked Sendable {
         switch result {
         case .success(let answer):
             if let tools = answer["tools"] as? [[String: Any]] { remoteStatus[server.name] = .running(tools: tools.count) }
+            if let names = answer["names"] as? [String] { remoteStatus[server.name] = .running(tools: names.count) }
         case .failure(let failure): remoteStatus[server.name] = .failed(failure.text) // a tool's own error is a result, not this
         }
         lock.unlock()

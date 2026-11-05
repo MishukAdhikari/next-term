@@ -144,7 +144,15 @@ enum MCPHubRemoteControl {
             }
             guard !answered else {
                 // The call stopped waiting: an approval is kept for this agent's next need of the server.
-                if case .allowed = decision { late[lateKey] = (values, Date().addingTimeInterval(120)) }
+                if case .allowed = decision {
+                    late[lateKey] = (values, Date().addingTimeInterval(120))
+                    // The values are held no longer than their two minutes, used or not.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 121) {
+                        MainActor.assumeIsolated {
+                            if let kept = late[lateKey], kept.until <= Date() { late[lateKey] = nil }
+                        }
+                    }
+                }
                 return
             }
             answered = true
@@ -175,17 +183,22 @@ enum MCPHubRemoteControl {
         let remote = connection(need)
         DispatchQueue.global(qos: .userInitiated).async {
             let answer: Result<[String: Any], MCPHubRemote.Failure>
+            let listed = remote.tools(endpoint, until: need.deadline)
+            // Its tools as listed now, for the next sessions' direct tools (written only when they changed).
+            if case .success(let tools) = listed {
+                let manifest = MCPHubManifest(listed: tools).masked { SecretMask.current.mask($0) }
+                MCPHubManifest.remember(manifest, server: need.server, list: need.list, userFile: need.userFile)
+            }
             if need.op == "tools" {
-                let listed = remote.tools(endpoint, until: need.deadline)
-                // Its tools as listed now, for the next sessions' direct tools (written only when they changed).
-                if case .success(let tools) = listed {
-                    let manifest = MCPHubManifest(listed: tools).masked { SecretMask.current.mask($0) }
-                    MCPHubManifest.remember(manifest, server: need.server, list: need.list, userFile: need.userFile)
-                }
                 answer = listed.map { ["tools": $0] }
             } else {
-                answer = remote.call(need.tool, arguments: need.arguments, endpoint: endpoint, until: need.deadline)
-                    .map { ["result": MCPHubCatalog.fit($0)] }
+                // A call is one need, so one approval: the tool's name is checked here, against the list just read.
+                answer = listed.flatMap { tools in
+                    let names = tools.compactMap { $0["name"] as? String }
+                    guard names.contains(need.tool) else { return .success(["names": names]) }
+                    return remote.call(need.tool, arguments: need.arguments, endpoint: endpoint, until: need.deadline)
+                        .map { ["result": MCPHubCatalog.fit($0), "names": names] }
+                }
             }
             let run: MCPHubOverview.Run
             let result: MCPServer.CallResult
@@ -194,8 +207,10 @@ enum MCPHubRemoteControl {
                 run = MCPHubOverview.Run(failure: nil, tools: remote.cachedTools?.count ?? 0)
                 result = MCPServer.CallResult(text: MCPServer.json(object))
             case .failure(let failure):
-                run = MCPHubOverview.Run(failure: failure.text, tools: 0)
-                result = MCPServer.CallResult(text: failure.text, isError: true)
+                // Masked here too, for Settings: a key quoted back in a server's words is never shown there either.
+                let text = SecretMask.current.mask(failure.text)
+                run = MCPHubOverview.Run(failure: text, tools: 0)
+                result = MCPServer.CallResult(text: text, isError: true)
             }
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {

@@ -119,7 +119,8 @@ public struct MCPHubPlan: Codable, Equatable, Sendable {
     /// The tool the bridge asks the app to reach a remote server with (MCPHubRemoteControl): never listed, and answered
     /// only for an agent in a Next Term tab where that server applies. Its arguments: `server`, `list`, `url` (as the plan
     /// has them, checked against the lists as they are now), `op` (`tools` or `call`, with `tool` and `arguments`) and
-    /// `seconds`, the most the bridge waits. Its answer: `{"tools": [...]}`, `{"result": {...}}`, or an error's sentence.
+    /// `seconds`, the most the bridge waits. Its answer: `{"tools": [...]}`; for a call `{"result": {...}, "names": [...]}`,
+    /// or the server's tool names alone when it has no such tool; or an error's sentence.
     public static let remoteTool = "mcp_hub_remote"
 
     /// The plan as the app's answer carries it.
