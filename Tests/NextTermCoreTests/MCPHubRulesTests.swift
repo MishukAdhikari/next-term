@@ -91,8 +91,16 @@ import Testing
         for local in ["http://localhost:3000/mcp", "http://127.0.0.1:8080/", "http://[::1]:9000/mcp", "http://app.localhost/mcp"] {
             #expect(reasons(.remote("s", url: local)).isEmpty, "\(local)")
         }
-        for remote in ["http://example.com/mcp", "http://127.0.0.1.example.com/", "http://10.0.0.5/mcp"] {
-            #expect(reasons(.remote("s", url: remote)).first?.contains("use https://") == true, "\(remote)")
+        for remote in ["http://example.com/mcp", "http://127.0.0.1.example.com/", "http://nas.local/mcp", "http://evil-ts.net/mcp"] {
+            #expect(reasons(.remote("s", url: remote)).first?.contains("http:// to another machine") == true, "\(remote)")
+            #expect(reasons(.remote("s", url: remote)).first?.contains(MCPHubAddress.recommendation) == true, "\(remote)")
+        }
+        // A Tailscale name may take http (its addresses are checked when it is reached); https to any domain may be used.
+        #expect(reasons(.remote("s", url: "http://box.tail1234.ts.net:8080/mcp")).isEmpty)
+        #expect(reasons(.remote("s", url: "https://mcp.home.example.com/mcp")).isEmpty)
+        // An IP literal in a private network: refused, with the server's own domain recommended.
+        for literal in ["http://10.0.0.5/mcp", "https://10.0.0.5/mcp", "https://[fd12::5]/mcp", "https://169.254.169.254/"] {
+            #expect(reasons(.remote("s", url: literal)).first?.contains("own domain over https") == true, "\(literal)")
         }
         for scheme in ["javascript:alert(1)", "data:text/html,<b>x</b>", "file:///etc/passwd", "ftp://example.com/", "JavaScript:void(0)"] {
             #expect(reasons(.remote("s", url: scheme)).first?.contains("Next Term reaches only https://") == true, "\(scheme)")
@@ -148,6 +156,14 @@ import Testing
     }
 
     // MARK: reading an entry
+
+    @Test func aCloudflareAccessServiceTokenIsTwoKeyedHeaders() throws {
+        let headers = ["CF-Access-Client-Id": "${secret:CF_ACCESS_CLIENT_ID}", "CF-Access-Client-Secret": "${secret:CF_ACCESS_CLIENT_SECRET}"]
+        let server = MCPHubServer.remote("tunnel", url: "https://mcp.example.com/mcp", headers: headers)
+        #expect(reasons(server).isEmpty)
+        let json = #"{"url": "https://mcp.example.com/mcp", "headers": {"CF-Access-Client-Id": "${secret:CF_ACCESS_CLIENT_ID}", "CF-Access-Client-Secret": "${secret:CF_ACCESS_CLIENT_SECRET}"}}"#
+        #expect(try decode(json).get().headers == headers)
+    }
 
     @Test func theTypeComesFromTheEntry() throws {
         #expect(try decode(#"{"command": "x"}"#).get().transport == .stdio)

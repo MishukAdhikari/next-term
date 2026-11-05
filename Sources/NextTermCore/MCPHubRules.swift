@@ -7,7 +7,8 @@ import Foundation
 ///   tools as `<server>__<tool>` inside its own prefix and a 64-character limit, and Gemini CLI's parser warns on `_`.
 ///   `next-term` is Next Term's own entry.
 /// - **Commands** are one program, as written: no space at either end, no control character.
-/// - **URLs** are https://, or http:// to this Mac only (a key sent over plain HTTP crosses the network readable).
+/// - **URLs** are https://, or http:// to this Mac or a Tailscale name only (a key sent over plain HTTP elsewhere crosses
+///   the network readable): MCPHubAddress has the one rule, which also refuses an IP literal in a private network.
 ///   javascript:, data:, file: and every other scheme are refused, and so is a user name or password in the URL.
 /// - **Keys stay in Secrets.** A value that looks like a key, by Secrets' import's own detection (SecretImport.detect,
 ///   argumentFindings and headerKind), is refused with where it goes instead: for a command, `nxtrm secret run NAME --`
@@ -163,13 +164,11 @@ public enum MCPHubRules {
             return "Its URL is not a URL Next Term can read."
         }
         guard scheme == "https" || scheme == "http" else {
-            return "Its URL is a \(scheme): address; Next Term reaches only https:// servers (and http:// on this Mac)."
+            return "Its URL is a \(scheme): address; Next Term reaches only https:// servers (and http:// on this Mac or a Tailscale name)."
         }
         guard let host = parts.host?.lowercased(), !host.isEmpty else { return "Its URL has no server name." }
         if host.contains(stand) { return "Its URL's server name can't come from a key." }
-        if scheme == "http", !isThisMac(host) {
-            return "Its URL is http:// to another machine, which would send what it is sent unencrypted; use https://."
-        }
+        if let why = MCPHubAddress.hostReason(scheme: scheme, host: host) { return "Its URL " + why }
         if parts.user != nil || parts.password != nil {
             return "Its URL has a user name or password in it. Move it to Secrets, and send it in a header with ${secret:NAME}."
         }

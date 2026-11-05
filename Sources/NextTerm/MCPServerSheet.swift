@@ -327,6 +327,8 @@ final class MCPServerSheet: NSWindowController, NSWindowDelegate, NSTextFieldDel
         sentAs.isHidden = !isURL || keyName == nil
         variableRow.isHidden = keyName == nil
         runsField.placeholderString = isURL ? "https://mcp.example.com/mcp" : "npx -y @modelcontextprotocol/server-github"
+        // Where a URL server may be: MCPHubAddress's rule, as its refusals recommend it.
+        runsField.toolTip = isURL ? "A server on this Mac, or on the internet or your own network. " + MCPHubAddress.recommendation : nil
         if variableField.stringValue.isEmpty, let keyName { variableField.placeholderString = keyName }
         let why = reason
         reasonLabel.stringValue = why ?? ""

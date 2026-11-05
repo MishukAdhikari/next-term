@@ -212,6 +212,31 @@ import Testing
         #expect(try found[1].server().get().command == "uvx" && found[1].keys.isEmpty)
     }
 
+    @Test func aCloudflareAccessServiceTokenIsPastedAsTwoKeys() throws {
+        let both = ["CF-Access-Client-Id": "${secret:CF_ACCESS_CLIENT_ID}", "CF-Access-Client-Secret": "${secret:CF_ACCESS_CLIENT_SECRET}"]
+        func snippet(_ id: String, _ secret: String) -> String {
+            #"{"mcpServers": {"tunnel": {"url": "https://mcp.example.com/mcp", "headers": {"CF-Access-Client-Id": "\#(id)", "CF-Access-Client-Secret": "\#(secret)"}}}}"#
+        }
+        // The token as Cloudflare shows it: both values go to Secrets, each named for its header.
+        let id = "0f3a9c2e7b1d4e8f9a6b5c4d3e2f1a0b.access", secret = "9f8e7d6c5b4a39281706f5e4d3c2b1a09f8e7d6c5b4a39281706f5e4d3c2b1a0"
+        let given = try MCPHubPaste.read(snippet(id, secret)).get()[0]
+        #expect(given.keys.map(\.name) == ["CF_ACCESS_CLIENT_ID", "CF_ACCESS_CLIENT_SECRET"])
+        #expect(given.keys.map(\.value) == [SecretBytes(utf8: id), SecretBytes(utf8: secret)])
+        let server = try given.server().get()
+        #expect(server.headers == both)
+        let bytes = try #require(try MCPHubFile.updated(nil, place: .user, .set(server)).get())
+        let file = String(decoding: bytes, as: UTF8.self)
+        #expect(!file.contains(id) && !file.contains(secret))
+        // A README's placeholders: two keys to give.
+        let asked = try MCPHubPaste.read(snippet("<CLIENT_ID>", "<CLIENT_SECRET>")).get()[0]
+        #expect(asked.keys.map(\.name) == ["CF_ACCESS_CLIENT_ID", "CF_ACCESS_CLIENT_SECRET"] && asked.keys.allSatisfy { $0.value == nil })
+        #expect(try asked.server().get().headers == both)
+        // References to Secrets already: kept as they are.
+        let refs = try MCPHubPaste.read(snippet("${secret:CF_ACCESS_CLIENT_ID}", "${secret:CF_ACCESS_CLIENT_SECRET}")).get()[0]
+        #expect(refs.keys.isEmpty)
+        #expect(try refs.server().get().headers == both)
+    }
+
     @Test func otherShapesAreReadToo() throws {
         // A member cut out of a file, VS Code's servers, and one server alone.
         #expect(try MCPHubPaste.read(#""docs": {"command": "docs-mcp"},"#).get().map(\.name) == ["docs"])

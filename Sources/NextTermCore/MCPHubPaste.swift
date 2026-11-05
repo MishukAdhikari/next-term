@@ -237,14 +237,19 @@ public enum MCPHubPaste {
         if let at = members.firstIndex(where: { $0.key == "headers" }), let headers = members[at].value.members {
             var kept: [MCPHubFile.Member] = []
             for header in headers {
-                guard let text = header.value.string else { kept.append(header); continue }
+                // A key already in Secrets (`${secret:NAME}`) stays as it is.
+                guard let text = header.value.string, MCPHubRules.secretNames(in: text).isEmpty else { kept.append(header); continue }
                 let bearer = text.hasPrefix("Bearer ") ? "Bearer " : ""
                 let bare = String(text.dropFirst(bearer.count))
-                let looksAsked = (header.key.lowercased() == "authorization" || SecretImport.nameLooksSecret(header.key)) && isAskedFor(bare)
-                if let kind = SecretImport.headerKind(name: header.key, value: text) {
-                    keys.append(Key(place: .header(header.key), kind: kind, value: SecretBytes(utf8: bare), name: keyName(fallback), prefix: bearer))
+                // A Cloudflare Access service token's two headers are both keys, each named for its header.
+                let access = cloudflareAccessKeys[header.key.lowercased()]
+                let wanted = access ?? fallback
+                let looksAsked = (header.key.lowercased() == "authorization" || access != nil || SecretImport.nameLooksSecret(header.key))
+                    && isAskedFor(bare)
+                if let kind = SecretImport.headerKind(name: header.key, value: text) ?? (access != nil && !looksAsked ? "Cloudflare Access service token" : nil) {
+                    keys.append(Key(place: .header(header.key), kind: kind, value: SecretBytes(utf8: bare), name: keyName(wanted), prefix: bearer))
                 } else if looksAsked {
-                    keys.append(Key(place: .header(header.key), kind: nil, value: nil, name: keyName(fallback, pasted: false), prefix: bearer))
+                    keys.append(Key(place: .header(header.key), kind: nil, value: nil, name: keyName(wanted, pasted: false), prefix: bearer))
                 } else {
                     kept.append(header)
                 }
@@ -264,6 +269,9 @@ public enum MCPHubPaste {
         }
         return Found(pastedName: pasted, name: name, entry: .object(members), keys: keys, stuck: stuck)
     }
+
+    /// Cloudflare Access's service token headers, lowercased, and the names their keys get in Secrets.
+    static let cloudflareAccessKeys = ["cf-access-client-id": "CF_ACCESS_CLIENT_ID", "cf-access-client-secret": "CF_ACCESS_CLIENT_SECRET"]
 
     /// A value a README puts where the user's key goes: `<YOUR_TOKEN>`, `your-api-key`, `${GITHUB_TOKEN}`, `sk-...`, or
     /// nothing.

@@ -10,8 +10,8 @@ import Foundation
 /// - **Versions.** Next Term offers its newest MCP version and speaks the one the server answers, if it knows it,
 ///   sending it as MCP-Protocol-Version from then on; one it doesn't know ends the start (MCP's lifecycle).
 /// - **Limits.** As a local server's (MCPHubUpstream.Limits): 30 seconds to start, 50 for a call, 32 MB an answer.
-/// - **Where.** Its name must resolve to the internet, or to this Mac for a URL that names this Mac (MCPHubAddress),
-///   checked before each request and again against the address the connection used. No redirect is followed to
+/// - **Where.** MCPHubAddress's one rule: https to a domain on the internet or the user's own network, http to this Mac
+///   or a Tailscale name, checked before each request and again against the address the connection used. No redirect is followed to
 ///   another server, nor one that would turn a call into a GET, so a key is never sent where its URL didn't say.
 /// - **Keys refused.** A 401 or 403 is `Failure.Kind.unauthorized`, with the server's WWW-Authenticate: the sentence
 ///   tells the agent to have the user check the key in Settings › MCP Servers. Signing in with OAuth comes later, at
@@ -335,7 +335,7 @@ public final class MCPHubRemote: @unchecked Sendable {
         guard let addresses = MCPHubAddress.resolve(host, until: deadline) else {
             return .failure(Failure("\(name) can't be reached: looking up \(host) took longer than the call may."))
         }
-        if let reason = MCPHubAddress.reason(host: host, addresses: addresses, name: name) { return .failure(Failure(reason)) }
+        if let reason = MCPHubAddress.reason(url: endpoint.url, addresses: addresses, name: name) { return .failure(Failure(reason)) }
         let left = deadline.timeIntervalSinceNow
         guard left > 0 else { return .failure(Failure("\(name) didn't answer Next Term's \(method == "initialize" ? "start" : "call") in time.")) }
 
@@ -369,7 +369,7 @@ public final class MCPHubRemote: @unchecked Sendable {
         }
         // The address the connection used (not through a proxy): a name that resolved elsewhere by then is thrown away.
         if !exchange.viaProxy, let used = MCPHubAddress.connected(exchange.remoteAddress),
-           let reason = MCPHubAddress.reason(host: host, addresses: [used], name: name) {
+           let reason = MCPHubAddress.reason(url: endpoint.url, addresses: [used], name: name) {
             return .failure(Failure(reason))
         }
         guard let response = exchange.response else {
@@ -383,6 +383,10 @@ public final class MCPHubRemote: @unchecked Sendable {
             if let key = key as? String, let value = value as? String { headers[key.lowercased()] = value }
         }
         if status == 401 || status == 403 {
+            if Self.isCloudflareAccess(headers: headers, body: exchange.body) {
+                return .failure(Failure(Self.cloudflareAccess(name, status: status, sent: endpoint.headers),
+                                        kind: .unauthorized(status: status, challenge: headers["www-authenticate"])))
+            }
             return .failure(unauthorized(status, challenge: headers["www-authenticate"], keyed: endpoint.keyed))
         }
         if status == 404, session != nil { return .failure(Self.expired) }
@@ -414,6 +418,28 @@ public final class MCPHubRemote: @unchecked Sendable {
                 + "Next Term › Settings › MCP Servers (a header with a key from Secrets); Next Term doesn't sign in to servers yet."
         }
         return Failure(text, kind: .unauthorized(status: status, challenge: challenge))
+    }
+
+    /// Whether a 401 or 403 (or a redirect, `to`) is Cloudflare Access asking for a sign-in: its login host, its
+    /// `cf-access-*` headers, its challenge, or its login page's address in the body. Never followed.
+    static func isCloudflareAccess(headers: [String: String] = [:], body: Data = Data(), to target: URL? = nil) -> Bool {
+        if let host = target?.host?.lowercased(), host == "cloudflareaccess.com" || host.hasSuffix(".cloudflareaccess.com") { return true }
+        if target?.path.hasPrefix("/cdn-cgi/access/") == true { return true }
+        if headers.keys.contains(where: { $0.lowercased().hasPrefix("cf-access-") }) { return true }
+        if headers.first(where: { $0.key.lowercased() == "www-authenticate" })?.value.lowercased().contains("cloudflare-access") == true { return true }
+        return String(decoding: body.prefix(8192), as: UTF8.self).lowercased().contains("cloudflareaccess.com")
+    }
+
+    /// What the agent is told of a server behind Cloudflare Access: a service token's two headers, in Settings.
+    static func cloudflareAccess(_ name: String, status: Int?, sent: [String: String]) -> String {
+        let code = status.map { " (HTTP \($0))" } ?? ""
+        if sent.keys.contains(where: { $0.lowercased() == "cf-access-client-id" }) {
+            return "\(name) is behind Cloudflare Access, which refused the service token Next Term sent\(code). Ask the user to check "
+                + "\(name)\u{2019}s CF-Access-Client-Id and CF-Access-Client-Secret headers in Next Term › Settings › MCP Servers, and the token in Cloudflare."
+        }
+        return "\(name) is behind Cloudflare Access, which asks for a sign-in Next Term doesn\u{2019}t give\(code). Ask the user to add a "
+            + "service token\u{2019}s two headers to \(name) in Next Term › Settings › MCP Servers: CF-Access-Client-Id and "
+            + "CF-Access-Client-Secret, each a key from Secrets."
     }
 
     /// The server's own requests that came in an event stream: a ping is answered, anything else refused, since Next
@@ -586,7 +612,9 @@ public final class MCPHubRemote: @unchecked Sendable {
                 && (target?.port ?? Self.port(target)) == (exchange.origin.port ?? Self.port(exchange.origin))
             if same, response.statusCode == 307 || response.statusCode == 308 { return completionHandler(request) }
             let place = target.map(MCPHubRemote.shown) ?? "another address"
-            if same {
+            if MCPHubRemote.isCloudflareAccess(to: target) {
+                exchange.refusedRedirect = MCPHubRemote.cloudflareAccess(exchange.name, status: nil, sent: task.originalRequest?.allHTTPHeaderFields ?? [:])
+            } else if same {
                 exchange.refusedRedirect = "\(exchange.name) redirected Next Term with HTTP \(response.statusCode) to \(place), "
                     + "which would turn its calls into GETs. Ask the user to use that URL for \(exchange.name) in Settings › MCP Servers."
             } else {

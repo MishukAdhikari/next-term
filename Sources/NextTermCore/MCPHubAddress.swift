@@ -3,53 +3,142 @@ import Foundation
 import Darwin
 #endif
 
-/// Where a remote MCP server may be (MCPHubRemote): on the internet, or on this Mac. Its URL's rules (https, or http to
-/// this Mac only) are MCPHubRules'; these are the addresses its name resolves to, and the one Next Term connected to.
+/// Where a remote MCP server may be (MCPHubRemote), the one rule its URL (MCPHubRules.urlReason), the addresses its
+/// name resolves to, and the address Next Term connected to are all checked against:
 ///
-/// - A server named as this Mac (localhost, 127.x, ::1) must resolve to loopback addresses only.
-/// - Any other name must resolve to public addresses only: no private, link-local, carrier-grade NAT, unique-local,
-///   multicast or reserved one, an IPv4 address inside IPv6 counted as that IPv4 address. A URL that names such an
-///   address itself is refused the same way, so a key is never sent into the user's own network on a URL's say.
-/// - Rebinding: a name that resolved to a public address as it was checked and to a private one by the time it was
-///   connected to is caught by the address the connection actually used (`connected`, MCPHubRemote), and its answer is thrown
-///   away. With https, such a server would also need a certificate for the name, so the key never reaches it.
+/// - **This Mac** (localhost, 127.x, ::1): http or https, and the name must resolve to loopback addresses only.
+/// - **https with a domain name**: the internet, or the user's own network (RFC 1918, unique-local, carrier-grade NAT,
+///   Tailscale's 100.64/10 among it), as the user sets it up: their own domain, a Cloudflare Tunnel, or Tailscale.
+///   TLS is what makes a private address safe: the system's own certificate check, which Next Term never bypasses
+///   (no trust or challenge handling of its own), so a name rebound into the user's network can't be answered by
+///   anything without a certificate for that very name, and the key never reaches it.
+/// - **http beyond this Mac**: only to a Tailscale MagicDNS name (`machine.tailnet.ts.net`) whose every address is
+///   Tailscale's (100.64.0.0/10, fd7a:115c:a1e0::/48), which WireGuard encrypts end to end. Any other http is refused.
+/// - **Never**: link-local (169.254/16, fe80::/10, cloud metadata among it), this network (0/8, ::), multicast,
+///   reserved and documentation blocks; nor a name other than this Mac's that resolves to loopback. An IPv4 address
+///   inside IPv6 counts as that IPv4 address.
+/// - **IP literals** other than this Mac's: a public one over https only, a private one never (no certificate can be
+///   checked for it in practice): the refusal says to use the server's own domain over https.
+/// - Rebinding: the address the connection actually used (`connected`, MCPHubRemote) is held to the same rule, and an
+///   answer from one it breaks is thrown away.
 public enum MCPHubAddress {
     public enum Kind: Equatable, Sendable {
-        case loopback, `private`, `public`
+        /// `private`: the user's own network (RFC 1918, unique-local, carrier-grade NAT); `never`: link-local, this
+        /// network, multicast, reserved and documentation blocks, never a server's.
+        case loopback, `private`, never, `public`
     }
+
+    /// What a refusal recommends instead.
+    public static let recommendation = "Use https with your own domain, a Cloudflare Tunnel, or a Tailscale name (machine.tailnet.ts.net)."
 
     /// An address's kind: IPv4 as 4 bytes, IPv6 as 16.
     public static func kind(_ bytes: [UInt8]) -> Kind {
         if bytes.count == 4 { return kind4(bytes) }
-        guard bytes.count == 16 else { return .private }
+        guard bytes.count == 16 else { return .never }
         if bytes == [UInt8](repeating: 0, count: 15) + [1] { return .loopback }
-        if bytes.allSatisfy({ $0 == 0 }) { return .private } // ::
-        // ::ffff:a.b.c.d (mapped), ::a.b.c.d (compatible) and 64:ff9b::a.b.c.d (NAT64) carry an IPv4 address.
-        let v4 = Array(bytes[12..<16])
-        if bytes[0..<10].allSatisfy({ $0 == 0 }), bytes[10] == 0xFF, bytes[11] == 0xFF { return kind4(v4) }
-        if bytes[0..<12].allSatisfy({ $0 == 0 }) { return kind4(v4) }
-        if bytes[0..<12] == [0x00, 0x64, 0xFF, 0x9B, 0, 0, 0, 0, 0, 0, 0, 0] { return kind4(v4) }
-        if bytes[0] & 0xFE == 0xFC { return .private } // fc00::/7, unique local
-        if bytes[0] == 0xFE, bytes[1] & 0xC0 == 0x80 { return .private } // fe80::/10, link-local
-        if bytes[0] == 0xFE, bytes[1] & 0xC0 == 0xC0 { return .private } // fec0::/10, site-local (deprecated)
-        if bytes[0] == 0xFF { return .private } // multicast
-        if bytes[0] == 0x20, bytes[1] == 0x01, bytes[2] == 0x0D, bytes[3] == 0xB8 { return .private } // 2001:db8::/32, documentation
-        if bytes[0] & 0xE0 != 0x20 { return .private } // outside 2000::/3, the only global unicast block
+        if bytes.allSatisfy({ $0 == 0 }) { return .never } // ::
+        if let v4 = embedded4(bytes) { return kind4(v4) }
+        if bytes[0] & 0xFE == 0xFC { return .private } // fc00::/7, unique local (Tailscale's fd7a:115c:a1e0::/48 among it)
+        if bytes[0] == 0xFE, bytes[1] & 0xC0 == 0x80 { return .never } // fe80::/10, link-local
+        if bytes[0] == 0xFE, bytes[1] & 0xC0 == 0xC0 { return .never } // fec0::/10, site-local (deprecated)
+        if bytes[0] == 0xFF { return .never } // multicast
+        if bytes[0] == 0x20, bytes[1] == 0x01, bytes[2] == 0x0D, bytes[3] == 0xB8 { return .never } // 2001:db8::/32, documentation
+        if bytes[0] & 0xE0 != 0x20 { return .never } // outside 2000::/3, the only global unicast block
         return .public
+    }
+
+    /// ::ffff:a.b.c.d (mapped), ::a.b.c.d (compatible) and 64:ff9b::a.b.c.d (NAT64) carry an IPv4 address.
+    private static func embedded4(_ bytes: [UInt8]) -> [UInt8]? {
+        let v4 = Array(bytes[12..<16])
+        if bytes[0..<10].allSatisfy({ $0 == 0 }), bytes[10] == 0xFF, bytes[11] == 0xFF { return v4 }
+        if bytes[0..<12].allSatisfy({ $0 == 0 }) { return v4 }
+        if bytes[0..<12] == [0x00, 0x64, 0xFF, 0x9B, 0, 0, 0, 0, 0, 0, 0, 0] { return v4 }
+        return nil
     }
 
     private static func kind4(_ b: [UInt8]) -> Kind {
         if b[0] == 127 { return .loopback }
-        if b[0] == 0 || b[0] == 10 || b[0] >= 224 { return .private } // this network, private, multicast and reserved
-        if b[0] == 100, b[1] & 0xC0 == 64 { return .private } // 100.64/10, carrier-grade NAT
-        if b[0] == 169, b[1] == 254 { return .private } // link-local, cloud metadata among it
+        if b[0] == 0 || b[0] >= 224 { return .never } // this network, multicast and reserved
+        if b[0] == 169, b[1] == 254 { return .never } // link-local, cloud metadata among it
+        if b[0] == 192, b[1] == 0, b[2] == 0 || b[2] == 2 { return .never } // 192.0.0/24, 192.0.2/24
+        if b[0] == 198, b[1] & 0xFE == 18 { return .never } // 198.18/15, benchmarking
+        if b[0] == 198, b[1] == 51, b[2] == 100 { return .never }
+        if b[0] == 203, b[1] == 0, b[2] == 113 { return .never }
+        if b[0] == 10 { return .private }
+        if b[0] == 100, b[1] & 0xC0 == 64 { return .private } // 100.64/10, carrier-grade NAT (Tailscale's among it)
         if b[0] == 172, b[1] & 0xF0 == 16 { return .private }
         if b[0] == 192, b[1] == 168 { return .private }
-        if b[0] == 192, b[1] == 0, b[2] == 0 || b[2] == 2 { return .private } // 192.0.0/24, 192.0.2/24
-        if b[0] == 198, b[1] & 0xFE == 18 { return .private } // 198.18/15, benchmarking
-        if b[0] == 198, b[1] == 51, b[2] == 100 { return .private }
-        if b[0] == 203, b[1] == 0, b[2] == 113 { return .private }
         return .public
+    }
+
+    /// Whether an address is Tailscale's: 100.64.0.0/10, or fd7a:115c:a1e0::/48 (an IPv4 inside IPv6 as that IPv4).
+    public static func isTailscale(_ bytes: [UInt8]) -> Bool {
+        if bytes.count == 4 { return bytes[0] == 100 && bytes[1] & 0xC0 == 64 }
+        guard bytes.count == 16 else { return false }
+        if let v4 = embedded4(bytes) { return isTailscale(v4) }
+        return bytes[0..<6] == [0xFD, 0x7A, 0x11, 0x5C, 0xA1, 0xE0]
+    }
+
+    /// Whether `host` is a Tailscale MagicDNS name: `machine.tailnet.ts.net`.
+    public static func isTailscaleName(_ host: String) -> Bool {
+        let name = bare(host)
+        return name.hasSuffix(".ts.net") && name.count > ".ts.net".count && bytes(name) == nil
+    }
+
+    /// `host` lowercased, without brackets or a final dot.
+    static func bare(_ host: String) -> String {
+        var name = host.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+        if name.hasSuffix(".") { name.removeLast() }
+        return name
+    }
+
+    /// Why a URL with `scheme` (https or http) and `host` can't be used, before any lookup, as the end of a sentence
+    /// ("… is http:// to another machine"); nil when only its addresses are left to check.
+    public static func hostReason(scheme: String, host: String) -> String? {
+        let name = bare(host)
+        if MCPHubRules.isThisMac(name) { return nil }
+        let secure = scheme.lowercased() == "https"
+        if let literal = bytes(name) {
+            switch kind(literal) {
+            case .loopback: return nil
+            case .public: return secure ? nil : "is http:// to another machine, which would send what it is sent unencrypted. " + recommendation
+            case .private, .never:
+                return "names an address in a private network, where no certificate can be checked for it. "
+                    + "Use the server\u{2019}s own domain over https, a Cloudflare Tunnel, or a Tailscale name (machine.tailnet.ts.net)."
+            }
+        }
+        if secure || isTailscaleName(name) { return nil }
+        return "is http:// to another machine, which would send what it is sent unencrypted. " + recommendation
+    }
+
+    /// Why a server at a URL with `scheme` and `host` can't be reached at these addresses (what its name resolved to,
+    /// or the one connected to), as a sentence for the agent; nil when every one is allowed. The one rule: the URL's
+    /// (`hostReason`), then each address's.
+    public static func reason(scheme: String, host: String, addresses: [[UInt8]], name server: String) -> String? {
+        if let why = hostReason(scheme: scheme, host: host) { return "\(server) can\u{2019}t be reached: its URL " + why }
+        guard !addresses.isEmpty else { return "\(server) can\u{2019}t be reached: \(host) has no address." }
+        let kinds = addresses.map(kind)
+        if MCPHubRules.isThisMac(bare(host)) {
+            if kinds.allSatisfy({ $0 == .loopback }) { return nil }
+            return "\(server) can\u{2019}t be reached: \(host) should be this Mac, and it resolves to another machine."
+        }
+        if kinds.contains(.loopback) {
+            return "\(server) can\u{2019}t be reached: \(host) resolves to this Mac. For a server on this Mac, use localhost."
+        }
+        if kinds.contains(.never) {
+            return "\(server) can\u{2019}t be reached: \(host) resolves to a link-local or reserved address (cloud metadata among them), "
+                + "which is never a server\u{2019}s."
+        }
+        if scheme.lowercased() == "https" { return nil }
+        // http reaches this far only for a Tailscale name: every address must be Tailscale's.
+        if addresses.allSatisfy(isTailscale) { return nil }
+        return "\(server) can\u{2019}t be reached: \(host) is a Tailscale name that resolves outside Tailscale\u{2019}s addresses, "
+            + "so http:// to it would leave the tailnet unencrypted. Use https, or check the name in Tailscale."
+    }
+
+    /// `reason(scheme:host:addresses:name:)` for a URL.
+    public static func reason(url: URL, addresses: [[UInt8]], name server: String) -> String? {
+        reason(scheme: url.scheme ?? "", host: url.host ?? "", addresses: addresses, name: server)
     }
 
     /// An address in text (1.2.3.4, ::1, [::1]), as bytes; nil when it isn't one.
@@ -60,20 +149,6 @@ public enum MCPHubAddress {
         var v6 = in6_addr()
         if inet_pton(AF_INET6, bare, &v6) == 1 { return withUnsafeBytes(of: &v6) { Array($0) } }
         return nil
-    }
-
-    /// Why a server at `host` can't be reached at these addresses (what its name resolved to, or the one connected to),
-    /// as a sentence for the agent; nil when every one is allowed.
-    public static func reason(host: String, addresses: [[UInt8]], name server: String) -> String? {
-        guard !addresses.isEmpty else { return "\(server) can't be reached: \(host) has no address." }
-        let kinds = addresses.map(kind)
-        if MCPHubRules.isThisMac(host.lowercased()) {
-            if kinds.allSatisfy({ $0 == .loopback }) { return nil }
-            return "\(server) can't be reached: \(host) should be this Mac, and it resolves to another machine."
-        }
-        if kinds.allSatisfy({ $0 == .public }) { return nil }
-        return "\(server) can't be reached: \(host) is an address in a private network (or resolves to one), and Next Term "
-            + "reaches servers on the internet or on this Mac only, so a key is never sent into a network on a URL's say."
     }
 
     /// The addresses `host` resolves to, within `deadline`; nil when the lookup didn't end in time.
