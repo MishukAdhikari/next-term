@@ -14,6 +14,9 @@ import Darwin
 /// - `stream`: a tools/call is answered as an event stream, a notification and a ping of its own before the answer.
 /// - `version`: the MCP version it answers (default: the one asked, when it is 2025-06-18 or newer, else 2025-06-18).
 /// - `redirect`: every POST is answered 307 to this URL.
+/// - `auth`: a fake authorization server (MCPHubFakeAuth) whose access tokens it takes, for its own URL only (the
+///   token's audience); any other request gets a 401 naming the server's resource metadata. With `insufficientScopeFor`,
+///   a call to that tool without the `files:write` scope gets a 403 `insufficient_scope`.
 ///
 /// `seen` keeps each request's method and headers (names lowercased), for the tests to look at.
 public final class MCPHubFakeRemote: @unchecked Sendable {
@@ -28,6 +31,8 @@ public final class MCPHubFakeRemote: @unchecked Sendable {
     public var stream = false
     public var version: String?
     public var redirect: String?
+    public var auth: MCPHubFakeAuth?
+    public var insufficientScopeFor: String?
     public var slowSeconds: Double = 5
 
     private let lock = NSLock()
@@ -130,6 +135,19 @@ public final class MCPHubFakeRemote: @unchecked Sendable {
         lock.unlock()
 
         if let redirect { return send(fd, status: "307 Temporary Redirect", headers: ["Location": redirect], body: "") }
+        if let auth {
+            let sent = headers["authorization"].flatMap { $0.hasPrefix("Bearer ") ? String($0.dropFirst(7)) : nil } ?? ""
+            let checked = auth.validate(sent, resource: url.absoluteString)
+            guard checked.valid else {
+                return send(fd, status: "401 Unauthorized",
+                            headers: ["WWW-Authenticate": "Bearer resource_metadata=\"\(auth.resourceMetadata)\", scope=\"read write\""], body: "")
+            }
+            let tool = (message["params"] as? [String: Any])?["name"] as? String
+            if method == "tools/call", let tool, tool == insufficientScopeFor, !checked.scope.split(separator: " ").contains("files:write") {
+                return send(fd, status: "403 Forbidden",
+                            headers: ["WWW-Authenticate": #"Bearer error="insufficient_scope", scope="files:write""#], body: "")
+            }
+        }
         if let bearer, headers["authorization"] != "Bearer \(bearer)" {
             return send(fd, status: "401 Unauthorized",
                         headers: ["WWW-Authenticate": #"Bearer resource_metadata="http://127.0.0.1/.well-known/oauth-protected-resource""#],
