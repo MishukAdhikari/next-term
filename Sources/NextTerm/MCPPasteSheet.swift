@@ -77,6 +77,8 @@ final class MCPPasteSheet: NSWindowController, NSWindowDelegate, NSTextViewDeleg
         foundStack.orientation = .vertical
         foundStack.alignment = .leading
         foundStack.spacing = 6
+        // Room for the fields' bezels and focus rings, which the scroll view would otherwise clip at its edge.
+        foundStack.edgeInsets = NSEdgeInsets(top: 2, left: 3, bottom: 2, right: 3)
         let foundScroll = NSScrollView()
         let flipped = PasteFlippedView()
         flipped.translatesAutoresizingMaskIntoConstraints = false
@@ -331,7 +333,7 @@ final class MCPPasteSheet: NSWindowController, NSWindowDelegate, NSTextViewDeleg
         let alert = NSAlert()
         alert.messageText = "Copy \(planned.count) \(planned.count == 1 ? "key" : "keys") into Secrets?"
         alert.informativeText = SecretFileImportSheet.confirmText(planned, file: nil)
-        alert.addButton(withTitle: "Copy Keys and Add")
+        alert.addButton(withTitle: planned.count == 1 ? "Copy Key and Add" : "Copy Keys and Add")
         alert.addButton(withTitle: "Cancel")
         confirmAlert = alert
         alert.beginSheetModal(for: window) { [weak self] response in

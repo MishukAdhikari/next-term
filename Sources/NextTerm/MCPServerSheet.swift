@@ -40,6 +40,7 @@ final class MCPServerSheet: NSWindowController, NSWindowDelegate, NSTextFieldDel
     let pasteButton = NSButton(title: "Paste a Config\u{2026}", target: nil, action: nil)
     private var newKeyRow = NSStackView()
     private var variableRow = NSStackView()
+    private var form = NSStackView()
     private let project: String?
     private(set) var isBusy = false
 
@@ -74,6 +75,10 @@ final class MCPServerSheet: NSWindowController, NSWindowDelegate, NSTextFieldDel
         for field in [nameField, runsField, newKeyName, variableField] {
             field.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
             field.delegate = self
+            // One line: a long command keeps its start and its end, never a first line cut at a slash.
+            field.usesSingleLineMode = true
+            field.cell?.wraps = false
+            field.lineBreakMode = .byTruncatingMiddle
         }
         newKeyValue.delegate = self
         nameField.setAccessibilityLabel("Name")
@@ -123,8 +128,9 @@ final class MCPServerSheet: NSWindowController, NSWindowDelegate, NSTextFieldDel
         let buttons = NSStackView(views: [pasteButton, NSView(), cancelButton, addButton])
         buttons.spacing = 8
 
-        let stack = NSStackView(views: [heading, row("Name", nameField), row("Runs", kind), row("", runsField), row("Key", keyPopUp),
-                                        newKeyRow, variableRow, row("Applies to", appliesPopUp), reasonLabel, buttons])
+        let stack = form
+        stack.setViews([heading, row("Name", nameField), row("Runs", kind), row("", runsField), row("Key", keyPopUp),
+                                        newKeyRow, variableRow, row("Applies to", appliesPopUp), reasonLabel, buttons], in: .top)
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 10
@@ -326,7 +332,17 @@ final class MCPServerSheet: NSWindowController, NSWindowDelegate, NSTextFieldDel
         reasonLabel.stringValue = why ?? ""
         reasonLabel.isHidden = (why ?? "").isEmpty
         addButton.isEnabled = why == nil && !isBusy
-        window?.layoutIfNeeded()
+        fit()
+    }
+
+    /// The sheet as tall as what it shows: rows come and go (a new key, its variable, the reason), and no space is left
+    /// under the buttons.
+    private func fit() {
+        guard let window else { return }
+        window.layoutIfNeeded()
+        let height = form.fittingSize.height
+        guard height > 0, abs(window.contentLayoutRect.height - height) > 0.5 else { return }
+        window.setContentSize(NSSize(width: window.contentLayoutRect.width, height: height))
     }
 
     @objc func cancel() { end(nil) }
@@ -358,6 +374,7 @@ final class MCPServerSheet: NSWindowController, NSWindowDelegate, NSTextFieldDel
                 refresh()
                 reasonLabel.stringValue = failure
                 reasonLabel.isHidden = false
+                fit()
                 return
             }
             newKeyValue.stringValue = ""

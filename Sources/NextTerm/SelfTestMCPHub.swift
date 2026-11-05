@@ -6,8 +6,8 @@ import NextTermCore
 /// The MCP hub, step 2: a fake local server added to a list of the self-test's own (MCPHubControl.userFile), for one
 /// folder, and the real `nxtrm mcp` run from a tab's shell as an agent there starts it. The bridge asks the app for its
 /// plan, lists the catalog after Next Term's own tools, and starts the server on its first call, in the tab's folder with
-/// the list's variable; the server ends with the bridge. A tab in another folder gets Next Term's tools exactly as
-/// they were, and no agent's config file changes. The user's own list is never read or written here.
+/// the list's variable; the server ends with the bridge. A tab in another folder gets Next Term's own tools and no
+/// catalog, and no agent's config file changes. The user's own list is never read or written here.
 extension SelfTest {
     /// The fake server: `echo` says hello, `where` says its folder, HUB_TEST and its process id.
     static let hubFakeServer = #"""
@@ -84,10 +84,12 @@ extension SelfTest {
             check(ended, "MCP hub: the server ends with the agent's session", "pid \(pid)")
         }
 
-        // An agent elsewhere: Next Term's tools as they were, byte for byte once sorted, and no catalog.
+        // An agent elsewhere: Next Term's own tools, byte for byte once sorted, and no catalog. The list is there now, so
+        // its own tools for MCP servers come with them (MCPServer.listed), in every folder.
+        let withList = MCPServer.respond(to: listTools, version: "0", hub: true) { _, _ in MCPServer.CallResult(text: "") }
         let elsewhere = await bridgeInTab(c, folder: outside, requests: [initialize, listTools], name: "out", userFile: userFile)
-        check(sortedJSON((elsewhere[2]?["result"] as? [String: Any])?["tools"]) == todaysTools,
-              "MCP hub: an agent in a folder the server isn't for gets exactly today's tool list", "\(toolNames(elsewhere[2]).count) tools")
+        check(sortedJSON((elsewhere[2]?["result"] as? [String: Any])?["tools"]) == sortedJSON((withList?["result"] as? [String: Any])?["tools"]),
+              "MCP hub: an agent in a folder the server isn't for gets Next Term's own tools and no catalog", "\(toolNames(elsewhere[2]).count) tools")
 
         check(agentConfigDigests() == configs, "MCP hub: no agent's config file changed")
     }

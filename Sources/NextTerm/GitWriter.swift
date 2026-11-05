@@ -424,25 +424,36 @@ final class GitToast {
         label.font = .systemFont(ofSize: 12.5, weight: .medium)
         label.textColor = isError ? Theme.failed : Theme.text
         Typography.singleLine(label, truncation: .byTruncatingMiddle)
+        // In a narrow window the words give way, never the buttons.
+        label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         var views: [NSView] = [label]
         if let button {
-            let control = NSButton(title: button, target: GitToastTarget.shared, action: #selector(GitToastTarget.pressed))
-            control.bezelStyle = .rounded
-            control.controlSize = .small
-            if primary { control.bezelColor = .controlAccentColor }
+            // The notice's panel is never key, where AppKit draws no tint: a primary draws its own fill (PrimaryButton).
+            let control = primary ? PrimaryButton(title: button, target: GitToastTarget.shared, action: #selector(GitToastTarget.pressed))
+                : NSButton(title: button, target: GitToastTarget.shared, action: #selector(GitToastTarget.pressed))
+            if !primary {
+                control.bezelStyle = .rounded
+                control.controlSize = .small
+            }
             views.append(control)
         }
         if let other {
             let control = NSButton(title: other, target: GitToastTarget.shared, action: #selector(GitToastTarget.pressedOther))
             control.bezelStyle = .rounded
-            control.controlSize = .small
+            control.controlSize = primary ? .regular : .small // beside a primary, at its size
             views.append(control)
         }
+        for control in views.dropFirst() { control.setContentCompressionResistancePriority(.required, for: .horizontal) }
         let stack = NSStackView(views: views)
         stack.spacing = 12
         stack.edgeInsets = NSEdgeInsets(top: 8, left: 14, bottom: 8, right: 10)
-        let size = stack.fittingSize
-        let width = min(max(size.width, 160), window.frame.width - 60)
+        var size = stack.fittingSize
+        let room = window.frame.width - 60
+        if size.width > room { // the words truncate to fit, so every button stays whole
+            label.widthAnchor.constraint(equalToConstant: max(80, label.fittingSize.width - (size.width - room))).isActive = true
+            size = stack.fittingSize
+        }
+        let width = min(max(size.width, 160), room)
         let panel = NSPanel(contentRect: NSRect(x: window.frame.midX - width / 2, y: window.frame.minY + 24, width: width, height: size.height),
                             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.isOpaque = false

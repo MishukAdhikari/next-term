@@ -102,16 +102,18 @@ final class MCPServersSettingsView: NSView, NSTableViewDataSource, NSTableViewDe
             label.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         }
 
-        let columns: [(String, String, CGFloat)] = [("name", "Server", 130), ("applies", "Applies to", 120), ("runs", "Runs", 190),
-                                                    ("state", "State", 120)]
+        let columns: [(String, String, CGFloat)] = [("name", "Server", 110), ("applies", "Applies to", 110), ("runs", "Runs", 190),
+                                                    ("state", "State", 150)]
         for (id, title, width) in columns {
             let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(id))
             column.title = title
             column.width = width
             column.minWidth = 60
+            // Runs takes the room the window gives: State keeps the width of its longest words, "Needs your approval".
+            column.resizingMask = id == "runs" ? [.autoresizingMask, .userResizingMask] : .userResizingMask
             table.addTableColumn(column)
         }
-        table.columnAutoresizingStyle = .lastColumnOnlyAutoresizingStyle
+        table.columnAutoresizingStyle = .uniformColumnAutoresizingStyle
         table.dataSource = self
         table.delegate = self
         table.usesAlternatingRowBackgroundColors = true
@@ -372,7 +374,17 @@ final class MCPServersSettingsView: NSView, NSTableViewDataSource, NSTableViewDe
         cell.lineBreakMode = .byTruncatingTail
         cell.toolTip = column.identifier.rawValue == "agents" ? server.files.map(SkillStep.short).joined(separator: "\n") : text
         if column.identifier.rawValue != "name" { cell.textColor = .secondaryLabelColor }
-        return cell
+        // Centred in the row, on the line of the Add… beside it, as a label alone would sit at the row's top.
+        let box = NSView()
+        cell.translatesAutoresizingMaskIntoConstraints = false
+        box.addSubview(cell)
+        NSLayoutConstraint.activate([
+            cell.leadingAnchor.constraint(equalTo: box.leadingAnchor, constant: 2),
+            cell.trailingAnchor.constraint(equalTo: box.trailingAnchor, constant: -2),
+            cell.centerYAnchor.constraint(equalTo: box.centerYAnchor),
+        ])
+        cell.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        return box
     }
 
     func tableViewSelectionDidChange(_ notification: Notification) {
@@ -494,7 +506,8 @@ final class MCPServersSettingsView: NSView, NSTableViewDataSource, NSTableViewDe
         alert.messageText = "Approve \(name)\u{2019}s MCP servers?"
         var lines = MCPHubOverview.approvalLines(entries)
         lines.append("")
-        lines.append("They come with the project, in \(SkillStep.short(row.list)). Agents in Next Term start them in this project once you approve. A change to the list waits for you again.")
+        let file = project.flatMap { row.list.hasPrefix($0 + "/") ? String(row.list.dropFirst($0.count + 1)) : nil } ?? SkillStep.short(row.list)
+        lines.append("They come with the project, in \(file). Agents in Next Term start them in this project once you approve. A change to the list waits for you again.")
         alert.informativeText = lines.joined(separator: "\n")
         alert.addButton(withTitle: "Approve")
         alert.addButton(withTitle: "Cancel")

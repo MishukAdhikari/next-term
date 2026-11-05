@@ -146,7 +146,8 @@ extension SelfTest {
     private static func agentsChecks(_ view: MCPServersSettingsView, window: NSWindow, dir: URL, script: String, userFile: String) async {
         let codex = dir.appendingPathComponent("codex/config.toml").path
         try? FileManager.default.createDirectory(atPath: (codex as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
-        let config = "[mcp_servers.found-demo]\ncommand = \"/bin/sh\"\nargs = [\"\(script)\"]\n"
+        // An argument of its own: a server that runs what one in the list runs is that one, and left out (notAdded).
+        let config = "[mcp_servers.found-demo]\ncommand = \"/bin/sh\"\nargs = [\"\(script)\", \"found\"]\n"
         try? config.write(toFile: codex, atomically: true, encoding: .utf8)
         MCPHubAgentServers.sourcesForTest = [SecretImport.Source(path: codex, client: .codex, format: .toml, containers: [["mcp_servers"]])]
         view.reload()
@@ -162,7 +163,8 @@ extension SelfTest {
             GitToast.show(MCPHubAgents.offerText(row), in: window, button: "Add\u{2026}", action: {}, other: "Not Now", otherAction: {}, primary: true)
             check(GitToast.text == "Codex has a new MCP server, \u{201C}found-demo\u{201D}. Use it in every agent in Next Term?",
                   "MCP agents: the new-server offer names the agent and the server", GitToast.text ?? "none")
-            await screenshot(window, suffix: "-mcp-offer")
+            // The notice is a panel of its own, a child of the window: the window's capture leaves it out.
+            await screenshot(window.childWindows?.last ?? window, suffix: "-mcp-offer")
             GitToast.dismiss()
 
             view.addFound(row)
