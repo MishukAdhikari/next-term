@@ -1086,7 +1086,9 @@ enum SelfTest {
         await skillsChecks()
         await secretsChecks(c, proj: proj)
         await mcpWriteChecks(c, proj: proj)
-        await mcpHubChecks(c, proj: proj)
+        #if DEBUG
+        await mcpHubChecks(c, proj: proj) // its bridge reads the self-test's own list, which only a debug build honours
+        #endif
         await endStrayQuestions(after: "the checks before the MCP restore")
         await restoreMCPChecks(proj: proj)
         await endStrayQuestions(after: "the MCP restore checks")
