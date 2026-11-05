@@ -76,8 +76,37 @@ struct MCPHubOAuthTests {
         #expect(!refused("http://127.0.0.1:9/authorize", server: local))
         #expect(!refused("http://localhost:9/authorize", server: local))
         #expect(refused("http://127.0.0.1:9/authorize"))
+        // MCPHubAddress's rule, as a server's own URL: http beyond this Mac only to a Tailscale name.
+        #expect(!refused("http://auth.tailnet.ts.net/authorize"))
+        #expect(refused("http://auth.home.example/authorize"))
+        if case .failure(let why) = MCPHubOAuthURL.checked("http://x.example/a", server: remote) {
+            #expect(why.text.hasPrefix("it is http:// to another machine"))
+        }
         #expect(MCPHubOAuthURL.canonical(URL(string: "HTTPS://MCP.Linear.App:443/mcp#x")!) == "https://mcp.linear.app/mcp")
         #expect(MCPHubOAuthURL.canonical(URL(string: "https://mcp.linear.app/mcp/")!) == "https://mcp.linear.app/mcp/")
+    }
+
+    /// A sign-in server's addresses are held to the rule a server's own are (MCPHubAddress): one in the user's own
+    /// network over https signs in there, as the MCP server is reached there; link-local and reserved addresses never,
+    /// nor this Mac for a server that isn't on it.
+    @Test func aSignInServerInTheUsersOwnNetworkIsReached() {
+        let http = MCPHubOAuthHTTP(server: URL(string: "https://mcp.home.example/mcp")!)
+        let auth = URL(string: "https://auth.home.example/token")!
+        #expect(http.reason(auth, addresses: [[192, 168, 1, 20]]) == nil)
+        #expect(http.reason(auth, addresses: [[10, 0, 0, 5], [100, 101, 1, 2]]) == nil)
+        #expect(http.reason(auth, addresses: [[93, 184, 216, 34]]) == nil)
+        #expect(http.reason(auth, addresses: [[169, 254, 169, 254]])?.contains("link-local") == true)
+        #expect(http.reason(auth, addresses: [[127, 0, 0, 1]])?.contains("resolves to this Mac") == true)
+        #expect(http.reason(auth, addresses: []) != nil)
+        #expect(http.reason(URL(string: "http://127.0.0.1:9/token")!, addresses: [[127, 0, 0, 1]])?.contains("never goes") == true)
+        // http to a Tailscale name: every address Tailscale's.
+        let tailnet = URL(string: "http://auth.tailnet.ts.net/token")!
+        #expect(http.reason(tailnet, addresses: [[100, 100, 1, 2]]) == nil)
+        #expect(http.reason(tailnet, addresses: [[192, 168, 1, 2]])?.contains("Tailscale") == true)
+        // A server on this Mac signs in on this Mac.
+        let here = MCPHubOAuthHTTP(server: local)
+        #expect(here.reason(URL(string: "http://127.0.0.1:9/token")!, addresses: [[127, 0, 0, 1]]) == nil)
+        #expect(here.reason(URL(string: "http://localhost:9/token")!, addresses: [[10, 0, 0, 1]]) != nil)
     }
 
     // MARK: discovery

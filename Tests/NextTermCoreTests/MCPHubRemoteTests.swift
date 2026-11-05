@@ -88,6 +88,16 @@ import Testing
         }
         #expect(try result?.get().count == 3)
         #expect(took < 3)
+
+        // A sign-in's requests the same way.
+        var status: Int?
+        whileGCDIsBusy {
+            let started = Date()
+            status = try? MCPHubOAuthHTTP(server: fake.url).fetch(.init(get: fake.url), seconds: 5).get().status
+            took = Date().timeIntervalSince(started)
+        }
+        #expect(status == 405)
+        #expect(took < 3)
     }
 
     @Test func anOlderVersionIsSpokenAndAnUnknownOneRefused() throws {

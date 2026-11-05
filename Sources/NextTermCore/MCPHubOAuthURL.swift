@@ -8,9 +8,11 @@ import Foundation
 ///   server there, such as the tests' fake, may sign in there). `javascript:`, `data:`, `file:`, `vbscript:` and every
 ///   other scheme are refused by not being on it.
 /// - **No user name or password, and no fragment.**
-/// - **A host**: a name with at least one dot, or an address. An address must be a public one (an IPv4 address inside
-///   IPv6 counted as that IPv4 address, MCPHubAddress), or this Mac's under the rule above. A name is resolved when it
-///   is fetched, and its addresses held to the same rule then (MCPHubOAuthHTTP).
+/// - **A host** held to MCPHubAddress, the one rule a server's own URL is: https to a domain name, which may be in the
+///   user's own network (their domain, a Cloudflare Tunnel, Tailscale); http beyond this Mac only to a Tailscale name;
+///   an IP literal other than this Mac's only a public one over https. A name needs at least one dot. This Mac (a name
+///   or a loopback address) only under the rule above. A name is resolved when it is fetched, and its addresses held to
+///   the same rule then (MCPHubOAuthHTTP), so a server in the user's own network signs in there too.
 /// - Next Term opens the authorization URL with LaunchServices (NSWorkspace), never through a shell.
 public enum MCPHubOAuthURL {
     /// `text` as a URL a sign-in may use for the MCP server at `server`, or why not, as the end of a sentence
@@ -29,19 +31,14 @@ public enum MCPHubOAuthURL {
         guard parts.fragment == nil else { return .failure("it has a fragment (#) in it") }
         guard let rawHost = parts.host, !rawHost.isEmpty else { return .failure("it has no server name") }
         let host = MCPHubAddressHost.bare(rawHost)
-        if MCPHubRules.isThisMac(host) {
+        let loopback = MCPHubRules.isThisMac(host) || MCPHubAddress.bytes(host).map { MCPHubAddress.kind($0) == .loopback } == true
+        if loopback {
             guard local else { return .failure("it names this Mac, and the server isn\u{2019}t on this Mac") }
-        } else if let address = MCPHubAddress.bytes(host) {
-            let kind = MCPHubAddress.kind(address)
-            if kind == .loopback {
-                guard local else { return .failure("it names this Mac, and the server isn\u{2019}t on this Mac") }
-            } else if kind != .public {
-                return .failure("it names an address in a private network")
-            }
-            if scheme == "http", kind != .loopback { return .failure("it is http:// to another machine") }
         } else {
-            guard host.contains("."), !host.hasPrefix("."), !host.contains("..") else { return .failure("its server name has no domain") }
-            if scheme == "http" { return .failure("it is http:// to another machine") }
+            if MCPHubAddress.bytes(host) == nil, !host.contains(".") || host.hasPrefix(".") || host.contains("..") {
+                return .failure("its server name has no domain")
+            }
+            if let why = MCPHubAddress.hostReason(scheme: scheme, host: host) { return .failure(MCPHubOAuth.Failure("it " + why)) }
         }
         guard let url = parts.url else { return .failure("it isn't a URL") }
         return .success(url)

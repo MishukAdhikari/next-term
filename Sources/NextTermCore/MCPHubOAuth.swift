@@ -109,9 +109,10 @@ public enum MCPHubOAuth {
 }
 
 /// The sign-in's requests, sent as MCPHubRemote sends a call's: an ephemeral session with no cookies and no cache, no
-/// redirect followed (a 3xx comes back as it is), and the server's name resolved and held to MCPHubOAuthURL's rule
-/// before the request and again against the address the connection used. A name resolving into a private network is
-/// refused unless it is the MCP server's own host, which the transport's rule already let in.
+/// redirect followed (a 3xx comes back as it is), and the server's name resolved and held to MCPHubAddress's rule, the
+/// one a server's own URL is, before the request and again against the address the connection used: a sign-in server
+/// in the user's own network over https is reached as the MCP server there is; link-local, reserved and, for a server
+/// not on this Mac, this Mac's addresses never are.
 public final class MCPHubOAuthHTTP: NSObject, URLSessionDataDelegate, @unchecked Sendable {
     public let server: URL
     let limit: Int
@@ -139,9 +140,7 @@ public final class MCPHubOAuthHTTP: NSObject, URLSessionDataDelegate, @unchecked
         configuration.urlCache = nil
         configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
         configuration.waitsForConnectivity = false
-        let queue = OperationQueue()
-        queue.maxConcurrentOperationCount = 1
-        session = URLSession(configuration: configuration, delegate: self, delegateQueue: queue)
+        session = URLSession(configuration: configuration, delegate: self, delegateQueue: MCPHubRemote.delegateQueue("sign-in"))
     }
 
     deinit { session.invalidateAndCancel() }
@@ -156,7 +155,7 @@ public final class MCPHubOAuthHTTP: NSObject, URLSessionDataDelegate, @unchecked
         guard let addresses = MCPHubAddress.resolve(host, until: deadline) else {
             return .failure(.unsent("Looking up \(host) took too long."))
         }
-        if let why = reason(host: host, addresses: addresses) { return .failure(.unsent(why)) }
+        if let why = reason(request.url, addresses: addresses) { return .failure(.unsent(why)) }
         var urlRequest = URLRequest(url: request.url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: seconds)
         urlRequest.httpMethod = request.method
         for (key, value) in request.headers { urlRequest.setValue(value, forHTTPHeaderField: key) }
@@ -180,7 +179,7 @@ public final class MCPHubOAuthHTTP: NSObject, URLSessionDataDelegate, @unchecked
             let why = "\(host) didn\u{2019}t answer in time."
             return .failure(task.countOfBytesSent > 0 || exchange.response != nil ? .lost(why) : .unsent(why))
         }
-        if !exchange.proxy, let address = MCPHubAddress.connected(exchange.address), let why = reason(host: host, addresses: [address]) {
+        if !exchange.proxy, let address = MCPHubAddress.connected(exchange.address), let why = reason(request.url, addresses: [address]) {
             return .failure(.lost(why))
         }
         if exchange.tooLarge { return .failure(.lost("\(host) sent an answer larger than a sign-in\u{2019}s.")) }
@@ -201,16 +200,18 @@ public final class MCPHubOAuthHTTP: NSObject, URLSessionDataDelegate, @unchecked
     /// The fetch to hand the sign-in's pieces.
     public var asFetch: MCPHubOAuth.Fetch { { [self] request in fetch(request) } }
 
-    /// Why `host`, at these addresses, isn't reached for a sign-in; nil when it may be.
-    func reason(host: String, addresses: [[UInt8]]) -> String? {
-        guard !addresses.isEmpty else { return "\(host) has no address." }
-        let local = MCPHubOAuthURL.isThisMac(server)
-        let kinds = addresses.map(MCPHubAddress.kind)
-        if kinds.allSatisfy({ $0 == .public }) { return nil }
-        if local, kinds.allSatisfy({ $0 == .loopback }) { return nil }
-        // The MCP server's own host: the transport's rule let it in, so its own sign-in may be there too.
-        if MCPHubAddressHost.bare(host) == MCPHubAddressHost.bare(server.host ?? ""), local || !kinds.contains(.loopback) { return nil }
-        return "\(host) resolves to an address in a private network or this Mac, where a sign-in for \(server.host ?? "this server") never goes."
+    /// Why `url`'s host, at these addresses, isn't reached for a sign-in; nil when it may be. MCPHubAddress's rule, and
+    /// this Mac only for a server on this Mac (MCPHubOAuthURL.checked has refused the rest by name already).
+    func reason(_ url: URL, addresses: [[UInt8]]) -> String? {
+        let host = url.host ?? ""
+        if MCPHubOAuthURL.isThisMac(url) {
+            guard MCPHubOAuthURL.isThisMac(server) else {
+                return "\(host) is this Mac, where a sign-in for \(server.host ?? "this server") never goes."
+            }
+            return !addresses.isEmpty && addresses.allSatisfy { MCPHubAddress.kind($0) == .loopback } ? nil
+                : "\(host) should be this Mac, and it resolves to another machine."
+        }
+        return MCPHubAddress.reason(url: url, addresses: addresses, name: "The sign-in server")
     }
 
     // MARK: delegate
