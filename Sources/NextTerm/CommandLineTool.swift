@@ -325,7 +325,10 @@ enum MCPBridge {
         let socket = environment[MCPServer.socketVariable].flatMap { $0.isEmpty ? nil : $0 } ?? MCPServer.socketPath()
         // Next Term's own skills, first, for an agent in a Next Term tab; next-term-tabs while the setting is on.
         let offering = UserDefaults.standard.object(forKey: "agentsOfferTabs") as? Bool ?? true
-        let instructions = MCPServer.instructions(inTab: MCPServer.runsUnder(executable: Bundle.main.executablePath ?? ""), offeringTabs: offering)
+        // Next Term's own tools for MCP servers, and their words, only once the user has a list of them (R17).
+        let hubListed = FileManager.default.fileExists(atPath: MCPBridgeHub.userFile(environment))
+        let instructions = MCPServer.instructions(inTab: MCPServer.runsUnder(executable: Bundle.main.executablePath ?? ""), offeringTabs: offering,
+                                                  hub: hubListed)
         let calls = DispatchGroup()
         #if DEBUG
         // The self-test's shorter progress interval (SelfTestOpencodeProgress).
@@ -350,13 +353,14 @@ enum MCPBridge {
                     progress.answer(message, in: calls) {
                         // Only a catalog tool's call waits for the hub's plan; Next Term's own go to the app as they did.
                         let session = MCPHubCatalog.isCatalogTool(MCPBridgeHub.toolName(message)) ? hub.session : nil
-                        return MCPServer.respond(to: message, version: version, extra: session?.tools ?? [],
+                        return MCPServer.respond(to: message, version: version, hub: hubListed, extra: session?.tools ?? [],
                                                  callExtra: { session?.call($0, $1) ?? [:] }, call: { forward($0, $1, socket: socket) })
                     }
                 } else {
                     // The tool list is the one place the hub shows: it waits for the plan (MCPBridgeHub.planWait at most).
                     let session = message["method"] as? String == "tools/list" ? hub.session : nil
-                    if let response = MCPServer.respond(to: message, version: version, instructions: instructions, extra: session?.tools ?? [],
+                    if let response = MCPServer.respond(to: message, version: version, instructions: instructions, hub: hubListed,
+                                                        extra: session?.tools ?? [],
                                                         call: { _, _ in MCPServer.CallResult(text: "") }) {
                         send(response)
                     }

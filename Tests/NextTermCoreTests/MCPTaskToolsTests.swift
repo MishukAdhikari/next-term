@@ -50,8 +50,12 @@ import Testing
         #expect(last == ["add_task", "list_secrets", "request_secret", "store_secret", "run_with_secrets", "import_secrets"])
         #expect(names.filter { $0 == "add_task" }.count == 1)
         // The instructions name it among the tools that ask, and still fit.
-        #expect(MCPServer.instructions.contains("apply_import, undo_import, apply_setup, add_task and add_mcp_server ask the user on the Mac first"))
-        for inTab in [false, true] { #expect(MCPServer.instructions(inTab: inTab, offeringTabs: true).utf16.count <= 2048) }
+        #expect(MCPServer.instructions.contains("apply_import, undo_import, apply_setup and add_task ask the user on the Mac first"))
+        #expect(MCPServer.instructions(inTab: false, offeringTabs: true, hub: true)
+            .contains("apply_import, undo_import, apply_setup, add_task and add_mcp_server ask the user on the Mac first"))
+        for inTab in [false, true] {
+            for hub in [false, true] { #expect(MCPServer.instructions(inTab: inTab, offeringTabs: true, hub: hub).utf16.count <= 2048) }
+        }
     }
 
     @Test func theArgumentsAreCheckedBeforeAnyoneIsAsked() throws {

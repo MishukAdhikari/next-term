@@ -170,6 +170,34 @@ import Testing
         }
     }
 
+    /// R17: until the user has a list of servers, tools/list and the instructions are as they were: neither tool, no
+    /// `mcp` in show_settings, the old words. Once there is one, both tools come, after Next Term's control tools.
+    @Test func theAgentToolsAreListedOnlyOnceTheUserHasAList() throws {
+        func listed(hub: Bool) -> [[String: Any]] {
+            let answer = MCPServer.respond(to: ["jsonrpc": "2.0", "id": 1, "method": "tools/list"], version: "0", hub: hub) { _, _ in
+                MCPServer.CallResult(text: "")
+            }
+            return (answer?["result"] as? [String: Any])?["tools"] as? [[String: Any]] ?? []
+        }
+        func enumOfShowSettings(_ tools: [[String: Any]]) -> [String] {
+            let tool = tools.first { $0["name"] as? String == "show_settings" }
+            let schema = tool?["inputSchema"] as? [String: Any], properties = schema?["properties"] as? [String: Any]
+            return (properties?["tab"] as? [String: Any])?["enum"] as? [String] ?? []
+        }
+        let before = listed(hub: false), after = listed(hub: true)
+        #expect(before.count == MCPServer.tools.count - 2 && after.count == MCPServer.tools.count)
+        #expect(!before.contains { MCPServer.isHubTool($0["name"] as? String ?? "") })
+        #expect(after.filter { MCPServer.isHubTool($0["name"] as? String ?? "") }.count == 2)
+        #expect(!enumOfShowSettings(before).contains("mcp") && enumOfShowSettings(after).contains("mcp"))
+        let described = before.first { $0["name"] as? String == "show_settings" }?["description"] as? String
+        #expect(described?.contains("skills, tasks (where") == true && described?.contains("MCP") == false)
+        for inTab in [false, true] {
+            #expect(!MCPServer.instructions(inTab: inTab, offeringTabs: true).contains("add_mcp_server"))
+            #expect(MCPServer.instructions(inTab: inTab, offeringTabs: true, hub: true).contains("add_task and add_mcp_server ask the user"))
+        }
+        #expect(MCPServer.instructions(inTab: false, offeringTabs: true) == MCPServer.instructions)
+    }
+
     @Test func addMakesTheServerWithItsKeysByName() throws {
         let local = try MCPServer.addServerRequest([
             "name": "github", "command": "npx", "args": ["-y", "@modelcontextprotocol/server-github@2025.4.8"],

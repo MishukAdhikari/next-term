@@ -88,7 +88,7 @@ import Testing
                 answer("prompts/list"),
             ]
             let data = try JSONSerialization.data(withJSONObject: answers, options: [.sortedKeys, .withoutEscapingSlashes])
-            #expect(SecretRun.digest(data) == "7aa81652fec91a3ffe6643e6bb3059b28d4a180462410537e5a8f05b279d02b4")
+            #expect(SecretRun.digest(data) == "4c279107834cad04c5737de883494cf4ed1b34fa8057926407dca5d91e8461a8")
             // A catalog tool is unknown, as it was.
             let called = MCPServer.respond(to: ["jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": ["name": "mcp_servers"]],
                                            version: "0", extra: hub.tools, callExtra: hub.call) { _, _ in MCPServer.CallResult(text: "") }
@@ -99,7 +99,8 @@ import Testing
     @Test func aServerAddsTheCatalogAfterNextTermsOwnTools() {
         let hub = session(plan([fakeServer()]))
         #expect(hub.isActive)
-        let listed = MCPServer.respond(to: ["jsonrpc": "2.0", "id": 1, "method": "tools/list"], version: "0", extra: hub.tools) { _, _ in
+        // A server means the user's list is there, so Next Term's own tools for it are listed too (MCPServer.listed).
+        let listed = MCPServer.respond(to: ["jsonrpc": "2.0", "id": 1, "method": "tools/list"], version: "0", hub: true, extra: hub.tools) { _, _ in
             MCPServer.CallResult(text: "")
         }
         let names = ((listed?["result"] as? [String: Any])?["tools"] as? [[String: Any]] ?? []).compactMap { $0["name"] as? String }

@@ -22,8 +22,11 @@ public enum MCPServer {
     /// 250 characters Codex shows of a deferred server's first line, so an agent that needs a key looks there before its
     /// shell files or the user; what the tools do follows, then where to learn to set Next Term up (setupPointer), and how
     /// keys are used ends it (secretsUse). Every variant stays within the 2,048 characters older Claude Code keeps.
-    public static let instructions = secretsLead + "\n" + "Next Term is the terminal and editor this agent may run in. "
-        + orchestration + " " + setupPointer + " " + secretsUse
+    public static let instructions = outside(orchestration)
+
+    static func outside(_ orchestration: String) -> String {
+        secretsLead + "\n" + "Next Term is the terminal and editor this agent may run in. " + orchestration + " " + setupPointer + " " + secretsUse
+    }
 
     /// Where an agent outside a Next Term tab learns to set Next Term up: an agent in a tab has next-term-setup in the
     /// skills paragraph instead.
@@ -33,17 +36,28 @@ public enum MCPServer {
     static let orchestration = """
         list_tabs shows every project, tab and herdr agent with its state. Start \
         an agent with new_tab (a folder and a command such as "claude", "codex" or "opencode"), give it a task with \
-        send_to_tab, wait_for_tab until it stops, then read_tab. An agent awaiting a decision shows \
+        send_to_tab, then wait_for_tab until it stops and read_tab. An agent awaiting a decision shows \
         "attention" and a question_id for answer_agent. Never type into your own tab ("you": true). \
         read_file, find_in_files, git_status, get_diff and get_editor_selection read projects and the editor. \
-        list_hosts, new_remote_tab, host_sessions and host_changes work on the user's hosts. list_skills \
+        list_hosts, new_remote_tab, host_sessions and host_changes work on the user's servers. list_skills \
         and get_skill give your project's, the user's and Next Term's skills: read one that fits and your \
-        agent doesn't load. propose_edit shows the user an edit to accept. write_file, \
+        agent doesn't load. propose_edit shows an edit for the user to accept. write_file, \
         create_file, stage, commit, focus_tab, split_pane, close_pane, zoom_pane, set_layout, settings_set, \
-        install_skill, remove_skill, apply_import, undo_import, apply_setup, add_task and add_mcp_server ask the user on the Mac \
-        first; a decline changes nothing. For another app's settings use list_import_sources and preview_import, \
+        install_skill, remove_skill, apply_import, undo_import, apply_setup and add_task ask the user on the Mac first, and change \
+        nothing if declined. For settings from another app use list_import_sources and preview_import, \
         never its files. A tab Next Term brings back after an update or a quit keeps its id.
         """
+
+    /// The same once the user has a list of MCP servers (`hub`, MCPServer.listed): add_mcp_server among the tools that
+    /// ask. Four phrases are shorter, so every variant still fits in 2,048 characters; until then the words are the
+    /// ones above, unchanged (R17).
+    static let hubOrchestration = [
+        ("send_to_tab, then wait_for_tab until it stops and read_tab", "send_to_tab, wait_for_tab until it stops, then read_tab"),
+        ("work on the user's servers", "work on the user's hosts"),
+        ("propose_edit shows an edit for the user to accept", "propose_edit shows the user an edit to accept"),
+        ("apply_setup and add_task ask the user on the Mac first, and change nothing if declined. For settings from another app",
+         "apply_setup, add_task and add_mcp_server ask the user on the Mac first; a decline changes nothing. For another app's settings"),
+    ].reduce(orchestration) { $0.replacingOccurrences(of: $1.0, with: $1.1) }
 
     /// Right after Secrets' first line when the agent runs in a Next Term tab: each of Next Term's own skills offered
     /// (BuiltInSkill.offered), with when to read it; get_skill gives the rules. next-term-tabs leads, while Settings ›
@@ -71,10 +85,11 @@ public enum MCPServer {
     }
 
     /// What `initialize` says: for an agent in a Next Term tab (`inTab`), Secrets' line, then Next Term's own skills in
-    /// place of the line that names Next Term.
-    public static func instructions(inTab: Bool, offeringTabs: Bool) -> String {
-        guard inTab else { return instructions }
-        return secretsLead + "\n" + skillsParagraph(offeringTabs: offeringTabs) + " " + orchestration + " " + secretsUse
+    /// place of the line that names Next Term. `hub`: the user has a list of MCP servers (MCPServer.listed).
+    public static func instructions(inTab: Bool, offeringTabs: Bool, hub: Bool = false) -> String {
+        let said = hub ? hubOrchestration : orchestration
+        guard inTab else { return outside(said) }
+        return secretsLead + "\n" + skillsParagraph(offeringTabs: offeringTabs) + " " + said + " " + secretsUse
     }
 
     // MARK: tools
@@ -231,10 +246,7 @@ public enum MCPServer {
              description: "The user's keyboard shortcuts as Next Term has them now: the shortcut set (Next Term, VS Code or JetBrains), and each command's title, where it is (a menu path such as \"File › New Tab\", or the part it works in), its key (null when it has none), and its default when the user changed it. query narrows it to commands whose title or place has all its words, or whose key it is (\"⌥⌘T\"). Keys differ with the set and the user's own changes: tell the user keys from here, never from memory.",
              inputSchema: #"{"type": "object", "properties": {"query": {"type": "string", "description": "Words in the command's title or menu path (\"split\", \"terminal position\"), or a key such as ⌘T. Default: every command."}}, "additionalProperties": false}"#,
              readOnly: true, destructive: false, idempotent: true, timeout: 15),
-        Tool(name: "show_settings", title: "Show Settings",
-             description: "Opens Next Term's Settings at a tab, in front of the user, for what agents don't change themselves: general, editor, terminal, notifications, keys (Keyboard Shortcuts), import, skills, mcp (MCP Servers: the servers agents reach through Next Term), tasks (where the todo folder is) or secrets. It changes no setting (settings_set and set_layout change the ones agents may). front is false when Next Term isn't the app in front: its Dock icon bounces instead.",
-             inputSchema: #"{"type": "object", "properties": {"tab": {"type": "string", "enum": ["general", "editor", "terminal", "notifications", "keys", "import", "skills", "mcp", "tasks", "secrets"], "description": "The Settings tab."}}, "required": ["tab"], "additionalProperties": false}"#,
-             readOnly: false, destructive: false, idempotent: true, timeout: 15),
+        showSettings(hub: true),
         Tool(name: "install_skill", title: "Ask to install a skill",
              description: "Asks the user to install an agent skill from a public GitHub repository. Nothing is fetched or written on this request alone: the user sees it in Next Term, chooses to review the skill's files, and decides. Answers within about 50 seconds: installed (with the names), declined, failed (with a note saying why), busy (another request is waiting; ask later), or pending with a request_id: call again with only request_id to keep waiting. A source the user declined stays declined until Next Term quits.",
              inputSchema: #"{"type": "object", "properties": {"source": {"type": "string", "description": "owner/repo, owner/repo/path/to/skill, or a github.com link to a repository, folder or SKILL.md."}, "reason": {"type": "string", "description": "Why, in a sentence; shown to the user as your words."}, "request_id": {"type": "string", "description": "A pending request's id, to keep waiting for the user's answer."}}, "additionalProperties": false}"#,
@@ -250,6 +262,25 @@ public enum MCPServer {
     ] + controlTools + hubTools + importTools + setupTools + taskTools + secretTools
 
     public static func tool(named name: String) -> Tool? { tools.first { $0.name == name } }
+
+    /// show_settings. `hub`: with Settings › MCP Servers (`mcp`) among its tabs, listed once the user has a list of MCP
+    /// servers (MCPServer.listed); before, its words are as they were (R17). The app opens `mcp` either way.
+    static func showSettings(hub: Bool) -> Tool {
+        let tabs = hub ? MCPShortcuts.settingsTabs : MCPShortcuts.settingsTabs.filter { $0 != "mcp" }
+        let named = hub ? "skills, mcp (MCP Servers: the servers agents reach through Next Term), tasks" : "skills, tasks"
+        let schema = #"{"type": "object", "properties": {"tab": {"type": "string", "enum": ["# + tabs.map { "\"\($0)\"" }.joined(separator: ", ")
+            + #"], "description": "The Settings tab."}}, "required": ["tab"], "additionalProperties": false}"#
+        return Tool(name: "show_settings", title: "Show Settings",
+                    description: "Opens Next Term's Settings at a tab, in front of the user, for what agents don't change themselves: general, editor, terminal, notifications, keys (Keyboard Shortcuts), import, \(named) (where the todo folder is) or secrets. It changes no setting (settings_set and set_layout change the ones agents may). front is false when Next Term isn't the app in front: its Dock icon bounces instead.",
+                    inputSchema: schema, readOnly: false, destructive: false, idempotent: true, timeout: 15)
+    }
+
+    /// The tools tools/list gives. Until the user has a list of MCP servers (`hub`: Next Term's own file of them is
+    /// there, MCPBridgeHub), it is the list from before the hub, byte for byte (R17): no add_mcp_server nor
+    /// list_mcp_servers, and show_settings without `mcp`. Calls are answered either way.
+    public static func listed(hub: Bool) -> [Tool] {
+        hub ? tools : tools.compactMap { isHubTool($0.name) ? nil : $0.name == "show_settings" ? showSettings(hub: false) : $0 }
+    }
 
     static func listing(_ listed: [Tool] = tools) -> [[String: Any]] {
         listed.map { tool in
@@ -285,9 +316,10 @@ public enum MCPServer {
 
     /// Answers one JSON-RPC message (nil for notifications). `call` runs a tool; it may block. `extra`: tools listed after
     /// Next Term's own, each call to one answered whole by `callExtra` (the MCP hub's catalog, MCPHubCatalog); none
-    /// leaves every answer as it is without them.
+    /// leaves every answer as it is without them. `hub`: the user has a list of MCP servers, so Next Term's own tools
+    /// for them are listed too (`listed`).
     public static func respond(to message: [String: Any], version: String, instructions said: String = instructions,
-                               extra: [Tool] = [], callExtra: (_ name: String, _ arguments: [String: Any]) -> [String: Any] = { _, _ in [:] },
+                               hub: Bool = false, extra: [Tool] = [], callExtra: (_ name: String, _ arguments: [String: Any]) -> [String: Any] = { _, _ in [:] },
                                call: (_ name: String, _ arguments: [String: Any]) -> CallResult) -> [String: Any]? {
         guard let method = message["method"] as? String else { return nil } // a response to us: none expected
         guard let id = message["id"], !(id is NSNull) else { return nil } // a notification
@@ -308,7 +340,7 @@ public enum MCPServer {
         case "ping":
             return result([String: Any]())
         case "tools/list":
-            return result(["tools": extra.isEmpty ? listing() : listing() + listing(extra)])
+            return result(["tools": listing(listed(hub: hub)) + listing(extra)])
         case "tools/call":
             if let name = params["name"] as? String, extra.contains(where: { $0.name == name }) {
                 return result(callExtra(name, params["arguments"] as? [String: Any] ?? [:]))
