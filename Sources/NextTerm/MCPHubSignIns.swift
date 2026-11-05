@@ -42,6 +42,8 @@ enum MCPHubSignIns {
     /// The self-test's: the agent a caller is, and the browser.
     static var agentForTest: ((TerminalTab?) -> String?)?
     static var openForTest: ((URL) -> Bool)?
+    /// The self-test's: sign-ins' states for Settings, in place of the file's.
+    static var statesForTest: [String: MCPHubOverview.SignIn]?
     #endif
 
     static var folder: SecretFolder { SecretsStore.shared.folder }
@@ -56,6 +58,9 @@ enum MCPHubSignIns {
 
     /// Each sign-in's state for Settings, by `MCPHubOverview.signInKey`.
     static func states() -> [String: MCPHubOverview.SignIn] {
+        #if DEBUG
+        if let statesForTest { return statesForTest }
+        #endif
         var found: [String: MCPHubOverview.SignIn] = [:]
         for record in peek()?.records ?? [] { found[MCPHubOverview.signInKey(record.resource)] = MCPHubOverview.SignIn(record.state) }
         return found

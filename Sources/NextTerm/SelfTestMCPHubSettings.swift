@@ -139,7 +139,75 @@ extension SelfTest {
                   "\(plan.servers.map { "\($0.name) \($0.state.rawValue)" })")
         }
         view.show(0)
+        await signInStateChecks(view, window: window, userFile: userFile)
         await agentsChecks(view, window: window, dir: dir, script: script, userFile: userFile)
+    }
+
+    /// The sign-in states in Settings, one server each: Needs sign-in (its last need got a Bearer challenge), Signed in
+    /// with its tools, Signed out — Reconnect… and Needs more access — Reconnect…, each with its one button under the
+    /// table; a local server has none. Then a lapse's notice, once however often it is met, and its click: Settings
+    /// opened on the server with Reconnect…. (The mcpHubOAuth part signs in for real.)
+    private static func signInStateChecks(_ view: MCPServersSettingsView, window: NSWindow, userFile: String) async {
+        let cases: [(name: String, signIn: MCPHubOverview.SignIn?, run: MCPHubOverview.Run?, text: String, button: String)] = [
+            ("signs-in", nil, .init(failure: MCPHubSignInWords.needsSignIn("signs-in"), tools: 0, needsSignIn: true), "Needs sign-in", "Sign In\u{2026}"),
+            ("signed-in", .signedIn, .init(failure: nil, tools: 12), "Signed in \u{00B7} 12 tools", "Sign Out"),
+            ("lapsed", .signedOut, nil, "Signed out \u{2014} Reconnect\u{2026}", "Reconnect\u{2026}"),
+            ("more-access", .needsMoreAccess(["files:write"]), nil, "Needs more access \u{2014} Reconnect\u{2026}", "Reconnect\u{2026}"),
+        ]
+        func url(_ name: String) -> String { "https://\(name).example.com/mcp" }
+        var states: [String: MCPHubOverview.SignIn] = [:]
+        for each in cases {
+            _ = MCPHubScope.save(.set(MCPHubServer.remote(each.name, url: url(each.name))), to: userFile, place: .user)
+            MCPHubControl.lastRuns[MCPHubOverview.runKey(list: userFile, server: each.name)] = each.run
+            if let signIn = each.signIn { states[MCPHubOverview.signInKey(url(each.name))] = signIn }
+        }
+        MCPHubSignIns.statesForTest = states
+        defer {
+            for each in cases {
+                MCPHubControl.lastRuns[MCPHubOverview.runKey(list: userFile, server: each.name)] = nil
+                _ = MCPHubScope.save(.remove(each.name), to: userFile, place: .user)
+            }
+            MCPHubSignIns.statesForTest = nil
+            view.reload()
+        }
+        view.reload()
+        for each in cases {
+            guard let row = view.rows.firstIndex(where: { $0.name == each.name }) else {
+                check(false, "MCP settings: the URL server \(each.name) is listed")
+                continue
+            }
+            view.table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+            let shown = view.cellText(view.rows[row], column: "state")
+            check(shown == each.text && view.signInButton.title == each.button && !view.signInButton.isHidden,
+                  "MCP settings: \(each.name) reads \(each.text), with \(each.button) under the table", "\(shown) | \(view.signInButton.title)")
+        }
+        if let row = view.rows.firstIndex(where: { $0.name == "lapsed" }) {
+            view.table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+        }
+        await screenshot(window, suffix: "-mcp-settings-sign-in-states")
+        if let local = view.rows.firstIndex(where: { $0.server?.transport == .stdio }) {
+            view.table.selectRowIndexes(IndexSet(integer: local), byExtendingSelection: false)
+            check(view.signInButton.isHidden, "MCP settings: a local server has no Sign In\u{2026}")
+        }
+
+        // The lapse's notice: one for the lapse, however many needs meet it; clicked, Settings on the server with Reconnect….
+        let lapsed = url("lapsed")
+        let before = AppDelegate.shared.testNotifications.count
+        let id = "self-test-\(getpid())"
+        MCPHubSignIns.notice(id, lapse: 1, name: "lapsed", url: lapsed)
+        MCPHubSignIns.notice(id, lapse: 1, name: "lapsed", url: lapsed)
+        let notices = AppDelegate.shared.testNotifications.dropFirst(before).filter { $0.identifier.hasPrefix("mcp-sign-in-") }
+        let expected = NotificationSettings(defaults: .standard).programAlerts ? 1 : 0
+        check(notices.count == expected && (notices.first.map { $0.content.title == MCPHubSignInWords.notice("lapsed").title
+                                                              && $0.content.body == MCPHubSignInWords.notice("lapsed").body } ?? true),
+              "MCP settings: a lapse is one notice, never repeated for the same lapse", "\(notices.count) notices")
+        MCPHubSignIns.openReconnect(lapsed)
+        let settings = AppDelegate.shared.showsMCPServersForTest
+        check(settings?.selected?.name == "lapsed" && settings?.signInButton.title == "Reconnect\u{2026}",
+              "MCP settings: the Reconnect notice opens Settings on the server, with Reconnect\u{2026}",
+              settings?.selected?.name ?? "nothing selected")
+        if let settingsWindow = settings?.window { await screenshot(settingsWindow, suffix: "-mcp-settings-reconnect-notice") }
+        settings?.window?.orderOut(nil)
     }
 
     /// Found in your agents, the new-server offer's notice, and the agent tools.

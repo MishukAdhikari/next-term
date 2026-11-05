@@ -121,21 +121,27 @@ extension SelfTest {
     /// Streamable HTTP with a session; and one that wants a key Next Term doesn't send, whose 401 tells the agent where
     /// the user checks it. Settings' state for each is what the need ended in.
     private static func mcpHubRemoteChecks(_ c: TerminalWindowController, folder: URL, userFile: String, initialize: [String: Any]) async {
-        guard let open = try? MCPHubFakeRemote(), let locked = try? MCPHubFakeRemote() else {
+        guard let open = try? MCPHubFakeRemote(), let locked = try? MCPHubFakeRemote(), let asks = try? MCPHubFakeRemote(),
+              let auth = try? MCPHubFakeAuth() else {
             return check(false, "MCP hub: the fake remote servers listen on this Mac")
         }
-        defer { open.stop(); locked.stop() }
+        defer { open.stop(); locked.stop(); asks.stop(); auth.stop() }
         open.sessions = true
         locked.bearer = "never-sent"
+        // One that asks for a sign-in (OAuth): with none in Next Term, the agent is told to have the user sign in.
+        asks.auth = auth
+        auth.resource = asks.url.absoluteString
         let scope = MCPHubServer.Projects.only([canonicalPath(folder.path)])
         for server in [MCPHubServer.remote("remote", url: open.url.absoluteString, projects: scope),
-                       MCPHubServer.remote("locked", url: locked.url.absoluteString, projects: scope)] {
+                       MCPHubServer.remote("locked", url: locked.url.absoluteString, projects: scope),
+                       MCPHubServer.remote("asks", url: asks.url.absoluteString, projects: scope)] {
             _ = MCPHubScope.save(.set(server), to: userFile, place: .user)
         }
         let requests: [[String: Any]] = [
             initialize,
             ["jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": ["name": "mcp_call", "arguments": ["server": "remote", "tool": "echo", "arguments": ["say": "hi"]]]],
             ["jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": ["name": "mcp_tools", "arguments": ["server": "locked"]]],
+            ["jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": ["name": "mcp_tools", "arguments": ["server": "asks"]]],
         ]
         // mcp_servers once the calls are answered: the bridge answers calls side by side, so asked beside them it may
         // come first and find the remote server not reached yet.
@@ -150,6 +156,12 @@ extension SelfTest {
         check(resultText(answers[3]).contains("Settings › MCP Servers"), "MCP hub: a 401 tells the agent where the user checks the key",
               resultText(answers[3]))
         check(resultText(answers[4]).contains("\"running\""), "MCP hub: mcp_servers lists the remote server running", resultText(answers[4]))
+        check(resultText(answers[5]) == MCPHubSignInWords.needsSignIn("asks") && auth.count("/token") == 0,
+              "MCP hub: a server that asks for a sign-in tells the agent to have the user sign in, and nothing signs in by itself",
+              resultText(answers[5]))
+        let asked = MCPHubControl.lastRuns[MCPHubOverview.runKey(list: userFile, server: "asks")]
+        check(asked?.needsSignIn == true && MCPHubSignIns.challenges[MCPHubOverview.signInKey(asks.url.absoluteString)] != nil,
+              "MCP hub: Settings shows it needing a sign-in, and keeps where it said to sign in", "\(String(describing: asked))")
         // The app kept the remote server's tools as it listed them, so the next agent has them as its own too.
         let next = await bridgeInTab(c, folder: folder, requests: [
             initialize, ["jsonrpc": "2.0", "id": 2, "method": "tools/list"],
@@ -162,12 +174,12 @@ extension SelfTest {
         let refused = MCPHubControl.lastRuns[MCPHubOverview.runKey(list: userFile, server: "locked")]
         check(ran == MCPHubOverview.Run(failure: nil, tools: 3) && refused?.failure?.contains("HTTP 401") == true,
               "MCP hub: Settings shows the remote servers ready and failed, with why", "\(String(describing: ran)) \(String(describing: refused))")
-        for name in ["remote", "locked"] { _ = MCPHubScope.save(.remove(name), to: userFile, place: .user) }
+        for name in ["remote", "locked", "asks"] { _ = MCPHubScope.save(.remove(name), to: userFile, place: .user) }
     }
 
     /// Runs `nxtrm mcp` in a new tab in `folder`, as an agent there starts it, with `requests` on its stdin and the
     /// self-test's list for the user's: its answers, by id, once it ends.
-    private static func bridgeInTab(_ c: TerminalWindowController, folder: URL, requests: [[String: Any]], name: String,
+    static func bridgeInTab(_ c: TerminalWindowController, folder: URL, requests: [[String: Any]], name: String,
                                     userFile: String, then later: [[String: Any]] = []) async -> [Int: [String: Any]] {
         let input = folder.deletingLastPathComponent().appendingPathComponent("\(name).jsonl")
         let laterInput = folder.deletingLastPathComponent().appendingPathComponent("\(name)-then.jsonl")
@@ -203,11 +215,11 @@ extension SelfTest {
         return answers
     }
 
-    private static func toolNames(_ answer: [String: Any]?) -> [String] {
+    static func toolNames(_ answer: [String: Any]?) -> [String] {
         ((answer?["result"] as? [String: Any])?["tools"] as? [[String: Any]] ?? []).compactMap { $0["name"] as? String }
     }
 
-    private static func resultText(_ answer: [String: Any]?) -> String {
+    static func resultText(_ answer: [String: Any]?) -> String {
         (((answer?["result"] as? [String: Any])?["content"] as? [[String: Any]])?.first?["text"] as? String) ?? ""
     }
 
