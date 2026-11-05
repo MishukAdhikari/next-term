@@ -4540,8 +4540,8 @@ enum SelfTest {
         shortcuts.set(nil, for: "clearBuffer:")
         check(shortcuts.commands.first { $0.id == "clearBuffer:" }?.item?.keyEquivalent == "", "a shortcut can be removed")
         AppDelegate.shared.showSettings(nil)
-        check(NSApp.windows.contains { $0.title == "Settings" && $0.isVisible }, "Settings opens with ⌘, (Editor and Keyboard Shortcuts)")
-        NSApp.windows.first { $0.title == "Settings" }?.close()
+        check(AppDelegate.shared.openSettings != nil, "Settings opens with ⌘, (Editor and Keyboard Shortcuts)")
+        AppDelegate.shared.openSettings?.window?.close()
         shortcuts.resetAll()
         check(newTabItem?.keyEquivalentModifierMask == .command && shortcuts.chord(for: "clearBuffer:")?.display == "⌘K", "Restore All Defaults")
         let sidebarKey = shortcuts.chord(for: "toggleProjectSidebar:")?.display ?? "none"

@@ -652,22 +652,39 @@ final class KeyHintOverlay: NSView {
 
 /// Settings (⌘,): every command with its shortcut. Click a shortcut and press the new one; ⌫ removes it,
 /// ⎋ cancels.
-final class SettingsWindowController: NSWindowController, NSTableViewDataSource, NSTableViewDelegate, NSSearchFieldDelegate {
+final class SettingsWindowController: NSWindowController, NSTableViewDataSource, NSTableViewDelegate, NSSearchFieldDelegate,
+                                      NSToolbarDelegate, NSTabViewDelegate {
     private let table = NSTableView()
     private let search = NSSearchField()
     private var rows: [KeyboardShortcuts.Command] = []
 
+    /// Each section's toolbar item: its name as the toolbar shows it, and its SF Symbol (all in macOS 13's set).
+    /// Keyboard Shortcuts shows as Shortcuts, so all ten fit whole; its tooltip and the window's title name it fully.
+    static let sections: [(id: String, label: String, symbol: String)] = [
+        ("general", "General", "gearshape"), ("editor", "Editor", "doc.text"), ("terminal", "Terminal", "terminal"),
+        ("notifications", "Notifications", "bell.badge"), ("keys", "Shortcuts", "keyboard"),
+        ("import", "Import", "square.and.arrow.down"), ("skills", "Skills", "sparkles"), ("mcp", "MCP Servers", "server.rack"),
+        ("tasks", "Tasks", "checklist"), ("secrets", "Secrets", "key"),
+    ]
+
+    /// The tab view the toolbar picks a section of: the window's content, with no tabs of its own.
+    private var tabs: NSTabView? { window?.contentView as? NSTabView }
+
     init() {
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 620, height: 730), styleMask: [.titled, .closable, .resizable],
+        // The panes keep the room they had inside the old bordered tab view (600 × 684); the toolbar above them is
+        // macOS's own Settings toolbar, as Safari's and Mail's are.
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 620, height: 684), styleMask: [.titled, .closable, .resizable],
                               backing: .buffered, defer: false)
         window.title = "Settings"
         window.keepsItsOwnFrame()
         window.minSize = NSSize(width: 480, height: 320)
         window.isReleasedWhenClosed = false
+        window.toolbarStyle = .preference
         super.init(window: window)
         // What a launch shows, the editor's settings, the terminal's, notifications, every shortcut, and imports.
         // General is first, so it is the tab Settings opens on.
         let tabs = NSTabView()
+        tabs.tabViewType = .noTabsNoBorder
         let generalTab = NSTabViewItem(identifier: "general")
         generalTab.label = "General"
         generalTab.view = GeneralSettingsView()
@@ -715,18 +732,82 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
         NotificationCenter.default.addObserver(self, selector: #selector(presetChanged), name: ImportCoordinator.changed, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(closing), name: NSWindow.willCloseNotification, object: window)
         window.contentView = tabs
+        tabs.delegate = self
+        let toolbar = NSToolbar(identifier: "Settings")
+        toolbar.delegate = self
+        toolbar.displayMode = .iconAndLabel
+        toolbar.allowsUserCustomization = false
+        window.toolbar = toolbar
+        sectionShown()
+        // Never narrower than the toolbar with every name whole: no section goes into an overflow menu.
+        window.layoutIfNeeded()
+        window.minSize.width = max(window.minSize.width, toolbarFitWidth)
+        if window.frame.width < window.minSize.width { window.setContentSize(NSSize(width: window.minSize.width, height: 684)) }
         shortcutsContent = keysTab.view
         build()
         reload()
         window.center()
     }
 
+    // MARK: Toolbar
+
+    func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        Self.sections.map { NSToolbarItem.Identifier($0.id) }
+    }
+
+    func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        toolbarAllowedItemIdentifiers(toolbar)
+    }
+
+    func toolbarSelectableItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        toolbarAllowedItemIdentifiers(toolbar)
+    }
+
+    func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier itemIdentifier: NSToolbarItem.Identifier,
+                 willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
+        guard let section = Self.sections.first(where: { $0.id == itemIdentifier.rawValue }) else { return nil }
+        let full = tabs?.tabViewItems.first { $0.identifier as? String == section.id }?.label ?? section.label
+        let item = NSToolbarItem(itemIdentifier: itemIdentifier)
+        item.label = section.label
+        item.paletteLabel = full
+        item.toolTip = full
+        item.image = NSImage(systemSymbolName: section.symbol, accessibilityDescription: full)
+            ?? NSImage(systemSymbolName: "gearshape", accessibilityDescription: full)
+        item.target = self
+        item.action = #selector(pickSection(_:))
+        return item
+    }
+
+    @objc private func pickSection(_ sender: NSToolbarItem) { showTab(sender.itemIdentifier.rawValue) }
+
+    func tabView(_ tabView: NSTabView, didSelect tabViewItem: NSTabViewItem?) { sectionShown() }
+
+    /// The toolbar marks the section shown, and the window is titled with its whole name, as Mac Settings windows are.
+    private func sectionShown() {
+        guard let item = tabs?.selectedTabViewItem, let id = item.identifier as? String else { return }
+        window?.toolbar?.selectedItemIdentifier = NSToolbarItem.Identifier(id)
+        window?.title = item.label
+    }
+
+    /// The narrowest window whose toolbar shows every item: each item's own width, and the toolbar's margins.
+    private var toolbarFitWidth: CGFloat {
+        guard let items = window?.toolbar?.items, !items.isEmpty else { return 0 }
+        let font = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
+        let labels = items.map { ($0.label as NSString).size(withAttributes: [.font: font]).width }
+        // An item is at least as wide as its icon's well (about 40 pt) and its label with a margin each side.
+        return labels.reduce(0) { $0 + max(40, ceil($1) + 16) } + CGFloat(items.count - 1) * 2 + 24
+    }
+
+    /// The toolbar's items, by section (for the self-test).
+    var toolbarItems: [NSToolbarItem] { window?.toolbar?.items ?? [] }
+
     private var shortcutsContent: NSView?
 
     @objc private func presetChanged() { reload() }
 
     func showTab(_ identifier: String) {
-        (window?.contentView as? NSTabView)?.selectTabViewItem(withIdentifier: identifier)
+        tabs?.selectTabViewItem(withIdentifier: identifier)
+        sectionShown()
     }
 
     /// Settings › Terminal.
@@ -754,7 +835,7 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
     }
 
     /// The tab shown, by its identifier (for the self-test of show_settings).
-    var shownTab: String? { (window?.contentView as? NSTabView)?.selectedTabViewItem?.identifier as? String }
+    var shownTab: String? { tabs?.selectedTabViewItem?.identifier as? String }
 
     required init?(coder: NSCoder) { fatalError("not used") }
 

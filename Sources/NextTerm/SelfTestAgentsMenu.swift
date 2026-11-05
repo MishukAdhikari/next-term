@@ -126,6 +126,34 @@ extension SelfTest {
         agents.performActionForItem(at: index)
         let opened = await wait(3) { settings()?.window?.isVisible == true && selectedTab() == "skills" }
         check(opened, "agents menu: Skills… opens Settings on its Skills tab", "\(String(describing: settings()?.window?.isVisible)) \(selectedTab() ?? "no tab")")
+        if let shown = settings(), let window = shown.window {
+            // Settings is the Mac's toolbar Settings window: a section per item, each named whole, the one shown marked.
+            let names = SettingsWindowController.sections.map(\.label)
+            check(shown.toolbarItems.map(\.label) == names && window.toolbarStyle == .preference,
+                  "Settings: its sections are the Settings toolbar's items, in order", shown.toolbarItems.map(\.label).joined(separator: ", "))
+            check(window.toolbar?.selectedItemIdentifier?.rawValue == "skills" && window.title == "Skills",
+                  "Settings: the toolbar marks Skills, and the window is titled with it", "\(window.title) \(window.toolbar?.selectedItemIdentifier?.rawValue ?? "none")")
+            let whole = toolbarLabelsShownWhole(in: window)
+            check(names.allSatisfy { whole[$0] == true }, "Settings: every toolbar item's name is shown whole, none in an overflow menu",
+                  names.map { "\($0): \(whole[$0].map { $0 ? "whole" : "cut" } ?? "not shown")" }.joined(separator: ", "))
+            // The check sees a cut: squeezed below the window's least width, items go to the overflow menu.
+            let before = window.frame
+            window.setContentSize(NSSize(width: 420, height: window.contentLayoutRect.height))
+            window.layoutIfNeeded()
+            await pause(0.3)
+            let squeezed = toolbarLabelsShownWhole(in: window)
+            window.setFrame(before, display: true)
+            check(names.contains { squeezed[$0] != true } && window.minSize.width >= 600,
+                  "Settings: a window narrower than its toolbar would cut a name, so it is never let that narrow",
+                  "least width \(window.minSize.width)")
+            shown.showTab("keys")
+            check(window.title == "Keyboard Shortcuts" && window.toolbar?.selectedItemIdentifier?.rawValue == "keys"
+                  && shown.toolbarItems.first { $0.itemIdentifier.rawValue == "keys" }?.toolTip == "Keyboard Shortcuts",
+                  "Settings: Shortcuts is titled and tipped Keyboard Shortcuts", window.title)
+            shown.showTab("general")
+            await screenshot(window, suffix: "-settings-toolbar")
+            shown.showTab("skills")
+        }
         // As it was: the tab it was on, and closed unless it was open.
         settings()?.showTab(previousTab)
         if !wasOpen { settings()?.window?.close() }
@@ -188,4 +216,28 @@ extension SelfTest {
         let back = key(#selector(TerminalWindowController.resumeSession(_:)))
         check(back == shortcuts.baseChord(for: "resumeSession:")?.display && back == "⌥⌘O", "agents menu: Default puts ⌥⌘O back on Resume Agent Session…", back)
     }
+}
+
+/// Each toolbar item's label, and whether the toolbar draws it whole: the item in the toolbar, not in its overflow
+/// menu, and its label's view as wide as the label needs. macOS draws the labels itself, left to right in the items' order.
+@MainActor
+func toolbarLabelsShownWhole(in window: NSWindow) -> [String: Bool] {
+    guard let toolbar = window.toolbar, let frame = window.contentView?.superview else { return [:] }
+    var labels: [NSView] = []
+    func walk(_ view: NSView) {
+        if NSStringFromClass(type(of: view)).contains("ToolbarItemViewerLabelView"), !view.isHiddenOrHasHiddenAncestor { labels.append(view) }
+        view.subviews.forEach(walk)
+    }
+    walk(frame)
+    let shown = labels.sorted { $0.convert($0.bounds, to: nil).minX < $1.convert($1.bounds, to: nil).minX }
+    let items = toolbar.items
+    var found: [String: Bool] = [:]
+    for (index, item) in items.enumerated() {
+        guard item.isVisible, index < shown.count, shown.count == items.count else { found[item.label] = false; continue }
+        let view = shown[index]
+        let needed = view.intrinsicContentSize.width == NSView.noIntrinsicMetric ? view.fittingSize.width : view.intrinsicContentSize.width
+        let inWindow = frame.bounds.contains(view.convert(view.bounds, to: nil))
+        found[item.label] = needed > 0 && view.bounds.width + 0.5 >= needed && inWindow
+    }
+    return found
 }
