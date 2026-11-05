@@ -127,7 +127,7 @@ extension SelfTest {
         // Settings › Terminal › Position: the four places, the one chosen, following the menus, and choosing there.
         let settings = SettingsWindowController()
         let tabs = settings.window?.contentView as? NSTabView
-        let terminalSettings = tabs?.tabViewItems.first { $0.identifier as? String == "terminal" }?.view as? TerminalSettingsView
+        let terminalSettings = tabs?.tabViewItems.first { $0.identifier as? String == "terminal" }?.pane as? TerminalSettingsView
         terminalSettings?.refresh()
         let popup = terminalSettings?.behaviour.position
         let titles = popup?.itemTitles ?? []

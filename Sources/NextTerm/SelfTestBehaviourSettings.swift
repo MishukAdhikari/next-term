@@ -207,7 +207,7 @@ extension SelfTest {
             let needed = stack.fittingSize.height + 24
             check(needed <= page.bounds.height, "Settings › \(id) fits its window", "\(Int(needed)) > \(Int(page.bounds.height))")
         }
-        let terminal = tabs.tabViewItems.first { $0.identifier as? String == "terminal" }?.view as? TerminalSettingsView
+        let terminal = tabs.tabViewItems.first { $0.identifier as? String == "terminal" }?.pane as? TerminalSettingsView
         let shapes = terminal?.behaviour.shape.numberOfItems ?? 0
         let folders = terminal?.behaviour.startFolder.numberOfItems ?? 0
         check(shapes == 3 && folders == 5, "Settings › Terminal offers three cursors and where new tabs open", "\(shapes) \(folders)")
@@ -223,7 +223,7 @@ extension SelfTest {
         terminal?.behaviour.refresh()
 
         // Patterns with braces read back as they were: an edit to the field never splits one at its comma.
-        let editor = tabs.tabViewItems.first { $0.identifier as? String == "editor" }?.view as? EditorSettingsView
+        let editor = tabs.tabViewItems.first { $0.identifier as? String == "editor" }?.pane as? EditorSettingsView
         let imported = ["*.{pyc,pyo}", "node_modules"]
         Preferences.hiddenFilePatterns = imported
         editor?.saving.refresh()

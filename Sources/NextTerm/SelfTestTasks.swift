@@ -296,15 +296,16 @@ extension SelfTest {
               "tasks: with several projects open and none named, a caller outside the tabs is refused with no window", unnamed.text)
     }
 
-    /// Settings › Tasks: right before Secrets, its defaults, and each control saving what it says.
+    /// Settings › Tasks: after Skills and MCP Servers, right before Secrets, its defaults, and each control saving what
+    /// it says.
     private static func taskSettingsChecks() {
         let defaults = UserDefaults.standard
         let tabs = (SettingsWindowController().window?.contentView as? NSTabView)?.tabViewItems ?? []
         let identifiers = tabs.compactMap { $0.identifier as? String }
         let tasks = identifiers.firstIndex(of: "tasks")
-        check(tasks.map { identifiers[safe: $0 + 1] == "secrets" && identifiers[safe: $0 - 1] == "skills" } == true
+        check(tasks.map { Array(identifiers[max(0, $0 - 2)...min(identifiers.count - 1, $0 + 1)]) } == ["skills", "mcp", "tasks", "secrets"]
                 && tabs.first { $0.identifier as? String == "tasks" }?.label == "Tasks",
-              "tasks: Settings › Tasks sits between Skills and Secrets", identifiers.joined(separator: ", "))
+              "tasks: Settings › Tasks sits after Skills and MCP Servers, right before Secrets", identifiers.joined(separator: ", "))
         TaskSettings.Key.all.forEach(defaults.removeObject(forKey:))
         let view = TaskSettingsView(frame: .zero)
         check(view.folder.stringValue == "todo" && view.folderScope.stringValue == "in each project" && view.includeContext.state == .on

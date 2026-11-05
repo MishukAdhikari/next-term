@@ -73,7 +73,7 @@ extension SelfTest {
         // Settings › Terminal › Tabs follows the menus and chooses Right: the list mirrored at the terminal's right.
         let settings = SettingsWindowController()
         let settingsTabs = settings.window?.contentView as? NSTabView
-        let terminalSettings = settingsTabs?.tabViewItems.first { $0.identifier as? String == "terminal" }?.view as? TerminalSettingsView
+        let terminalSettings = settingsTabs?.tabViewItems.first { $0.identifier as? String == "terminal" }?.pane as? TerminalSettingsView
         terminalSettings?.refresh()
         let popup = terminalSettings?.behaviour.tabs
         let choices: [String] = popup?.itemTitles ?? []

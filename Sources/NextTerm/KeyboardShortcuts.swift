@@ -685,6 +685,7 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
         // General is first, so it is the tab Settings opens on.
         let tabs = NSTabView()
         tabs.tabViewType = .noTabsNoBorder
+        tabs.delegate = self // set first: each pane is readied as it is selected, General as it is added
         let generalTab = NSTabViewItem(identifier: "general")
         generalTab.label = "General"
         generalTab.view = GeneralSettingsView()
@@ -732,17 +733,15 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
         NotificationCenter.default.addObserver(self, selector: #selector(presetChanged), name: ImportCoordinator.changed, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(closing), name: NSWindow.willCloseNotification, object: window)
         window.contentView = tabs
-        tabs.delegate = self
         let toolbar = NSToolbar(identifier: "Settings")
         toolbar.delegate = self
         toolbar.displayMode = .iconAndLabel
         toolbar.allowsUserCustomization = false
         window.toolbar = toolbar
-        sectionShown()
         // Never narrower than the toolbar with every name whole: no section goes into an overflow menu.
         window.layoutIfNeeded()
         window.minSize.width = max(window.minSize.width, toolbarFitWidth)
-        if window.frame.width < window.minSize.width { window.setContentSize(NSSize(width: window.minSize.width, height: 684)) }
+        sectionShown()
         shortcutsContent = keysTab.view
         build()
         reload()
@@ -780,13 +779,86 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
 
     @objc private func pickSection(_ sender: NSToolbarItem) { showTab(sender.itemIdentifier.rawValue) }
 
+    func tabView(_ tabView: NSTabView, willSelect tabViewItem: NSTabViewItem?) {
+        if let tabViewItem { ready(tabViewItem) }
+    }
+
     func tabView(_ tabView: NSTabView, didSelect tabViewItem: NSTabViewItem?) { sectionShown() }
 
-    /// The toolbar marks the section shown, and the window is titled with its whole name, as Mac Settings windows are.
+    /// The toolbar marks the section shown, the window is titled with its whole name, and it takes the section's own
+    /// height, as Mac Settings windows do.
     private func sectionShown() {
         guard let item = tabs?.selectedTabViewItem, let id = item.identifier as? String else { return }
         window?.toolbar?.selectedItemIdentifier = NSToolbarItem.Identifier(id)
         window?.title = item.label
+        fit(item)
+    }
+
+    // MARK: Each section's height
+
+    /// The sections laid out from the top down, as tall as what they hold. The others fill the window: their lists
+    /// grow with it, and they keep the height Settings always had.
+    static let flowingSections: Set<String> = ["general", "editor", "terminal", "notifications"]
+    static let listHeight: CGFloat = 684
+    static let baseWidth: CGFloat = 620
+
+    /// The tallest content the window's screen has room for, under the title bar and the toolbar.
+    private var roomyHeight: CGFloat {
+        guard let window, let screen = window.screen ?? NSScreen.main else { return .greatestFiniteMagnitude }
+        let chrome = window.frame.height - window.contentRect(forFrameRect: window.frame).height
+        return screen.visibleFrame.height - chrome
+    }
+
+    private var contentWidth: CGFloat { window.map { $0.contentRect(forFrameRect: $0.frame).width } ?? 620 }
+
+    /// A flowing section's own height at `width`: its lowest view's bottom, and the margin its top has.
+    static func flowingHeight(of pane: NSView, width: CGFloat) -> CGFloat {
+        let saved = pane.frame
+        let probe: CGFloat = 4000
+        pane.frame = NSRect(x: 0, y: 0, width: width, height: probe)
+        pane.layoutSubtreeIfNeeded()
+        let shown = pane.subviews.filter { !$0.isHidden }
+        let extent = pane.isFlipped ? shown.map(\.frame.maxY).max() ?? 0 : probe - (shown.map(\.frame.minY).min() ?? probe)
+        pane.frame = saved
+        pane.needsLayout = true
+        return ceil(extent + 24)
+    }
+
+    /// Before a section shows: a flowing one taller than the screen goes into a scroll view rather than be cut off,
+    /// and comes out of it once there is room.
+    private func ready(_ item: NSTabViewItem) {
+        guard let id = item.identifier as? String, Self.flowingSections.contains(id), let pane = item.pane else { return }
+        let height = Self.flowingHeight(of: pane, width: contentWidth)
+        if height > roomyHeight {
+            let scroll = item.view as? SettingsPaneScroll ?? SettingsPaneScroll(pane: pane)
+            scroll.paneHeight = height
+            if item.view !== scroll { item.view = scroll }
+        } else if let scroll = item.view as? SettingsPaneScroll {
+            pane.removeFromSuperview()
+            item.view = pane
+            _ = scroll
+        }
+    }
+
+    /// The window takes the section's height (within the screen), its top-left corner kept.
+    private func fit(_ item: NSTabViewItem) {
+        guard let window, let id = item.identifier as? String, let pane = item.pane else { return }
+        // Each section at the window's own width; one that needs more (Secrets) widens it by its own constraints.
+        let width = max(Self.baseWidth, window.minSize.width)
+        let wanted = Self.flowingSections.contains(id) ? Self.flowingHeight(of: pane, width: width)
+            : max(Self.listHeight, ceil(pane.fittingSize.height))
+        (item.view as? SettingsPaneScroll)?.paneHeight = wanted
+        let height = min(wanted, roomyHeight)
+        var frame = window.frameRect(forContentRect: NSRect(x: 0, y: 0, width: width, height: height))
+        frame.origin = NSPoint(x: window.frame.minX, y: window.frame.maxY - frame.height)
+        if let visible = (window.screen ?? NSScreen.main)?.visibleFrame, frame.minY < visible.minY { frame.origin.y = visible.minY }
+        guard frame != window.frame else { return }
+        window.setFrame(frame, display: true, animate: window.isVisible)
+        window.layoutIfNeeded()
+        // Widened by the section's constraints: its top-left corner stays where it was.
+        if window.frame.maxY != frame.maxY || window.frame.minX != frame.minX {
+            window.setFrameTopLeftPoint(NSPoint(x: frame.minX, y: frame.maxY))
+        }
     }
 
     /// The narrowest window whose toolbar shows every item: each item's own width, and the toolbar's margins.
@@ -813,7 +885,7 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
     /// Settings › Terminal.
     var terminalSettings: TerminalSettingsView? {
         let tabs = window?.contentView as? NSTabView
-        return tabs?.tabViewItems.first { $0.identifier as? String == "terminal" }?.view as? TerminalSettingsView
+        return tabs?.tabViewItems.first { $0.identifier as? String == "terminal" }?.pane as? TerminalSettingsView
     }
 
     /// Settings › Terminal at its Suggestions row, which says Suggest a Command is off and how to turn it on.
@@ -1297,3 +1369,41 @@ final class EditorSettingsView: NSView {
         refresh()
     }
 }
+
+/// A Settings section taller than the screen, in a scroll view rather than cut off: the section keeps its own height
+/// and the window's width.
+final class SettingsPaneScroll: NSScrollView {
+    let pane: NSView
+    var paneHeight: CGFloat = 0 { didSet { if paneHeight != oldValue { tile() } } }
+
+    private final class Flipped: NSView { override var isFlipped: Bool { true } }
+
+    init(pane: NSView) {
+        self.pane = pane
+        super.init(frame: pane.frame)
+        hasVerticalScroller = true
+        autohidesScrollers = true
+        drawsBackground = false
+        borderType = .noBorder
+        let document = Flipped()
+        pane.removeFromSuperview()
+        pane.translatesAutoresizingMaskIntoConstraints = true
+        document.addSubview(pane)
+        documentView = document
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    override func tile() {
+        super.tile()
+        let size = NSSize(width: contentSize.width, height: max(paneHeight, contentSize.height))
+        documentView?.frame = NSRect(origin: .zero, size: size)
+        pane.frame = NSRect(origin: .zero, size: size)
+    }
+}
+
+extension NSTabViewItem {
+    /// The section's own view: in its scroll view when it is taller than the screen.
+    var pane: NSView? { (view as? SettingsPaneScroll)?.pane ?? view }
+}
+
