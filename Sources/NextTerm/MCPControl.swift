@@ -379,6 +379,8 @@ enum MCPControl {
             }
         // Never listed: the bridge's question as its session starts, of which hub servers apply to its agent (MCPHubControl).
         case MCPHubPlan.tool: MainActor.assumeIsolated { MCPHubControl.plan(caller: caller, reply: reply) }
+        // Never listed either: how a hub server's start ended, for Settings › MCP Servers.
+        case MCPHubPlan.reportTool: MainActor.assumeIsolated { MCPHubControl.report(arguments, caller: caller, reply: reply) }
         default: reply(fail("Unknown tool \(tool)"))
         }
     }

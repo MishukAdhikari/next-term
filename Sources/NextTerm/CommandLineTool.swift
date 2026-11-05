@@ -475,8 +475,17 @@ final class MCPBridgeHub: @unchecked Sendable {
             ready.signal()
             return
         }
+        // How a start ended goes to the app, never waited for: Settings › MCP Servers shows the last one.
+        let report: MCPHubSession.Report = { server, list, failure, tools in
+            DispatchQueue.global(qos: .utility).async {
+                var arguments: [String: Any] = ["server": server, "list": list, "tools": tools]
+                if let failure { arguments["failure"] = failure }
+                _ = MCPBridge.attempt(MCPHubPlan.reportTool, arguments, socket: socket, wait: 2)
+            }
+        }
         DispatchQueue.global(qos: .userInitiated).async {
-            let session = MCPHubSession(plan: fetch(), refresh: fetch, nxtrm: nxtrm, environment: environment, version: version)
+            let session = MCPHubSession(plan: fetch(), refresh: fetch, nxtrm: nxtrm, environment: environment, version: version,
+                                        report: report)
             self.lock.lock()
             self.made = session
             self.lock.unlock()

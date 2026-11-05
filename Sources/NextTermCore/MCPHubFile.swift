@@ -35,8 +35,9 @@ import Foundation
 /// - **Keeps what it doesn't know.** Every member is kept as read, in order, numbers as written: a client's own keys in a
 ///   pasted entry (`cwd`, `timeout`), a newer Next Term's keys in `nextTerm`, top-level keys. A change rewrites only the
 ///   keys it changes (`updated`).
-/// - **Makes no file until the first server is added.** `updated` gives bytes for a missing file only for `.set`;
-///   removing from a missing file, or a change that changes nothing, writes nothing. An update to Next Term creates no
+/// - **Makes no file until the user acts.** `updated` gives bytes for a missing file only for adding a server, approving
+///   a project's list or turning a server off (MCPHubChoices, at the top of the user's list); removing from a missing
+///   file, or a change that changes nothing, writes nothing. An update to Next Term creates no
 ///   file and changes no answer of `next-term`'s until the user adds one.
 /// - **Never overwrites a file it can't read.** A broken hand edit, or a file from a newer Next Term (`version` above
 ///   `version`), is refused, not replaced.
@@ -194,6 +195,20 @@ public enum MCPHubFile {
         case set(MCPHubServer)
         /// Removes the server with this name (every copy).
         case remove(String)
+        /// The user's choices (MCPHubChoices), in the user's list only: approves a project's list as these bytes'
+        /// digest have it (replacing an older approval of it), or turns a server off, or on again, for a folder.
+        case approve(file: String, digest: String)
+        case turnOff(server: String, folder: String)
+        case turnOn(server: String, folder: String)
+
+        /// Whether it makes a list that isn't there: adding a server, approving a list and turning one off are the
+        /// user's own acts; removing and turning on again change nothing in a list that isn't there.
+        var makesFile: Bool {
+            switch self {
+            case .set, .approve, .turnOff: return true
+            case .remove, .turnOn: return false
+            }
+        }
     }
 
     /// Why a change wasn't made: nothing is written.
@@ -206,11 +221,18 @@ public enum MCPHubFile {
 
     /// The bytes to write after a change, from the file's bytes as read (`current`, nil when there is no file). Nil
     /// when nothing is to be written: a remove from a missing file or of a name it doesn't have, or a set that changes
-    /// nothing. Only a `.set` ever gives bytes for a missing file, so no file is made until the first server is added.
+    /// nothing. Only an act of the user's (`makesFile`: a server added, a project's list approved, a server turned off)
+    /// ever gives bytes for a missing file, so updating Next Term makes none.
     public static func updated(_ current: Data?, place: Place, _ change: Change) -> Result<Data?, Refusal> {
         if case .set(let server) = change {
             let reasons = MCPHubRules.reasons(server, place: place)
             guard reasons.isEmpty else { return .failure(.invalid(reasons)) }
+        }
+        if let reason = MCPHubChoices.reason(change) { return .failure(.invalid([reason])) }
+        switch change {
+        case .approve, .turnOff, .turnOn:
+            guard place == .user else { return .failure(.invalid(["A project's list keeps no choices; they are yours, in your own list."])) }
+        case .set, .remove: break
         }
         var document: Document
         if let current {
@@ -221,7 +243,7 @@ public enum MCPHubFile {
                 document = read.document
             }
         } else {
-            guard case .set = change else { return .success(nil) }
+            guard change.makesFile else { return .success(nil) }
             document = Document(members: [Member("version", .number(String(version))), Member("mcpServers", .object([]))])
         }
         let before = document
@@ -236,12 +258,27 @@ public enum MCPHubFile {
             }
         case .remove(let name):
             entries.removeAll { $0.key == name }
+        case .approve, .turnOff, .turnOn: break
         }
         if let at = document.members.firstIndex(where: { $0.key == "mcpServers" }) {
             document.members[at].value = .object(entries)
         } else {
             document.members.append(Member("mcpServers", .object(entries)))
         }
+        var choices = MCPHubChoices.read(document)
+        switch change {
+        case .approve(let file, let digest) where !choices.isApproved(file, digest: digest):
+            choices.approved.removeAll { $0.file == file }
+            choices.approved.append(MCPHubChoices.Approval(file: file, digest: digest))
+        case .turnOff(let server, let folder):
+            if !choices.off.contains(MCPHubChoices.Off(server: server, folder: folder)) {
+                choices.off.append(MCPHubChoices.Off(server: server, folder: folder))
+            }
+        case .turnOn(let server, let folder):
+            choices.off.removeAll { $0.server == server && $0.folder == folder }
+        case .set, .remove, .approve: break
+        }
+        if choices != MCPHubChoices.read(document) { document = choices.written(into: document) }
         guard document != before else { return .success(nil) }
         return .success(text(document))
     }

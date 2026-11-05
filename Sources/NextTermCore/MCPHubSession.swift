@@ -18,11 +18,15 @@ import Foundation
 /// tools never repeat an agent's own; direct tools (step 4) would, and need this settled first.
 public final class MCPHubSession: @unchecked Sendable {
     public typealias Refresh = @Sendable () -> MCPHubPlan?
+    /// Told when a server's start ends otherwise than its last one did: its name, its list, and why it failed (nil: it
+    /// runs, with this many tools). The bridge passes it on to the app, for Settings › MCP Servers to show.
+    public typealias Report = @Sendable (_ server: String, _ list: String, _ failure: String?, _ tools: Int) -> Void
 
     /// Whether the catalog is offered: fixed as the session starts.
     public let isActive: Bool
     private var plan: MCPHubPlan
     private let refresh: Refresh
+    private let report: Report?
     /// What `nxtrm` is to this bridge: its own program, so `nxtrm secret run` needs nothing on PATH.
     private let nxtrm: [String]
     private let environment: [String: String]
@@ -36,10 +40,11 @@ public final class MCPHubSession: @unchecked Sendable {
     /// `environment`: the bridge's own, which a server's starts from. `nxtrm`: the program and first arguments `nxtrm`
     /// stands for.
     public init(plan: MCPHubPlan?, refresh: @escaping Refresh, nxtrm: [String], environment: [String: String],
-                limits: MCPHubUpstream.Limits = .standard, version: String) {
+                limits: MCPHubUpstream.Limits = .standard, version: String, report: Report? = nil) {
         self.plan = plan ?? MCPHubPlan(folder: "")
         isActive = plan?.isActive ?? false
         self.refresh = refresh
+        self.report = report
         self.nxtrm = nxtrm
         self.environment = environment
         self.limits = limits
@@ -210,9 +215,22 @@ public final class MCPHubSession: @unchecked Sendable {
         case .remote: return .failure(.init("\(name) is a remote server, and Next Term doesn't reach remote servers yet."))
         }
         guard let upstream = upstream(server) else {
-            return .failure(.init(isStopped ? "\(name) was stopped: its session is ending." : launchFailure(server)))
+            if isStopped { return .failure(.init("\(name) was stopped: its session is ending.")) }
+            let failure = launchFailure(server)
+            report?(name, server.list, failure, 0)
+            return .failure(.init(failure))
         }
-        return upstream.tools(until: deadline)
+        let before = upstream.status
+        let result = upstream.tools(until: deadline)
+        let after = upstream.status
+        if after != before {
+            switch after {
+            case .running(let count): if case .running = before {} else { report?(name, server.list, nil, count) }
+            case .failed(let why): report?(name, server.list, why, 0)
+            case .notStarted: break
+            }
+        }
+        return result
     }
 
     private func upstream(named name: String) -> MCPHubUpstream? {

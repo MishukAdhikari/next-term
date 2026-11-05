@@ -12,7 +12,9 @@ import Foundation
 /// 2. a project's, the nearest list first;
 /// 3. the user's for all projects.
 /// A server that breaks a rule (MCPHubRules) or is in its file twice is passed over and named in `issues`: it takes no
-/// name from another list. An unreadable file adds nothing and is named in `unreadable`.
+/// name from another list. An unreadable file adds nothing and is named in `unreadable`. The user's choices at the top of
+/// their list (MCPHubChoices) apply on top: a server they turned off for this folder is off, whichever list it is from,
+/// and their approvals of projects' lists come with the resolution, for MCPHubPlan.make.
 ///
 /// A project's list comes with the repository, so anyone who can commit to it wrote it: each `Source` has its bytes'
 /// `digest`, for the approval the user gives a project's list before any of its servers starts.
@@ -74,6 +76,10 @@ public enum MCPHubScope {
         public var issues: [Issue] = []
         /// Lists that can't be read: they add nothing (the app keeps the last list it read, and says why).
         public var unreadable: [Unreadable] = []
+        /// The names among `off` that the user turned off for this folder (MCPHubChoices.off), not in their entry.
+        public var offHere: Set<String> = []
+        /// The projects' lists the user approved, as MCPHubPlan.make takes them (`file + "\0" + digest`).
+        public var approved: Set<String> = []
 
         /// No server, and nothing to say: what every agent sees until the user adds the first one.
         public var isEmpty: Bool { servers.isEmpty && off.isEmpty && shadowed.isEmpty && issues.isEmpty && unreadable.isEmpty }
@@ -82,6 +88,11 @@ public enum MCPHubScope {
     public struct Unreadable: Equatable, Sendable {
         public let file: String
         public let problem: MCPHubFile.Problem
+
+        public init(file: String, problem: MCPHubFile.Problem) {
+            self.file = file
+            self.problem = problem
+        }
     }
 
     // MARK: resolving
@@ -89,6 +100,9 @@ public enum MCPHubScope {
     /// The servers for an agent in `folder`, from the user's list and the projects' lists, nearest first. Reads nothing.
     public static func resolve(folder: String, user: Source?, projects: [Source], home: String) -> Resolution {
         var resolution = Resolution()
+        let choices: MCPHubChoices
+        if case .success(let read)? = user?.read { choices = MCPHubChoices.read(read.document) } else { choices = MCPHubChoices() }
+        resolution.approved = choices.approvedKeys
         var forHere: [Applied] = [], fromProjects: [Applied] = [], forAll: [Applied] = []
         for source in (user.map { [$0] } ?? []) + projects {
             let read: MCPHubFile.Read
@@ -123,10 +137,13 @@ public enum MCPHubScope {
         for applied in forHere + fromProjects + forAll {
             if !taken.insert(applied.name).inserted {
                 resolution.shadowed.append(applied)
-            } else if applied.server.enabled {
-                resolution.servers.append(applied)
-            } else {
+            } else if !applied.server.enabled {
                 resolution.off.append(applied)
+            } else if choices.isOff(applied.name, in: folder, home: home) {
+                resolution.off.append(applied)
+                resolution.offHere.insert(applied.name)
+            } else {
+                resolution.servers.append(applied)
             }
         }
         resolution.servers.sort { $0.name < $1.name }
@@ -176,10 +193,23 @@ public enum MCPHubScope {
     }
 
     /// Makes a change to the list at `file` (the user's, or a project's `.next-term/mcp.json`). Nothing is written
-    /// when the change changes nothing; the file, and its folder, are made only when a server is added to none
+    /// when the change changes nothing; the file, and its folder, are made only by an act of the user's on none
     /// (MCPHubFile.updated). The write is all or nothing, and refused when the file changed since it was read. The
     /// user's list is the user's alone (0600); a project's is for its repository (0644).
     public static func save(_ change: MCPHubFile.Change, to file: String, place: MCPHubFile.Place) -> Result<Saved, SaveFailure> {
+        write(change, to: file, place: place).map { (written: Written?) -> Saved in written == nil ? .unchanged : .written }
+    }
+
+    /// One write `save` made: the file's bytes before it (nil: there was no file) and after, for Undo.
+    public struct Written: Equatable, Sendable {
+        public let file: String
+        public let place: MCPHubFile.Place
+        public let before: Data?
+        public let after: Data
+    }
+
+    /// `save`, with what it wrote: nil when nothing was written.
+    public static func write(_ change: MCPHubFile.Change, to file: String, place: MCPHubFile.Place) -> Result<Written?, SaveFailure> {
         let folder = (file as NSString).deletingLastPathComponent
         var info = stat()
         var old: Data?
@@ -190,7 +220,7 @@ public enum MCPHubScope {
         let bytes: Data
         switch MCPHubFile.updated(old, place: place, change) {
         case .failure(let refusal): return .failure(.refused(refusal))
-        case .success(nil): return .success(.unchanged)
+        case .success(nil): return .success(nil)
         case .success(let made?): bytes = made
         }
         if old == nil {
@@ -207,7 +237,25 @@ public enum MCPHubScope {
         } catch {
             return .failure(.write(error as? SafeWrite.Failure ?? .system(EIO)))
         }
-        return .success(.written)
+        return .success(Written(file: file, place: place, before: old, after: bytes))
+    }
+
+    /// Puts a list back as it was before `written`, only while it is still what that write left: a list changed since
+    /// (by hand, by another Next Term) is refused, never overwritten. A list the write made is removed again, so an Undo
+    /// of the first server leaves no file, as before it.
+    public static func undo(_ written: Written) -> Result<Void, SaveFailure> {
+        guard let now = SkillLibrary.readText(written.file, in: (written.file as NSString).deletingLastPathComponent).map({ Data($0.utf8) }),
+              now == written.after else { return .failure(.write(.changed)) }
+        guard let before = written.before else {
+            return unlink(written.file) == 0 ? .success(()) : .failure(.write(.system(errno)))
+        }
+        do {
+            try SafeWrite.replace(written.file, with: before, expecting: .contents(written.after),
+                                  newFileMode: written.place == .user ? 0o600 : 0o644)
+        } catch {
+            return .failure(.write(error as? SafeWrite.Failure ?? .system(EIO)))
+        }
+        return .success(())
     }
 
     /// A list as read: nil when there is no file. One that is there and isn't a plain UTF-8 file of at most

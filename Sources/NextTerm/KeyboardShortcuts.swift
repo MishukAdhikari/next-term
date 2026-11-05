@@ -696,6 +696,11 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
         skillsTab.label = "Skills"
         skillsTab.view = SkillsPane()
         tabs.addTabViewItem(skillsTab)
+        // The MCP servers agents reach through Next Term, beside the skills they load.
+        let mcpTab = NSTabViewItem(identifier: "mcp")
+        mcpTab.label = "MCP Servers"
+        mcpTab.view = MCPServersSettingsView()
+        tabs.addTabViewItem(mcpTab)
         // Where the todo folder is (Tasks › Task Settings…).
         let tasksTab = NSTabViewItem(identifier: "tasks")
         tasksTab.label = "Tasks"

@@ -88,7 +88,7 @@ import Testing
                 answer("prompts/list"),
             ]
             let data = try JSONSerialization.data(withJSONObject: answers, options: [.sortedKeys, .withoutEscapingSlashes])
-            #expect(SecretRun.digest(data) == "4c279107834cad04c5737de883494cf4ed1b34fa8057926407dca5d91e8461a8")
+            #expect(SecretRun.digest(data) == "e9e77c711c39a6940ba3599780f6b1497926aab037682fc60b78d4d6ca099114")
             // A catalog tool is unknown, as it was.
             let called = MCPServer.respond(to: ["jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": ["name": "mcp_servers"]],
                                            version: "0", extra: hub.tools, callExtra: hub.call) { _, _ in MCPServer.CallResult(text: "") }
@@ -198,6 +198,25 @@ import Testing
         #expect(isError && said.contains("no-such-program-nt was not found on the login shell's PATH (/usr/bin:/bin)"))
         let row = (json(hub.call("mcp_servers", [:]))["servers"] as? [[String: Any]])?.first
         #expect(row?["state"] as? String == "failed" && (row?["error"] as? String ?? "").contains("was not found"))
+    }
+
+    /// How a start ended goes to the app (Settings › MCP Servers' state): once when it changes, never for each call.
+    @Test func aStartsEndIsReportedWhenItChanges() {
+        final class Reports: @unchecked Sendable {
+            let lock = NSLock()
+            var all: [String] = []
+            func add(_ line: String) { lock.lock(); all.append(line); lock.unlock() }
+        }
+        let reports = Reports()
+        let plan = plan([fakeServer()])
+        let hub = MCPHubSession(plan: plan, refresh: { plan }, nxtrm: ["/usr/bin/true"], environment: ["HOME": NSHomeDirectory()],
+                                version: "0.0.0", report: { server, list, failure, tools in
+                                    reports.add("\(server) \(list) \(failure ?? "ok") \(tools)")
+                                })
+        _ = hub.call("mcp_call", ["server": "fake", "tool": "echo"])
+        _ = hub.call("mcp_call", ["server": "fake", "tool": "echo"])
+        hub.stop()
+        #expect(reports.all == ["fake /u/mcp.json ok 6"])
     }
 
     @Test func nxtrmIsTheBridgesOwnProgram() throws {

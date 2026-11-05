@@ -215,7 +215,7 @@ import Testing
         #expect(text.contains("`list_shortcuts`") && text.contains("never from memory") && text.contains("`show_settings`"))
         #expect(text.contains("| Key | What | Where | Done |") && text.contains("Never agent control"))
         for tab in MCPShortcuts.settingsTabs { #expect(text.contains(tab), "\(tab)") }
-        #expect(text.contains("Settings › Tasks") && text.contains("skills, tasks or secrets"))
+        #expect(text.contains("Settings › Tasks") && text.contains("skills, mcp, tasks or secrets"))
     }
 
     /// next-term-setup's first run: read what is there, preview the import, one plan as a table, one approval with

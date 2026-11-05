@@ -96,6 +96,9 @@ public struct MCPHubPlan: Codable, Equatable, Sendable {
 
     /// The tool the bridge asks the app with: never listed, and answered only for an agent in a Next Term tab.
     public static let tool = "mcp_hub_plan"
+    /// The tool the bridge tells the app with how a server's start ended (MCPHubSession.Report): never listed either,
+    /// and kept only in the app's memory, for Settings › MCP Servers' state.
+    public static let reportTool = "mcp_hub_report"
 
     /// The plan as the app's answer carries it.
     public var text: String {

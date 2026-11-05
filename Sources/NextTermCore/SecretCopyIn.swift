@@ -20,6 +20,22 @@ public enum SecretCopyIn {
         public let replaces: Bool
         /// "Never show": a new key is saved write-only, and so is a key it replaces, which stays write-only either way.
         public internal(set) var writeOnly: Bool = false
+
+        /// A key given outside a file the import read, with no page: the MCP hub's sheets', typed or pasted there.
+        public init(name: String, value: SecretBytes, purpose: String, replaces: Bool, writeOnly: Bool = false) {
+            self.init(name: name, value: value, purpose: purpose, link: nil, linkFrom: nil, replaces: replaces, writeOnly: writeOnly)
+        }
+
+        init(name: String, value: SecretBytes, purpose: String, link: String?, linkFrom: SecretVault.LinkFrom?, replaces: Bool,
+             writeOnly: Bool = false) {
+            self.name = name
+            self.value = value
+            self.purpose = purpose
+            self.link = link
+            self.linkFrom = linkFrom
+            self.replaces = replaces
+            self.writeOnly = writeOnly
+        }
     }
 
     /// Why ticked rows can't be saved: the preview checks names as they are typed, so this is a last check.
