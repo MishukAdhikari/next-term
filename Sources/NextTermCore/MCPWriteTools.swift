@@ -143,8 +143,9 @@ extension MCPServer {
 }
 
 extension MCPServer.Tool {
-    /// Next Term's scope tag (nil only for a tool nobody tagged, which a unit test refuses).
-    public var scope: MCPServer.Scope? { MCPServer.scopeTags[name] }
+    /// Next Term's scope tag (nil only for a tool nobody tagged, which a unit test refuses). A hub server's direct tool
+    /// (MCPHubDirect) is write, as mcp_call is: it starts the user's server on this Mac.
+    public var scope: MCPServer.Scope? { MCPServer.scopeTags[name] ?? (MCPHubDirect.isDirectName(name) ? .write : nil) }
 
     /// The `_meta` it is listed with: Claude Code keeps it loaded (unless it is used only once in a while), and
     /// the scope tag is there for any client.

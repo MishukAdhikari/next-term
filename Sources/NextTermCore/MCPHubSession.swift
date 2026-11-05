@@ -7,16 +7,18 @@ import Foundation
 /// for its client keeps it for this agent alone.
 ///
 /// The catalog is offered for the whole session once its first plan `isActive`, and not at all otherwise: the tool list
-/// is fixed when a session starts. A server connected meanwhile is still reached: a name the plan doesn't have, and
-/// every mcp_servers, ask the app again (`refresh`).
+/// is fixed when a session starts. So are the direct tools (MCPHubDirect), from the servers' cached lists in that first
+/// plan: a call to one is answered as mcp_call with its server and tool is. A server connected meanwhile is still
+/// reached: a name the plan doesn't have, and every mcp_servers, ask the app again (`refresh`). When a local server the
+/// session started lists other tools than its cached list, the app is told (`remember`), for the next sessions.
 ///
-/// TODO(MCP hub step 4, R7): a server the calling agent already has in its own config is not passed over yet. The
-/// importer's reader (SecretImport.sources and its entries) sees an agent's files, but not reliably what the agent
-/// loads from them: an entry turned off (Codex's `enabled = false`, Claude Code's disabledMcpServers), a project's
-/// `.mcp.json` the user hasn't approved in Claude Code, plugins' and managed servers, `--mcp-config` and `-c` flags, and
-/// profiles are all outside it; and a match would have to be by command and arguments, which an `nxtrm secret run` or
-/// `npx -y` changes. Passing over a server on a wrong guess would hide tools the agent doesn't have. The catalog's three
-/// tools never repeat an agent's own; direct tools (step 4) would, and need this settled first.
+/// TODO(MCP hub, R7): a server the calling agent already has in its own config is not passed over yet. The importer's
+/// reader (SecretImport.sources and its entries) sees an agent's files, but not reliably what the agent loads from them:
+/// an entry turned off (Codex's `enabled = false`, Claude Code's disabledMcpServers), a project's `.mcp.json` the user
+/// hasn't approved in Claude Code, plugins' and managed servers, `--mcp-config` and `-c` flags, and profiles are all
+/// outside it; and a match would have to be by command and arguments, which an `nxtrm secret run` or `npx -y` changes.
+/// Passing over a server on a wrong guess would hide tools the agent doesn't have. The catalog's three tools never repeat
+/// an agent's own; direct tools do, for an agent that has the same server in its own config, until this is knowable.
 public final class MCPHubSession: @unchecked Sendable {
     public typealias Refresh = @Sendable () -> MCPHubPlan?
     /// Told when a server's start ends otherwise than its last one did: its name, its list, and why it failed (nil: it
@@ -26,6 +28,9 @@ public final class MCPHubSession: @unchecked Sendable {
     /// answer's text and whether it is an error, or nil when the app didn't answer. The keys stay in the app: a server
     /// at a URL gets them in its headers from there, and nothing the bridge holds or the agent can read has them.
     public typealias Remote = @Sendable (_ arguments: [String: Any], _ wait: TimeInterval) -> (text: String, isError: Bool)?
+    /// Told when a local server lists other tools than the session knew it to (its cached list, or what it last told):
+    /// the app keeps them for the next sessions' direct tools (MCPHubManifest).
+    public typealias Remember = @Sendable (_ server: String, _ list: String, _ manifest: MCPHubManifest) -> Void
 
     /// Whether the catalog is offered: fixed as the session starts.
     public let isActive: Bool
@@ -33,6 +38,14 @@ public final class MCPHubSession: @unchecked Sendable {
     private let refresh: Refresh
     private let report: Report?
     private let remote: Remote?
+    private let remember: Remember?
+    /// The session's direct tools, by their names, as listed: fixed as it starts.
+    private let direct: [String: MCPHubDirect.Entry]
+    private let directTools: [MCPServer.Tool]
+    /// Why each ready server of the first plan has no direct tools, or how many it has, for mcp_servers.
+    private let directState: [String: DirectState]
+    /// Each server's tool list's digest as the session knows it: its cached list's, then what it told the app.
+    private var known: [String: String] = [:]
     /// What `nxtrm` is to this bridge: its own program, so `nxtrm secret run` needs nothing on PATH.
     private let nxtrm: [String]
     private let environment: [String: String]
@@ -48,20 +61,47 @@ public final class MCPHubSession: @unchecked Sendable {
     /// `environment`: the bridge's own, which a server's starts from. `nxtrm`: the program and first arguments `nxtrm`
     /// stands for.
     public init(plan: MCPHubPlan?, refresh: @escaping Refresh, nxtrm: [String], environment: [String: String],
-                limits: MCPHubUpstream.Limits = .standard, version: String, report: Report? = nil, remote: Remote? = nil) {
+                limits: MCPHubUpstream.Limits = .standard, version: String, report: Report? = nil, remote: Remote? = nil,
+                remember: Remember? = nil) {
         self.plan = plan ?? MCPHubPlan(folder: "")
         isActive = plan?.isActive ?? false
         self.refresh = refresh
         self.report = report
         self.remote = remote
+        self.remember = remember
         self.nxtrm = nxtrm
         self.environment = environment
         self.limits = limits
         self.version = version
+        let entries = isActive ? MCPHubDirect.entries(self.plan) : []
+        direct = Dictionary(entries.map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first })
+        directTools = entries.map(MCPHubDirect.listed)
+        var states: [String: DirectState] = [:], known: [String: String] = [:]
+        for server in self.plan.servers where server.state == .ready {
+            let count = entries.filter { $0.server == server.name }.count
+            if count > 0 {
+                states[server.name] = .listed(count, of: server.cachedTools ?? count)
+            } else {
+                states[server.name] = server.cachedTools == nil ? .notYet : .overBudget
+            }
+            known[server.name] = server.manifest
+        }
+        directState = states
+        self.known = known
     }
 
-    /// The tools listed after Next Term's own: none until a server applies.
-    public var tools: [MCPServer.Tool] { isActive ? MCPHubCatalog.tools : [] }
+    /// The tools listed after Next Term's own: none until a server applies, then the catalog and the direct tools.
+    public var tools: [MCPServer.Tool] { isActive ? MCPHubCatalog.tools + directTools : [] }
+
+    /// How a ready server's tools come in this session.
+    enum DirectState: Equatable {
+        /// `count` of its `of` cached tools are direct tools; the rest have schemas an agent can't take.
+        case listed(Int, of: Int)
+        /// Its cached tools didn't fit in what was left of the budget, or none had a schema an agent takes.
+        case overBudget
+        /// It had no cached list as the session started, or was added since.
+        case notYet
+    }
 
     /// Ends every server it started, and any a call in flight is starting.
     public func stop() {
@@ -82,7 +122,10 @@ public final class MCPHubSession: @unchecked Sendable {
         case "mcp_servers": return servers()
         case "mcp_tools": return toolsAnswer(arguments, until: deadline)
         case "mcp_call": return callAnswer(arguments, until: deadline)
-        default: return MCPHubCatalog.text("Unknown tool \(tool).", isError: true)
+        default:
+            // A direct tool: exactly mcp_call with its server and tool.
+            guard let entry = direct[tool] else { return MCPHubCatalog.text("Unknown tool \(tool).", isError: true) }
+            return callAnswer(["server": entry.server, "tool": entry.tool.name, "arguments": arguments], until: deadline)
         }
     }
 
@@ -100,6 +143,20 @@ public final class MCPHubSession: @unchecked Sendable {
             }
             if server.state == .remote {
                 item["note"] = "It uses the older HTTP+SSE transport, which Next Term doesn't reach; its Streamable HTTP URL (often ending in /mcp) works instead."
+            }
+            if server.state == .ready {
+                switch directState[server.name] ?? .notYet {
+                case .listed(let count, let cached):
+                    item["direct_tools"] = count
+                    if cached > count {
+                        item["direct"] = "\(cached - count) of its tools have input schemas agents can't take as their own: mcp_call reaches them."
+                    }
+                case .overBudget:
+                    item["direct"] = "Not listed as your own tools in this session (past its budget of \(MCPHubDirect.budget) direct tools, "
+                        + "or input schemas agents can't take): mcp_call reaches them."
+                case .notYet:
+                    item["direct"] = "Listed as your own tools from the next session on; until then mcp_call reaches them."
+                }
             }
             if server.state == .ready, server.isRemote {
                 switch remoteState(server.name) {
@@ -265,6 +322,7 @@ public final class MCPHubSession: @unchecked Sendable {
         let before = upstream.status
         let result = upstream.tools(until: deadline)
         let after = upstream.status
+        if after != before, case .success(let listed) = result { learn(server, listed) }
         if after != before {
             switch after {
             case .running(let count): if case .running = before {} else { report?(name, server.list, nil, count) }
@@ -273,6 +331,18 @@ public final class MCPHubSession: @unchecked Sendable {
             }
         }
         return result
+    }
+
+    /// A local server's tools as it listed them as it started: the app is told when they are not what the session knew.
+    private func learn(_ server: MCPHubPlan.Server, _ listed: [[String: Any]]) {
+        guard let remember else { return }
+        let manifest = MCPHubManifest(listed: listed)
+        let digest = manifest.digest
+        lock.lock()
+        let was = known[server.name]
+        known[server.name] = digest
+        lock.unlock()
+        if was != digest { remember(server.name, server.list, manifest) }
     }
 
     // MARK: remote servers

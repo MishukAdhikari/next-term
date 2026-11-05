@@ -14,7 +14,8 @@ import NextTermCore
 ///   grant answers the session's later needs with no panel. A need that outlasts its call while the user decides is
 ///   told so; an approval that comes later is kept two minutes for that agent's next need of the server.
 /// - **One connection per server**, shared by every agent: one Mcp-Session-Id, and later one sign-in.
-/// - **State.** Each need's end is Settings › MCP Servers' state for the server (MCPHubControl.lastRuns).
+/// - **State.** Each need's end is Settings › MCP Servers' state for the server (MCPHubControl.lastRuns), and its tool
+///   list, when it changed, the cached one the next sessions' direct tools are made from (MCPHubManifest).
 ///
 /// The seam for signing in (OAuth, a later step): `credentials` is where a server's token joins the filled headers, and
 /// a 401 or 403 comes back as MCPHubRemote.Failure.Kind.unauthorized with the server's challenge, where "Reconnect"
@@ -58,7 +59,7 @@ enum MCPHubRemoteControl {
                         return fail("\(name)'s URL changed in Next Term since this session asked; call again to use the new one.")
                     }
                     let need = Need(server: applied.server, list: list, folder: folder, op: op, tool: tool, arguments: toolArguments,
-                                    deadline: deadline)
+                                    deadline: deadline, userFile: file)
                     let caller = MCPControl.tab(withID: tabID)
                     withKeys(need, caller: caller, pid: pid, fail: fail) { values in reach(need, values: values, reply: reply) }
                 }
@@ -74,6 +75,8 @@ enum MCPHubRemoteControl {
         let tool: String
         let arguments: [String: Any]
         let deadline: Date
+        /// The user's list, beside which the server's cached tool list is kept (MCPHubManifest).
+        let userFile: String
 
         var names: [String] {
             var seen = Set<String>()
@@ -173,7 +176,13 @@ enum MCPHubRemoteControl {
         DispatchQueue.global(qos: .userInitiated).async {
             let answer: Result<[String: Any], MCPHubRemote.Failure>
             if need.op == "tools" {
-                answer = remote.tools(endpoint, until: need.deadline).map { ["tools": $0] }
+                let listed = remote.tools(endpoint, until: need.deadline)
+                // Its tools as listed now, for the next sessions' direct tools (written only when they changed).
+                if case .success(let tools) = listed {
+                    let manifest = MCPHubManifest(listed: tools).masked { SecretMask.current.mask($0) }
+                    MCPHubManifest.remember(manifest, server: need.server, list: need.list, userFile: need.userFile)
+                }
+                answer = listed.map { ["tools": $0] }
             } else {
                 answer = remote.call(need.tool, arguments: need.arguments, endpoint: endpoint, until: need.deadline)
                     .map { ["result": MCPHubCatalog.fit($0)] }

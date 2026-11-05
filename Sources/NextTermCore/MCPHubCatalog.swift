@@ -1,14 +1,15 @@
 import Foundation
 
 /// The MCP hub's catalog (R6): three tools `next-term` lists after its own once a server the user connected applies
-/// where the agent works (MCPHubPlan.isActive), and never before (R17). They are answered in the agent's bridge, which
+/// where the agent works (MCPHubPlan.isActive), and never before (R17); the servers' direct tools follow them
+/// (MCPHubDirect). They are answered in the agent's bridge, which
 /// runs the servers (MCPHubSession), never by the app. Each is deferred: it costs nothing until tool search finds it.
 public enum MCPHubCatalog {
     private static let serverArgument = #""server": {"type": "string", "description": "A server's name, as mcp_servers lists it."}"#
 
     public static let tools: [MCPServer.Tool] = [
         MCPServer.Tool(name: "mcp_servers", title: "List connected MCP servers",
-                       description: "The MCP servers the user connected in Next Term that apply in this folder, each with its command or URL and its state: ready (it starts, or is reached, the first time it is used), running (with its tool count), failed (and why), off (the user turned it off here), needs_approval (from a project's list the user hasn't approved) or remote (an older HTTP+SSE server Next Term doesn't reach). mcp_tools lists and describes their tools; mcp_call calls one.",
+                       description: "The MCP servers the user connected in Next Term that apply in this folder, each with its command or URL and its state: ready (it starts, or is reached, the first time it is used), running (with its tool count), failed (and why), off (the user turned it off here), needs_approval (from a project's list the user hasn't approved) or remote (an older HTTP+SSE server Next Term doesn't reach); and direct_tools, how many of its tools you have as your own, named <server>__<tool>, or direct, why they aren't (then mcp_call reaches them). mcp_tools lists and describes their tools; mcp_call calls one.",
                        inputSchema: #"{"type": "object", "properties": {}, "additionalProperties": false}"#,
                        readOnly: true, destructive: false, idempotent: true, timeout: 15, alwaysLoad: false),
         MCPServer.Tool(name: "mcp_tools", title: "Find a connected server's tools",

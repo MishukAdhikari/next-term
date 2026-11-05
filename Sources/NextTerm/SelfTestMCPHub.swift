@@ -7,7 +7,8 @@ import NextTermCore
 /// folder, and the real `nxtrm mcp` run from a tab's shell as an agent there starts it. The bridge asks the app for its
 /// plan, lists the catalog after Next Term's own tools, and starts the server on its first call, in the tab's folder with
 /// the list's variable; the server ends with the bridge. A tab in another folder gets Next Term's own tools and no
-/// catalog, and no agent's config file changes. The user's own list is never read or written here.
+/// catalog, and no agent's config file changes. Step 4: the server's tool list, kept beside the self-test's list after that
+/// first use, gives the next agent there its tools as its own. The user's own list is never read or written here.
 extension SelfTest {
     /// The fake server: `echo` says hello, `where` says its folder, HUB_TEST and its process id.
     static let hubFakeServer = #"""
@@ -89,6 +90,23 @@ extension SelfTest {
             check(ended, "MCP hub: the server ends with the agent's session", "pid \(pid)")
         }
 
+        // Step 4: that session's start kept the server's tools beside the list, so the next agent there has them as its
+        // own (R5), after the catalog, and a call to one is mcp_call's.
+        let sidecar = MCPHubManifest.file(fake, list: userFile, userFile: userFile)
+        check(FileManager.default.fileExists(atPath: sidecar) && sidecar.hasPrefix(dir.path),
+              "MCP hub: a server's first use keeps its tool list beside the self-test's list", sidecar)
+        let direct = await bridgeInTab(c, folder: inScope, requests: [
+            initialize, listTools,
+            ["jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": ["name": "fake__echo", "arguments": [String: Any]()]],
+            ["jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": ["name": "mcp_servers", "arguments": [String: Any]()]],
+        ], name: "direct", userFile: userFile)
+        let directNames = toolNames(direct[2])
+        check(directNames == MCPServer.tools.map(\.name) + MCPHubCatalog.tools.map(\.name) + ["fake__echo", "fake__where"],
+              "MCP hub: the next agent gets the server's tools as its own, after the catalog", "\(directNames.suffix(5))")
+        check(resultText(direct[3]) == "hello from fake", "MCP hub: a direct tool reaches the server's tool", resultText(direct[3]))
+        check(resultText(direct[4]).contains("\"direct_tools\" : 2"), "MCP hub: mcp_servers says which tools are the agent's own",
+              resultText(direct[4]))
+
         // An agent elsewhere: Next Term's own tools, byte for byte once sorted, and no catalog.
         let elsewhere = await bridgeInTab(c, folder: outside, requests: [initialize, listTools], name: "out", userFile: userFile)
         check(sortedJSON((elsewhere[2]?["result"] as? [String: Any])?["tools"]) == ownTools,
@@ -129,6 +147,14 @@ extension SelfTest {
         check(resultText(answers[3]).contains("Settings › MCP Servers"), "MCP hub: a 401 tells the agent where the user checks the key",
               resultText(answers[3]))
         check(resultText(answers[4]).contains("\"running\""), "MCP hub: mcp_servers lists the remote server running", resultText(answers[4]))
+        // The app kept the remote server's tools as it listed them, so the next agent has them as its own too.
+        let next = await bridgeInTab(c, folder: folder, requests: [
+            initialize, ["jsonrpc": "2.0", "id": 2, "method": "tools/list"],
+            ["jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": ["name": "remote__echo", "arguments": ["say": "hi"]]],
+        ], name: "remote-direct", userFile: userFile)
+        check(toolNames(next[2]).contains("remote__echo") && !toolNames(next[2]).contains { $0.hasPrefix("locked__") },
+              "MCP hub: a remote server's tools are the next agent's own, and one that refused isn't", "\(toolNames(next[2]).suffix(6))")
+        check(resultText(next[3]) == "hello from remote", "MCP hub: a remote server's direct tool reaches it through the app", resultText(next[3]))
         let ran = MCPHubControl.lastRuns[MCPHubOverview.runKey(list: userFile, server: "remote")]
         let refused = MCPHubControl.lastRuns[MCPHubOverview.runKey(list: userFile, server: "locked")]
         check(ran == MCPHubOverview.Run(failure: nil, tools: 3) && refused?.failure?.contains("HTTP 401") == true,

@@ -33,9 +33,16 @@ public struct MCPHubPlan: Codable, Equatable, Sendable {
         public var url: String
         /// The list it is from.
         public var list: String
+        /// Its cached tool list's digest and size (MCPHubManifest), nil while it has none: the bridge tells the app when
+        /// the server lists something else.
+        public var manifest: String?
+        public var cachedTools: Int?
+        /// Its tools as the session's direct tools (MCPHubDirect), when it has them: a ready server whose cached list fits
+        /// in what is left of the budget (`allotDirect`).
+        public var tools: [MCPHubManifest.Tool]?
 
         public init(name: String, state: State, command: String = "", args: [String] = [], env: [String: String] = [:],
-                    url: String = "", list: String) {
+                    url: String = "", list: String, manifest: String? = nil, cachedTools: Int? = nil, tools: [MCPHubManifest.Tool]? = nil) {
             self.name = name
             self.state = state
             self.command = command
@@ -43,6 +50,9 @@ public struct MCPHubPlan: Codable, Equatable, Sendable {
             self.env = env
             self.url = url
             self.list = list
+            self.manifest = manifest
+            self.cachedTools = cachedTools
+            self.tools = tools
         }
 
         /// Reached at a URL by the app (MCPHubPlan.remoteTool), not started by the bridge.
@@ -102,7 +112,8 @@ public struct MCPHubPlan: Codable, Equatable, Sendable {
     /// The tool the bridge asks the app with: never listed, and answered only for an agent in a Next Term tab.
     public static let tool = "mcp_hub_plan"
     /// The tool the bridge tells the app with how a server's start ended (MCPHubSession.Report): never listed either,
-    /// and kept only in the app's memory, for Settings › MCP Servers' state.
+    /// and kept only in the app's memory, for Settings › MCP Servers' state. With `manifest` (MCPHubSession.Remember), a
+    /// local server's tool list instead, which the app keeps for the next sessions' direct tools (MCPHubManifest).
     public static let reportTool = "mcp_hub_report"
 
     /// The tool the bridge asks the app to reach a remote server with (MCPHubRemoteControl): never listed, and answered

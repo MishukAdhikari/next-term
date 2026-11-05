@@ -314,7 +314,7 @@ enum CommandLineTool {
 ///
 /// The MCP hub rides it (MCPBridgeHub): as it starts, the bridge asks the app which servers the user connected apply to
 /// its agent. While none does, every answer is as it was before the hub; once one does, tools/list ends with the
-/// catalog, whose calls the bridge answers itself, running the servers as its children.
+/// catalog and the servers' direct tools, whose calls the bridge answers itself, running the servers as its children.
 enum MCPBridge {
     private static let output = NSLock()
 
@@ -348,8 +348,9 @@ enum MCPBridge {
                     // Calls can take long (wait_for_tab): answer pings and other calls meanwhile. One that carries a
                     // progress token gets progress until its answer is sent (MCPProgress).
                     progress.answer(message, in: calls) {
-                        // Only a catalog tool's call waits for the hub's plan; Next Term's own go to the app as they did.
-                        let session = MCPHubCatalog.isCatalogTool(MCPBridgeHub.toolName(message)) ? hub.session : nil
+                        // Only a catalog or direct tool's call waits for the hub's plan; Next Term's own go to the app as they did.
+                        let called = MCPBridgeHub.toolName(message)
+                        let session = MCPHubCatalog.isCatalogTool(called) || MCPHubDirect.isDirectName(called) ? hub.session : nil
                         return MCPServer.respond(to: message, version: version, extra: session?.tools ?? [],
                                                  callExtra: { session?.call($0, $1) ?? [:] }, call: { forward($0, $1, socket: socket) })
                     }
@@ -461,6 +462,8 @@ final class MCPBridgeHub: @unchecked Sendable {
     static let planWait: TimeInterval = 5
 
     private let ready = DispatchSemaphore(value: 0)
+    /// The reports to the app on their way, which the bridge lets finish before it goes: a server's tool list among them.
+    private let reports = DispatchGroup()
     private let lock = NSLock()
     private var made: MCPHubSession?
     private var terminate: DispatchSourceSignal?
@@ -477,11 +480,25 @@ final class MCPBridgeHub: @unchecked Sendable {
             return
         }
         // How a start ended goes to the app, never waited for: Settings › MCP Servers shows the last one.
+        let reports = self.reports
         let report: MCPHubSession.Report = { server, list, failure, tools in
+            reports.enter()
             DispatchQueue.global(qos: .utility).async {
                 var arguments: [String: Any] = ["server": server, "list": list, "tools": tools]
                 if let failure { arguments["failure"] = failure }
                 _ = MCPBridge.attempt(MCPHubPlan.reportTool, arguments, socket: socket, wait: 2)
+                reports.leave()
+            }
+        }
+        // A local server's tools, when they are not the cached list the session started with: the app keeps them for
+        // the next sessions' direct tools.
+        let remember: MCPHubSession.Remember = { server, list, manifest in
+            let encoder = JSONEncoder()
+            guard let data = try? encoder.encode(manifest), let object = try? JSONSerialization.jsonObject(with: data) else { return }
+            reports.enter()
+            DispatchQueue.global(qos: .utility).async {
+                _ = MCPBridge.attempt(MCPHubPlan.reportTool, ["server": server, "list": list, "manifest": object], socket: socket, wait: 5)
+                reports.leave()
             }
         }
         // A remote server is reached by the app, which alone fills its keys in: the bridge runs as the user under the
@@ -492,7 +509,7 @@ final class MCPBridgeHub: @unchecked Sendable {
         }
         DispatchQueue.global(qos: .userInitiated).async {
             let session = MCPHubSession(plan: fetch(), refresh: fetch, nxtrm: nxtrm, environment: environment, version: version,
-                                        report: report, remote: remote)
+                                        report: report, remote: remote, remember: remember)
             self.lock.lock()
             self.made = session
             self.lock.unlock()
@@ -509,12 +526,13 @@ final class MCPBridgeHub: @unchecked Sendable {
         return made
     }
 
-    /// Ends the servers the session started.
+    /// Ends the servers the session started, and lets the reports on their way reach the app (5 seconds at most).
     func stop() {
         lock.lock()
         let session = made
         lock.unlock()
         session?.stop()
+        _ = reports.wait(timeout: .now() + 5)
     }
 
     /// An agent that ends its servers with SIGTERM ends this bridge's servers too, before the bridge goes.
