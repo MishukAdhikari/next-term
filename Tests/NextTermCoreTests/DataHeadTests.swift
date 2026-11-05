@@ -228,10 +228,12 @@ import Testing
         for _ in 0..<500 { out.write(line) }
         try out.close()
         // The footprint is the whole process's, and the other suites allocate meanwhile: that only ever adds. The page is
-        // read three times, each kept, so each read needs memory of its own, and the least it grew is what a page costs.
+        // read six times, each kept, so each read needs memory of its own, and the least it grew is what a page costs. Six,
+        // a moment apart, because a busy parallel run (CI, every suite at once) can allocate through three reads in a row.
         var pages: [DataPage] = []
         var grew = Int64.max
-        for _ in 0..<3 {
+        for _ in 0..<6 {
+            Thread.sleep(forTimeInterval: 0.05)
             let before = Self.footprint()
             pages.append(try DataHead.page(at: path, kind: .delimited))
             grew = min(grew, Int64(Self.footprint()) - Int64(before))
