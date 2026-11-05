@@ -509,25 +509,15 @@ final class WindowColumnView: NSView, ProjectGlowing {
     override func mouseExited(with event: NSEvent) { onPointer?(false) }
     override func mouseMoved(with event: NSEvent) { onMoved?() }
 
-    /// The top row: the window's Project Color menu. Below it: Hide Window Column and Collapse (or Expand) Window Column.
+    /// The top row: the column's menu with the window's Project Color (`onTopRowMenu`). Below it, the column's own menu.
     override func menu(for event: NSEvent) -> NSMenu? {
         if isTitleBar(convert(event.locationInWindow, from: nil)) { return onTopRowMenu?() }
         return Self.columnMenu()
     }
 
-    /// The View menu's two items for the column, their titles set as the menu opens (AppDelegate.validateMenuItem).
-    static func columnMenu() -> NSMenu {
-        let menu = NSMenu()
-        let hide = menu.addItem(withTitle: "Hide Window Column", action: #selector(AppDelegate.toggleWindowColumn(_:)), keyEquivalent: "")
-        hide.target = AppDelegate.shared
-        let fold = menu.addItem(withTitle: "Collapse Window Column", action: #selector(AppDelegate.toggleWindowColumnExpanded(_:)),
-                                keyEquivalent: "")
-        fold.target = AppDelegate.shared
-        // Their keys as the user has them, as the View menu shows them.
-        KeyboardShortcuts.set(KeyboardShortcuts.shared.chord(for: "toggleWindowColumn:"), on: hide)
-        KeyboardShortcuts.set(KeyboardShortcuts.shared.chord(for: "toggleWindowColumnExpanded:"), on: fold)
-        return menu
-    }
+    /// The column's menu (PlaceMenus.windowColumn): Collapse or Expand Window Column and Move to the other edge, then
+    /// Hide Window Column, as View has them.
+    static func columnMenu() -> NSMenu { PlaceMenus.windowColumn(for: nil) }
 
     @objc private func chevronClicked() { onToggle?() }
 

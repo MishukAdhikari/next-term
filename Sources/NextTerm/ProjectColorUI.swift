@@ -208,15 +208,15 @@ enum ProjectColorMenu {
         show.target = AppDelegate.shared
     }
 
-    /// The View menu's submenu.
-    static func submenu() -> NSMenu {
+    /// The View menu's submenu (`target` nil: the window in front), and a place's right-click's (`target` that window).
+    static func submenu(target: AnyObject? = nil) -> NSMenu {
         let menu = NSMenu(title: title)
-        items(into: menu, target: nil)
+        items(into: menu, target: target)
         return menu
     }
 
-    /// The top row's right-click for `controller`'s window: the same, under a heading, as the terminal's ⋯ has its
-    /// Move Terminal To.
+    /// The editor's top row's right-click for `controller`'s window: the same, under a heading, as the terminal's ⋯ has
+    /// its Move Terminal To. The other places have it as a submenu after their own commands (PlaceMenus).
     static func contextMenu(for controller: TerminalWindowController) -> NSMenu {
         let menu = NSMenu(title: title)
         let heading = menu.addItem(withTitle: title, action: nil, keyEquivalent: "")

@@ -2434,19 +2434,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         view.delegate = ProjectTabMenuTitles.shared
         // What shows: the sidebar, the editor or terminal in front, the terminal folded, the window column. Then where each
         // goes, then a submenu per kind of setting, so the menu reads at a glance. Keys work in submenus as anywhere.
-        item(view, "Hide Project Sidebar", #selector(TerminalWindowController.toggleProjectSidebar(_:)), "b") // title follows the state
+        // Built as each place's right-click builds them (LayoutItems), so the two can't differ.
+        view.addItem(LayoutItems.projectSidebar(target: nil)) // title follows the state
         item(view, "Focus Editor", #selector(TerminalWindowController.toggleEditorFocus(_:)), "`", [.control]) // title follows the focus
-        item(view, "Collapse Terminal", #selector(TerminalWindowController.toggleTerminalCollapsed(_:)), "j") // title follows the state
+        view.addItem(LayoutItems.terminalCollapse(target: nil)) // title follows the state
         // The window column at the window's outer edge, while two or more windows are open; also Settings › General.
         // ⌃⇧⌘S hides it and brings it back, ⌃⌘S folds it.
-        item(view, "Hide Window Column", #selector(toggleWindowColumn(_:)), "s", [.command, .shift, .control], target: self) // title follows the setting
-        item(view, "Collapse Window Column", #selector(toggleWindowColumnExpanded(_:)), "s", [.command, .control], target: self) // and the fold
+        view.addItem(LayoutItems.windowColumn()) // title follows the setting
+        view.addItem(LayoutItems.windowColumnFold()) // and the fold
         view.addItem(.separator())
         let sidebarSides = NSMenu(title: "Project Sidebar Position")
         let columnSides = NSMenu(title: "Window Column Position")
         for side in [SidebarSide.left, .right] {
-            item(sidebarSides, side.title, #selector(chooseSidebarSide(_:)), "", target: self).representedObject = side.rawValue
-            item(columnSides, side.title, #selector(chooseWindowColumnSide(_:)), "", target: self).representedObject = side.rawValue
+            sidebarSides.addItem(LayoutItems.sidebarSide(side))
+            columnSides.addItem(LayoutItems.windowColumnSide(side))
         }
         // The commands that were View › Project Sidebar on the Right and Window Column on the Right, by the same ids: a
         // key the user gave either (or VS Code's Toggle Primary Side Bar Position, imported) still switches the side.
@@ -2454,15 +2455,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             menu.addItem(.separator())
             item(menu, "Move to the Other Side", action, "", target: self)
         }
-        view.addItem(withTitle: "Project Sidebar Position", action: nil, keyEquivalent: "").submenu = sidebarSides
-        view.addItem(withTitle: "Window Column Position", action: nil, keyEquivalent: "").submenu = columnSides
-        let positions = NSMenu(title: "Terminal Position")
-        for position in TerminalPosition.allCases {
-            let entry = item(positions, position.title, #selector(setTerminalPosition(_:)), "", target: self)
-            entry.representedObject = position.rawValue
-        }
-        view.addItem(withTitle: "Terminal Position", action: nil, keyEquivalent: "").submenu = positions
-        view.addItem(withTitle: "Terminal Tabs", action: nil, keyEquivalent: "").submenu = TabListMenus.view(target: self)
+        view.addItem(LayoutItems.submenuItem(sidebarSides))
+        view.addItem(LayoutItems.submenuItem(columnSides))
+        view.addItem(LayoutItems.submenuItem(LayoutItems.terminalPositions()))
+        view.addItem(LayoutItems.submenuItem(TabListMenus.view(target: self)))
         view.addItem(.separator())
         item(view, "Show Changes", #selector(TerminalWindowController.showChanges(_:)), "g", [.command, .option])
         // Not "Git": the menu bar has a Git menu already.

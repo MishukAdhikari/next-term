@@ -124,9 +124,10 @@ extension SelfTest {
               && ProjectColorStore.read().entry(for: repo)?.color == chosen && ProjectColorStore.read().entry(for: repo)?.chosen == true,
               "project colour: a colour chosen is the window's and its worktree's, checked in the menu", main.projectColor?.name ?? "none")
         let menuItems: [String] = main.projectColorMenu()?.items.map(\.title) ?? []
-        check(menuItems.count == 15 && menuItems.contains("None for This Project") && menuItems.contains("Show Project Colors")
+        check(menuItems.count == 15 && menuItems.first == ProjectColorMenu.title && menuItems.contains("None for This Project") && menuItems.contains("Show Project Colors")
               && ProjectColor.allCases.allSatisfy { menuItems.contains($0.name) },
-              "project colour: the top row's right-click lists the nine colours, Automatic, None and Show Project Colors", "\(menuItems)")
+              "project colour: the editor's top row's right-click lists the nine colours, Automatic, None and Show Project Colors", "\(menuItems)")
+        await placeMenuChecks(main, app: app, repo: repo) // and each place's own commands before them
 
         // Show Project Colors, off and on, for every window; the colours stay kept, and Settings › General's box follows.
         app.toggleProjectColors(nil)
@@ -144,6 +145,7 @@ extension SelfTest {
         let none = await open(plain, project: false)
         check(none.projectColorKey == nil && none.projectColor == nil && none.projectColorMenu() == nil && none.tabBar.projectGlow.peak == nil,
               "project colour: a window with no project has none")
+        noProjectPlaceMenuChecks(none)
         await close(none)
 
         await welcomeDotChecks(app, repo: repo, tree: tree, color: chosen)

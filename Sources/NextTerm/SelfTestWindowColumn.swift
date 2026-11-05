@@ -296,16 +296,21 @@ extension SelfTest {
         settings.windowColumn.performClick(nil)
         check(offByBox && app.showsWindowColumn && defaultsValue(WindowColumnSettings.shownKey) == true,
               "window column: Settings' checkbox turns it off and on, the View menu following, the choice kept")
-        // A right-click below the top row offers the same two items.
+        // A right-click below the top row offers the column's own menu: Expand (folded here) and Move to the other edge,
+        // then Hide.
         let column: WindowColumnView = first.windowColumn
         if let event = rightClick(at: NSPoint(x: 10, y: 200), in: column) {
             let offered: [String] = (column.menu(for: event)?.items ?? []).map { (item: NSMenuItem) -> String in
+                if item.isSeparatorItem { return "—" }
                 _ = app.validateMenuItem(item)
                 return item.title
             }
-            check(offered == ["Hide Window Column", "Expand Window Column"], "window column: a right-click below its top row offers its two View items",
-                  "\(offered)")
+            let edge: String = app.windowColumnOnRight ? "Left" : "Right"
+            check(offered == ["Expand Window Column", "Move to the \(edge) Edge", "—", "Hide Window Column"],
+                  "window column: a right-click below its top row offers Expand Window Column and Move to the \(edge) Edge, then Hide",
+                  offered.joined(separator: " | "))
         }
+        if let top = column.onTopRowMenu?() { await screenshot(top, in: column, suffix: "-menu-window-column") }
         await close(second)
         await close(third)
     }

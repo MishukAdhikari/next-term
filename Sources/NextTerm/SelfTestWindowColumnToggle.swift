@@ -115,10 +115,22 @@ extension SelfTest {
         check(hidden && offTitle == "Show Window Column" && kept && back && onTitle == "Hide Window Column",
               "window column: ⌃⇧⌘S hides the column in every window and brings it back, the menu and the setting following",
               "hidden \(hidden), menu \(offTitle), count kept \(kept), back \(back), menu \(onTitle)")
-        // The column's own right-click menu shows both keys as the user has them.
+        // The column's own right-click menu, in two groups: Collapse or Expand and Move to the other edge, then Hide, with
+        // the keys as the user has them; Move moves it, as View › Window Column Position does, and names the edge back.
         let menu = WindowColumnView.columnMenu()
-        let keys: [String] = menu.items.map { KeyboardShortcuts.chord(of: $0)?.display ?? "" }
-        check(keys == ["⌃⇧⌘S", "⌃⌘S"], "window column: its right-click menu shows ⌃⇧⌘S and ⌃⌘S", keys.joined(separator: ", "))
+        let onRight: Bool = app.windowColumnOnRight
+        let other: String = onRight ? "Left" : "Right"
+        let titles: [String] = menu.items.map { $0.isSeparatorItem ? "—" : $0.title }
+        let keys: [String] = menu.items.filter { !$0.isSeparatorItem }.map { KeyboardShortcuts.chord(of: $0)?.display ?? "" }
+        check(titles == ["Collapse Window Column", "Move to the \(other) Edge", "—", "Hide Window Column"] && keys == ["⌃⌘S", "", "⌃⇧⌘S"],
+              "window column: its right-click menu groups Collapse and Move to the \(other) Edge, then Hide, with ⌃⌘S and ⌃⇧⌘S",
+              "\(titles.joined(separator: " | ")); keys \(keys.joined(separator: ", "))")
+        if let move = menu.items.first(where: { $0.title.hasPrefix("Move to the") }) { menu.performActionForItem(at: menu.index(of: move)) }
+        let moved: Bool = app.windowColumnOnRight != onRight
+        let named: String = WindowColumnView.columnMenu().items.first { $0.title.hasPrefix("Move to the") }?.title ?? ""
+        check(moved && named == "Move to the \(onRight ? "Right" : "Left") Edge",
+              "window column: Move to the \(other) Edge moves it there, and the menu then offers the edge it left", "moved \(moved), then “\(named)”")
+        app.setWindowColumnSide(onRight ? .right : .left)
     }
 
     /// set_layout under a grant (as a remote door's own setting has it): hidden in every window, with a notice saying so

@@ -7,13 +7,14 @@ import NextTermCore
 /// one, since it collects the View menu's commands.
 enum TabListMenus {
     /// View › Terminal Tabs: Top, Left, Right, then Show Folders and Collapse Tab List, whose title follows the list
-    /// of the window in front (Expand Tab List while it is collapsed).
-    static func view(target: AppDelegate) -> NSMenu {
+    /// of the window in front (Expand Tab List while it is collapsed), or of `window`'s for its own right-click.
+    static func view(target: AppDelegate, window: AnyObject? = nil) -> NSMenu {
         let menu = NSMenu(title: "Terminal Tabs")
         addPlaces(to: menu, target: target, indented: false)
         menu.addItem(.separator())
         menu.addItem(withTitle: "Show Folders", action: #selector(AppDelegate.toggleTabListFolders(_:)), keyEquivalent: "").target = target
         menu.addItem(withTitle: "Collapse Tab List", action: #selector(TerminalWindowController.toggleTabListCollapsed(_:)), keyEquivalent: "")
+            .target = window
         return menu
     }
 

@@ -116,9 +116,11 @@ import Testing
     }
 
     @Test func everyTitleIsAnActionInTheMenus() throws {
-        let source = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("Sources/NextTerm/AppDelegate.swift")
-        let menus = try String(contentsOf: source, encoding: .utf8)
+        let sources = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/NextTerm")
+        // The menu bar, and the layout items it shares with each place's right-click.
+        let menus = try ["AppDelegate.swift", "PlaceMenus.swift"]
+            .map { try String(contentsOf: sources.appendingPathComponent($0), encoding: .utf8) }.joined(separator: "\n")
         for id in ImportShortcuts.titles.keys {
             let action = String(id.prefix { $0 != ":" })
             #expect(menus.contains("\(action)(_:)") || menus.contains("(\"\(action):\")"), "\(id)")

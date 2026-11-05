@@ -41,10 +41,9 @@ enum LayoutMenu {
         let heading = menu.addItem(withTitle: "Move Terminal To", action: nil, keyEquivalent: "")
         heading.isEnabled = false
         for position in AppDelegate.TerminalPosition.allCases {
-            let item = menu.addItem(withTitle: position.title, action: #selector(AppDelegate.setTerminalPosition(_:)), keyEquivalent: "")
-            item.target = AppDelegate.shared
-            item.representedObject = position.rawValue
+            let item = LayoutItems.terminalPosition(position)
             item.indentationLevel = 1
+            menu.addItem(item)
         }
         menu.addItem(.separator())
         TabListMenus.items(into: menu) // where its tabs go
@@ -62,10 +61,8 @@ enum LayoutMenu {
         singleClick.target = AppDelegate.shared
         singleClick.state = AppDelegate.shared.sidebarSingleClickOpens ? .on : .off // and AppDelegate.validateMenuItem keeps it so
         menu.addItem(.separator())
-        let hide = menu.addItem(withTitle: "Hide Project Sidebar", action: #selector(TerminalWindowController.toggleProjectSidebar(_:)), keyEquivalent: "")
-        // Shows the user's shortcut for it, whatever it is now.
-        KeyboardShortcuts.set(KeyboardShortcuts.shared.chord(for: "toggleProjectSidebar:"), on: hide)
-        return menu
+        menu.addItem(LayoutItems.projectSidebar(target: nil))
+        return PlaceMenus.userKeys(menu) // the user's shortcuts, whatever they are now
     }
 
     private static func sidebarItems(into menu: NSMenu) {

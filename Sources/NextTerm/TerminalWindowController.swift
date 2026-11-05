@@ -451,12 +451,14 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         sidebar.onHeadChange = { [weak self] in self?.editorArea.headMoved() }
         sidebar.onBrowseHome = { [weak self] in self?.browseHomeFolder() }
         sidebar.onLeaveBrowsing = { [weak self] in self?.stopBrowsingHome() }
-        // A right-click on the top row, whichever bar is there: View › Project Color's choices for this window.
-        let colorMenu: () -> NSMenu? = { [weak self] in self?.projectColorMenu() }
-        for bar in [tabBar, editorArea.tabBar] { bar.onTopRowMenu = colorMenu }
-        sidebar.header.onTopRowMenu = colorMenu
-        terminalRail.onTopRowMenu = colorMenu
-        windowColumn.onTopRowMenu = colorMenu
+        // A right-click on the top row: that place's own commands from View, then this window's Project Color
+        // (PlaceMenus). The editor's bar has the Project Color choices alone.
+        editorArea.tabBar.onTopRowMenu = { [weak self] in self?.projectColorMenu() }
+        sidebar.header.onTopRowMenu = { [weak self] in self.map(PlaceMenus.sidebar(for:)) }
+        let terminalMenu: () -> NSMenu? = { [weak self] in self.map(PlaceMenus.terminal(for:)) }
+        tabBar.onTopRowMenu = terminalMenu
+        terminalRail.onTopRowMenu = terminalMenu
+        windowColumn.onTopRowMenu = { [weak self] in self.map(PlaceMenus.windowColumn(for:)) }
         NotificationCenter.default.addObserver(self, selector: #selector(projectColorsChanged), name: ProjectColorStore.changed, object: nil)
         for split in [splitView, workSplit] as [HairlineSplitView] { split.onPanesPlaced = { [weak self] in self?.projectGlowMoved() } }
         // The collapse button's tooltip names ⌘J, or the key Settings gives it instead.
@@ -1413,7 +1415,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         return projectColorKey != nil && ProjectColorStore.isShown
     }
 
-    /// The top row's right-click; none in a window with no project, which has no colour.
+    /// The editor's top row's right-click; none in a window with no project, which has no colour.
     func projectColorMenu() -> NSMenu? {
         projectColorKey == nil ? nil : ProjectColorMenu.contextMenu(for: self)
     }
