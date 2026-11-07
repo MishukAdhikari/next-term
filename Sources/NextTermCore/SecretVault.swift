@@ -466,6 +466,11 @@ public final class SecretVault {
         /// When the value was last set, or for a key saved before that was recorded, when the key was made: its age can
         /// then only seem greater than it is, never less.
         public var lastSet: Date { valueSet ?? created }
+
+        /// A SHA-256 of the sealed value (its box, whose associated data holds the id, the name and the flags), hex: it
+        /// changes with a new value, a rename and a key made write-only, and never with what the key is for. An Always
+        /// grant keeps it, so any of those asks again.
+        public var valueMark: String { SHA256.hash(data: box).map { String(format: "%02x", $0) }.joined() }
     }
 
     struct Wrapped: Codable, Equatable, Sendable {

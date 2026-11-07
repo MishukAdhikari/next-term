@@ -31,6 +31,8 @@ public enum SecretAudit {
         case fifteenMinutes = "15 minutes"
         case untilLock = "until lock"
         case session = "this session"
+        /// An Always approval, made or used (SecretAlwaysGrants.swift). A build before it skips the line.
+        case always
         case grant, remote
     }
 

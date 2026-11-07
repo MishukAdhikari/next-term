@@ -455,6 +455,7 @@ enum SecretsMCP {
             case .fifteenMinutes: approved = "for 15 minutes"
             case .untilLock: approved = "until the Mac locks"
             case .session: approved = "for this session"
+            case .always: approved = "always, here"
             case .grant: approved = "by an earlier approval"
             }
             return ["status": Status.started.rawValue, "approved": approved,

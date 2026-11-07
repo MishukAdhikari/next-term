@@ -4,9 +4,11 @@ import Foundation
 // time it's used" (the default, and how a key saved before that box reads) is used once per approval: while any key a
 // request names asks every time, the panel offers only Allow once, and a grant in force that holds the key ends.
 
-/// How long an approval lasts, as the panel's "How long" offers it.
+/// How long an approval lasts, as the panel's Remember offers it. The Always choices outlast Next Term, kept in
+/// their own sealed file (SecretAlwaysFile).
 public enum SecretApprovalChoice: String, CaseIterable, Hashable, Sendable {
     case once, fifteenMinutes, untilLock, session
+    case alwaysProject, alwaysWorktree, alwaysFolder
 
     /// The audit log's word for it.
     public var approval: SecretAudit.Approval {
@@ -15,16 +17,38 @@ public enum SecretApprovalChoice: String, CaseIterable, Hashable, Sendable {
         case .fifteenMinutes: return .fifteenMinutes
         case .untilLock: return .untilLock
         case .session: return .session
+        case .alwaysProject, .alwaysWorktree, .alwaysFolder: return .always
         }
     }
 
-    /// The grant it makes: none for Allow once.
+    /// The grant it makes while Next Term runs: none for Allow once, nor for an Always choice, whose grant is kept.
     public var grantKind: SecretGrant.Kind? {
         switch self {
-        case .once: return nil
+        case .once, .alwaysProject, .alwaysWorktree, .alwaysFolder: return nil
         case .fifteenMinutes: return .fifteenMinutes
         case .untilLock: return .untilLock
         case .session: return .session
+        }
+    }
+
+    /// Where an Always choice holds; nil for the others.
+    public var scope: SecretAlwaysScope.Kind? {
+        switch self {
+        case .alwaysProject: return .project
+        case .alwaysWorktree: return .worktree
+        case .alwaysFolder: return .folder
+        case .once, .fifteenMinutes, .untilLock, .session: return nil
+        }
+    }
+
+    public var isAlways: Bool { scope != nil }
+
+    /// The Always choice for `kind`.
+    public static func always(_ kind: SecretAlwaysScope.Kind) -> SecretApprovalChoice {
+        switch kind {
+        case .project: return .alwaysProject
+        case .worktree: return .alwaysWorktree
+        case .folder: return .alwaysFolder
         }
     }
 }
@@ -34,12 +58,20 @@ public enum SecretApprovalChoices {
     /// Mac; Allow for this session for an agent's session Next Term can follow (`hasSession`); Allow this command until
     /// the Mac locks for `nxtrm secret run`'s (`isWrapper`). Only Allow once for a remote connection, and while any key
     /// the request names asks every time (`asksEveryUse`).
-    public static func offered(isWrapper: Bool, isRemote: Bool, asksEveryUse: Bool, hasSession: Bool = false) -> [SecretApprovalChoice] {
-        guard !isRemote, !asksEveryUse else { return [.once] }
+    ///
+    /// After them, the Always choices for the places `always` names (the project, the worktree, the folder): only for an
+    /// agent in one of Next Term's own tabs whose request may be kept (SecretAlwaysRules), which the caller decides. A key
+    /// that asks every time gets them too: for that one command or server it then asks once per launch, and the panel
+    /// says so. Never for a remote connection.
+    public static func offered(isWrapper: Bool, isRemote: Bool, asksEveryUse: Bool, hasSession: Bool = false,
+                               always: [SecretAlwaysScope.Kind] = []) -> [SecretApprovalChoice] {
+        guard !isRemote else { return [.once] }
+        let places: [SecretApprovalChoice] = always.map(SecretApprovalChoice.always)
+        guard !asksEveryUse else { return [.once] + places }
         // Allow for this session when the request comes from an agent's session Next Term can follow to its end: the
-        // widest, so last.
+        // widest of those that end, so after them.
         let session: [SecretApprovalChoice] = hasSession ? [.session] : []
-        return (isWrapper ? [.once, .fifteenMinutes, .untilLock] : [.once, .fifteenMinutes]) + session
+        return (isWrapper ? [.once, .fifteenMinutes, .untilLock] : [.once, .fifteenMinutes]) + session + places
     }
 
     /// The keys among `names` that ask every time, in their order: each one `index` says so of (a key saved before
