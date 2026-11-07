@@ -294,6 +294,93 @@ import Testing
         #expect(SecretApprovalChoices.offered(isWrapper: false, isRemote: false, asksEveryUse: true) == [.once])
     }
 
+    // MARK: the sealed file
+
+    static func store(_ folder: SecretFolder, key: SymmetricKey, floor: Int = 0) -> SecretAlwaysStore {
+        SecretAlwaysStore(folder: folder, key: key, floor: floor)
+    }
+
+    static func secrets() throws -> SecretFolder {
+        SecretFolder(url: URL(fileURLWithPath: try fixture("always-file")).appendingPathComponent("Secrets.noindex", isDirectory: true))
+    }
+
+    @Test func aGrantReadsBackSealed() throws {
+        let folder = try Self.secrets()
+        let key = SymmetricKey(size: .bits256)
+        let grant = Self.grant(scope: Self.scope(.folder, "/a/app"))
+        let made = try Self.store(folder, key: key).update(startsOver: true) { body in
+            body.grants = SecretAlwaysGrants.adding(grant, to: body.grants)
+            return (true, ())
+        }
+        #expect(made.sequence == 1)
+        guard case .success(let body) = Self.store(folder, key: key, floor: 1).read() else { Issue.record("not read"); return }
+        #expect(body.grants == [grant])
+        // Another key opens nothing.
+        #expect(Self.store(folder, key: SymmetricKey(size: .bits256)).read() == .failure(.tampered))
+    }
+
+    /// A program that writes the file can't add a grant: it has no key, so its MAC fails.
+    @Test func anAgentCantAddAGrantByWritingTheFile() throws {
+        let folder = try Self.secrets()
+        let key = SymmetricKey(size: .bits256)
+        try Self.store(folder, key: key).update(startsOver: true) { _ in (true, ()) }
+        let data = try #require(try folder.read(SecretAlwaysFile.name, cap: SecretAlwaysFile.maxSize))
+        // The body rewritten with a grant, the old MAC kept.
+        var outer = try JSONDecoder().decode(SecretAlwaysFile.Outer.self, from: data)
+        let forged = SecretAlwaysFile.Body(grants: [Self.grant(scope: Self.scope(.project, "/a"))], sequence: 5)
+        outer.body = try SecretAlwaysFile.encoder.encode(forged)
+        try folder.write(SecretAlwaysFile.name, data: try JSONEncoder().encode(outer))
+        #expect(Self.store(folder, key: key).read() == .failure(.tampered))
+        // And a whole file made with a key of its own.
+        try folder.write(SecretAlwaysFile.name, data: try SecretAlwaysFile.encode(forged, key: SymmetricKey(size: .bits256)))
+        #expect(Self.store(folder, key: key).read() == .failure(.tampered))
+        // Settings may list what is there, unchecked; nothing answers from it.
+        #expect(SecretAlwaysFile.peek(try folder.read(SecretAlwaysFile.name, cap: SecretAlwaysFile.maxSize))?.grants.count == 1)
+    }
+
+    /// An older copy put back, its MAC still good, reads as tampered once the vault's floor passed it: a removed grant
+    /// never comes back, after a relaunch too.
+    @Test func aRollbackIsRefused() throws {
+        let folder = try Self.secrets()
+        let key = SymmetricKey(size: .bits256)
+        let grant = Self.grant(scope: Self.scope(.folder, "/a/app"))
+        let added = try Self.store(folder, key: key).update(startsOver: true) { body in
+            body.grants = [grant]
+            return (true, ())
+        }
+        let withGrant = try #require(try folder.read(SecretAlwaysFile.name, cap: SecretAlwaysFile.maxSize))
+        let removed = try Self.store(folder, key: key, floor: added.sequence).update { body in
+            body.grants = []
+            return (true, ())
+        }
+        // The vault keeps the floor the removal raised it to.
+        let vault = try SecretVault.create(keyring: SoftwareKeyring()).vault
+        _ = try vault.raiseFloor(of: SecretAlwaysFile.name, to: removed.sequence)
+        #expect(vault.index.floor(of: SecretAlwaysFile.name) == removed.sequence)
+        _ = try vault.raiseFloor(of: SecretAlwaysFile.name, to: 1)
+        #expect(vault.index.floor(of: SecretAlwaysFile.name) == removed.sequence, "a floor never goes down")
+        try folder.write(SecretAlwaysFile.name, data: withGrant)
+        let relaunched = Self.store(folder, key: key, floor: vault.index.floor(of: SecretAlwaysFile.name))
+        #expect(relaunched.read() == .failure(.tampered))
+        // Without the floor (a vault from before it), the copy would read: the floor is what refuses it.
+        #expect((try? Self.store(folder, key: key).read().get())?.grants == [grant])
+    }
+
+    @Test func theSignInsFileTakesTheVaultsFloorToo() throws {
+        let folder = try Self.secrets()
+        let key = SymmetricKey(size: .bits256)
+        let signIns = SignInStore(folder: folder, key: key)
+        try signIns.update(startsOver: true) { _ in (true, ()) }
+        let old = try #require(try folder.read(SignInFile.name, cap: SignInFile.maxSize))
+        try signIns.update { _ in (true, ()) }
+        let now = try #require(try folder.read(SignInFile.name, cap: SignInFile.maxSize))
+        let sequence = try #require(SignInFile.sequence(of: now, key: key))
+        try folder.write(SignInFile.name, data: old)
+        // A new launch's store, which keeps no memory of this one, with the vault's floor.
+        let next = SignInStore(folder: folder, key: key, floor: sequence)
+        #expect(next.read() == .failure(.tampered))
+    }
+
     /// A key changed, renamed or deleted takes its grants with it; one made again replaces the same one.
     @Test func revocationAndReplacement() {
         let one = Self.grant(scope: Self.scope(.folder, "/a/app"))

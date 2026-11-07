@@ -491,6 +491,14 @@ public final class SecretVault {
         var wrapped: Wrapped
         var recovery: Recovery?
         public internal(set) var entries: [Entry]
+        /// The lowest `sequence` each of Secrets' sealed companions (always.json, sign-ins.json) may have, by file name:
+        /// raised in the Touch ID that changes what one grants, so an older copy put back, its MAC still good, reads as
+        /// tampered after a relaunch too. Added after 0.11.43; absent until the first, and a copy before it drops it when it
+        /// next saves, which only lowers the floor.
+        public internal(set) var floors: [String: Int]? = nil
+
+        /// A companion's floor (`floors`), 0 with none.
+        public func floor(of file: String) -> Int { floors?[file] ?? 0 }
 
         /// Whether the second wrap, under the login keychain's recovery key, is there.
         public var hasRecovery: Bool { recovery != nil }
@@ -821,6 +829,27 @@ public final class SecretVault {
         }
     }
 
+    // MARK: companions
+
+    /// Raises a companion's floor (`Index.floors`) to `sequence`; one already as high leaves the file as it is.
+    public func raiseFloor(of file: String, to sequence: Int) throws -> Data {
+        let key = try unlockedKey()
+        guard !file.isEmpty, file.utf8.count <= 64, sequence >= 0 else { throw Failure.badName }
+        guard sequence > index.floor(of: file) else { return self.file }
+        return try written(key) {
+            var floors = index.floors ?? [:]
+            floors[file] = sequence
+            index.floors = floors
+        }
+    }
+
+    /// A key for one of Secrets' sealed companions, derived from the vault key with `info`: only an unlock releases it,
+    /// and a vault made again (Start Over) gives another, so an old companion file opens with nothing.
+    public func companionKey(_ info: String) throws -> SymmetricKey {
+        let key = try unlockedKey()
+        return HKDF<SHA256>.deriveKey(inputKeyMaterial: key, info: Data(("nextterm companion/1\u{0}" + info).utf8), outputByteCount: 32)
+    }
+
     // MARK: values
 
     /// A key's value, to hand to a command: write-only keys included. Throws `tampered` when its seal fails.
@@ -1088,6 +1117,9 @@ public final class SecretVault {
                   entry.purpose.count <= maxPurposeLength, names.insert(entry.name).inserted,
                   ids.insert(entry.id).inserted, entry.marks.allSatisfy(SecretMask.isPlausible),
                   hasWellFormedFacts(entry) else { return false }
+        }
+        if let floors = index.floors {
+            guard floors.count <= 8, floors.allSatisfy({ !$0.key.isEmpty && $0.key.utf8.count <= 64 && $0.value >= 0 }) else { return false }
         }
         return true
     }

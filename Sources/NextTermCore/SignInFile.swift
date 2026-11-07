@@ -173,6 +173,12 @@ public enum SignInFile {
     // MARK: reading and writing
 
     /// The body of `data` (nil: no file yet, an empty body), its MAC checked over the body's bytes as stored.
+    /// The sequence of a body that `key` vouches for, for the vault's floor: nil for no file or one that doesn't check out.
+    public static func sequence(of data: Data?, key: SymmetricKey) -> Int? {
+        guard data != nil, case .success(let body) = read(data, key: key) else { return nil }
+        return body.sequence ?? 0
+    }
+
     public static func read(_ data: Data?, key: SymmetricKey) -> Result<Body, Failure> {
         guard let data else { return .success(Body()) }
         guard let outer = try? JSONDecoder().decode(Outer.self, from: data), outer.format >= 1,
@@ -287,10 +293,14 @@ public enum SignInFile {
 public final class SignInStore: @unchecked Sendable {
     public let folder: SecretFolder
     let key: SymmetricKey
+    /// The vault's floor for this file (`SecretVault.Index.floors`), as the unlock that released the key read it: a body
+    /// below it is an older copy put back before this launch.
+    let floor: Int
 
-    public init(folder: SecretFolder, key: SymmetricKey) {
+    public init(folder: SecretFolder, key: SymmetricKey, floor: Int = 0) {
         self.folder = folder
         self.key = key
+        self.floor = floor
     }
 
     /// The sign-ins now; `tampered` when the file was changed outside Next Term.
@@ -302,6 +312,7 @@ public final class SignInStore: @unchecked Sendable {
 
     /// The highest `sequence` read or written this launch, for each file and key: a body below it is an older copy put
     /// back. Kept in memory, so it holds within a launch (where Sign Out and Change… happen); a key made anew starts its own.
+    /// Across launches the vault's floor holds (`floor`), raised to the file's sequence each time a launch releases the key.
     private static var seen: [String: Int] = [:]
     private static let seenLock = NSLock()
     private var seenKey: String {
@@ -314,7 +325,7 @@ public final class SignInStore: @unchecked Sendable {
         let sequence = body.sequence ?? 0
         Self.seenLock.lock()
         defer { Self.seenLock.unlock() }
-        if sequence < Self.seen[seenKey, default: 0] { return .failure(.tampered) }
+        if sequence < max(floor, Self.seen[seenKey, default: 0]) { return .failure(.tampered) }
         Self.seen[seenKey] = sequence
         return .success(body)
     }
