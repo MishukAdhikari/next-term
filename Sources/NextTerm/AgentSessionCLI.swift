@@ -2,20 +2,25 @@ import Darwin
 import Foundation
 import NextTermCore
 
-/// `nxtrm agent NAME [--prompt TEXT]`: an agent session in the tab it runs in (plan 030). It starts the agent in ACP
-/// mode, draws the session as text (ACPTranscript) with an input line, and says what the agent does over OSC 7501, so
-/// the tab's marks, its notification and `wait_for_tab` follow the agent's own turns rather than its screen. A
-/// permission request is drawn as a numbered menu that the tab's keys, the notification's buttons and `answer_agent`
-/// answer. The agent uses its own tools; it is given Next Term's MCP server when it runs in a Next Term tab.
+/// `nxtrm agent NAME [--prompt TEXT] [--resume ID]`: an agent session in the tab it runs in (plans 030, 035). It starts
+/// the agent in ACP mode, or Claude Code or Codex over its own protocol (AgentSessionDrivers), draws the session as text
+/// (ACPTranscript) with an input line, and says what the agent does over OSC 7501, so the tab's marks, its notification
+/// and `wait_for_tab` follow the agent's own turns rather than its screen. A permission request is drawn as a numbered
+/// menu that the tab's keys, the notification's buttons and `answer_agent` answer. The agent uses its own tools; it is given Next Term's MCP server when it runs in a Next Term tab.
 enum AgentSessionCLI {
     static let usage = """
         nxtrm agent NAME [--prompt TEXT] [--resume ID]
-          Runs an agent that speaks the Agent Client Protocol in this tab, as an agent session: its turns, tool calls,
-          plan and permission requests drawn as text, and its state followed exactly by Next Term.
+          Runs an agent in this tab as an agent session: Claude Code (claude -p over stream-json), Codex (codex
+          app-server), or an agent that speaks the Agent Client Protocol. Its turns, tool calls, plan and permission
+          requests are drawn as text, and Next Term follows its state exactly. It runs the agent installed here, signed
+          in as you signed it in.
           NAME is one of: \(ACPAgent.known.map(\.id).joined(separator: ", ")).
           --prompt TEXT   the first prompt, sent at once.
           --resume ID     Claude Code and Codex: go on with session ID (what a restore after an update runs).
         Type a prompt and Return to send it; ⌃C or Esc stops a turn; ⌃D on an empty line ends the session.
+        Claude Code asks on the Mac before its first session in a folder, as it runs that folder's hooks and MCP servers.
+        What stays in the agent's own terminal tab: Claude Code's /usage, /rewind and /login and its plugin and MCP
+        panels; Codex's own screens, such as /status and /approvals.
         """
 
     static func run(_ arguments: [String]) -> Never {
@@ -49,7 +54,7 @@ enum AgentSessionCLI {
             exit(installed.isEmpty ? 1 : 0)
         }
         guard let agent = ACPAgent.named(name) else {
-            fail("\(name) isn't an agent Next Term runs over ACP. Installed here: \(ACPAgent.listed(installed)).")
+            fail("\(name) isn't an agent Next Term runs as a session (claude, codex, or an ACP agent). Installed here: \(ACPAgent.listed(installed)).")
         }
         guard let program = locate(agent.program, path: path) else {
             fail("\(agent.name) (\(agent.program)) isn't on the PATH. Installed here: \(ACPAgent.listed(installed)).")

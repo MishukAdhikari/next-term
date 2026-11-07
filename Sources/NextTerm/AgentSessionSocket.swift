@@ -146,13 +146,38 @@ enum AgentSessionSocket {
         let option = ACPSession.oneLine(arguments["option"] as? String ?? "Allow always", limit: 60)
         let details = "\(agent) asks to \(action). \u{201C}\(option)\u{201D} lets it do this again in this session without asking. "
             + "It was picked in the session\u{2019}s tab, by you or by an agent that steers it."
-        let window = AgentApprovalWindow(.init(title: "Allow \(agent) always?", requester: "The session in “\(tab.title)”",
-                                               agentWords: nil, details: details, approveTitle: option),
+        let request = AgentApprovalWindow.Request(title: "Allow \(agent) always?", requester: "The session in “\(tab.title)”",
+                                                  agentWords: nil, details: details, approveTitle: option)
+        ask(request, then: then)
+    }
+
+    /// The approval windows open now. A window doesn't keep its controller (`NSWindow.windowController` is weak), and
+    /// nothing else here does: without this the controller went as soon as it was shown, its buttons answered nothing
+    /// and the session's menu waited on the Mac for good.
+    @MainActor private static var asking: [AgentApprovalWindow] = []
+
+    /// Shows `request` on the Mac and answers `then` once, Approve (true) or Decline or a close (false), keeping the
+    /// window until then.
+    @MainActor
+    private static func ask(_ request: AgentApprovalWindow.Request, approved: (() -> Void)? = nil, then: @escaping (Bool) -> Void) {
+        // Let go once its own close is done: Decline answers before the window closes.
+        func letGo(_ window: AgentApprovalWindow?) {
+            DispatchQueue.main.async { MainActor.assumeIsolated { asking.removeAll { $0 === window } } }
+        }
+        weak var shown: AgentApprovalWindow?
+        let window = AgentApprovalWindow(request,
                                          approve: { window in
                                              window.finish()
+                                             letGo(window)
+                                             approved?()
                                              then(true)
                                          },
-                                         decline: { _ in then(false) })
+                                         decline: { _ in
+                                             letGo(shown)
+                                             then(false)
+                                         })
+        shown = window
+        asking.append(window)
         window.present()
     }
 
@@ -170,15 +195,10 @@ enum AgentSessionSocket {
         let request = AgentApprovalWindow.Request(title: "Trust this folder for \(agent)?",
                                                   requester: "The session in \u{201C}\(tab.title)\u{201D}",
                                                   agentWords: nil, details: details, approveTitle: "Trust Folder")
-        let window = AgentApprovalWindow(request,
-                                         approve: { window in
-                                             window.finish()
-                                             let list = AgentSessionTrust.list(in: trustStore)
-                                             trustStore.set(AgentSessionTrust.adding(folder, to: list), forKey: AgentSessionTrust.defaultsKey)
-                                             then(true)
-                                         },
-                                         decline: { _ in then(false) })
-        window.present()
+        ask(request, approved: {
+            let list = AgentSessionTrust.list(in: trustStore)
+            trustStore.set(AgentSessionTrust.adding(folder, to: list), forKey: AgentSessionTrust.defaultsKey)
+        }, then: then)
     }
 
     private static func answer(_ fd: Int32, _ fields: [String: Any]) {

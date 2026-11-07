@@ -386,16 +386,21 @@ How it knows, most reliable first:
 
 ### Agent sessions
 
-An agent that speaks the [Agent Client Protocol](https://agentclientprotocol.com) can also run as an agent
-session: Agents › New Agent Session…, or `nxtrm agent gemini` in any tab (also `qwen`, `opencode`, `cursor`,
-`copilot`, `goose` and others, when their program is on your PATH; Next Term installs none of them). The tab
-draws the session as text: your prompts, the agent's words, each tool call with its status, file changes with
-their line counts, the plan as a checklist, and how each turn ended (Done, Stopped, Refused, Hit the token
-limit). Next Term follows the agent's own turns instead of its screen, so the tab's mark is exact, and a
-permission request turns it amber with the agent's options as the notification's buttons. Allow always isn't
-offered from a session yet. An orchestrating agent starts one with `new_tab`'s `agent_session` and answers its
-requests with `answer_agent`. The agent's own terminal interface in a tab stays the default: a session is an
-addition, and Claude Code and Codex, which speak the protocol only through adapters, aren't offered yet.
+Claude Code, Codex and the agents that speak the [Agent Client Protocol](https://agentclientprotocol.com) can
+also run as an agent session: Agents › New Agent Session…, or `nxtrm agent claude` in any tab (also `codex`,
+`gemini`, `qwen`, `opencode`, `cursor`, `copilot`, `goose` and others, when their program is on your PATH; Next
+Term installs none of them). Claude Code runs as `claude -p` over its stream-json, and Codex as `codex
+app-server`; each is the CLI you installed, signed in as you signed it in, and Next Term never reads or offers a
+login. The tab draws the session as text: your prompts, the agent's words, each tool call with its status, file
+changes with their line counts, the plan as a checklist, and how each turn ended (Done, Stopped, Refused, Hit the
+token limit). Next Term follows the agent's own turns instead of its screen, so the tab's mark is exact, and a
+permission request turns it amber with the agent's options as the notification's buttons. Allow always is asked
+on the Mac first and lasts for that session only. Before Claude Code's first session in a folder, Next Term asks
+on the Mac whether to trust it, as `claude -p` runs a folder's hooks and MCP servers without asking. A session
+names the CLI's version, says when it changed, and comes back after a Next Term update. An orchestrating agent
+starts one with `new_tab`'s `agent_session` and answers its requests with `answer_agent`. The agent's own
+terminal interface in a tab stays the default: a session is an addition, and what only that interface has
+(Claude Code's `/usage`, `/rewind`, `/login` and plugin panels, Codex's own screens) works in a tab running it.
 
 Interactive programs (`vim`, `ssh`, `less`, REPLs) are never reported as "done". Closing a tab or quitting
 asks first if a program is running or a job is suspended (Ctrl-Z) or in the background, and names it.
