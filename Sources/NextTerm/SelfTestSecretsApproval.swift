@@ -165,7 +165,29 @@ extension SelfTest {
         check(remote.panel?.serverButton?.title == "Use as an MCP Server\u{2026}" && remote.always?.bridge?.url == "https://mcp.example.com/mcp",
               "secrets approval: mcp-remote offers Use as an MCP Server", remote.always?.refusal ?? "")
         if let remoteWindow = remote.panel?.window { await screenshot(remoteWindow, suffix: "-approval-mcp-remote") }
-        remote.panel?.declineButton.performClick(nil)
+        // Use as an MCP Server…, confirmed: a URL server with the same header in a user list of the self-test's own, and this
+        // request declined; reached through Next Term, that server is offered Always.
+        let savedUserFile = MCPHubControl.userFile
+        let userFile = base.appendingPathComponent("user-mcp.json").path
+        MCPHubControl.userFile = userFile
+        defer { MCPHubControl.userFile = savedUserFile }
+        remote.panel?.serverButton?.performClick(nil)
+        let sheetShown = await wait(5) { remote.panel?.window?.attachedSheet != nil }
+        if let sheet = remote.panel?.window?.attachedSheet {
+            await screenshot(sheet, suffix: "-approval-use-as-server")
+            approvalButtons(sheet.contentView ?? NSView()).first { $0.title == "Add Server" }?.performClick(nil)
+        }
+        let added = await wait(5) { remote.isAnswered }
+        let written = (try? String(contentsOfFile: userFile, encoding: .utf8)) ?? ""
+        let asServer = MCPHubServer(name: "example", transport: .http, url: "https://mcp.example.com/mcp",
+                                    headers: ["Authorization": "Bearer ${secret:API_TOKEN}"])
+        let offered = SecretAlways.offer(agent: "Codex", identity: identity, server: asServer, list: userFile, keys: ["API_TOKEN": "API_TOKEN"],
+                                         folder: src)
+        check(sheetShown && added && written.contains("https://mcp.example.com/mcp") && written.contains("${secret:API_TOKEN}")
+              && offered.refusal == nil && !offered.scopes.isEmpty,
+              "secrets approval: Use as an MCP Server adds it as a URL server with the same header, once confirmed, where Always is offered",
+              written)
+        if !remote.isAnswered { remote.panel?.declineButton.performClick(nil) }
         await pause(0.2)
 
         // 7. A hub server at a URL: Always in the project holds in its linked worktree too; outside, it asks.

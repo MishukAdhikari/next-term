@@ -583,11 +583,10 @@ final class SecretRequests {
         }
         let alert = NSAlert()
         alert.messageText = "Use \u{201C}\(name)\u{201D} as an MCP server?"
-        let headers = bridge.headers.keys.sorted().map { "\($0): \(bridge.headers[$0] ?? "")" }
-        alert.informativeText = "Next Term adds \(bridge.url) to Settings \u{203A} MCP Servers for every agent"
-            + (headers.isEmpty ? "" : ", with \(headers.joined(separator: ", "))") + ". Next Term then sends "
-            + "\(SecretRun.keysText(request.names)) itself, so the agent never sees it, and Always is offered there.\n\n"
-            + "This request is declined. Remove the nxtrm line from the agent\u{2019}s own MCP settings, then restart it."
+        let host = URL(string: bridge.url)?.host ?? bridge.url
+        alert.informativeText = "Next Term adds \(host) to Settings \u{203A} MCP Servers and sends \(SecretRun.keysText(request.names)) to it "
+            + "itself, so the agent never sees the key, and Always is offered there.\n\nThis request is declined. Remove the nxtrm "
+            + "line from the agent\u{2019}s MCP settings, then restart it."
         let add = alert.addButton(withTitle: "Add Server")
         ApprovalLayout.style(add, look: .accent)
         alert.addButton(withTitle: "Cancel").keyEquivalent = "\u{1b}"
