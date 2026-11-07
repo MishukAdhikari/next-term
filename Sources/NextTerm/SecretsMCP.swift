@@ -322,6 +322,8 @@ enum SecretsMCP {
         // started (a codex its Bash runs) gets no session choice; one started by an alias, a script or npx does.
         if let caller, let bridge = facts.pid, let agent = SecretSocket.agentAbove(bridge), SecretSocket.isFrontAgent(agent, in: caller) {
             ticket.session = SecretRequests.session(agent: agent.pid, in: caller)
+            ticket.agent = agent
+            ticket.callerTab = caller.id
         }
         calls[call.id] = call
         requests.add(ticket)

@@ -179,6 +179,10 @@ enum SecretSocket {
             guard let tab, found.pid > 1, isFrontAgent(found, in: tab) else { return nil }
             return SecretRequests.session(agent: found.pid, in: tab)
         }
+        // Always, only for the agent in front of its tab, for a fixed command (SecretAlways.offer).
+        asking.always = SecretAlways.offer(agent: agent, tab: tab, door: .wrapper, words: request.argv, keys: request.map,
+                                           folder: request.directory, path: nil, resolved: request.executable, warned: request.warn,
+                                           warnings: warnings, summary: shown)
         let waiting = SecretRequests.shared.ask(asking, left: { waiter.hasLeft }) { decision in
             waiter.set(answer(for: decision, request: request))
         }

@@ -303,6 +303,12 @@ final class CommandBox: NSView, NSLayoutManagerDelegate {
         text.frame = NSRect(x: 8, y: 6, width: width - 16, height: bounds.height - 12)
     }
 
+    /// The first line's baseline, so a label beside the box lines up with the command, not the box's edge.
+    override var firstBaselineOffsetFromTop: CGFloat {
+        guard let manager = text.layoutManager, manager.numberOfGlyphs > 0 else { return 6 + (text.font?.ascender ?? 10) }
+        return 6 + manager.typesetter.baselineOffset(in: manager, glyphIndex: 0)
+    }
+
     /// Breaks only where a person would: before a character that follows a space or a slash.
     nonisolated func layoutManager(_ layoutManager: NSLayoutManager, shouldBreakLineByWordBeforeCharacterAt charIndex: Int) -> Bool {
         guard charIndex > 0, let storage = layoutManager.textStorage else { return true }

@@ -122,6 +122,10 @@ final class SecretRequests {
         /// The asking agent's session, when Next Term can follow it to its end (SecretGrant.session): what "Allow for this
         /// session" binds to. Nil offers no such choice.
         var session: String?
+        /// What the Always choices would bind, for an agent in front of one of Next Term's own tabs; nil offers none.
+        var always: SecretAlways.Offer?
+        /// The Touch ID that checks the Always grants was asked for it once already.
+        var alwaysTried = false
         let made: ContinuousClock.Instant
         /// A wrapper request whose wrapper stopped waiting: a pending card.
         fileprivate(set) var gone = false
@@ -212,6 +216,7 @@ final class SecretRequests {
         observers.append(NotificationCenter.default.addObserver(forName: SecretsStore.changed, object: nil, queue: .main) { _ in
             MainActor.assumeIsolated { SecretRequests.shared.endGrantsAskingEveryUse() }
         })
+        SecretAlways.startObserving()
     }
 
     // MARK: asking
@@ -247,6 +252,33 @@ final class SecretRequests {
             audit(.refused, request, outcome: Self.word(refusal))
             reply(.refused(refusal))
             return nil
+        }
+        // An Always grant: after the limits, so the hour's pause and Stop Asking hold it back without ending it. With its
+        // values held this launch, no panel and no Touch ID; else, when the file may hold one, the one Touch ID that checks
+        // it and releases them, and the panel only if none answers.
+        if request.isUse, !request.isRemote, let ask = request.always?.ask(in: SecretsStore.shared.held) {
+            if let answered = SecretAlways.heldAnswer(ask) {
+                limits.record(.answeredByGrant, asker: request.asker, binding: request.binding, at: now)
+                audit(.use, request, approval: .always, outcome: "allowed: Always in \(answered.grant.scope.path)")
+                changedNow()
+                reply(.allowed(copies(answered.values), how: .always))
+                return nil
+            }
+            if !request.alwaysTried, SecretAlways.mightAnswer(ask) {
+                request.alwaysTried = true
+                let reason = SecretReason.use(request.names, program: request.program, folder: request.folder)
+                Task { @MainActor in
+                    if let answered = await SecretAlways.unlockAndAnswer(ask, reason: reason) {
+                        self.limits.record(.answeredByGrant, asker: request.asker, binding: request.binding, at: self.now())
+                        self.audit(.use, request, approval: .always, outcome: "allowed: Always in \(answered.grant.scope.path)")
+                        self.changedNow()
+                        reply(.allowed(answered.values, how: .always))
+                    } else {
+                        _ = self.ask(request, left: left, reply: reply) // the panel, as with no grant
+                    }
+                }
+                return nil
+            }
         }
         let id = UUID()
         // Of the same session too: another agent's identical request never rides this one's "Allow for this session".
@@ -391,6 +423,10 @@ final class SecretRequests {
             guard let self, let next else { return }
             self.pauseForAnHour(from: next)
         })
+        panel.onUseAsServer = { [weak self, weak next] server in
+            guard let self, let next else { return }
+            self.useAsServer(next, server: server)
+        }
         next.panel = panel
         if next.gone { panel.markGone() }
         panel.present(urgent: next.isWrapper)
@@ -419,13 +455,29 @@ final class SecretRequests {
             isRemote: request.isRemote, notice: request.notice, waiting: max(0, queue.count - 1))
         let asking: [String] = SecretApprovalChoices.askingEveryUse(request.names, in: store.index)
         content.reachesURL = request.reachesURL
+        if request.reachesURL { content.serverName = request.program }
         content.choices = offered(request) // one source for the panel's choices and the Allow's
         content.askingEveryUse = request.isRemote ? [] : asking
+        if let offer = request.always {
+            content.place = Self.place(of: offer.places)
+            var always = SecretApprovalPanel.Content.Always(refusal: offer.refusal, bridge: offer.bridge, agent: offer.agent)
+            for kind in offer.scopes { always.labels[.always(kind)] = offer.label(kind) }
+            content.always = always
+        }
         if !request.isUse {
             content.offersHowLong = false
             content.allowTitle = "Save"
         }
         return content
+    }
+
+    /// The In row: the project's or worktree's name, with the path inside it ("app › src").
+    static func place(of places: SecretPlaces) -> String {
+        guard let root = places.worktree ?? places.project else { return (places.folder as NSString).lastPathComponent }
+        let name = (root as NSString).lastPathComponent
+        guard let inner = SecretAlwaysScope.components(places.folder), let base = SecretAlwaysScope.components(root),
+              inner.count > base.count else { return name }
+        return ([name] + inner[base.count...]).joined(separator: " \u{203A} ")
     }
 
     // MARK: answers
@@ -437,6 +489,7 @@ final class SecretRequests {
         let how: How = Self.stillOffered(how, request, offered: offered(request))
         panel.setBusy(true)
         let reason = SecretReason.use(request.names, program: request.program, folder: request.folder)
+        if let kind = how.scope, let offer = request.always { return allowAlways(request, offer: offer, kind: kind, reason: reason, panel: panel) }
         let facts = SecretsStore.Facts(who: Self.who(request), command: request.command, folder: request.folder, approval: how.approval)
         Task { @MainActor in
             do {
@@ -494,6 +547,62 @@ final class SecretRequests {
             return
         }
         finish(request, outcome: .allowed, decision: .allowed(values, how: how.approval))
+    }
+
+    /// Allow with an Always choice: one Touch ID releases the keys and keeps the grant (SecretAlways.allow); every caller
+    /// waiting on the panel gets the keys, as the grant would answer each.
+    private func allowAlways(_ request: Request, offer: SecretAlways.Offer, kind: SecretAlwaysScope.Kind, reason: String,
+                             panel: SecretApprovalPanel) {
+        let line = SecretAudit.Line(event: .use, names: request.names, who: Self.who(request), command: request.command,
+                                    folder: request.folder, approval: .always, outcome: "done")
+        Task { @MainActor in
+            do {
+                let values = try await SecretAlways.allow(offer, scope: kind, reason: reason, line: line)
+                self.audit(.grant, request, approval: .always, outcome: offer.label(kind))
+                self.finish(request, outcome: .allowed, decision: .allowed(values, how: .always))
+            } catch SecretsStore.Failure.cancelled {
+                panel.setBusy(false)
+                panel.notApproved()
+            } catch {
+                self.finish(request, outcome: .allowed, decision: .failed(error as? SecretsStore.Failure ?? .keyring))
+            }
+        }
+    }
+
+    /// "Use as an MCP Server": a command that only bridges to a server at a URL is added to Settings › MCP Servers as that
+    /// URL server, with the same header and key, once the user confirms what it adds; this request is then declined, as
+    /// the agent should reach the server through Next Term from now on. Never by an agent: only the panel's button.
+    private func useAsServer(_ request: Request, server bridge: SecretAlwaysBridge.Server) {
+        guard !request.isAnswered, let panel = request.panel, let window = panel.window else { return }
+        var name = bridge.name
+        let taken = Set(MCPServerSheet.names(in: MCPHubEdits.userFile))
+        var counter = 2
+        while taken.contains(name) {
+            name = "\(bridge.name)-\(counter)"
+            counter += 1
+        }
+        let alert = NSAlert()
+        alert.messageText = "Use \u{201C}\(name)\u{201D} as an MCP server?"
+        let headers = bridge.headers.keys.sorted().map { "\($0): \(bridge.headers[$0] ?? "")" }
+        alert.informativeText = "Next Term adds \(bridge.url) to Settings \u{203A} MCP Servers for every agent"
+            + (headers.isEmpty ? "" : ", with \(headers.joined(separator: ", "))") + ". Next Term then sends "
+            + "\(SecretRun.keysText(request.names)) itself, so the agent never sees it, and Always is offered there.\n\n"
+            + "This request is declined. Remove the nxtrm line from the agent\u{2019}s own MCP settings, then restart it."
+        let add = alert.addButton(withTitle: "Add Server")
+        ApprovalLayout.style(add, look: .accent)
+        alert.addButton(withTitle: "Cancel").keyEquivalent = "\u{1b}"
+        alert.beginSheetModal(for: window) { [weak self, weak request] response in
+            MainActor.assumeIsolated {
+                guard let self, let request, response == .alertFirstButtonReturn, !request.isAnswered else { return }
+                let server = MCPHubServer(name: name, transport: .http, url: bridge.url, headers: bridge.headers)
+                if let failure = MCPHubEdits.apply("Add \(name)", [.init(change: .set(server), file: MCPHubEdits.userFile, place: .user)]) {
+                    request.panel?.showNote(failure)
+                    return
+                }
+                self.audit(.decline, request, outcome: "declined: added as the MCP server \(name)")
+                self.finish(request, outcome: .declined, decision: .declined(stopAsking: false))
+            }
+        }
     }
 
     /// store_secret's Save: the agent's value, under its name. A new name takes the agent's reason as what it's for;
@@ -666,6 +775,9 @@ final class SecretRequests {
         let notice: String?
         /// The calling agent's session in its tab (SecretRequests.session(of:)), for "Allow for this session".
         var session: String?
+        /// The calling agent and its tab, when it is the agent in front there: what an Always grant binds (SecretAlways).
+        var agent: SecretSocket.Agent?
+        var callerTab: UUID?
         fileprivate(set) var typedAt: ContinuousClock.Instant?
         fileprivate(set) var used = false
         /// The tool call's side: told the decision once, or `.notStarted`.
@@ -782,6 +894,11 @@ final class SecretRequests {
                              isRemote: ticket.isRemote)
         asking.notice = ticket.notice
         asking.session = ticket.session
+        if let agent = ticket.agent, let caller = ticket.callerTab.flatMap({ MCPControl.tab(withID: $0.uuidString) }) {
+            asking.always = SecretAlways.offer(agent: agent, tab: caller, door: .tool, words: SecretAlwaysRules.plainWords(ticket.command),
+                                               keys: ticket.map, folder: ticket.folder, path: request.path, warned: request.warn,
+                                               warnings: warnings, summary: ticket.command)
+        }
         // The wrapper sent no names: its answer is built from the ticket's.
         var asked = request
         asked.names = ticket.names
@@ -819,7 +936,7 @@ final class SecretRequests {
     func offered(_ request: Request) -> [How] {
         let asking: [String] = SecretApprovalChoices.askingEveryUse(request.names, in: SecretsStore.shared.index)
         return SecretApprovalChoices.offered(isWrapper: request.isWrapper, isRemote: request.isRemote, asksEveryUse: !asking.isEmpty,
-                                             hasSession: request.session != nil)
+                                             hasSession: request.session != nil, always: request.always?.scopes ?? [])
     }
 
     /// A use that waited behind an identical request of another session: a grant that answers it, made meanwhile, answers
@@ -1106,6 +1223,7 @@ final class SecretRequests {
         now = { .now }
         #if DEBUG
         Self.grantTimer = nil
+        SecretAlways.resetForSelfTest()
         #endif
         changedNow()
     }

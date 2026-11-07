@@ -700,6 +700,7 @@ enum SelfTest {
             return agentSpinnerChecks()
         case "services": return await serviceChecks(c)
         case "secrets": return await secretsChecks(c, proj: proj)
+        case "secretsApproval": return await secretsApprovalChecks() // the panel's states and Always, with screenshots
         case "opencode": return await opencodeScreenChecks(c) // its screen, answers and own notices
         case "tasks": return await tasksChecks(c, proj: proj) // the Tasks menu, Add Task…, the todo file's bytes and add_task
         case "welcome": return await welcomePartChecks() // the Welcome window (SelfTestWelcomeSwitcher)

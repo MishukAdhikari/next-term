@@ -228,13 +228,9 @@ extension SelfTest {
         let twin = ask(["node first.js"], session: nestedSession)
         requests.ask(twin) { _ in }
         let waitsItsTurn: Bool = twin.panel == nil && requests.queue.contains { $0 === twin } && first.panel != nil
-        // The radios as drawn, top to bottom: Allow for this session last, Allow once chosen.
-        let radios: [(String, CGFloat)] = (first.panel.map { panel in SecretRequests.How.allCases.compactMap { (how: SecretRequests.How) -> (String, CGFloat)? in
-            guard let button = panel.durationChoice[how] else { return nil }
-            return (button.title, button.convert(button.bounds, to: nil).minY)
-        } } ?? [])
-        let lowest: String? = radios.min { $0.1 < $1.1 }?.0
-        let offeredLast: Bool = lowest == "Allow for this session" && first.panel?.durationChoice[.once]?.state == .on
+        // Remember's choices in order: For this session last, Only this time chosen.
+        let titles: [String] = first.panel?.rememberPopUp?.itemTitles.filter { !$0.isEmpty } ?? []
+        let offeredLast: Bool = titles.last == "For this session" && first.panel?.durationChoice[.once]?.state == .on
         first.panel?.durationChoice[.session]?.performClick(nil)
         first.panel?.allowButton.performClick(nil)
         let made = await wait(10) { requests.book.grants.contains { $0.kind == .session && $0.session == session } && !requests.heldGrants.isEmpty }
@@ -260,7 +256,7 @@ extension SelfTest {
         check(offeredLast && waitsItsTurn && made && twinAsks && kept && answered && shown == [true, true, true],
               "secrets: Allow for this session, drawn last, lasts through a lock and answers another command of the session with no panel; "
                   + "another session's identical request waits for its own panel; a warned command, another start time and no session still ask",
-              "radios \(radios.map(\.0)), lowest \(lowest ?? "none"), twin waits \(waitsItsTurn) asks \(twinAsks), made \(made), kept \(kept), "
+              "choices \(titles), twin waits \(waitsItsTurn) asks \(twinAsks), made \(made), kept \(kept), "
                   + "answered \(answered), shown \(shown)")
 
         // Queued twins of another session are settled by what the panel before them made: an exact grant answers one, and

@@ -180,6 +180,11 @@ import Testing
         #expect(Self.refusal(["tool"], executable: "/Users/me/.local/bin/tool", writable: writable) != nil)
     }
 
+    @Test func aPackageRunnerIsRefused() {
+        #expect(Self.refusal(["npx", "mcp-remote@0.15.2", "https://mcp.example.com/mcp"], executable: "/usr/bin/npx")
+            == "Always isn\u{2019}t offered: npx runs a package it fetches when it runs.")
+    }
+
     @Test func aShellIsRefused() {
         let words = ["bash", "-c", "curl x"]
         #expect(Self.refusal(words, executable: "/bin/bash", warnings: SecretRun.warnings(argv: words))?.contains("shell") == true)

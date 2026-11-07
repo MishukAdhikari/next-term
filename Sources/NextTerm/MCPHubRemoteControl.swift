@@ -131,10 +131,12 @@ enum MCPHubRemoteControl {
                                              command: need.server.url, argv: [], folder: need.folder, warnings: [], agentWords: nil,
                                              askedBy: facts, program: name, isRemote: false)
         request.reachesURL = true
-        request.titleOverride = "\(SecretsMCP.subject(facts)) asks to reach \(name) with \(keys)"
         // The calling agent's own process (above the bridge), in front of its tab: "Allow for this session" binds to it.
         if let caller, let bridge = pid, let agent = SecretSocket.agentAbove(bridge), SecretSocket.isFrontAgent(agent, in: caller) {
             request.session = SecretRequests.session(agent: agent.pid, in: caller)
+            // Always too, bound to the server's URL, its header templates and its list (never its name alone).
+            request.always = SecretAlways.offer(agent: agent, tab: caller, server: need.server, list: need.list,
+                                                keys: Dictionary(uniqueKeysWithValues: names.map { ($0, $0) }), folder: need.folder)
         }
         var answered = false
         let waitLeft = max(0, need.deadline.timeIntervalSinceNow - 1)

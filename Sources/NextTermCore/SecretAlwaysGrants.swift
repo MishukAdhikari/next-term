@@ -355,6 +355,8 @@ public enum SecretAlwaysRules {
     /// Package managers whose `run` (and the like) runs a script package.json names.
     static let packageManagers: Set<String> = ["npm", "pnpm", "yarn", "bun"]
     static let packageScripts: Set<String> = ["run", "run-script", "exec", "test", "start", "x", "dlx"]
+    /// Runners that fetch the package they run.
+    static let packageRunners: Set<String> = ["npx", "bunx", "pnpx", "uvx", "pipx"]
     /// Interpreters: what they run is a script and whatever it loads.
     public static let interpreters: Set<String> = [
         "node", "nodejs", "bun", "deno", "python", "python3", "ruby", "perl", "php", "lua", "Rscript", "osascript", "java", "tsx",
@@ -377,6 +379,10 @@ public enum SecretAlwaysRules {
         }
         if program == "git", command.hasHooks { return lead + "this repository\u{2019}s git hooks run with the key." }
         if SecretRun.shells.contains(program) { return lead + "this command starts a shell." }
+        // npx and the like run a package they fetch when they run: no file Next Term could bind.
+        if let runner = command.words.first.map(CommandClassifier.baseName), packageRunners.contains(runner) {
+            return lead + "\(runner) runs a package it fetches when it runs."
+        }
         guard let executable = command.executable else { return lead + "Next Term couldn\u{2019}t find \(program)." }
         let name = (executable as NSString).lastPathComponent
         if isChangeable(executable, scopes: scopes, writable: writable) {
