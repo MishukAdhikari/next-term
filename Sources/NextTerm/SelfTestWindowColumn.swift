@@ -118,6 +118,7 @@ extension SelfTest {
         await railChecks(app, project, others: [main, worktree, home, plain])
         await foldChecks(app, repo: main, worktree: worktree)
         await resizeChecks(app, project)
+        await dragFoldChecks(app, project, all: app.controllers.filter { !$0.hasClosed }) // the drag that folds it (plan 033)
         await unfoldedMarksChecks(app, worktree: worktree)
         await detailChecks(app, plain, open: { await open(loose) }, close: closeWindow)
         await overflowChecks(app, project)
