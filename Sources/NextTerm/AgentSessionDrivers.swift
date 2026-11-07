@@ -128,11 +128,7 @@ final class ClaudeDriver: AgentSessionDriver {
             guard let self, self.initializeID == id else { return }
             self.drift("no answer to initialize in \(Int(ClaudeStream.initializeTimeout)) seconds")
         }
-        let timer = DispatchSource.makeTimerSource(queue: .main)
-        timer.schedule(deadline: .now() + 5, repeating: 5)
-        timer.setEventHandler { [weak self] in self?.checkDrift() }
-        timer.resume()
-        self.timer = timer
+        timer = driftTimer { [weak self] in self?.checkDrift() }
     }
 
     private func checkDrift() {
@@ -360,11 +356,7 @@ final class CodexDriver: AgentSessionDriver {
     func started() {
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "development"
         runner.sendToAgent(codex.initializeRequest(version: version).line)
-        let timer = DispatchSource.makeTimerSource(queue: .main)
-        timer.schedule(deadline: .now() + 5, repeating: 5)
-        timer.setEventHandler { [weak self] in self?.checkDrift() }
-        timer.resume()
-        self.timer = timer
+        timer = driftTimer { [weak self] in self?.checkDrift() }
     }
 
     private func checkDrift() {
@@ -513,4 +505,13 @@ final class CodexDriver: AgentSessionDriver {
         timer?.cancel()
         if runner.session.pending != nil { cancelOpen() }
     }
+}
+
+/// The drift watch's check, every 5 seconds on the main queue, until the driver's `quitting()` cancels it.
+private func driftTimer(_ check: @escaping () -> Void) -> DispatchSourceTimer {
+    let timer = DispatchSource.makeTimerSource(queue: .main)
+    timer.schedule(deadline: .now() + 5, repeating: 5)
+    timer.setEventHandler(handler: check)
+    timer.resume()
+    return timer
 }

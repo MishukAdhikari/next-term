@@ -134,11 +134,6 @@ public struct ClaudeStream: Sendable {
     /// What a session says when Claude Code isn't signed in (R2). Next Term never offers a login of its own.
     public static let signInLine = "Run claude in a tab to sign in, then start the session again"
 
-    /// Option ids of a permission's menu.
-    public static let allowOnce = "allow_once"
-    public static let allowAlways = "allow_always"
-    public static let rejectOnce = "reject_once"
-
     /// Messages whose text and thinking came as `stream_event` deltas: their whole `assistant` line isn't shown again.
     private var streamed: Set<String> = []
     /// The message the deltas belong to, from its `message_start`.
@@ -222,9 +217,9 @@ public struct ClaudeStream: Sendable {
             let update: ACPWire.Value
             switch delta["type"]?.string {
             case "text_delta":
-                update = Self.chunk("agent_message_chunk", delta["text"]?.string ?? "")
+                update = ACPWire.chunk("agent_message_chunk", delta["text"]?.string ?? "")
             case "thinking_delta":
-                update = Self.chunk("agent_thought_chunk", delta["thinking"]?.string ?? "")
+                update = ACPWire.chunk("agent_thought_chunk", delta["thinking"]?.string ?? "")
             default:
                 return .ignore
             }
@@ -251,10 +246,10 @@ public struct ClaudeStream: Sendable {
             switch block["type"]?.string {
             case "text":
                 guard main, !alreadyShown, let text = block["text"]?.string else { continue }
-                updates.append(Self.chunk("agent_message_chunk", text))
+                updates.append(ACPWire.chunk("agent_message_chunk", text))
             case "thinking":
                 guard main, !alreadyShown, let text = block["thinking"]?.string else { continue }
-                updates.append(Self.chunk("agent_thought_chunk", text))
+                updates.append(ACPWire.chunk("agent_thought_chunk", text))
             case "tool_use":
                 if let update = toolUse(block) { updates.append(update) }
             default:
@@ -307,11 +302,8 @@ public struct ClaudeStream: Sendable {
                     "toolCallId": .string(id),
                     "status": .string(failed ? "failed" : "completed"),
                 ]
-                let output = Self.resultText(block["content"])
-                if !output.isEmpty {
-                    let text = ACPWire.Value.object(["type": .string("text"), "text": .string(String(output.prefix(4000)))])
-                    update["content"] = .array([.object(["type": .string("content"), "content": text])])
-                }
+                let content = ACPWire.textContent(Self.resultText(block["content"]))
+                if !content.isEmpty { update["content"] = .array(content) }
                 updates.append(.object(["update": .object(update)]))
             case "text":
                 // Claude's own note that a stop was asked for.
@@ -332,6 +324,8 @@ public struct ClaudeStream: Sendable {
         streamed.removeAll()
         streamingID = nil
         streamedUnnamed = false
+        // A hidden call's result comes before the turn's result line, which ends the turn.
+        hidden.removeAll()
         if authFailed {
             authFailed = false
             if isError { return .ignore }
@@ -371,9 +365,9 @@ public struct ClaudeStream: Sendable {
             return .question(Question(requestID: id, toolUseID: toolUseID, input: input, items: items))
         }
         let suggestions = request["permission_suggestions"]?.array ?? []
-        var options: [ACPWire.Value] = [Self.option(Self.allowOnce, "Allow once")]
-        if !suggestions.isEmpty { options.append(Self.option(Self.allowAlways, "Allow always")) }
-        options.append(Self.option(Self.rejectOnce, "Reject"))
+        var options: [ACPWire.Value] = [ACPWire.option(ACPWire.allowOnce, "Allow once")]
+        if !suggestions.isEmpty { options.append(ACPWire.option(ACPWire.allowAlways, "Allow always")) }
+        options.append(ACPWire.option(ACPWire.rejectOnce, "Reject"))
         var call: [String: ACPWire.Value] = [
             "title": .string(Self.title(tool: tool, input: input)),
             "kind": .string(Self.kind(of: tool)),
@@ -390,7 +384,7 @@ public struct ClaudeStream: Sendable {
     public mutating func userMessage(_ text: String) -> Data {
         interrupting = false
         let message = ACPWire.Value.object(["role": .string("user"), "content": .string(text)])
-        return Self.line(["type": .string("user"), "session_id": .string(""), "message": message, "parent_tool_use_id": .null])
+        return ACPWire.line(["type": .string("user"), "session_id": .string(""), "message": message, "parent_tool_use_id": .null])
     }
 
     /// The `initialize` control request, which opens the control channel; the session is ready at its answer (KTD3).
@@ -409,9 +403,9 @@ public struct ClaudeStream: Sendable {
     /// is ever allowed by default.
     public static func response(to permission: Permission, optionID: String?) -> Data {
         switch optionID {
-        case allowOnce?:
+        case ACPWire.allowOnce?:
             return success(permission.requestID, ["behavior": .string("allow"), "updatedInput": permission.input])
-        case allowAlways?:
+        case ACPWire.allowAlways?:
             let kept: [ACPWire.Value] = permission.suggestions.map { suggestion in
                 guard case .object(var fields) = suggestion else { return suggestion }
                 // Never a rule in a settings file: Allow always lasts for this session only.
@@ -424,7 +418,7 @@ public struct ClaudeStream: Sendable {
                 "updatedPermissions": .array(kept),
             ]
             return success(permission.requestID, answer)
-        case rejectOnce?:
+        case ACPWire.rejectOnce?:
             return deny(requestID: permission.requestID, message: "The user rejected this in Next Term.")
         default:
             return deny(requestID: permission.requestID, message: "The user stopped this in Next Term.")
@@ -451,7 +445,7 @@ public struct ClaudeStream: Sendable {
     public static func controlError(requestID: String, message: String) -> Data {
         let response = ACPWire.Value.object(["subtype": .string("error"), "request_id": .string(requestID),
                                              "error": .string(message)])
-        return line(["type": .string("control_response"), "response": response])
+        return ACPWire.line(["type": .string("control_response"), "response": response])
     }
 
     // MARK: Helpers
@@ -460,32 +454,14 @@ public struct ClaudeStream: Sendable {
         nextRequest += 1
         let tail = UUID().uuidString.prefix(8).lowercased()
         let id = "req_\(nextRequest)_\(tail)"
-        let data = Self.line(["type": .string("control_request"), "request_id": .string(id), "request": .object(request)])
+        let data = ACPWire.line(["type": .string("control_request"), "request_id": .string(id), "request": .object(request)])
         return (id, data)
     }
 
     private static func success(_ requestID: String, _ answer: [String: ACPWire.Value]) -> Data {
         let response = ACPWire.Value.object(["subtype": .string("success"), "request_id": .string(requestID),
                                              "response": .object(answer)])
-        return line(["type": .string("control_response"), "response": response])
-    }
-
-    private static func line(_ fields: [String: ACPWire.Value]) -> Data {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-        // JSON never holds a raw newline: strings escape theirs, so the line is one line.
-        var data = (try? encoder.encode(ACPWire.Value.object(fields))) ?? Data("{}".utf8)
-        data.append(0x0A)
-        return data
-    }
-
-    private static func option(_ id: String, _ name: String) -> ACPWire.Value {
-        .object(["optionId": .string(id), "name": .string(name), "kind": .string(id)])
-    }
-
-    private static func chunk(_ kind: String, _ text: String) -> ACPWire.Value {
-        let content = ACPWire.Value.object(["type": .string("text"), "text": .string(text)])
-        return .object(["update": .object(["sessionUpdate": .string(kind), "content": content])])
+        return ACPWire.line(["type": .string("control_response"), "response": response])
     }
 
     /// The tool and its main input, whole: `Bash(rm -rf build)`, `Edit(/project/app.py)`.

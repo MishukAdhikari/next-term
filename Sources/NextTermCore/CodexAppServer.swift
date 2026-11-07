@@ -74,11 +74,6 @@ public struct CodexAppServer: Sendable {
     /// The start of every drift note (R9).
     public static let driftLead = "Codex's app-server changed; run codex in a terminal tab for now."
 
-    /// Option ids of a permission's menu.
-    public static let allowOnce = "allow_once"
-    public static let allowAlways = "allow_always"
-    public static let rejectOnce = "reject_once"
-
     /// The methods the session can't do without: "method not found" for one of them is drift (KTD4).
     static let required: Set<String> = ["initialize", "thread/start", "turn/start", "turn/interrupt"]
 
@@ -186,9 +181,9 @@ public struct CodexAppServer: Sendable {
     /// session only, KTD6), or decline. Nil (the turn stopped, the tab closed) cancels: nothing is ever accepted by default.
     public static func decision(for optionID: String?) -> String {
         switch optionID {
-        case allowOnce?: return "accept"
-        case allowAlways?: return "acceptForSession"
-        case rejectOnce?: return "decline"
+        case ACPWire.allowOnce?: return "accept"
+        case ACPWire.allowAlways?: return "acceptForSession"
+        case ACPWire.rejectOnce?: return "decline"
         default: return "cancel"
         }
     }
@@ -355,7 +350,7 @@ public struct CodexAppServer: Sendable {
     private mutating func delta(_ params: ACPWire.Value, kind: String) -> Event {
         guard let text = params["delta"]?.string, !text.isEmpty else { return .ignore }
         if let item = params["itemId"]?.string { streamed.insert(item) }
-        return .updates([Self.chunk(kind, text)])
+        return .updates([ACPWire.chunk(kind, text)])
     }
 
     private mutating func turnCompleted(_ turn: ACPWire.Value?) -> Event {
@@ -391,19 +386,19 @@ public struct CodexAppServer: Sendable {
         switch type {
         case "agentMessage":
             guard completed, !streamed.contains(id), let text = item["text"]?.string, !text.isEmpty else { return .ignore }
-            return .updates([Self.chunk("agent_message_chunk", text)])
+            return .updates([ACPWire.chunk("agent_message_chunk", text)])
         case "reasoning":
             guard completed, !streamed.contains(id) else { return .ignore }
             let summary = (item["summary"]?.array ?? []).compactMap(\.string)
             let content = (item["content"]?.array ?? []).compactMap(\.string)
             let text = (summary.isEmpty ? content : summary).joined(separator: "\n")
-            return text.isEmpty ? .ignore : .updates([Self.chunk("agent_thought_chunk", text)])
+            return text.isEmpty ? .ignore : .updates([ACPWire.chunk("agent_thought_chunk", text)])
         case "commandExecution":
             let title = item["command"]?.string ?? "Run a command"
             var output: String?
             if completed { output = item["aggregatedOutput"]?.string }
             return .updates([Self.toolUpdate(id: id, title: title, kind: "execute", item: item, completed: completed,
-                                             content: Self.textContent(output))])
+                                             content: ACPWire.textContent(output))])
         case "fileChange":
             let changes = item["changes"]?.array ?? []
             let paths = changes.compactMap { $0["path"]?.string }
@@ -421,7 +416,7 @@ public struct CodexAppServer: Sendable {
                 output = item["error"]?["message"]?.string ?? Self.resultText(item["result"]?["content"])
             }
             return .updates([Self.toolUpdate(id: id, title: title, kind: "other", item: item, completed: completed,
-                                             content: Self.textContent(output))])
+                                             content: ACPWire.textContent(output))])
         case "webSearch":
             let query = item["query"]?.string ?? ""
             let title = query.isEmpty ? "Search the web" : "Search: " + query
@@ -448,18 +443,10 @@ public struct CodexAppServer: Sendable {
         var call: [String: ACPWire.Value] = ["title": .string(title), "kind": .string(kind)]
         if let item { call["toolCallId"] = .string(item) }
         let options: [ACPWire.Value] = [
-            option(allowOnce, "Allow once"), option(allowAlways, "Allow always"), option(rejectOnce, "Reject"),
+            ACPWire.option(ACPWire.allowOnce, "Allow once"), ACPWire.option(ACPWire.allowAlways, "Allow always"),
+            ACPWire.option(ACPWire.rejectOnce, "Reject"),
         ]
         return .object(["toolCall": .object(call), "options": .array(options)])
-    }
-
-    private static func option(_ id: String, _ name: String) -> ACPWire.Value {
-        .object(["optionId": .string(id), "name": .string(name), "kind": .string(id)])
-    }
-
-    private static func chunk(_ kind: String, _ text: String) -> ACPWire.Value {
-        let content = ACPWire.Value.object(["type": .string("text"), "text": .string(text)])
-        return .object(["update": .object(["sessionUpdate": .string(kind), "content": content])])
     }
 
     /// Every path a change touches, whole.
@@ -489,12 +476,6 @@ public struct CodexAppServer: Sendable {
         case "failed"?, "declined"?: return "failed"
         default: return completed ? "completed" : "in_progress"
         }
-    }
-
-    private static func textContent(_ output: String?) -> [ACPWire.Value] {
-        guard let output, !output.isEmpty else { return [] }
-        let text = ACPWire.Value.object(["type": .string("text"), "text": .string(String(output.prefix(4000)))])
-        return [.object(["type": .string("content"), "content": text])]
     }
 
     /// An MCP result's text blocks, joined.

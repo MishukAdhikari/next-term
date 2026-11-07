@@ -112,6 +112,16 @@ import Testing
         #expect(session.tools.isEmpty)
     }
 
+    @Test func hiddenCallsLastUntilTheTurnsResult() {
+        var stream = ClaudeStream()
+        let todo = #"{"type":"assistant","message":{"id":"msg_h","role":"assistant","content":[{"type":"tool_use","id":"toolu_h","name":"TodoWrite","input":{"todos":[]}}]},"parent_tool_use_id":null}"#
+        let toolResult = #"{"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_h","type":"tool_result","content":"Done."}]},"parent_tool_use_id":null}"#
+        _ = decode(&stream, todo)
+        guard case .ignore = decode(&stream, toolResult) else { Issue.record("a hidden result was shown"); return }
+        _ = decode(&stream, #"{"type":"result","subtype":"success","is_error":false,"result":""}"#)
+        guard case .updates = decode(&stream, toolResult) else { Issue.record("the hidden set carried over"); return }
+    }
+
     @Test func aSuccessfulResultEndsTheTurnWithAUsageLine() {
         let (session, events) = session([
             #"{"type":"assistant","message":{"id":"msg_7","role":"assistant","content":[{"type":"text","text":"Hi."}],"usage":{"input_tokens":100,"cache_creation_input_tokens":2000,"cache_read_input_tokens":10000,"output_tokens":245}},"parent_tool_use_id":null}"#,
