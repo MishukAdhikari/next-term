@@ -106,7 +106,7 @@ enum SecretWrapper {
             }
             argv = ticketArgv
             target = first
-            let shown = ticketArgv.count >= 3 ? SecretRun.programName(ofCommand: ticketArgv[2]) : (first as NSString).lastPathComponent
+            let shown = ticketArgv.count >= 3 && first == "/bin/sh" ? SecretRun.programName(ofCommand: ticketArgv[2]) : (first as NSString).lastPathComponent
             say(SecretRun.ending(.answer(.allowed, name: nil, until: nil), names: names, program: shown).line)
         }
         let childEnvironment = SecretRun.environment(base: environment, answer: answer)

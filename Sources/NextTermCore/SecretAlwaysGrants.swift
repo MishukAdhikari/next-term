@@ -220,6 +220,10 @@ public struct SecretAlwaysGrant: Codable, Equatable, Hashable, Sendable, Identif
     public let keys: [String: String]
     /// NAME → a digest of its sealed value when the grant was made (`SecretVault.Entry.valueMark`).
     public let marks: [String: String]
+    /// The keys that asked for Touch ID every time when the grant was made, which it then answers once per launch. A key
+    /// set to ask every time since is the user asking for more: the grant no longer answers for it. Nil (a grant kept
+    /// before this was recorded) is none.
+    public let everyUse: [String]?
     /// `SecretAlwaysDefinition.digest`.
     public let definition: String
     /// What Settings shows: the command, or the server's name and URL.
@@ -229,14 +233,15 @@ public struct SecretAlwaysGrant: Codable, Equatable, Hashable, Sendable, Identif
     public var lastUsed: Date?
 
     public init(id: String = UUID().uuidString.lowercased(), agent: String, identity: SecretAgentIdentity, door: SecretAlwaysDoor,
-                keys: [String: String], marks: [String: String], definition: String, summary: String, scope: SecretAlwaysScope,
-                made: Date = Date(), lastUsed: Date? = nil) {
+                keys: [String: String], marks: [String: String], everyUse: [String] = [], definition: String, summary: String,
+                scope: SecretAlwaysScope, made: Date = Date(), lastUsed: Date? = nil) {
         self.id = id
         self.agent = agent
         self.identity = identity
         self.door = door
         self.keys = keys
         self.marks = marks
+        self.everyUse = everyUse.sorted()
         self.definition = definition
         self.summary = summary
         self.scope = scope
@@ -249,7 +254,7 @@ public struct SecretAlwaysGrant: Codable, Equatable, Hashable, Sendable, Identif
     /// Whether it answers `ask`: the same identity, door, keys and values, definition, from a folder it covers.
     public func answers(_ ask: SecretAlwaysAsk, identify: (String) -> (device: UInt64, inode: UInt64)? = SecretAlwaysScope.identify) -> Bool {
         guard !keys.isEmpty, ask.identity == identity, ask.door == door, ask.keys == keys, ask.marks == marks,
-              ask.definition == definition else { return false }
+              ask.definition == definition, ask.everyUse.isSubset(of: everyUse ?? []) else { return false }
         return scope.covers(folder: ask.folder, project: ask.project, identify: identify)
     }
 
@@ -270,13 +275,16 @@ public struct SecretAlwaysAsk: Equatable, Sendable {
     /// Where it runs (a hub server: the tab's folder), canonical, and the main checkout of its repository.
     public var folder: String
     public var project: String?
+    /// The keys that ask for Touch ID every time now.
+    public var everyUse: Set<String>
 
     public init(identity: SecretAgentIdentity, door: SecretAlwaysDoor, keys: [String: String], marks: [String: String],
-                definition: String, folder: String, project: String? = nil) {
+                definition: String, folder: String, project: String? = nil, everyUse: Set<String> = []) {
         self.identity = identity
         self.door = door
         self.keys = keys
         self.marks = marks
+        self.everyUse = everyUse
         self.definition = definition
         self.folder = folder
         self.project = project
@@ -300,12 +308,22 @@ public enum SecretAlwaysGrants {
         return list
     }
 
-    /// The grants still true of the vault `index`: each key there under its name, its value the one it was made with.
-    /// The rest can never answer again (a key changed, renamed or deleted), so they go.
+    /// The grants still true of the vault `index`: each key there under its name, its value the one it was made with,
+    /// and asking every time only if it did then. The rest can never answer again (a key changed, renamed, deleted or
+    /// set to ask every time since), so they go.
     public static func kept(_ grants: [SecretAlwaysGrant], in index: SecretVault.Index) -> [SecretAlwaysGrant] {
         grants.filter { grant in
-            grant.marks.allSatisfy { name, mark in index.entry(named: name).map { !$0.isSignIns && $0.valueMark == mark } ?? false }
+            grant.marks.allSatisfy { name, mark in
+                index.entry(named: name).map { entry in
+                    !entry.isSignIns && entry.valueMark == mark && (!entry.asksEveryUse || (grant.everyUse ?? []).contains(name))
+                } ?? false
+            }
         }
+    }
+
+    /// The keys among `names` that ask for Touch ID every time, as `index` has them.
+    public static func everyUse(_ names: [String], in index: SecretVault.Index) -> Set<String> {
+        Set(names.filter { index.entry(named: $0)?.asksEveryUse == true })
     }
 
     /// The grants that hold `name`.
@@ -352,16 +370,37 @@ public enum SecretAlwaysRules {
         "gradle": "the build file", "gradlew": "the build file", "mvn": "the pom", "cargo": "Cargo.toml", "tox": "tox.ini",
         "nox": "the noxfile", "invoke": "tasks.py", "turbo": "turbo.json", "nx": "the workspace",
     ]
-    /// Package managers whose `run` (and the like) runs a script package.json names.
+    /// Package managers: `run` and the like run a script package.json names, and `install`, `ci`, `publish` and `pack` run
+    /// its lifecycle scripts (`preinstall`, `prepublishOnly`, …), so every verb may run what package.json says.
     static let packageManagers: Set<String> = ["npm", "pnpm", "yarn", "bun"]
-    static let packageScripts: Set<String> = ["run", "run-script", "exec", "test", "start", "x", "dlx"]
+    /// Programs that build or run the project's own code (or code its files name) at the time: the same words run other
+    /// code tomorrow.
+    static let projectRunners: Set<String> = [
+        "go", "swift", "dotnet", "composer", "bundle", "bundler", "poetry", "uv", "pip", "pip3", "pytest", "xcodebuild", "mix",
+        "sbt", "bazel", "bazelisk", "cmake", "meson", "ninja", "rails", "rspec",
+    ]
     /// Runners that fetch the package they run.
     static let packageRunners: Set<String> = ["npx", "bunx", "pnpx", "uvx", "pipx"]
     /// Interpreters: what they run is a script and whatever it loads.
     public static let interpreters: Set<String> = [
         "node", "nodejs", "bun", "deno", "python", "python3", "ruby", "perl", "php", "lua", "Rscript", "osascript", "java", "tsx",
-        "ts-node",
+        "ts-node", "pypy", "pypy3", "pwsh", "julia", "elixir", "tclsh", "expect",
     ]
+    /// Families named with their version (`python3.12`, `node22`, `ruby3.3`), which the set alone would miss.
+    static let interpreterFamilies = ["python", "pypy", "node", "ruby", "perl", "php", "lua"]
+
+    /// Whether `name` is an interpreter's: one of `interpreters`, or a family's name with a version after it.
+    public static func isInterpreter(_ name: String) -> Bool {
+        if interpreters.contains(name) { return true }
+        return interpreterFamilies.contains { family in
+            name.hasPrefix(family) && !name.dropFirst(family.count).isEmpty
+                && name.dropFirst(family.count).allSatisfy { $0.isASCII && ($0.isNumber || $0 == ".") }
+        }
+    }
+
+    /// Python's options that load no other code. Python also runs `.pth` files and `usercustomize` from the user's own
+    /// site-packages, which agents can change, unless `-I` (isolated) is given: so Always asks for it.
+    static let pythonSafeOptions: Set<String> = ["-I", "-u", "-B", "-O", "-OO", "-E", "-s", "-S", "-q", "-b", "-bb"]
 
     /// Why Always isn't offered for `command`, or nil when it is. `scopes`: the folders a grant would hold in, and
     /// `writable`: whether this user (so any agent running as them) can change a folder or file.
@@ -373,22 +412,41 @@ public enum SecretAlwaysRules {
         let (program, rest) = SecretRun.program(of: command.words)
         if program.isEmpty { return lead + "Next Term couldn\u{2019}t tell what this command runs." }
         if let file = fileRunners[program] { return lead + "\(program) runs whatever \(file) says at the time." }
-        if packageManagers.contains(program), let verb = rest.first(where: { !$0.hasPrefix("-") }),
-           packageScripts.contains(verb) || program == "yarn" && !["add", "install"].contains(verb) {
-            return lead + "\(program) \(verb) runs whatever package.json says at the time."
+        if packageManagers.contains(program) { return lead + "\(program) runs whatever package.json says at the time." }
+        if projectRunners.contains(program) { return lead + "\(program) runs the project\u{2019}s own code at the time." }
+        // Its config (core.fsmonitor, core.sshCommand, a credential helper, filters, aliases) and its hooks name programs
+        // to run, in files agents can change: no definition holds them.
+        if program == "git" {
+            return lead + (command.hasHooks ? "this repository\u{2019}s git hooks run with the key."
+                : "git runs programs its config names, which your agents can change.")
         }
-        if program == "git", command.hasHooks { return lead + "this repository\u{2019}s git hooks run with the key." }
         if SecretRun.shells.contains(program) { return lead + "this command starts a shell." }
         // npx and the like run a package they fetch when they run: no file Next Term could bind.
-        if let runner = command.words.first.map(CommandClassifier.baseName), packageRunners.contains(runner) {
-            return lead + "\(runner) runs a package it fetches when it runs."
+        let first = command.words.first.map(CommandClassifier.baseName) ?? ""
+        if packageRunners.contains(first) { return lead + "\(first) runs a package it fetches when it runs." }
+        // `env`, `sudo`, `nice`, `timeout` and the like find the program by its name when they run (and their options take
+        // values, so which word is the program is theirs to say): the executable bound here may not be the one that runs.
+        if first != program || CommandClassifier.wrappers.contains(first) {
+            return lead + "\(first.isEmpty ? "the command" : first) finds the program it starts by its name at the time."
         }
         guard let executable = command.executable else { return lead + "Next Term couldn\u{2019}t find \(program)." }
         let name = (executable as NSString).lastPathComponent
         if isChangeable(executable, scopes: scopes, writable: writable) {
             return lead + "\(name) is in a folder your agents can change."
         }
-        if interpreters.contains(program) || interpreters.contains(name) {
+        if isInterpreter(program) || isInterpreter(name) {
+            // Options before the script can load other code (`node --require=…`, `perl -M…`, `ruby -r…`, `java -javaagent…`).
+            let options = Array(rest.prefix { $0.hasPrefix("-") })
+            if [program, name].contains(where: { $0.hasPrefix("python") || $0.hasPrefix("pypy") }) {
+                if let other = options.first(where: { !pythonSafeOptions.contains($0) }) {
+                    return lead + "\(other) can make \(program) load other code."
+                }
+                if !options.contains("-I") {
+                    return lead + "\(program) also loads code from folders your agents can change; run it with -I."
+                }
+            } else if let option = options.first {
+                return lead + "\(option) can make \(program) load other code."
+            }
             guard let script = command.script else { return lead + "Next Term couldn\u{2019}t tell which script \(name) runs." }
             if isChangeable(script, scopes: scopes, writable: writable) {
                 return lead + "\(name) runs \((script as NSString).lastPathComponent), which your agents can change."
@@ -397,10 +455,16 @@ public enum SecretAlwaysRules {
         return nil
     }
 
-    /// A file inside a scope's folder, or one this user can change, or whose folder this user can write.
+    /// A file inside a scope's folder, or one this user can change, or under any folder this user can write: a folder
+    /// they can write anywhere above it can be renamed and made again with another file at the same path.
     static func isChangeable(_ path: String, scopes: [String], writable: (String) -> Bool) -> Bool {
         if scopes.contains(where: { SecretAlwaysScope.contains($0, path, caseSensitive: false) }) { return true }
-        return writable(path) || writable((path as NSString).deletingLastPathComponent)
+        if writable(path) { return true }
+        guard let parts = SecretAlwaysScope.components(path) else { return true }
+        for count in stride(from: parts.count - 1, through: 0, by: -1) where writable("/" + parts.prefix(count).joined(separator: "/")) {
+            return true
+        }
+        return false
     }
 
     /// A warning made short for "Always isn’t offered: …".
@@ -542,5 +606,33 @@ public struct SecretPlaces: Equatable, Sendable {
         case .worktree: return worktree
         case .folder: return folder
         }
+    }
+}
+
+// MARK: launchers
+
+/// An agent a launcher of the same program starts, as `SecretSocket.isFrontAgent` lets one stand for the agent in front.
+public enum SecretAgentLaunch {
+    /// Whether an agent at `executable` (canonical) is one a launcher of its program started, the launcher running
+    /// `script` (canonical) under an interpreter: the executable is where the script's packages are installed (inside
+    /// the first `node_modules` above the script, or pnpm's `.pnpm` store, where a platform package sits beside the
+    /// launcher's), else inside the script's own package, the nearest folder up to four above it with a package.json, as
+    /// Codex's node starts its own binary. A program by the same name anywhere else (one the agent's Bash `exec`s, so its
+    /// parent is the agent itself) is not.
+    public static func isLaunched(_ executable: String, byScript script: String,
+                                  isPackage: (String) -> Bool = { FileManager.default.fileExists(atPath: $0 + "/package.json") }) -> Bool {
+        guard var parts = SecretAlwaysScope.components(script), !parts.isEmpty else { return false }
+        if let store = parts.firstIndex(of: ".pnpm") ?? parts.firstIndex(of: "node_modules"), store >= 1 {
+            return SecretAlwaysScope.contains("/" + parts[...store].joined(separator: "/"), executable, caseSensitive: true)
+        }
+        parts.removeLast()
+        for _ in 0..<4 {
+            // A package two folders deep at least: never `/` or a folder at the top of the disk.
+            guard parts.count >= 2 else { return false }
+            let folder = "/" + parts.joined(separator: "/")
+            if isPackage(folder) { return SecretAlwaysScope.contains(folder, executable, caseSensitive: true) }
+            parts.removeLast()
+        }
+        return false
     }
 }

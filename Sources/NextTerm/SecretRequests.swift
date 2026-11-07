@@ -460,7 +460,8 @@ final class SecretRequests {
         content.askingEveryUse = request.isRemote ? [] : asking
         if let offer = request.always {
             content.place = Self.place(of: offer.places)
-            var always = SecretApprovalPanel.Content.Always(refusal: offer.refusal, bridge: offer.bridge, agent: offer.agent)
+            var always = SecretApprovalPanel.Content.Always(refusal: offer.refusal, bridge: offer.bridge, agent: offer.agent,
+                                                            program: offer.identity.map { [$0.path, $0.script].compactMap { $0 }.joined(separator: " ") })
             for kind in offer.scopes { always.labels[.always(kind)] = offer.label(kind) }
             content.always = always
         }
@@ -903,11 +904,19 @@ final class SecretRequests {
         asked.names = ticket.names
         asked.map = ticket.map
         let argv = ticket.argv
+        // Allowed by Always: the executable the grant binds, run itself with the command's words, never `/bin/sh -c` looking
+        // its name up in `PATH` again, where a program put there since would answer.
+        let direct: [String]? = asking.always.flatMap { offer in
+            guard offer.refusal == nil, let executable = offer.definition.executable, !offer.definition.words.isEmpty else { return nil }
+            return [executable] + offer.definition.words.dropFirst()
+        }
         let folder = ticket.folder
         let decided = ticket.decided
         ticket.decided = nil
         return ask(asking, left: left) { decision in
-            reply(SecretSocket.answer(for: decision, request: asked, argv: argv, directory: folder))
+            var run = argv
+            if case .allowed(_, how: .always) = decision, let direct { run = direct }
+            reply(SecretSocket.answer(for: decision, request: asked, argv: run, directory: folder))
             decided?(decision)
         }
     }

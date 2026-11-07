@@ -329,8 +329,9 @@ enum SecretSocket {
     /// Whether `agent` is the agent in front of `tab`, the one its panel names: the leader of the tab's foreground process
     /// group, or below that leader with no agent between them or as the leader (an alias, a script or npx starting it).
     /// An agent another one started (a codex its Bash runs) is not, nor one by the same program's name started below the
-    /// agent in front (a `claude` its Bash runs, or a program named so): only a launcher of the same program directly
-    /// above it (Codex's node starting its own binary) may be.
+    /// agent in front (a `claude` its Bash runs or `exec`s, or a program named so): only a launcher of the same program
+    /// directly above it, running a script under an interpreter whose package holds this agent's executable (Codex's node
+    /// starting its own binary), may be.
     static func isFrontAgent(_ agent: Agent, in tab: TerminalTab) -> Bool {
         guard tab.remote == nil else { return false }
         let leader: pid_t = tcgetpgrp(tab.view.process.childfd)
@@ -344,11 +345,21 @@ enum SecretSocket {
             if current == leader { return true }
             guard let up = parent(of: current), up > 1 else { return false }
             if let between = Self.agent(at: up) {
-                guard between.program == agent.program, up == launcher else { return false }
+                guard between.program == agent.program, up == launcher, isLauncher(between, of: agent) else { return false }
             }
             current = up
         }
         return false
+    }
+
+    /// Whether `launcher`, the same program's agent directly above `agent`, is its launcher: a script under an
+    /// interpreter whose package holds `agent`'s executable (SecretAgentLaunch).
+    private static func isLauncher(_ launcher: Agent, of agent: Agent) -> Bool {
+        guard let script = launcher.script else { return false }
+        let base = script.hasPrefix("/") ? nil : ProcessInspector.currentDirectory(of: launcher.pid)
+        guard script.hasPrefix("/") || base != nil else { return false }
+        let full = canonicalPath(base.map { ($0 as NSString).appendingPathComponent(script) } ?? script)
+        return SecretAgentLaunch.isLaunched(canonicalPath(agent.path), byScript: full)
     }
 
     static func parent(of pid: pid_t) -> pid_t? {

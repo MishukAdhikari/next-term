@@ -44,7 +44,7 @@ extension SecretsView {
     }
 
     static let alwaysHelp = "Each asks for Touch ID once each time Next Term opens, then no more. Changing, renaming or deleting a key "
-        + "removes its Always approvals."
+        + "removes its Always approvals, and so does setting it to ask for Touch ID every time."
 
     /// "Always: Codex · curl -sS https://api.example.com · in app and its worktrees" (the full path is the row's tooltip).
     static func alwaysText(_ grant: SecretAlwaysGrant) -> String {

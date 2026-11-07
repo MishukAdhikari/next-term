@@ -35,6 +35,9 @@ final class SecretApprovalPanel: NSWindowController, NSWindowDelegate {
             /// A command that bridges to a server at a URL: "Use as an MCP Server" adds it.
             var bridge: SecretAlwaysBridge.Server?
             var agent: String
+            /// The program an Always grant binds (the agent's executable, and its script under an interpreter): the Who
+            /// row's tooltip, so a program that only goes by an agent's name shows what it is.
+            var program: String?
         }
 
         var title: String
@@ -249,7 +252,9 @@ final class SecretApprovalPanel: NSWindowController, NSWindowDelegate {
         let inner = ApprovalLayout.inner(Self.width)
         let valueWidth = inner - 24 - Self.labelWidth - 18 - 16
         var rows: [NSView] = []
-        rows.append(cardRow("person.crop.circle", "Who", [ApprovalLayout.body(whoText(), width: valueWidth)]))
+        let who = ApprovalLayout.body(whoText(), width: valueWidth)
+        if let program = content.always?.program { who.toolTip = Self.sanitized(program, limit: 1000) }
+        rows.append(cardRow("person.crop.circle", "Who", [who]))
         if !content.keys.isEmpty {
             rows.append(cardRow("key", content.keys.count == 1 ? "Key" : "Keys", content.keys.map { keyValue($0, width: valueWidth) }))
         }

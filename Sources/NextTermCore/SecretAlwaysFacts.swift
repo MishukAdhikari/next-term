@@ -107,7 +107,7 @@ public enum SecretAlwaysFacts {
         definition.executableStamp = executable.flatMap(SecretFileStamp.of)
         var script: String?
         let base = executable.map { ($0 as NSString).lastPathComponent } ?? program
-        if SecretAlwaysRules.interpreters.contains(program) || SecretAlwaysRules.interpreters.contains(base) {
+        if SecretAlwaysRules.isInterpreter(program) || SecretAlwaysRules.isInterpreter(base) {
             script = self.script(of: words, folder: folder)
             if let script { definition.files["script"] = SecretFileStamp.of(script).map { "\($0.inode):\($0.size):\($0.changed)" } ?? "none" }
         }

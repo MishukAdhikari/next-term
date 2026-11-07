@@ -50,7 +50,8 @@ enum SecretAlways {
                 marks[name] = entry.valueMark
             }
             return SecretAlwaysAsk(identity: identity, door: door, keys: keys, marks: marks, definition: definition.digest,
-                                   folder: places.folder, project: places.project)
+                                   folder: places.folder, project: places.project,
+                                   everyUse: SecretAlwaysGrants.everyUse(Array(keys.keys), in: index))
         }
 
         /// "Always in app", "Always in window-rail", "Always in this folder".
@@ -118,10 +119,13 @@ enum SecretAlways {
 
     /// The agent's identity: its executable resolved, that file's stamp, the Team ID of its running code when that code
     /// is validly signed, and under an interpreter its script (from the agent's own folder when relative) and the
-    /// script's SHA-256. Nil when any of it can't be read.
+    /// script's SHA-256. Nil when any of it can't be read, or when the file the kernel ran isn't the one its path names
+    /// now (a link started one program and was pointed at another since).
     static func identity(of agent: SecretSocket.Agent) -> SecretAgentIdentity? {
         let path = canonicalPath(agent.path)
-        guard path.hasPrefix("/"), let stamp = SecretFileStamp.of(path) else { return nil }
+        guard path.hasPrefix("/"), let ran = ProcessInspector.executablePath(of: agent.pid),
+              SecretAlwaysScope.same(canonicalPath(ran), path, caseSensitive: true),
+              let stamp = SecretFileStamp.of(path) else { return nil }
         var identity = SecretAgentIdentity(path: path, stamp: stamp, team: team(of: agent.pid))
         if let script = agent.script {
             let base = script.hasPrefix("/") ? nil : ProcessInspector.currentDirectory(of: agent.pid)
@@ -188,11 +192,16 @@ enum SecretAlways {
     }
 
     /// Whether the file may hold a grant for `ask`, by its unchecked read: worth the one Touch ID that checks it. With
-    /// the key held, the checked grants say.
+    /// the key held, the checked grants say. A file an unlock found tampered with asks no Touch ID again until it changes:
+    /// a program writing grants of its own into it gets one bare Touch ID at most, which releases nothing.
     static func mightAnswer(_ ask: SecretAlwaysAsk) -> Bool {
         if store != nil { return SecretAlwaysGrants.first(answering: ask, in: grants) != nil }
+        if let tampered, (try? folder.read(SecretAlwaysFile.name, cap: SecretAlwaysFile.maxSize)) == tampered { return false }
         return SecretAlwaysGrants.first(answering: ask, in: listed()) != nil
     }
+
+    /// The file as an unlock found it tampered with, this launch.
+    private static var tampered: Data?
 
     /// What an unlock read and released, carried out of the store's queue.
     private final class Released: @unchecked Sendable {
@@ -229,6 +238,7 @@ enum SecretAlways {
             // Decided from the unlocked vault: the keys' marks as it has them, never the unchecked index's.
             var checked = ask
             checked.marks = Dictionary(uniqueKeysWithValues: names.compactMap { name in vault.index.entry(named: name).map { (name, $0.valueMark) } })
+            checked.everyUse = SecretAlwaysGrants.everyUse(names, in: vault.index)
             guard let grant = SecretAlwaysGrants.first(answering: checked, in: kept) else { return nil }
             released.grant = grant
             for name in names { released.values[name] = try vault.value(of: name) }
@@ -236,6 +246,7 @@ enum SecretAlways {
         }, line: nil)
         guard index != nil, let always = released.store else { return nil }
         if released.tampered {
+            tampered = try? folder.read(SecretAlwaysFile.name, cap: SecretAlwaysFile.maxSize)
             SecretsStore.shared.record(SecretAudit.Line(event: .tamper, names: names, outcome: "always.json changed outside Next Term: no Always approval used"))
             return nil
         }
@@ -264,7 +275,8 @@ enum SecretAlways {
                 marks[name] = entry.valueMark
             }
             let grant = SecretAlwaysGrant(agent: offer.agent, identity: identity, door: offer.door, keys: offer.keys, marks: marks,
-                                          definition: definition, summary: offer.summary, scope: scope)
+                                          everyUse: Array(SecretAlwaysGrants.everyUse(names, in: vault.index)), definition: definition,
+                                          summary: offer.summary, scope: scope)
             let always = SecretAlwaysStore(folder: folder, key: try vault.companionKey(SecretAlwaysFile.keyInfo),
                                            floor: vault.index.floor(of: SecretAlwaysFile.name))
             let written = try always.update(startsOver: true) { body in
@@ -374,6 +386,7 @@ enum SecretAlways {
         store = nil
         grants = []
         held = [:]
+        tampered = nil
         usedThisLaunch = []
         scriptDigests = [:]
     }

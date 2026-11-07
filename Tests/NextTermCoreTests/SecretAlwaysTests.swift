@@ -132,13 +132,38 @@ import Testing
                           value: SecretBytes(utf8: "made-up-value-0123456789"))
         let mark = try #require(vault.index.entry(named: "API_TOKEN")?.valueMark)
         let grant = SecretAlwaysGrant(agent: "Codex", identity: Self.codex, door: .wrapper, keys: ["API_TOKEN": "API_TOKEN"],
-                                      marks: ["API_TOKEN": mark], definition: "d", summary: "s", scope: Self.scope(.folder, "/a/app"))
+                                      marks: ["API_TOKEN": mark], everyUse: ["API_TOKEN"], definition: "d", summary: "s",
+                                      scope: Self.scope(.folder, "/a/app"))
         #expect(SecretAlwaysGrants.kept([grant], in: vault.index).count == 1)
         _ = try vault.edit("API_TOKEN", newName: nil, purpose: "now with a note", purposeBy: .user)
         #expect(SecretAlwaysGrants.kept([grant], in: vault.index).count == 1, "a note alone keeps it")
         _ = try vault.replace("API_TOKEN", value: SecretBytes(utf8: "made-up-other-value-012345"), writeOnly: false, origin: .settings)
         #expect(SecretAlwaysGrants.kept([grant], in: vault.index).isEmpty)
         #expect(!grant.answers(Self.ask(marks: ["API_TOKEN": vault.index.entry(named: "API_TOKEN")!.valueMark]), identify: Self.anyRoot))
+    }
+
+    /// A key set to ask for Touch ID every time after its grant was made, while it allowed lasting approvals, is the user
+    /// asking for more: the grant no longer answers for it. One made while it asked every time (once per launch) still
+    /// does, and a key eased to lasting approvals since keeps its grants.
+    @Test func aKeySetToAskEveryTimeSinceAsks() throws {
+        let vault = try SecretVault.create(keyring: SoftwareKeyring()).vault
+        _ = try vault.add(name: "API_TOKEN", purpose: "", purposeBy: .user, origin: .settings, writeOnly: false,
+                          value: SecretBytes(utf8: "made-up-value-0123456789"), asksEveryUse: false)
+        let mark = try #require(vault.index.entry(named: "API_TOKEN")?.valueMark)
+        func grant(everyUse: [String]) -> SecretAlwaysGrant {
+            SecretAlwaysGrant(agent: "Codex", identity: Self.codex, door: .wrapper, keys: ["API_TOKEN": "API_TOKEN"], marks: ["API_TOKEN": mark],
+                              everyUse: everyUse, definition: Self.definition().digest, summary: "s", scope: Self.scope(.folder, "/a/app"))
+        }
+        let lasting = grant(everyUse: [])
+        let onceALaunch = grant(everyUse: ["API_TOKEN"])
+        #expect(SecretAlwaysGrants.kept([lasting, onceALaunch], in: vault.index).count == 2)
+        _ = try vault.edit("API_TOKEN", newName: nil, purpose: nil, purposeBy: nil, asksEveryUse: true)
+        #expect(vault.index.entry(named: "API_TOKEN")?.valueMark == mark, "the box is the same: the setting is checked on its own")
+        #expect(SecretAlwaysGrants.kept([lasting, onceALaunch], in: vault.index) == [onceALaunch])
+        var ask = Self.ask(marks: ["API_TOKEN": mark])
+        ask.everyUse = SecretAlwaysGrants.everyUse(["API_TOKEN"], in: vault.index)
+        #expect(!lasting.answers(ask, identify: Self.anyRoot))
+        #expect(onceALaunch.answers(ask, identify: Self.anyRoot))
     }
 
     // MARK: refused
@@ -167,7 +192,78 @@ import Testing
         #expect(Self.refusal(["make", "deploy"], executable: "/usr/bin/make")?.contains("Makefile") == true)
         #expect(Self.refusal(["just", "x"], executable: "/usr/bin/just")?.contains("justfile") == true)
         #expect(Self.refusal(["git", "push"], executable: "/usr/bin/git", hooks: true)?.contains("hooks") == true)
-        #expect(Self.refusal(["git", "push"], executable: "/usr/bin/git", hooks: false) == nil)
+        // Without hooks too: its config (core.fsmonitor, core.sshCommand, a credential helper) names programs to run.
+        #expect(Self.refusal(["git", "push"], executable: "/usr/bin/git", hooks: false)?.contains("config") == true)
+    }
+
+    /// Every package manager's verb may run what package.json says: install, ci, publish and pack run its lifecycle
+    /// scripts, and pnpm runs a script by its bare name.
+    @Test func everyPackageManagerVerbIsRefused() {
+        for words in [["npm", "install"], ["npm", "ci"], ["npm", "publish"], ["npm", "pack"], ["pnpm", "build"], ["yarn", "add", "x"],
+                      ["bun", "install"]] {
+            #expect(Self.refusal(words, executable: "/usr/local/lib/node_modules/npm/bin/npm-cli.js")?.contains("package.json") == true,
+                    "\(words)")
+        }
+        for words in [["go", "run", "."], ["swift", "run"], ["pytest"], ["bundle", "exec", "rake"], ["uv", "run", "x.py"]] {
+            #expect(Self.refusal(words, executable: "/usr/local/bin/\(words[0])")?.contains("own code") == true, "\(words)")
+        }
+    }
+
+    /// `env`, `sudo`, `nice` and the like start a program by its name, and their options take values: `env -u ls python3
+    /// evil.py` reads as `ls` to a word-by-word look, so it would bind /bin/ls and never the script that runs.
+    @Test func aWrapperInFrontIsRefused() {
+        let evasion = ["env", "-u", "ls", "python3", "/Users/me/evil.py"]
+        #expect(Self.refusal(evasion, executable: "/bin/ls")?.contains("by its name") == true)
+        for words in [["env", "curl", "x"], ["sudo", "curl", "x"], ["nice", "-n", "5", "curl"], ["timeout", "9", "curl"], ["FOO=1", "curl"]] {
+            #expect(Self.refusal(words) != nil, "\(words)")
+        }
+        #expect(Self.refusal(["/usr/bin/curl", "-sS", "https://api.example.com"]) == nil)
+    }
+
+    /// An interpreter's options can load other code (`node --require=…`, `perl -M…`); Python loads `.pth` files from the
+    /// user's own site-packages unless isolated; and an interpreter named with its version is one too.
+    @Test func interpreterOptionsAndVersionsAreChecked() {
+        let script = "/usr/local/lib/tool/main.js"
+        #expect(Self.refusal(["node", script], executable: "/usr/bin/node", script: script) == nil)
+        #expect(Self.refusal(["node", "--require=/Users/me/evil.js", script], executable: "/usr/bin/node", script: script)?
+            .contains("--require=/Users/me/evil.js") == true)
+        #expect(Self.refusal(["perl", "-MEvil", "/usr/local/lib/t.pl"], executable: "/usr/bin/perl", script: "/usr/local/lib/t.pl") != nil)
+        let py = "/usr/local/lib/tool/main.py"
+        #expect(Self.refusal(["python3", py], executable: "/usr/bin/python3", script: py)?.contains("-I") == true)
+        #expect(Self.refusal(["python3", "-I", "-u", py], executable: "/usr/bin/python3", script: py) == nil)
+        #expect(Self.refusal(["python3", "-I", "-X", "importtime", py], executable: "/usr/bin/python3", script: py) != nil)
+        // python3.12 is python's: its script is checked, not skipped.
+        #expect(Self.refusal(["python3.12", "-I", "/a/app/x.py"], executable: "/usr/local/bin/python3.12", script: "/a/app/x.py")?
+            .contains("your agents can change") == true)
+        #expect(SecretAlwaysRules.isInterpreter("python3.12") && SecretAlwaysRules.isInterpreter("node22"))
+        #expect(!SecretAlwaysRules.isInterpreter("nodemon") && !SecretAlwaysRules.isInterpreter("perlbrew"))
+    }
+
+    /// A folder the user can write anywhere above the executable can be renamed and made again with another file at
+    /// that path between the check and the run.
+    @Test func aWritableFolderAboveIsChangeable() {
+        let writable: (String) -> Bool = { $0 == "/opt/tools" }
+        #expect(Self.refusal(["tool"], executable: "/opt/tools/bin/sub/tool", writable: writable)?.contains("folder your agents") == true)
+        #expect(Self.refusal(["tool"], executable: "/usr/local/bin/tool", writable: writable) == nil)
+    }
+
+    /// The agent's own launcher (Codex's node starting its binary) stands for it; a same-named program the agent's Bash
+    /// `exec`s, so its parent is the agent, does not.
+    @Test func onlyAnAgentsOwnPackageLaunchesIt() {
+        let npm = "/opt/homebrew/lib/node_modules/@openai/codex/bin/codex.js"
+        #expect(SecretAgentLaunch.isLaunched("/opt/homebrew/lib/node_modules/@openai/codex/vendor/aarch64-apple-darwin/codex/codex",
+                                             byScript: npm, isPackage: { _ in false }))
+        let pnpm = "/Users/me/Library/pnpm/global/5/.pnpm/@openai+codex@1/node_modules/@openai/codex/bin/codex.js"
+        #expect(SecretAgentLaunch.isLaunched("/Users/me/Library/pnpm/global/5/.pnpm/@openai+codex-darwin-arm64@1/node_modules/x/codex",
+                                             byScript: pnpm, isPackage: { _ in false }))
+        #expect(!SecretAgentLaunch.isLaunched("/tmp/evil/codex", byScript: npm, isPackage: { _ in false }))
+        #expect(!SecretAgentLaunch.isLaunched("/opt/homebrew/lib/evil", byScript: npm, isPackage: { _ in false }))
+        // A checkout of its own, by its package.json.
+        let dev = "/Users/me/src/codex/codex-cli/bin/codex.js"
+        let isPackage: (String) -> Bool = { $0 == "/Users/me/src/codex/codex-cli" }
+        #expect(SecretAgentLaunch.isLaunched("/Users/me/src/codex/codex-cli/vendor/codex", byScript: dev, isPackage: isPackage))
+        #expect(!SecretAgentLaunch.isLaunched("/Users/me/src/other/codex", byScript: dev, isPackage: isPackage))
+        #expect(!SecretAgentLaunch.isLaunched("/Users/me/x", byScript: "/Users/me/bin/x.js", isPackage: { _ in false }))
     }
 
     @Test func aScriptInTheScopeIsRefused() {
