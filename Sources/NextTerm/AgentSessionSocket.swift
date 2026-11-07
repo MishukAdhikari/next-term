@@ -69,6 +69,7 @@ enum AgentSessionSocket {
         }
         let done = DispatchSemaphore(value: 0)
         var reply: [String: Any] = ["error": "no tab"]
+        let gate = AnswerGate()
         DispatchQueue.main.async {
             MainActor.assumeIsolated {
                 guard let tab = ClaudeIDEServer.tab(for: pid, among: MCPControl.allTabs) else {
@@ -82,12 +83,12 @@ enum AgentSessionSocket {
                     if let previous = record(arguments, for: tab) { reply["previous_version"] = previous }
                     done.signal()
                 case "confirm_always":
-                    confirm(arguments, tab: tab) { approved in
+                    confirm(arguments, tab: tab, gate: gate) { approved in
                         reply = ["approved": approved]
                         done.signal()
                     }
                 case "trust_folder":
-                    trust(arguments, tab: tab) { trusted in
+                    trust(arguments, tab: tab, gate: gate) { trusted in
                         reply = ["trusted": trusted]
                         done.signal()
                     }
@@ -97,9 +98,58 @@ enum AgentSessionSocket {
                 }
             }
         }
-        // The user may take their time on the Mac; the session's menu waits, as the agent does.
-        if done.wait(timeout: .now() + 15 * 60) == .timedOut { reply = ["approved": false] }
+        // The user may take their time on the Mac; the session's menu waits, as the agent does, until 15 minutes pass or
+        // the session hangs up. Then the window closes and a later click does nothing: what the session was told stands.
+        let deadline = Date().addingTimeInterval(15 * 60)
+        while done.wait(timeout: .now() + 1) == .timedOut {
+            guard Date() >= deadline || peerHungUp(fd) else { continue }
+            if gate.expire() {
+                DispatchQueue.main.async { MainActor.assumeIsolated { gate.closeWindow() } }
+                return answer(fd, ["approved": false, "trusted": false])
+            }
+            // Clicked just now: its answer is on the way.
+            done.wait()
+            break
+        }
         answer(fd, reply)
+    }
+
+    /// Whether the session at `fd` has closed its end (it quit, or its tab closed) while the app waited to answer.
+    private static func peerHungUp(_ fd: Int32) -> Bool {
+        var probe = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+        guard poll(&probe, 1, 0) > 0 else { return false }
+        if probe.revents & Int16(POLLHUP | POLLERR | POLLNVAL) != 0 { return true }
+        var byte: UInt8 = 0
+        return recv(fd, &byte, 1, MSG_PEEK | MSG_DONTWAIT) == 0
+    }
+
+    /// One request's answer, given once: by the user's click on the Mac, or by the wait running out (or the session
+    /// hanging up), whichever comes first. A click after the wait ran out does nothing, and a trust is never written for a
+    /// session that was already told no.
+    final class AnswerGate: @unchecked Sendable {
+        private let lock = NSLock()
+        private var settled = false
+        /// The window asking, on the main thread.
+        @MainActor weak var window: AgentApprovalWindow?
+
+        /// The click's turn: true when it is the answer, false when the wait ran out first.
+        func claim() -> Bool { settle() }
+
+        /// The wait's turn: true when nothing was clicked yet, so the session is told no.
+        func expire() -> Bool { settle() }
+
+        private func settle() -> Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            guard !settled else { return false }
+            settled = true
+            return true
+        }
+
+        /// The window closes unanswered: its decline finds the gate settled and does nothing more.
+        @MainActor func closeWindow() {
+            window?.close()
+        }
     }
 
     /// The report kept for the tab; the version this agent ran before, when this one differs.
@@ -140,7 +190,7 @@ enum AgentSessionSocket {
     }
 
     @MainActor
-    private static func confirm(_ arguments: [String: Any], tab: TerminalTab, then: @escaping (Bool) -> Void) {
+    private static func confirm(_ arguments: [String: Any], tab: TerminalTab, gate: AnswerGate, then: @escaping (Bool) -> Void) {
         let agent = ACPSession.oneLine(arguments["agent"] as? String ?? "The agent", limit: 60)
         let action = ACPSession.oneLine(arguments["action"] as? String ?? "act", limit: 2000) // the whole command (R5)
         let option = ACPSession.oneLine(arguments["option"] as? String ?? "Allow always", limit: 60)
@@ -148,7 +198,7 @@ enum AgentSessionSocket {
             + "It was picked in the session\u{2019}s tab, by you or by an agent that steers it."
         let request = AgentApprovalWindow.Request(title: "Allow \(agent) always?", requester: "The session in “\(tab.title)”",
                                                   agentWords: nil, details: details, approveTitle: option)
-        ask(request, then: then)
+        ask(request, gate: gate, then: then)
     }
 
     /// The approval windows open now. A window doesn't keep its controller (`NSWindow.windowController` is weak), and
@@ -157,9 +207,11 @@ enum AgentSessionSocket {
     @MainActor private static var asking: [AgentApprovalWindow] = []
 
     /// Shows `request` on the Mac and answers `then` once, Approve (true) or Decline or a close (false), keeping the
-    /// window until then.
+    /// window until then. Once `gate` has expired (the wait ran out, or the session hung up), a click only closes the
+    /// window: `approved` never runs and `then` isn't called.
     @MainActor
-    private static func ask(_ request: AgentApprovalWindow.Request, approved: (() -> Void)? = nil, then: @escaping (Bool) -> Void) {
+    private static func ask(_ request: AgentApprovalWindow.Request, gate: AnswerGate, approved: (() -> Void)? = nil,
+                            then: @escaping (Bool) -> Void) {
         // Let go once its own close is done: Decline answers before the window closes.
         func letGo(_ window: AgentApprovalWindow?) {
             DispatchQueue.main.async { MainActor.assumeIsolated { asking.removeAll { $0 === window } } }
@@ -169,14 +221,17 @@ enum AgentSessionSocket {
                                          approve: { window in
                                              window.finish()
                                              letGo(window)
+                                             guard gate.claim() else { return }
                                              approved?()
                                              then(true)
                                          },
                                          decline: { _ in
                                              letGo(shown)
+                                             guard gate.claim() else { return }
                                              then(false)
                                          })
         shown = window
+        gate.window = window
         asking.append(window)
         window.present()
     }
@@ -185,7 +240,7 @@ enum AgentSessionSocket {
     nonisolated(unsafe) static var trustStore = UserDefaults.standard
 
     @MainActor
-    private static func trust(_ arguments: [String: Any], tab: TerminalTab, then: @escaping (Bool) -> Void) {
+    private static func trust(_ arguments: [String: Any], tab: TerminalTab, gate: AnswerGate, then: @escaping (Bool) -> Void) {
         guard let given = arguments["folder"] as? String, given.hasPrefix("/") else { return then(false) }
         let folder = AgentSessionTrust.canonical(given)
         guard !AgentSessionTrust.isTrusted(folder, in: AgentSessionTrust.list(in: trustStore)) else { return then(true) }
@@ -195,7 +250,7 @@ enum AgentSessionSocket {
         let request = AgentApprovalWindow.Request(title: "Trust this folder for \(agent)?",
                                                   requester: "The session in \u{201C}\(tab.title)\u{201D}",
                                                   agentWords: nil, details: details, approveTitle: "Trust Folder")
-        ask(request, approved: {
+        ask(request, gate: gate, approved: {
             let list = AgentSessionTrust.list(in: trustStore)
             trustStore.set(AgentSessionTrust.adding(folder, to: list), forKey: AgentSessionTrust.defaultsKey)
         }, then: then)

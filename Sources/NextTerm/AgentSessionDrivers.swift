@@ -124,15 +124,16 @@ final class ClaudeDriver: AgentSessionDriver {
         initializeID = id
         runner.sendToAgent(line)
         // No answer to initialize, or a turn of only unknown lines: Claude Code's stream changed (plan 035 U7).
-        DispatchQueue.main.asyncAfter(deadline: .now() + ClaudeStream.initializeTimeout) { [weak self] in
+        let wait = AgentSessionRunner.startupTimeout
+        DispatchQueue.main.asyncAfter(deadline: .now() + wait) { [weak self] in
             guard let self, self.initializeID == id else { return }
-            self.drift("no answer to initialize in \(Int(ClaudeStream.initializeTimeout)) seconds")
+            self.drift("no answer to initialize in \(Int(wait)) seconds")
         }
         timer = driftTimer { [weak self] in self?.checkDrift() }
     }
 
     private func checkDrift() {
-        guard runner.session.working, watch.isDrifting(at: Date()) else { return }
+        guard runner.session.working, watch.isDrifting(at: Date(), waitingOnUser: runner.isWaitingOnUser) else { return }
         drift("only lines of unknown types for \(Int(ProtocolDriftWatch.quiet)) seconds")
     }
 
@@ -239,6 +240,9 @@ final class ClaudeDriver: AgentSessionDriver {
     private func becomeReady() {
         guard !ready else { return }
         ready = true
+        // A resumed session goes on with the id it was given until system/init names one, so an update meanwhile brings
+        // back this conversation, not none.
+        if runner.sessionID == nil, let id = runner.resumeID { runner.sessionID = id }
         let version = runner.agentVersion.map { " " + $0 } ?? ""
         let named = model.map { " (\($0))" } ?? ""
         let resumed = runner.resumeID.map { ", going on with session " + $0 } ?? ""
@@ -356,11 +360,18 @@ final class CodexDriver: AgentSessionDriver {
     func started() {
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "development"
         runner.sendToAgent(codex.initializeRequest(version: version).line)
+        // No thread from initialize to thread/start: Codex's app-server changed, or hangs (plan 035 U7), as for Claude Code.
+        let wait = AgentSessionRunner.startupTimeout
+        DispatchQueue.main.asyncAfter(deadline: .now() + wait) { [weak self] in
+            guard let self, !self.ready else { return }
+            let detail = "no session from initialize to thread/start in \(Int(wait)) seconds"
+            self.runner.fatal(CodexAppServer.driftNote(userAgent: self.codex.userAgent, detail: detail))
+        }
         timer = driftTimer { [weak self] in self?.checkDrift() }
     }
 
     private func checkDrift() {
-        guard runner.session.working, watch.isDrifting(at: Date()) else { return }
+        guard runner.session.working, watch.isDrifting(at: Date(), waitingOnUser: runner.isWaitingOnUser) else { return }
         let detail = "only unknown notifications for \(Int(CodexAppServer.DriftWatch.quiet)) seconds"
         runner.fatal(CodexAppServer.driftNote(userAgent: codex.userAgent, detail: detail))
     }
@@ -423,7 +434,8 @@ final class CodexDriver: AgentSessionDriver {
             for update in updates { runner.session.apply(update: update) }
             runner.scheduleDraw()
         case .permission(let request):
-            if runner.session.pending != nil { cancelOpen() }
+            // A second approval while one is open: the first is declined, which keeps the turn going (cancel would end it).
+            if runner.session.pending != nil { cancelOpen(superseded: true) }
             permission = request
             if runner.session.requested(permission: request.requestID, params: request.params) == nil {
                 permission = nil
@@ -466,10 +478,14 @@ final class CodexDriver: AgentSessionDriver {
         }
     }
 
-    /// The open approval cancelled, its menu closed: never accepted by default.
-    private func cancelOpen() {
+    /// The open approval cancelled (which stops the turn), or declined when a newer one replaced it, its menu closed:
+    /// never accepted by default.
+    private func cancelOpen(superseded: Bool = false) {
         _ = runner.session.cancelPending()
-        if let permission { runner.sendToAgent(CodexAppServer.response(to: permission, optionID: nil)) }
+        if let permission {
+            let line = superseded ? CodexAppServer.supersededResponse(to: permission) : CodexAppServer.response(to: permission, optionID: nil)
+            runner.sendToAgent(line)
+        }
         permission = nil
     }
 

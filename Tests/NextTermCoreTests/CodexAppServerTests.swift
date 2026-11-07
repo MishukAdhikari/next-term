@@ -274,6 +274,10 @@ import Testing
             #expect(answer["result"] == .object(["decision": .string(decision)]))
             #expect(answer["error"] == nil)
         }
+        // Replaced by a newer approval while open: declined, so the turn goes on; cancel would end it.
+        let superseded = object(CodexAppServer.supersededResponse(to: permission))
+        #expect(superseded["id"] == .number(7))
+        #expect(superseded["result"] == .object(["decision": .string("decline")]))
     }
 
     @Test func aFileChangeApprovalNamesThePathsAndEncodesTheSame() {
@@ -451,7 +455,7 @@ import Testing
         #expect(decode(&codex, #"{"id":\#(read.id),"error":{"code":-32601,"message":"method not found"}}"#) == .ignore)
     }
 
-    @Test func unknownNotificationsAreCountedAndTheTurnEndsAfterSixtyQuietSeconds() {
+    @Test func unknownNotificationsAreCountedAndAMinuteOfOnlyThemIsDrift() {
         var codex = started()
         #expect(decode(&codex, #"{"method":"item/agentMessage/textDelta2","params":{}}"#) == .unknownNotification("item/agentMessage/textDelta2"))
         #expect(decode(&codex, #"{"method":"thread/status/changed","params":{"threadId":"thr_1","status":{"type":"active"}}}"#) == .ignore)
@@ -465,25 +469,47 @@ import Testing
         watch.observe(.updates([]), at: start.addingTimeInterval(5))
         // Quiet with nothing at all is a slow turn, not drift.
         #expect(!watch.isDrifting(at: start.addingTimeInterval(200)))
-        watch.observe(.unknownNotification("a/b"), at: start.addingTimeInterval(10))
-        watch.observe(.unknownNotification("a/c"), at: start.addingTimeInterval(30))
-        #expect(watch.unknownCount == 2)
-        #expect(!watch.isDrifting(at: start.addingTimeInterval(64)))
-        #expect(watch.isDrifting(at: start.addingTimeInterval(65)))
-        // A known notification resets the quiet.
-        watch.observe(.updates([]), at: start.addingTimeInterval(66))
+        // Unknown notifications every few seconds for a minute, nothing known among them: drift.
+        var at: TimeInterval = 10
+        while at <= 70 {
+            watch.observe(.unknownNotification("a/b"), at: start.addingTimeInterval(at))
+            at += 5
+        }
+        #expect(watch.unknownCount == 13)
+        #expect(!watch.isDrifting(at: start.addingTimeInterval(69)))
+        #expect(watch.isDrifting(at: start.addingTimeInterval(70)))
+        // A known notification breaks the run.
+        watch.observe(.updates([]), at: start.addingTimeInterval(71))
         #expect(!watch.isDrifting(at: start.addingTimeInterval(100)))
-        watch.observe(.unknownNotification("a/b"), at: start.addingTimeInterval(101))
-        #expect(watch.isDrifting(at: start.addingTimeInterval(126)))
-        #expect(watch.unknownCount == 3)
         // The turn's end stops the watch; the next turn counts again from nothing.
+        watch.observe(.unknownNotification("a/b"), at: start.addingTimeInterval(101))
         watch.observe(.turnEnded(.init(stopReason: "end_turn", failure: nil)), at: start.addingTimeInterval(127))
         #expect(!watch.isDrifting(at: start.addingTimeInterval(500)))
         watch.turnStarted(at: start.addingTimeInterval(600))
         #expect(watch.unknownCount == 0)
-        watch.observe(.unknownNotification("a/b"), at: start.addingTimeInterval(601))
-        #expect(!watch.isDrifting(at: start.addingTimeInterval(659)))
-        #expect(watch.isDrifting(at: start.addingTimeInterval(660)))
+    }
+
+    /// One unknown line and then silence is a long tool run or the user thinking, never drift; nor is a run of unknown
+    /// lines broken by a pause longer than `gap`, nor one that goes on while the session waits on the user.
+    @Test func silenceAfterAnUnknownLineOrAWaitOnTheUserIsNeverDrift() {
+        let start = Date(timeIntervalSinceReferenceDate: 1000)
+        var watch = ProtocolDriftWatch()
+        watch.turnStarted(at: start)
+        watch.observe(.unknownNotification("a/b"), at: start.addingTimeInterval(1))
+        for later in [30.0, 60, 61, 120, 600] { #expect(!watch.isDrifting(at: start.addingTimeInterval(later)), "\(later)") }
+
+        // Unknown lines with pauses past `gap` between them are separate runs, none a minute long.
+        watch.turnStarted(at: start)
+        for at in stride(from: 0.0, through: 120, by: 15) { watch.observe(.unknownNotification("a/b"), at: start.addingTimeInterval(at)) }
+        #expect(!watch.isDrifting(at: start.addingTimeInterval(120)))
+
+        // A run a minute long while a menu is open, or an Allow always waits on the Mac: not drift until the wait ends.
+        watch.turnStarted(at: start)
+        for at in stride(from: 0.0, through: 60, by: 3) { watch.observe(.unknownNotification("a/b"), at: start.addingTimeInterval(at)) }
+        #expect(!watch.isDrifting(at: start.addingTimeInterval(60), waitingOnUser: true))
+        #expect(watch.isDrifting(at: start.addingTimeInterval(60)))
+        #expect(ProtocolDriftWatch.gap == 10)
+        #expect(ProtocolDriftWatch.startupTimeout == 30)
     }
 
     // MARK: Credentials

@@ -40,10 +40,10 @@ public struct ClaudeStream: Sendable {
         public let toolUseID: String?
         /// The tool's input, sent back unchanged with an allow.
         public let input: ACPWire.Value
-        /// Claude's permission suggestions: what Allow always gives back, kept to this session.
+        /// Claude's permission suggestions that Allow always may give back: its `addRules` ones alone (`keptSuggestions`).
         public let suggestions: [ACPWire.Value]
         /// The request as `session/request_permission` params, for `ACPSession.requested(permission:params:)`: the
-        /// whole input in the title, uncut (R5), and Allow once, Allow always (only with suggestions) and Reject.
+        /// whole input in the title, uncut (R5), and Allow once, Allow always (only with a rule suggested) and Reject.
         public let params: ACPWire.Value
     }
 
@@ -121,7 +121,7 @@ public struct ClaudeStream: Sendable {
     public static let driftLead = "Claude Code's stream changed; run claude in a terminal tab for now."
 
     /// How long the `initialize` control request may go unanswered before the session ends with the drift note.
-    public static let initializeTimeout: TimeInterval = 30
+    public static let initializeTimeout: TimeInterval = ProtocolDriftWatch.startupTimeout
 
     /// The drift note, with what didn't match and the version when they are known.
     public static func driftNote(version: String?, detail: String?) -> String {
@@ -129,6 +129,13 @@ public struct ClaudeStream: Sendable {
         let parts = [detail, named].compactMap { $0 }.filter { !$0.isEmpty }
         guard !parts.isEmpty else { return driftLead }
         return driftLead + " (" + parts.joined(separator: "; ") + ")"
+    }
+
+    /// What a session says when Claude Code quit before its resume was ready (the session is gone, or was another
+    /// folder's), before it starts a new one: `words` are Claude's last, when it said any.
+    public static func resumeFailedLine(sessionID: String, words: String) -> String {
+        let why = words.isEmpty ? "" : " (" + words + ")"
+        return "Claude Code couldn\u{2019}t go on with session " + sessionID + why + "; starting a new session."
     }
 
     /// What a session says when Claude Code isn't signed in (R2). Next Term never offers a login of its own.
@@ -364,7 +371,7 @@ public struct ClaudeStream: Sendable {
             }
             return .question(Question(requestID: id, toolUseID: toolUseID, input: input, items: items))
         }
-        let suggestions = request["permission_suggestions"]?.array ?? []
+        let suggestions = Self.keptSuggestions(request["permission_suggestions"]?.array ?? [])
         var options: [ACPWire.Value] = [ACPWire.option(ACPWire.allowOnce, "Allow once")]
         if !suggestions.isEmpty { options.append(ACPWire.option(ACPWire.allowAlways, "Allow always")) }
         options.append(ACPWire.option(ACPWire.rejectOnce, "Reject"))
@@ -406,8 +413,8 @@ public struct ClaudeStream: Sendable {
         case ACPWire.allowOnce?:
             return success(permission.requestID, ["behavior": .string("allow"), "updatedInput": permission.input])
         case ACPWire.allowAlways?:
-            let kept: [ACPWire.Value] = permission.suggestions.map { suggestion in
-                guard case .object(var fields) = suggestion else { return suggestion }
+            let kept: [ACPWire.Value] = keptSuggestions(permission.suggestions).compactMap { suggestion in
+                guard case .object(var fields) = suggestion else { return nil }
                 // Never a rule in a settings file: Allow always lasts for this session only.
                 fields["destination"] = .string("session")
                 return .object(fields)
@@ -422,6 +429,16 @@ public struct ClaudeStream: Sendable {
             return deny(requestID: permission.requestID, message: "The user rejected this in Next Term.")
         default:
             return deny(requestID: permission.requestID, message: "The user stopped this in Next Term.")
+        }
+    }
+
+    /// The suggestions Allow always may give back: rules that allow this tool again (`addRules`), which is what the Mac's
+    /// question says ("lets it do this again in this session"). A mode change, another folder, or rules removed or
+    /// replaced are wider than that, and never sent.
+    public static func keptSuggestions(_ suggestions: [ACPWire.Value]) -> [ACPWire.Value] {
+        suggestions.filter { suggestion in
+            guard case .object = suggestion else { return false }
+            return suggestion["type"]?.string == "addRules"
         }
     }
 

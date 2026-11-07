@@ -194,11 +194,36 @@ import Testing
         let answer = always["response"]?["response"]
         #expect(answer?["behavior"]?.string == "allow")
         let updates = answer?["updatedPermissions"]?.array ?? []
-        #expect(updates.count == 2)
+        // Only the rule goes back: the mode change Claude also suggested is wider than "do this again", and is dropped.
+        #expect(updates.count == 1)
         // Nothing is written to a settings file: every destination is the session.
         #expect(updates.allSatisfy { $0["destination"]?.string == "session" })
+        #expect(updates.first?["type"]?.string == "addRules")
         #expect(updates.first?["rules"]?.array?.first?["ruleContent"]?.string == "rm -rf build")
-        #expect(updates.last?["mode"]?.string == "acceptEdits")
+        #expect(!updates.contains { $0["mode"] != nil })
+    }
+
+    /// Suggestions that only change the mode, add a folder, or remove or replace rules give no Allow always: the Mac's
+    /// question promises the same action again, nothing wider.
+    @Test func allowAlwaysIsNotOfferedForSuggestionsWiderThanARule() {
+        let wider = [
+            #"{"type":"setMode","mode":"bypassPermissions","destination":"session"}"#,
+            #"{"type":"addDirectories","directories":["/"],"destination":"session"}"#,
+            #"{"type":"removeRules","rules":[{"toolName":"Bash"}],"behavior":"deny","destination":"session"}"#,
+            #"{"type":"replaceRules","rules":[{"toolName":"Bash"}],"behavior":"allow","destination":"session"}"#,
+            #""addRules""#,
+        ].joined(separator: ",")
+        let line = #"{"type":"control_request","request_id":"perm-3","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"ls"},"permission_suggestions":["#
+            + wider + "]}}"
+        var stream = ClaudeStream()
+        guard case .permission(let asked) = decode(&stream, line) else { Issue.record("no permission"); return }
+        #expect(asked.suggestions.isEmpty)
+        let options = asked.params["options"]?.array ?? []
+        #expect(options.compactMap { $0["kind"]?.string } == ["allow_once", "reject_once"])
+        // Even if asked, Allow always sends no wider permission.
+        let always = object(ClaudeStream.response(to: asked, optionID: "allow_always"))
+        #expect(always["response"]?["response"]?["updatedPermissions"]?.array?.isEmpty == true)
+        #expect(ClaudeStream.keptSuggestions([.string("addRules"), .object(["type": .string("addRules")])]).count == 1)
     }
 
     @Test func aControlCancelAndAnUnknownControlRequestAreTold() {
@@ -337,10 +362,35 @@ import Testing
         #expect(next.stopReason == "end_turn")
     }
 
+    // MARK: Credentials
+
+    /// No line Next Term writes to Claude holds a credential (R2): the prompt, the control requests, and every answer to a
+    /// permission or a question carry only what the user typed or picked and what Claude sent.
+    @Test func noLineNextTermWritesHoldsACredential() {
+        var stream = ClaudeStream()
+        guard case .permission(let asked) = decode(&stream, bashAskWithSuggestions) else { Issue.record("no permission"); return }
+        let question = ClaudeStream.Question(requestID: "q-1", toolUseID: nil, input: .object([:]),
+                                             items: [.init(question: "Which?", header: "", options: ["A"], multiSelect: false)])
+        var lines = [stream.userMessage("hi"), stream.initializeRequest().line, stream.interruptRequest().line]
+        for option in ["allow_once", "allow_always", "reject_once", nil] as [String?] {
+            lines.append(ClaudeStream.response(to: asked, optionID: option))
+        }
+        lines.append(ClaudeStream.deny(requestID: "q-1", message: "no"))
+        lines.append(ClaudeStream.answer(question, with: ["A"]))
+        lines.append(ClaudeStream.controlError(requestID: "h-1", message: "not handled"))
+        for line in lines {
+            let text = String(decoding: line, as: UTF8.self).lowercased()
+            #expect(!text.contains("token"))
+            #expect(!text.contains("apikey") && !text.contains("api_key"))
+            #expect(!text.contains("password"))
+            #expect(!text.contains("oauth"))
+        }
+    }
+
     // MARK: Drift and versions (plan 035 U7)
 
     /// Claude's stream fails as loudly as Codex's: a line of a type Next Term doesn't know is told apart from one it
-    /// knows and passes over, and a turn that hears only those for a minute is drift, by the same watch Codex's uses.
+    /// knows and passes over, and a turn that keeps hearing only those for a minute is drift, by the same watch Codex's uses.
     @Test func linesOfAnUnknownTypeAreToldAndATurnOfOnlyThemIsDrift() {
         var stream = ClaudeStream()
         #expect(decode(&stream, #"{"type":"assistant_v2","message":{}}"#) == .unknownLine("assistant_v2"))
@@ -353,12 +403,12 @@ import Testing
         let start = Date(timeIntervalSinceReferenceDate: 1000)
         var watch = ProtocolDriftWatch()
         watch.turnStarted(at: start)
-        watch.observe(claude: .unknownLine("assistant_v2"), at: start.addingTimeInterval(1))
-        #expect(watch.unknownCount == 1)
-        #expect(!watch.isDrifting(at: start.addingTimeInterval(59)))
-        #expect(watch.isDrifting(at: start.addingTimeInterval(60)))
-        // A known line resets the quiet; the turn's end stops the watch.
-        watch.observe(claude: .ignore, at: start.addingTimeInterval(61))
+        for at in stride(from: 1.0, through: 61, by: 4) { watch.observe(claude: .unknownLine("assistant_v2"), at: start.addingTimeInterval(at)) }
+        #expect(watch.unknownCount == 16)
+        #expect(!watch.isDrifting(at: start.addingTimeInterval(60)))
+        #expect(watch.isDrifting(at: start.addingTimeInterval(61)))
+        // A known line breaks the run; the turn's end stops the watch.
+        watch.observe(claude: .ignore, at: start.addingTimeInterval(62))
         #expect(!watch.isDrifting(at: start.addingTimeInterval(100)))
         watch.observe(claude: .unknownLine("x"), at: start.addingTimeInterval(101))
         watch.observe(claude: .turnEnded(.init(stopReason: "end_turn", failure: nil, usage: nil)), at: start.addingTimeInterval(102))
@@ -370,6 +420,10 @@ import Testing
         #expect(ClaudeStream.driftNote(version: "2.1.4", detail: "no answer to initialize in 30 seconds")
                 == ClaudeStream.driftLead + " (no answer to initialize in 30 seconds; Claude Code 2.1.4)")
         #expect(ClaudeStream.initializeTimeout == 30)
+        // A resume Claude couldn't go on with is said so, with its words, before a new session starts.
+        #expect(ClaudeStream.resumeFailedLine(sessionID: "sess-1", words: "No conversation found with session ID: sess-1")
+                == "Claude Code couldn\u{2019}t go on with session sess-1 (No conversation found with session ID: sess-1); starting a new session.")
+        #expect(ClaudeStream.resumeFailedLine(sessionID: "sess-1", words: "") == "Claude Code couldn\u{2019}t go on with session sess-1; starting a new session.")
         #expect(ProtocolDriftWatch.quiet == 60)
     }
 

@@ -305,6 +305,11 @@ import Testing
         #expect(!AgentSessionVersion.isSessionID("a b"))
         #expect(!AgentSessionVersion.isSessionID("x;rm -rf /"))
         #expect(!AgentSessionVersion.isSessionID(String(repeating: "a", count: 129)))
+        // A leading letter or digit: an id that starts like a flag would read as one after --resume.
+        for flagLike in ["-p", "--dangerously-skip-permissions", "_x", ".x", "-"] {
+            #expect(!AgentSessionVersion.isSessionID(flagLike), "\(flagLike)")
+        }
+        #expect(AgentSessionVersion.isSessionID("9a-b") && AgentSessionVersion.isSessionID("Z"))
         // Only Claude Code and Codex sessions resume.
         #expect(claude.resumesSessions && ACPAgent.named("codex")!.resumesSessions)
         #expect(!ACPAgent.named("gemini")!.resumesSessions)

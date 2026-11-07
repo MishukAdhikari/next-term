@@ -45,15 +45,19 @@ public enum AgentSessionVersion {
         agent + " updated " + old + " \u{2192} " + new
     }
 
-    /// A session id a resume may name: 1 to 128 of letters, digits, `-`, `_` and `.`, so the line that resumes it needs
-    /// no quoting and holds nothing a shell reads.
+    /// A session id a resume may name: 1 to 128 of letters, digits, `-`, `_` and `.`, starting with a letter or a digit,
+    /// so the line that resumes it needs no quoting, holds nothing a shell reads, and never reads as a flag after `--resume`.
     public static func isSessionID(_ id: String) -> Bool {
-        guard (1...128).contains(id.utf8.count) else { return false }
+        guard (1...128).contains(id.utf8.count), let first = id.utf8.first, isAlphanumeric(first) else { return false }
         return id.utf8.allSatisfy { (byte: UInt8) -> Bool in
-            switch byte {
-            case 0x30...0x39, 0x41...0x5A, 0x61...0x7A: return true
-            default: return byte == UInt8(ascii: "-") || byte == UInt8(ascii: "_") || byte == UInt8(ascii: ".")
-            }
+            isAlphanumeric(byte) || byte == UInt8(ascii: "-") || byte == UInt8(ascii: "_") || byte == UInt8(ascii: ".")
+        }
+    }
+
+    private static func isAlphanumeric(_ byte: UInt8) -> Bool {
+        switch byte {
+        case 0x30...0x39, 0x41...0x5A, 0x61...0x7A: return true
+        default: return false
         }
     }
 }

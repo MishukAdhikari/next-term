@@ -194,6 +194,12 @@ public struct CodexAppServer: Sendable {
         return ACPWire.result(id: permission.requestID, .object(["decision": decision]))
     }
 
+    /// The answer to an approval a newer one replaced while it was open: decline, so the turn goes on with the new one;
+    /// cancel would end the turn, and is kept for a stop and a quit.
+    public static func supersededResponse(to permission: Permission) -> Data {
+        response(to: permission, optionID: ACPWire.rejectOnce)
+    }
+
     /// JSON-RPC's "method not found" (-32601) for a request Next Term doesn't take, so Codex never waits on it.
     public static func unsupportedAnswer(id: ACPWire.Value, method: String) -> Data {
         ACPWire.error(id: id, code: -32601, message: "Next Term's session doesn't handle " + method)

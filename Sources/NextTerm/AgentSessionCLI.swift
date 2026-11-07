@@ -38,7 +38,7 @@ enum AgentSessionCLI {
                 prompt = text
             case "--resume":
                 guard let id = rest.popFirst(), AgentSessionVersion.isSessionID(id) else {
-                    fail("--resume needs a session id: letters, digits, -, _ and . only")
+                    fail("--resume needs a session id: letters, digits, -, _ and . only, starting with a letter or digit")
                 }
                 resume = id
             default:
@@ -63,8 +63,25 @@ enum AgentSessionCLI {
         guard isatty(STDIN_FILENO) == 1, isatty(STDOUT_FILENO) == 1 else { fail("nxtrm agent runs in a terminal tab") }
         let runner = AgentSessionRunner(agent: agent, program: program, firstPrompt: prompt)
         runner.resumeID = resume
+        runner.freshArguments = without(resume: arguments)
         runner.start()
         dispatchMain()
+    }
+
+    /// `arguments` without `--resume` and its id: what a session starts again with when its resume can't go on.
+    static func without(resume arguments: [String]) -> [String] {
+        var kept: [String] = []
+        var rest = arguments[...]
+        while let argument = rest.popFirst() {
+            switch argument {
+            case "--resume": _ = rest.popFirst()
+            case "--prompt", "-p":
+                kept.append(argument)
+                if let text = rest.popFirst() { kept.append(text) }
+            default: kept.append(argument)
+            }
+        }
+        return kept
     }
 
     static func locate(_ program: String, path: String) -> String? {
@@ -116,6 +133,19 @@ final class AgentSessionRunner {
     var firstPrompt: String?
     /// The session to go on with (`--resume`, plan 035 U7): Claude Code's session id, Codex's thread id.
     var resumeID: String?
+    /// `nxtrm agent`'s arguments without `--resume`: a Claude Code session whose resume can't go on starts again with them.
+    var freshArguments: [String] = []
+
+    /// How long a session's handshake may take before it ends with the drift note (plan 035 U7). The self-test's
+    /// stand-ins shorten it, in a debug build only.
+    static let startupTimeout: TimeInterval = {
+        #if DEBUG
+        if let given = ProcessInfo.processInfo.environment["NEXTTERM_SELFTEST_STARTUP_TIMEOUT"].flatMap(TimeInterval.init), given > 0 {
+            return given
+        }
+        #endif
+        return ProtocolDriftWatch.startupTimeout
+    }()
     /// What the session reports to the app (plan 035 U7): the CLI's version, the model, and the session's id, which the
     /// tab's saved state keeps so an update brings the session back.
     var agentVersion: String?
@@ -173,6 +203,7 @@ final class AgentSessionRunner {
         write("\u{1b}]2;\(agent.name)\u{07}") // the tab's title
         session.note("Starting \(agent.name) (\(driver.startWords))\u{2026}")
         draw()
+        reportStart()
         driver.prepare { [weak self] in self?.spawn() }
     }
 
@@ -244,6 +275,9 @@ final class AgentSessionRunner {
 
     /// An Allow always waiting for the user's OK on the Mac: the menu takes no other answer meanwhile.
     private var confirming = false
+
+    /// The session waits on the user: a menu or a question is open, or an Allow always is asked on the Mac. Never drift.
+    var isWaitingOnUser: Bool { session.pending != nil || confirming }
 
     private func choose(_ index: Int) {
         guard !confirming, let option = session.option(at: index) else { return }
@@ -373,6 +407,15 @@ final class AgentSessionRunner {
         }
     }
 
+    /// The first report, before anything runs: the app forgets what an earlier session in this tab reported (its session
+    /// id above all, which an update would otherwise resume). The tab's state isn't touched: no OSC 7501 yet.
+    private func reportStart() {
+        guard appSocket != nil else { return }
+        let update: [String: Any] = ["op": "report", "agent": agent.name, "state": "idle", "turns": 0, "last_message": "",
+                                     "agent_id": agent.id, "folder": FileManager.default.currentDirectoryPath]
+        callApp(update, timeout: 2) { _ in }
+    }
+
     /// The version change was told: once a session.
     private var toldVersion = false
 
@@ -395,6 +438,14 @@ final class AgentSessionRunner {
         keepWords(buffer) // a last line with no newline
         buffer.removeAll()
         let tail = errorTail.split(whereSeparator: \.isNewline).suffix(3).joined(separator: " / ")
+        if !driver.isReady, agent.protocolKind == .claudeStream, let id = resumeID {
+            // Claude Code couldn't go on with the session (it is gone, or from another folder): a new one, said so, as
+            // Codex's thread falls back, rather than a sign-in hint that isn't the reason.
+            session.note(ClaudeStream.resumeFailedLine(sessionID: id, words: ACPSession.oneLine(tail, limit: 300)))
+            waitingLine = "" // the next run draws its own input line here
+            draw()
+            startAfresh()
+        }
         session.note("\(agent.name) quit (exit \(status))" + (tail.isEmpty ? "." : ": " + ACPSession.oneLine(tail, limit: 300)))
         if !driver.isReady {
             // It quit before a session started: signed out, or a version without ACP.
@@ -402,6 +453,23 @@ final class AgentSessionRunner {
         }
         draw()
         finish(status == 0 ? 0 : 1)
+    }
+
+    /// The same `nxtrm agent`, run again in this process without `--resume`: every part of the session starts fresh, and
+    /// the tab sees the same program go on. The folder is trusted by now, so it isn't asked again.
+    private func startAfresh() -> Never {
+        driver.quitting()
+        if process.isRunning { process.terminate() }
+        restoreTerminal()
+        guard let me = Bundle.main.executablePath else { finish(1) }
+        for stop in [SIGTERM, SIGHUP, SIGINT, SIGWINCH, SIGPIPE] { signal(stop, SIG_DFL) }
+        let words = [me, "--cli", "agent"] + freshArguments
+        var argv: [UnsafeMutablePointer<CChar>?] = words.map { strdup($0) }
+        argv.append(nil)
+        execv(me, &argv)
+        // It couldn't run again: the session ends as it would have.
+        session.note("Couldn\u{2019}t start \(agent.name) again: " + String(cString: strerror(errno)))
+        finish(1)
     }
 
     func finish(_ code: Int32) -> Never {

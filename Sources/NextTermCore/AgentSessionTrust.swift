@@ -1,4 +1,3 @@
-import Darwin
 import Foundation
 
 /// Which folders a Claude Code session may start in (plan 035 R8). `claude -p` loads a folder's hooks, `.mcp.json`,
@@ -31,11 +30,7 @@ public enum AgentSessionTrust {
         let absolute = expanded.hasPrefix("/")
             ? expanded
             : (FileManager.default.currentDirectoryPath as NSString).appendingPathComponent(expanded)
-        if let resolved = realpath(absolute, nil) {
-            defer { free(resolved) }
-            return String(cString: resolved)
-        }
-        return (absolute as NSString).standardizingPath
+        return canonicalPath(absolute)
     }
 
     /// Whether `folder` is in `list`, exactly, by its canonical path.

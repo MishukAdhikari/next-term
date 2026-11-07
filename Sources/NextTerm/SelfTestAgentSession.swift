@@ -132,7 +132,8 @@ extension SelfTest {
     /// A stand-in for `claude -p` with stream-json in and out and the control channel on stdio. By prompt: "please rm"
     /// asks can_use_tool for Bash with no suggestions, "always" with a suggestion, "ask" asks AskUserQuestion with two
     /// questions, "wait" starts a turn that only an interrupt ends; anything else streams a reply and runs a tool.
-    /// STANDIN_MODE=auth answers the first prompt as an account that isn't signed in.
+    /// STANDIN_MODE=auth answers the first prompt as an account that isn't signed in, STANDIN_MODE=initerror answers
+    /// initialize with an error, and STANDIN_MODE=stale quits at once when given --resume, as for a session that is gone.
     static let claudeStandIn = #"""
     #!/usr/bin/python3
     # A stand-in for Claude Code's claude -p, for testing nxtrm agent claude. Never a real model or account.
@@ -147,6 +148,9 @@ extension SelfTest {
     note("session", os.getpid(), json.dumps(args))
     mode = os.environ.get("STANDIN_MODE", "")
     sid = args[args.index("--resume") + 1] if "--resume" in args else "sess-standin-1"
+    if mode == "stale" and "--resume" in args:
+        sys.stderr.write("No conversation found with session ID: " + sid + "\n")
+        sys.exit(1)
     def send(o): sys.stdout.write(json.dumps(o) + "\n"); sys.stdout.flush()
     def assistant(mid, content, **more):
         o = {"type": "assistant", "message": {"id": mid, "role": "assistant", "content": content}, "parent_tool_use_id": None, "session_id": sid}
@@ -175,7 +179,9 @@ extension SelfTest {
         if kind == "control_request":
             sub = m["request"].get("subtype")
             note("control", sub)
-            if sub == "initialize":
+            if sub == "initialize" and mode == "initerror":
+                send({"type": "control_response", "response": {"subtype": "error", "request_id": m["request_id"], "error": "stand-in refuses initialize"}})
+            elif sub == "initialize":
                 send({"type": "system", "subtype": "init", "session_id": sid, "model": "stand-in-model", "tools": ["Bash", "Edit"], "mcp_servers": [], "slash_commands": ["compact"], "capabilities": ["interrupt_receipt_v1"]})
                 send({"type": "control_response", "response": {"subtype": "success", "request_id": m["request_id"], "response": {"commands": []}}})
             elif sub == "interrupt":
@@ -233,7 +239,7 @@ extension SelfTest {
     /// A stand-in for `codex app-server` (JSON-RPC over stdio). It has no thread/resume, so a resume falls back to a new
     /// thread. By prompt: "run" asks command approval, "other" makes a request Next Term doesn't take, "wait" starts a turn
     /// that only turn/interrupt ends; anything else answers and runs a command. STANDIN_MODE=drift answers initialize in a
-    /// shape Next Term doesn't know, STANDIN_MODE=nologin reports no account.
+    /// shape Next Term doesn't know, STANDIN_MODE=nologin reports no account, STANDIN_MODE=noinit never answers initialize.
     static let codexStandIn = #"""
     #!/usr/bin/python3
     # A stand-in for codex app-server, for testing nxtrm agent codex. Never a real model or account.
@@ -279,6 +285,7 @@ extension SelfTest {
             continue
         note("request" if i is not None else "notification", method)
         if method == "initialize":
+            if mode == "noinit": continue
             if mode == "drift": answer(i, {"serverInfo": {}})
             else: answer(i, {"userAgent": "codex_cli_rs/0.154.0 (Mac OS; arm64) stand-in"})
         elif method == "account/read":
@@ -562,6 +569,25 @@ extension SelfTest {
         guard let unsigned = await session(work, "claude --prompt hi", "STANDIN_MODE=auth") else { return check(false, "claude session: the sign-in tab starts") }
         let signIn = await wait(15) { !unsigned.status.running && flatScreen(unsigned).contains(ClaudeStream.signInLine) }
         check(signIn, "claude session: an account that isn't signed in ends the session with the sign-in line", flatScreen(unsigned).suffix(300).description)
+
+        // U7: initialize answered with an error ends the session with the drift note at once, never a hang.
+        guard let refused = await session(work, "claude", "STANDIN_MODE=initerror") else { return check(false, "claude session: the drift tab starts") }
+        let drifted = await wait(15) { !refused.status.running && flatScreen(refused).contains(ClaudeStream.driftLead) }
+        check(drifted && flatScreen(refused).contains("initialize answered with an error"),
+              "claude session: an initialize answered with an error ends the session with the drift note", flatScreen(refused).suffix(300).description)
+
+        // U7: a resume Claude can't go on with starts a new session in the same tab, said so, not the sign-in hint.
+        guard let stale = await session(work, "claude --resume sess-gone-1", "STANDIN_MODE=stale") else {
+            return check(false, "claude session: the stale resume tab starts")
+        }
+        let fresh = await wait(20) {
+            flatScreen(stale).contains("couldn\u{2019}t go on with session sess-gone-1") && flatScreen(stale).contains("(stand-in-model) is ready.")
+        }
+        let restarted = sessions().last ?? ""
+        check(fresh && stale.status.running && !restarted.contains("--resume") && !flatScreen(stale).contains(ClaudeStream.signInLine),
+              "claude session: a resume Claude can't go on with starts a new session, said so", "\(restarted): \(flatScreen(stale).suffix(300))")
+        stale.view.send(txt: "\u{04}")
+        _ = await wait(6) { !stale.status.running }
     }
 
     // MARK: Codex
@@ -626,6 +652,15 @@ extension SelfTest {
         guard let unsigned = await session(work, "codex", "STANDIN_MODE=nologin") else { return check(false, "codex session: the sign-in tab starts") }
         let signIn = await wait(15) { !unsigned.status.running && flatScreen(unsigned).contains(CodexAppServer.signInLine) }
         check(signIn, "codex session: no account ends the session with the codex login line", flatScreen(unsigned).suffix(300).description)
+
+        // U7: an app-server that never answers initialize ends the session with the note once the startup wait runs out
+        // (shortened to 2 seconds for this check), never a session left at Starting.
+        guard let silent = await session(work, "codex", "STANDIN_MODE=noinit NEXTTERM_SELFTEST_STARTUP_TIMEOUT=2") else {
+            return check(false, "codex session: the silent tab starts")
+        }
+        let timedOut = await wait(15) { !silent.status.running && flatScreen(silent).contains(CodexAppServer.driftLead) }
+        check(timedOut && flatScreen(silent).contains("in 2 seconds"),
+              "codex session: an app-server that never answers initialize ends the session with the note", flatScreen(silent).suffix(300).description)
     }
 }
 #endif

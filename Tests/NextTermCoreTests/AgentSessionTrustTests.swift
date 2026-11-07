@@ -71,6 +71,14 @@ import Testing
     @Test func aMissingFolderIsOnlyTidied() {
         let path = "/nt-no-such-folder-\(UUID().uuidString)"
         #expect(AgentSessionTrust.canonical(path + "/a/../b/") == path + "/b")
+        #expect(AgentSessionTrust.canonical(path + "//a/./c") == path + "/a/c")
+    }
+
+    /// An empty path, or `.`, is the working folder, resolved as any other.
+    @Test func anEmptyPathIsTheWorkingFolder() {
+        let here = canonicalPath(FileManager.default.currentDirectoryPath)
+        #expect(AgentSessionTrust.canonical("") == here)
+        #expect(AgentSessionTrust.canonical(".") == here)
     }
 
     @Test func theListIsReadFromTheDefaults() throws {
