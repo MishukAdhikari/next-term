@@ -264,6 +264,9 @@ extension SelfTest {
             let remove = approvalButtons(view.alwaysBox).first { $0.identifier?.rawValue == first_?.id }
             remove?.performClick(nil)
             removedInSettings = await wait(10) { !SecretAlways.grants.contains { $0.id == first_?.id } }
+            // Back to the top, as the checks after this one click the table where it first shows.
+            if let top = view.table.enclosingScrollView?.superview { top.scrollToVisible(top.bounds) }
+            view.table.enclosingScrollView?.scrollToVisible(view.table.enclosingScrollView?.bounds ?? .zero)
             settings.close()
         }
         let raised = store.held?.floor(of: SecretAlwaysFile.name) ?? 0
