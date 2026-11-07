@@ -105,9 +105,22 @@ enum MCPHubSignIns {
         store.reloadIfChanged()
         let name = SecretVault.signInsName
         if store.held?.signIns != nil {
-            guard let values = try? await store.perform(.use(names: [name]), reason: reason),
-                  let text = values[name]?.utf8String(), let data = Data(base64Encoded: text), data.count == 32 else { return nil }
-            return SymmetricKey(data: data)
+            // In the same Touch ID, the vault's floor for sign-ins.json is raised to the file as it is now, when the key
+            // vouches for it: a copy older than that, put back while Next Term wasn't running, reads as tampered.
+            let released = KeyBox()
+            let folder = folder
+            let index = try? await store.run(makes: false, names: [name], reason: reason, change: { vault, _ in
+                let value = try vault.value(of: name)
+                guard let text = value.utf8String(), let data = Data(base64Encoded: text), data.count == 32 else { return nil }
+                let key = SymmetricKey(data: data)
+                released.key = key
+                let stored = try? folder.read(SignInFile.name, cap: SignInFile.maxSize)
+                guard let sequence = SignInFile.sequence(of: stored, key: key), sequence > vault.index.floor(of: SignInFile.name) else { return nil }
+                return try vault.raiseFloor(of: SignInFile.name, to: sequence)
+            }, line: { SecretAudit.Line(event: .use, names: [name], outcome: "done") })
+            guard let index, let key = released.key else { return nil }
+            floor = index.floor(of: SignInFile.name)
+            return key
         }
         guard makes else { return nil }
         let made = SymmetricKey(size: .bits256)
@@ -126,10 +139,19 @@ enum MCPHubSignIns {
     /// Start Over in Secrets retired the folder, the sign-ins with it.
     static func forget() {
         key = nil
+        floor = 0
         refreshers = [:]
     }
 
-    private static func store(_ key: SymmetricKey) -> SignInStore { SignInStore(folder: folder, key: key) }
+    private static func store(_ key: SymmetricKey) -> SignInStore { SignInStore(folder: folder, key: key, floor: floor) }
+
+    /// The vault's floor for sign-ins.json, as the unlock that released the key read it.
+    private static var floor = 0
+
+    /// The key an unlock released, carried out of the store's queue.
+    private final class KeyBox: @unchecked Sendable {
+        var key: SymmetricKey?
+    }
 
     private static func refresher(_ record: SignInFile.Record, key: SymmetricKey) -> SignInRefresher? {
         if let made = refreshers[record.id] { return made }
@@ -220,6 +242,7 @@ enum MCPHubSignIns {
         let last = (peek()?.records.count ?? 0) <= 1
         let store = SecretsStore.shared
         let folder = folder
+        let floor = floor
         final class Taken: @unchecked Sendable {
             var removed: (record: SignInFile.Record, tokens: SignInFile.Tokens?)?
             var client: MCPHubOAuthRegistration.Client?
@@ -231,7 +254,7 @@ enum MCPHubSignIns {
         let held = key
         // Run off the main thread (here or in the vault's change), so a closure of no actor's.
         let remove: @Sendable (SymmetricKey) throws -> Void = { key in
-            let signIns = SignInStore(folder: folder, key: key)
+            let signIns = SignInStore(folder: folder, key: key, floor: floor)
             if case .success(let body) = signIns.read() {
                 taken.client = body.registered(key: key).first { $0.issuer == record.issuer && $0.clientID == record.client.clientID }
             }
@@ -307,7 +330,7 @@ enum MCPHubSignIns {
                     if signInsKey == nil, let text = try? vault.value(of: SecretVault.signInsName).utf8String(), let data = Data(base64Encoded: text) {
                         signInsKey = SymmetricKey(data: data)
                     }
-                    if let signInsKey, case .success(let body) = SignInStore(folder: folder, key: signInsKey).read() {
+                    if let signInsKey, case .success(let body) = SignInStore(folder: folder, key: signInsKey, floor: vault.index.floor(of: SignInFile.name)).read() {
                         let clients = body.registered(key: signInsKey)
                         taken.all = body.records.map { record in
                             (record, SignInFile.open(record, key: signInsKey),
