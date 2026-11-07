@@ -541,7 +541,7 @@ public enum SecretRun {
         guard isPipx ? unpinnedPipx(command) != nil : SkillReview.unpinnedPackage(command) else { return nil }
         let package = (isPipx ? unpinnedPipx(command) : command.dropFirst().first { !$0.hasPrefix("-") && $0 != "dlx" }) ?? ""
         let lead = command.prefix { $0 != package }.joined(separator: " ")
-        return "\(lead) runs the newest \(package) each time, so code you haven't seen gets the key. Pin a version to avoid this."
+        return "\(lead) runs the newest \(package) each time, so code you haven’t seen gets the key. Pin a version to avoid this."
     }
 
     /// `pipx run`'s package when it has no exact version: the value of `--spec` when given, else the first word after

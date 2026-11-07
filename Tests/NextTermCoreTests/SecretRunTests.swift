@@ -138,7 +138,7 @@ import Testing
             #expect(!SecretRun.warnings(argv: words).contains { $0.contains("runs the newest") }, "\(words)")
         }
         #expect(SecretRun.warnings(argv: ["npx", "-y", "@x/y"]).first
-                == "npx -y runs the newest @x/y each time, so code you haven't seen gets the key. Pin a version to avoid this.")
+                == "npx -y runs the newest @x/y each time, so code you haven’t seen gets the key. Pin a version to avoid this.")
         #expect(SecretRun.warnings(command: "cd x && npx -y pkg").contains { $0.hasPrefix("npx -y runs the newest pkg") })
     }
 

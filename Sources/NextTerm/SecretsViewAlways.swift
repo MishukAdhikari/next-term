@@ -22,7 +22,6 @@ extension SecretsView {
                 remove.identifier = NSUserInterfaceItemIdentifier(grant.id)
                 remove.setAccessibilityLabel("Remove \(Self.alwaysText(grant))")
                 let text = SecretApprovalPanel.label(Self.alwaysText(grant), size: 12)
-                text.preferredMaxLayoutWidth = 400
                 text.toolTip = grant.scope.path
                 let used = SecretApprovalPanel.label(Self.alwaysUsed(grant), size: 11)
                 used.textColor = .secondaryLabelColor
@@ -30,7 +29,12 @@ extension SecretsView {
                 lines.orientation = .vertical
                 lines.alignment = .leading
                 lines.spacing = 2
-                let row = NSStackView(views: [lines, NSView(), remove])
+                // The text takes the row up to Remove, which keeps to the right edge.
+                for view in [lines, text, used] { view.setContentHuggingPriority(.defaultLow, for: .horizontal) }
+                remove.setContentHuggingPriority(.required, for: .horizontal)
+                text.widthAnchor.constraint(equalTo: lines.widthAnchor).isActive = true
+                let row = NSStackView(views: [lines, remove])
+                row.distribution = .fill
                 row.spacing = 8
                 row.alignment = .top
                 row.edgeInsets = NSEdgeInsets(top: 0, left: 12, bottom: 0, right: 0)
@@ -41,6 +45,7 @@ extension SecretsView {
         let help = SecretApprovalPanel.label(Self.alwaysHelp, size: 11)
         help.textColor = .secondaryLabelColor
         alwaysBox.addArrangedSubview(help)
+        help.widthAnchor.constraint(equalTo: alwaysBox.widthAnchor).isActive = true
     }
 
     static let alwaysHelp = "Each asks for Touch ID once each time Next Term opens, then no more. Changing, renaming or deleting a key "
