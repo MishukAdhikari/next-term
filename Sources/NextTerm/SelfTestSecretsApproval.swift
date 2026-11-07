@@ -221,12 +221,31 @@ extension SelfTest {
               "secrets approval: after a relaunch, Always asks for Touch ID once and shows no panel",
               "\(presence.calls - beforeRelaunch) checks, panel \(relaunched.panel != nil)")
 
-        // 10. Removed in Settings (a Touch ID that raises the floor), then the old file put back: it answers nothing.
+        // 10. Settings › Secrets lists each grant under its key; Remove there (a Touch ID that raises the floor), then the old
+        // file put back: it answers nothing.
         let path = store.folder.path(SecretAlwaysFile.name)
         let old = FileManager.default.contents(atPath: path)
         let first_ = SecretAlways.grants.first { $0.summary == first.command }
-        if let id = first_?.id { try? await SecretAlways.remove(id) }
+        AppDelegate.shared.showSecrets(nil)
+        var removedInSettings = false
+        if let controller = SecretsWindowController.shared, let settings = controller.window {
+            let view = controller.secretsView
+            view.reloadAlways()
+            settings.layoutIfNeeded()
+            let listed = texts(view.alwaysBox)
+            check(listed.contains("Always: Codex \u{00B7} curl -sS https://api.example.com/v1/status \u{00B7} in app and its worktrees")
+                  && listed.contains("Always: Codex \u{00B7} docs \u{00B7} https://mcp.example.com/mcp \u{00B7} in app and its worktrees")
+                  && listed.contains("Last used") && listed.contains("EVERY_KEY"),
+                  "secrets approval: Settings \u{203A} Secrets lists each Always approval under its key, with when it was last used", listed)
+            view.alwaysBox.scrollToVisible(view.alwaysBox.bounds) // the list in sight, below the keys and settings
+            await screenshot(settings, suffix: "-approval-settings")
+            let remove = approvalButtons(view.alwaysBox).first { $0.identifier?.rawValue == first_?.id }
+            remove?.performClick(nil)
+            removedInSettings = await wait(10) { !SecretAlways.grants.contains { $0.id == first_?.id } }
+            settings.close()
+        }
         let raised = store.held?.floor(of: SecretAlwaysFile.name) ?? 0
+        check(removedInSettings, "secrets approval: Remove in Settings \u{203A} Secrets removes it")
         if let old { try? old.write(to: URL(fileURLWithPath: path)) }
         SecretAlways.resetForSelfTest()
         let rolledBack = command(curl)
@@ -257,6 +276,11 @@ extension SelfTest {
         #else
         note("secrets approval: skipped in a release build")
         #endif
+    }
+
+    /// Every button in `view`, deepest last.
+    static func approvalButtons(_ view: NSView) -> [NSButton] {
+        ((view as? NSButton).map { [$0] } ?? []) + view.subviews.flatMap(approvalButtons)
     }
 
     /// Next Term's facts about Codex in front of tab 2 of `project`.

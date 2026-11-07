@@ -67,6 +67,8 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
     /// Import From: A File… and MCP Configs….
     private(set) var importMenuButton = NSPopUpButton(frame: .zero, pullsDown: true)
     private let allowedBox = NSStackView()
+    /// The Always approvals, by key (SecretsViewAlways.swift).
+    let alwaysBox = NSStackView()
     private(set) var allowedRows: [(grant: SecretGrant, revoke: NSButton)] = []
     private(set) var revokeAllButton = NSButton(title: "Revoke All", target: nil, action: nil)
     private let pausedBox = NSStackView()
@@ -113,6 +115,7 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
         build()
         NotificationCenter.default.addObserver(self, selector: #selector(reload), name: SecretsStore.changed, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(reload), name: SecretRequests.changed, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(reload), name: SecretAlways.changed, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(refreshAges), name: SecretReminders.checked, object: nil)
         for name in [SecretsStore.locked, NSApplication.willHideNotification] {
             endObservers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
@@ -213,7 +216,7 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
         configureImportMenu()
         let valueButtons = NSStackView(views: [revealButton, copyButton, writeOnlyButton, NSView(), importMenuButton])
         valueButtons.spacing = 8
-        for box in [allowedBox, pausedBox, importsBox] {
+        for box in [allowedBox, alwaysBox, pausedBox, importsBox] {
             box.orientation = .vertical
             box.alignment = .leading
             box.spacing = 6
@@ -232,11 +235,11 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
         signInsRow.spacing = 8
         signInsRow.alignment = .firstBaseline
         let rows: [NSView] = [statusLabel, startOverButton, agentControlLabel, tableScroll, emptyLabel, writeOnlyLabel, keyButtons,
-                              valueButtons, actionLabel, signInsRow, newKeySettings, skillSetting, reminderSettings, allowedBox, importsBox, pausedBox,
-                              footer, docs]
+                              valueButtons, actionLabel, signInsRow, newKeySettings, skillSetting, reminderSettings, allowedBox, alwaysBox, importsBox,
+                              pausedBox, footer, docs]
         for row in rows { content.addArrangedSubview(row) }
         let wide: [NSView] = [statusLabel, agentControlLabel, tableScroll, emptyLabel, writeOnlyLabel, keyButtons, valueButtons,
-                              actionLabel, newKeySettings, skillSetting, reminderSettings, allowedBox, importsBox, pausedBox, footer]
+                              actionLabel, newKeySettings, skillSetting, reminderSettings, allowedBox, alwaysBox, importsBox, pausedBox, footer]
         for row in wide {
             row.widthAnchor.constraint(equalTo: content.widthAnchor, constant: -32).isActive = true
         }
@@ -327,6 +330,7 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
         importMenuButton.isEnabled = !broken
         refreshButtons()
         reloadAllowed()
+        reloadAlways()
         reloadImports()
         reloadPaused()
         reloadSignIns()
@@ -625,7 +629,7 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
         return "An agent in a tab that has closed"
     }
 
-    private static func heading(_ text: String) -> NSTextField {
+    static func heading(_ text: String) -> NSTextField {
         let label = NSTextField(labelWithString: text)
         label.font = .systemFont(ofSize: 13, weight: .semibold)
         return label
