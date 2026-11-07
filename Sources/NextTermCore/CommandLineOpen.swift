@@ -60,6 +60,10 @@ public enum CommandLineOpen {
       nxtrm secret run NAME -- command   a command or an MCP server with a stored key in its environment
       nxtrm secret help                  more, with MCP server examples
 
+    An agent session, an agent run over ACP in this tab and followed exactly:
+      nxtrm agent gemini                 also qwen, opencode, cursor, copilot, goose and others
+      nxtrm agent --help                 more
+
     Options:
       -n, --new-window   open in a new window
       -h, --help         show this help

@@ -109,12 +109,17 @@ final class MCPControlServer: @unchecked Sendable {
         // found before its line came is no MCP caller either: no MCP answer goes to it. Its connection closes as the call
         // ends, as every other one does.
         // `nxtrm secret import`'s header answers itself the same way; its keys come after, raw, never through this reader.
+        // An agent session's report or Allow always (AgentSessionSocket) answers itself the same way.
         let selfAnswering = request?.tool == SecretSocket.tool || request?.tool == SecretPipeSocket.tool
+            || request?.tool == AgentSessionSocket.tool
         let route = calls.route(call, read: request, selfAnswering: selfAnswering) {
-            SecretSocket.isWrapper(pid: peer)
+            SecretSocket.isWrapper(pid: peer) || AgentSessionSocket.isSession(pid: peer)
         }
         switch route {
         case .answerItself:
+            if request?.tool == AgentSessionSocket.tool {
+                return AgentSessionSocket.handle(fd: fd, arguments: request?.arguments ?? [:], peer: peer, auditToken: token)
+            }
             if request?.tool == SecretPipeSocket.tool {
                 return SecretPipeSocket.handle(fd: fd, arguments: request?.arguments ?? [:], peer: peer, auditToken: token)
             }
@@ -249,7 +254,7 @@ enum MCPControl {
     }
 
     private static var app: AppDelegate { AppDelegate.shared }
-    private static var allTabs: [TerminalTab] { app.controllers.flatMap(\.tabs) }
+    static var allTabs: [TerminalTab] { app.controllers.flatMap(\.tabs) }
 
     /// A tab's text an agent reads (title, command, screen, question, choices, served URL, selected text), with stored
     /// keys' exact values masked. Pattern masking is not added here: it would change what agents read today. The
@@ -441,6 +446,9 @@ enum MCPControl {
         }
         info.merge(questionInfo(tab)) { $1 }
         info.merge(restoredFields(tab)) { $1 } // what a restart did to it (U13)
+        if let session = MainActor.assumeIsolated({ AgentSessionSocket.reports[tab.id] }), tab.status.program == CommandClassifier.agentSessionProgram {
+            info["agent_session"] = session.agent // an agent session (plan 030): read_tab gives its last message
+        }
         if let code = tab.status.exitCode, tab.status.state == .failed { info["exit_code"] = Int(code) }
         if MCPRegistration.needsRestart(tab) { info["needs_restart"] = true } // its agent started before Next Term's tools reached it
         if tab === caller { info["you"] = true }
@@ -523,6 +531,7 @@ enum MCPControl {
             var info: [String: Any] = ["id": tab.id.uuidString.lowercased(), "state": state(tab)]
             info.merge(questionInfo(tab)) { $1 }
             info.merge(restoredFields(tab)) { $1 }
+            info.merge(MainActor.assumeIsolated { AgentSessionSocket.fields(tab) }) { $1 } // an agent session's own (plan 030)
             info.merge(screenFields(tab, lines: min(2000, max(1, lines)))) { $1 }
             reply(ok(info))
         }
@@ -540,6 +549,7 @@ enum MCPControl {
                 var info: [String: Any] = ["id": tab.id.uuidString.lowercased(), "state": state(tab), "timed_out": busy || starting]
                 info.merge(questionInfo(tab)) { $1 }
                 info.merge(restoredFields(tab)) { $1 }
+                info.merge(MainActor.assumeIsolated { AgentSessionSocket.fields(tab) }) { $1 } // stop_reason, last_message
                 info.merge(screenFields(tab, lines: 40)) { $1 }
                 reply(ok(info))
             }
@@ -623,6 +633,20 @@ enum MCPControl {
         case .failure(let refusal): return reply(fail(refusal.text))
         case .success(let given): title = given
         }
+        // An agent session (plan 030): `nxtrm agent ID` instead of a command, checked before any tab opens.
+        var sessionLine: String?
+        var sessionName: String?
+        if let name = arguments["agent_session"] as? String {
+            if let command = arguments["command"] as? String, !command.trimmingCharacters(in: .whitespaces).isEmpty {
+                return reply(fail("Give command or agent_session, not both."))
+            }
+            switch ACPSessionTabs.agent(named: name) {
+            case .failure(let refusal): return reply(fail(refusal.text))
+            case .success(let agent):
+                sessionLine = agent.sessionLine(launcher: ACPSessionTabs.launcher, prompt: arguments["prompt"] as? String)
+                sessionName = agent.name
+            }
+        }
         let tab: TerminalTab
         let controller: TerminalWindowController
         if let besideID = arguments["split_beside"] {
@@ -659,7 +683,7 @@ enum MCPControl {
         // An agent's worker: it opens no tabs of its own unless the user asks it to. A hand-off carries on the user's own
         // conversation (next-term-worktrees), so it is nobody's worker.
         if arguments["hand_off"] as? Bool != true { tab.openedBy = caller?.id }
-        if let title { tab.userTitle = title }
+        if let title = title ?? sessionName { tab.userTitle = title }
         MCPTabOpeners.record(tab, openedBy: caller)
         controller.refresh()
         let answer = {
@@ -668,9 +692,9 @@ enum MCPControl {
             if let note = arrived.note { info["note"] = note }
             reply(ok(info))
         }
-        guard let command = arguments["command"] as? String, !command.trimmingCharacters(in: .whitespaces).isEmpty else { return answer() }
-        guard !command.contains("\n") else { return reply(fail("The command must be one line.")) }
-        let line = MCPServer.commandLine(command, prompt: arguments["prompt"] as? String)
+        guard let command = sessionLine ?? arguments["command"] as? String, !command.trimmingCharacters(in: .whitespaces).isEmpty else { return answer() }
+        guard sessionLine != nil || !command.contains("\n") else { return reply(fail("The command must be one line.")) }
+        let line = sessionLine ?? MCPServer.commandLine(command, prompt: arguments["prompt"] as? String)
         // Type it once the shell is at its first prompt (its integration reports in), or after 3 s.
         whenReady(tab, until: TerminalTab.now + 3) {
             type(line, into: tab, submit: true)

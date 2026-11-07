@@ -2547,6 +2547,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // every shortcut set (MenuKeys).
         item(agents, "Go to Next Agent Needing You", #selector(goToNextAgentNeedingYou(_:)), "u", [.command, .shift], target: self)
         agents.addItem(.separator())
+        // An agent run over ACP in a tab, followed exactly (plan 030, AgentSessionSheet). No key of its own.
+        item(agents, "New Agent Session…", #selector(TerminalWindowController.newAgentSession(_:)), "")
         item(agents, "Resume Agent Session…", #selector(TerminalWindowController.resumeSession(_:)), "o", [.command, .option])
         item(agents, "Send to Agent", #selector(TerminalWindowController.sendToAgent(_:)), "k", [.command, .option])
         item(agents, "Suggest a Command…", #selector(CommandSuggestionController.suggestCommand(_:)), "k", [.command, .control],

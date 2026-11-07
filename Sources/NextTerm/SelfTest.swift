@@ -675,7 +675,7 @@ enum SelfTest {
               "a self-test's tabs read its own zsh config, never the user's", "test config \(ownConfig): " + zdotTab.screenTail(4).joined(separator: " | "))
         c.remove(zdotTab)
         #if DEBUG
-        // One part on the project set up so far (NEXTTERM_SELFTEST_ONLY=gitAndViewKeys, import, rollback, held, closeWorktree, worktrees, markdown, mcpWrite, parallel (with scrollback), skills, notifications, services, secrets, mcpHub, mcpHubSettings, mcpHubOAuth (only when asked), opencode, tasks, welcome, tabList, terminalPosition, completion, ghostText, gitRefresh, clicks, mouse, remote, mcp, newTerminal, cellSnap, projectColor, windowNav, windowColumn, hints or database), for its own failures
+        // One part on the project set up so far (NEXTTERM_SELFTEST_ONLY=gitAndViewKeys, import, rollback, held, closeWorktree, worktrees, markdown, mcpWrite, parallel (with scrollback), skills, notifications, services, secrets, agentSession, mcpHub, mcpHubSettings, mcpHubOAuth (only when asked), opencode, tasks, welcome, tabList, terminalPosition, completion, ghostText, gitRefresh, clicks, mouse, remote, mcp, newTerminal, cellSnap, projectColor, windowNav, windowColumn, hints or database), for its own failures
         // without the whole run's 25 minutes.
         switch ProcessInfo.processInfo.environment["NEXTTERM_SELFTEST_ONLY"] {
         case "gitAndViewKeys": return await gitAndViewKeyChecks(c, proj: proj)
@@ -701,6 +701,7 @@ enum SelfTest {
         case "services": return await serviceChecks(c)
         case "secrets": return await secretsChecks(c, proj: proj)
         case "opencode": return await opencodeScreenChecks(c) // its screen, answers and own notices
+        case "agentSession": return await agentSessionChecks(c) // nxtrm agent over ACP: its reports, its permission menu
         case "tasks": return await tasksChecks(c, proj: proj) // the Tasks menu, Add Task…, the todo file's bytes and add_task
         case "welcome": return await welcomePartChecks() // the Welcome window (SelfTestWelcomeSwitcher)
         case "tabList": return await tabListChecks(c, proj: proj) // the terminal's tabs in a list, its import and its smoothness
@@ -1084,6 +1085,9 @@ enum SelfTest {
         await cellSnapChecks(c)
         await notificationChecks(c)
         await opencodeScreenChecks(c)
+        #if DEBUG
+        await agentSessionChecks(c)
+        #endif
         notificationsMenuChecks()
         await tasksChecks(c, proj: proj)
         agentSpinnerChecks()

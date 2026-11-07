@@ -384,6 +384,19 @@ How it knows, most reliable first:
 3. **Other shells.** For bash and fish, or after `exec bash`, Next Term asks the kernel for the terminal's
    foreground process and working directory twice a second.
 
+### Agent sessions
+
+An agent that speaks the [Agent Client Protocol](https://agentclientprotocol.com) can also run as an agent
+session: Agents › New Agent Session…, or `nxtrm agent gemini` in any tab (also `qwen`, `opencode`, `cursor`,
+`copilot`, `goose` and others, when their program is on your PATH; Next Term installs none of them). The tab
+draws the session as text: your prompts, the agent's words, each tool call with its status, file changes with
+their line counts, the plan as a checklist, and how each turn ended (Done, Stopped, Refused, Hit the token
+limit). Next Term follows the agent's own turns instead of its screen, so the tab's mark is exact, and a
+permission request turns it amber with the agent's options as the notification's buttons. Allow always isn't
+offered from a session yet. An orchestrating agent starts one with `new_tab`'s `agent_session` and answers its
+requests with `answer_agent`. The agent's own terminal interface in a tab stays the default: a session is an
+addition, and Claude Code and Codex, which speak the protocol only through adapters, aren't offered yet.
+
 Interactive programs (`vim`, `ssh`, `less`, REPLs) are never reported as "done". Closing a tab or quitting
 asks first if a program is running or a job is suspended (Ctrl-Z) or in the background, and names it.
 
