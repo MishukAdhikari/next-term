@@ -1,6 +1,6 @@
 {
   "Android Studio 2025.3.4" : {
-    "changes_if_applied" : 15,
+    "changes_if_applied" : 13,
     "not_brought_over" : [
 
     ],
@@ -23,7 +23,7 @@
       }
     ],
     "shortcut_set" : {
-      "differs" : 13,
+      "differs" : 11,
       "id" : "preset",
       "lines" : [
 
@@ -38,7 +38,7 @@
     ]
   },
   "GoLand 2025.2" : {
-    "changes_if_applied" : 15,
+    "changes_if_applied" : 13,
     "not_brought_over" : [
 
     ],
@@ -61,7 +61,7 @@
       }
     ],
     "shortcut_set" : {
-      "differs" : 13,
+      "differs" : 11,
       "id" : "preset",
       "lines" : [
 
@@ -76,7 +76,7 @@
     ]
   },
   "PhpStorm 2026.1" : {
-    "changes_if_applied" : 18,
+    "changes_if_applied" : 16,
     "not_brought_over" : [
       {
         "item" : "Keymap “Escaped”",
@@ -131,7 +131,7 @@
       }
     ],
     "shortcut_set" : {
-      "differs" : 13,
+      "differs" : 11,
       "id" : "preset",
       "lines" : [
 
@@ -146,7 +146,7 @@
     ]
   },
   "RubyMine 2025.1" : {
-    "changes_if_applied" : 15,
+    "changes_if_applied" : 13,
     "not_brought_over" : [
       {
         "item" : "idea.config.path in idea.properties",
@@ -172,7 +172,7 @@
       }
     ],
     "shortcut_set" : {
-      "differs" : 13,
+      "differs" : 11,
       "id" : "preset",
       "lines" : [
 
@@ -187,7 +187,7 @@
     ]
   },
   "WebStorm 2024.2" : {
-    "changes_if_applied" : 15,
+    "changes_if_applied" : 13,
     "not_brought_over" : [
 
     ],
@@ -210,7 +210,7 @@
       }
     ],
     "shortcut_set" : {
-      "differs" : 13,
+      "differs" : 11,
       "id" : "preset",
       "lines" : [
 

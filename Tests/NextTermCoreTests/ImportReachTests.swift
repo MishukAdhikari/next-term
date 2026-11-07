@@ -111,12 +111,14 @@ import Testing
     @Test func theJetBrainsSetCommitsAndPushesOutsideTheTerminal() {
         let jetBrains = ImportShortcutsTests.current(.jetBrains)
         let commandK = KeyChord(key: "k", command: true), shiftCommandK = KeyChord(key: "k", command: true, shift: true)
-        #expect(jetBrains["gitCommit:"] == .some(commandK) && jetBrains["gitPush:"] == .some(shiftCommandK))
+        // Commit… keeps Next Term's ⇧⌘C: ⌘K is Go to Anything outside a terminal in every set (plan 034).
+        let shiftCommandC = KeyChord(key: "c", command: true, shift: true)
+        #expect(jetBrains["gitCommit:"] == .some(shiftCommandC) && jetBrains["gitPush:"] == .some(shiftCommandK))
         #expect(jetBrains["newTab:"] == .some(KeyChord(key: "t", command: true)))
         // ⇧⌘K is Push… alone (Delete Line moved to ⌘⌫); ⌘K is Clear Buffer's in a terminal and Commit…'s elsewhere.
         let onShiftK: [String] = jetBrains.filter { $0.value == shiftCommandK }.map(\.key)
         let onK: Set<String> = Set(jetBrains.filter { $0.value == commandK }.map(\.key))
-        let both: Set<String> = ["clearBuffer:", "gitCommit:"]
+        let both: Set<String> = ["clearBuffer:", "goToAnything:", "insertMarkdownLink:"]
         #expect(onShiftK == ["gitPush:"])
         #expect(onK == both)
         #expect(KeyBindings.canShareKey("clearBuffer:", "gitCommit:") && KeyBindings.canShareKey("newWindow:", "clearBuffer:"))
@@ -124,14 +126,13 @@ import Testing
         let titles = ["clearBuffer:": "Clear Buffer", "gitCommit:": "Commit…"]
         #expect(KeyBindings.sharingNote(commandK, ["gitCommit:", "clearBuffer:"], title: { titles[$0] ?? $0 })
                 == "⌘K is Clear Buffer while a terminal has the keyboard, Commit… everywhere else")
-        // Under Next Term's own set, a Commit… key on ⌘K shares it with Clear Buffer and Link instead of taking it away
-        // (with the menu's title for Link, as the app gives it).
+        // Under Next Term's own set, a Commit… key brought over on ⌘K would take it from Go to Anything, a command for
+        // everywhere too: the row comes unticked, and says so (with the menu's titles, as the app gives them).
         let row = ImportShortcuts.row("gitCommit:", commandK, source: "keymap: CheckinProject")
         let plan = ImportPlan(preset: .nextTerm, shortcuts: [row])
-            .settlingShortcuts(current: ImportShortcutsTests.current(), titles: ["insertMarkdownLink:": "Link"])
-        #expect(plan.shortcuts.first?.ticked == true)
-        #expect(plan.shortcuts.first?.note == "⌘K is Link while a Markdown file’s editor has the keyboard, Clear Buffer while a terminal has "
-                + "the keyboard, Commit… everywhere else")
+            .settlingShortcuts(current: ImportShortcutsTests.current(), titles: ["insertMarkdownLink:": "Link", "goToAnything:": "Go to Anything…"])
+        #expect(plan.shortcuts.first?.ticked == false)
+        #expect(plan.shortcuts.first?.note == "⌘K is Go to Anything…’s here; tick to move it (Go to Anything… is left without a shortcut)")
     }
 
     // MARK: Undo names them

@@ -150,6 +150,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     /// Help › Show Tips Again, as Settings › General's Reset Tips: tips seen or closed show again, each on its trigger.
     @objc func showTipsAgain(_ sender: Any?) { MainActor.assumeIsolated { HintCenter.shared.reset() } }
+    /// File › Go to Anything…: every tab and project by name, over the window in front.
+    @objc func goToAnything(_ sender: Any?) {
+        let front: TerminalWindowController? = (NSApp.keyWindow?.windowController as? TerminalWindowController)
+            ?? (NSApp.mainWindow?.windowController as? TerminalWindowController)
+        GoToAnythingPanel.toggle(from: front)
+    }
 
     /// View › Collapse Window Column, or Expand Window Column while it is folded: every window at once.
     @objc func toggleWindowColumnExpanded(_ sender: Any?) { windowColumnExpanded.toggle() }
@@ -2345,6 +2351,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         item(shell, "Reopen Closed Tab", #selector(TerminalWindowController.reopenClosedTab(_:)), "t", [.command, .shift])
         shell.addItem(.separator())
         item(shell, "Open Project…", #selector(openProjectPanel(_:)), "o", target: self)
+        // ⌘K wherever a terminal doesn't have the keyboard; a terminal keeps ⌘K for Clear (plan 034, GoToAnythingPanel).
+        item(shell, "Go to Anything…", #selector(goToAnything(_:)), "k", target: self)
         item(shell, "Go to File…", #selector(TerminalWindowController.goToFile(_:)), "p")
         // ⌘P keeps opening Go to File when a shortcut set moves it (JetBrains: ⇧⌘O), unless a command takes ⌘P.
         let goToFileAlias = item(shell, "Go to File…", #selector(TerminalWindowController.goToFile(_:)), "")
@@ -2539,6 +2547,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // every shortcut set (MenuKeys).
         item(agents, "Go to Next Agent Needing You", #selector(goToNextAgentNeedingYou(_:)), "u", [.command, .shift], target: self)
         agents.addItem(.separator())
+        // An agent run over ACP in a tab, followed exactly (plan 030, AgentSessionSheet). No key of its own.
+        item(agents, "New Agent Session…", #selector(TerminalWindowController.newAgentSession(_:)), "")
         item(agents, "Resume Agent Session…", #selector(TerminalWindowController.resumeSession(_:)), "o", [.command, .option])
         item(agents, "Send to Agent", #selector(TerminalWindowController.sendToAgent(_:)), "k", [.command, .option])
         item(agents, "Suggest a Command…", #selector(CommandSuggestionController.suggestCommand(_:)), "k", [.command, .control],

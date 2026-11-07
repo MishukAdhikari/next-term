@@ -116,3 +116,24 @@ import Testing
         #expect(WindowColumnRail.lightsEnd(zoomMaxX: 0) == 78)
     }
 }
+
+/// Dragging the pinned column's edge (plan 033, R12): it follows down to its narrowest, holds there, and folds to the
+/// rail at half its narrowest; back out in the same drag it unfolds.
+@Suite struct WindowColumnDragTests {
+    @Test func theDragFollowsThenHoldsThenFolds() {
+        #expect(WindowColumnWidth.dragged(400) == .unfolded(360))
+        #expect(WindowColumnWidth.dragged(200.7) == .unfolded(200))
+        #expect(WindowColumnWidth.dragged(140) == .unfolded(140))
+        #expect(WindowColumnWidth.dragged(100) == .unfolded(140))
+        #expect(WindowColumnWidth.dragged(71) == .unfolded(140))
+        #expect(WindowColumnWidth.dragged(70) == .folded)
+        #expect(WindowColumnWidth.dragged(0) == .folded)
+        #expect(WindowColumnWidth.dragged(-30) == .folded)
+    }
+
+    @Test func backOutInTheSameDragUnfolds() {
+        // Stateless: the width the drag is at now decides, whatever it passed through.
+        #expect(WindowColumnWidth.dragged(60) == .folded)
+        #expect(WindowColumnWidth.dragged(150) == .unfolded(150))
+    }
+}
