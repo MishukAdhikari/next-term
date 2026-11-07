@@ -208,7 +208,8 @@ public struct ACPSession: Sendable {
             return Permission.Option(id: optionID, name: Self.oneLine(name, limit: 60), kind: kind)
         }
         guard !options.isEmpty else { return nil }
-        let action = Self.oneLine(title.isEmpty ? "act" : title, limit: 140).replacingOccurrences(of: "?", with: "")
+        // Whole (R5, plan 035): the menu wraps it and the tab's question carries it; only a runaway input is cut.
+        let action = Self.oneLine(title.isEmpty ? "act" : title, limit: Self.wholeLimit).replacingOccurrences(of: "?", with: "")
         let permission = Permission(requestID: id, action: action, options: options, highlighted: 0, isQuestion: question)
         pending = permission
         items.append(.permission(action: action, answer: nil))
@@ -280,7 +281,7 @@ public struct ACPSession: Sendable {
     }
 
     private func merge(_ update: ACPWire.Value, into call: inout ToolCall) {
-        if let title = update["title"]?.string { call.title = Self.oneLine(title, limit: 200) }
+        if let title = update["title"]?.string { call.title = Self.oneLine(title, limit: Self.wholeLimit) }
         if let kind = update["kind"]?.string { call.kind = kind }
         if let status = update["status"]?.string.flatMap(ToolCall.Status.init(rawValue:)) { call.status = status }
         guard let content = update["content"]?.array else { return }
@@ -349,6 +350,10 @@ public struct ACPSession: Sendable {
     static func compact(_ count: Int) -> String {
         count >= 1000 ? String(format: count >= 10_000 ? "%.0fk" : "%.1fk", Double(count) / 1000) : String(count)
     }
+
+    /// The longest tool title or permission action kept: a whole command or path (R5, plan 035), cut only when it is
+    /// past anything a screen could show.
+    public static let wholeLimit = 16_384
 
     /// One line, control characters out, at most `limit` characters.
     public static func oneLine(_ text: String, limit: Int) -> String {

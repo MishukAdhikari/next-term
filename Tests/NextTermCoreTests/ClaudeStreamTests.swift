@@ -46,6 +46,8 @@ import Testing
         #expect(info.tools == ["Bash", "Edit", "Read"])
         #expect(info.mcpServers == [.init(name: "next-term", status: "connected")])
         #expect(info.commands == ["compact", "review"])
+        // The session's id, which a restore after an update resumes (plan 035 U7).
+        #expect(info.sessionID == "s-1")
         // Capabilities given as an object's keys read the same.
         let keyed = #"{"type":"system","subtype":"init","capabilities":{"interrupt_receipt_v1":true,"old":false}}"#
         guard case .initialized(let other) = decode(&stream, keyed) else { Issue.record("not init"); return }
@@ -323,5 +325,49 @@ import Testing
         _ = stream.userMessage("next")
         guard case .turnEnded(let next) = decode(&stream, #"{"type":"result","subtype":"success","is_error":false}"#) else { Issue.record("no end"); return }
         #expect(next.stopReason == "end_turn")
+    }
+
+    // MARK: Drift and versions (plan 035 U7)
+
+    /// Claude's stream fails as loudly as Codex's: a line of a type Next Term doesn't know is told apart from one it
+    /// knows and passes over, and a turn that hears only those for a minute is drift, by the same watch Codex's uses.
+    @Test func linesOfAnUnknownTypeAreToldAndATurnOfOnlyThemIsDrift() {
+        var stream = ClaudeStream()
+        #expect(decode(&stream, #"{"type":"assistant_v2","message":{}}"#) == .unknownLine("assistant_v2"))
+        #expect(decode(&stream, #"{"session_id":"s-1"}"#) == .unknownLine(""))
+        // Known types passed over, and words that aren't JSON, stay ignored.
+        #expect(decode(&stream, #"{"type":"keep_alive"}"#) == .ignore)
+        #expect(decode(&stream, #"{"type":"stream_event","event":{"type":"message_stop"}}"#) == .ignore)
+        #expect(decode(&stream, "Loading plugins...") == .ignore)
+
+        let start = Date(timeIntervalSinceReferenceDate: 1000)
+        var watch = ProtocolDriftWatch()
+        watch.turnStarted(at: start)
+        watch.observe(claude: .unknownLine("assistant_v2"), at: start.addingTimeInterval(1))
+        #expect(watch.unknownCount == 1)
+        #expect(!watch.isDrifting(at: start.addingTimeInterval(59)))
+        #expect(watch.isDrifting(at: start.addingTimeInterval(60)))
+        // A known line resets the quiet; the turn's end stops the watch.
+        watch.observe(claude: .ignore, at: start.addingTimeInterval(61))
+        #expect(!watch.isDrifting(at: start.addingTimeInterval(100)))
+        watch.observe(claude: .unknownLine("x"), at: start.addingTimeInterval(101))
+        watch.observe(claude: .turnEnded(.init(stopReason: "end_turn", failure: nil, usage: nil)), at: start.addingTimeInterval(102))
+        #expect(!watch.isDrifting(at: start.addingTimeInterval(500)))
+
+        // The note, with what didn't match and the version when they are known.
+        #expect(ClaudeStream.driftLead == "Claude Code's stream changed; run claude in a terminal tab for now.")
+        #expect(ClaudeStream.driftNote(version: nil, detail: nil) == ClaudeStream.driftLead)
+        #expect(ClaudeStream.driftNote(version: "2.1.4", detail: "no answer to initialize in 30 seconds")
+                == ClaudeStream.driftLead + " (no answer to initialize in 30 seconds; Claude Code 2.1.4)")
+        #expect(ClaudeStream.initializeTimeout == 30)
+        #expect(ProtocolDriftWatch.quiet == 60)
+    }
+
+    /// `claude --version`'s first line gives the version; anything else gives none.
+    @Test func theVersionLineGivesTheVersion() {
+        #expect(AgentSessionVersion.parse("2.1.4 (Claude Code)") == "2.1.4")
+        #expect(AgentSessionVersion.parse("claude 2.2.0-beta.1\nmore") == "2.2.0-beta.1")
+        #expect(AgentSessionVersion.parse("Usage: claude [options]") == nil)
+        #expect(AgentSessionVersion.parse("") == nil)
     }
 }

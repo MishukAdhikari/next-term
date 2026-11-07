@@ -79,6 +79,16 @@ public struct ACPAgent: Equatable, Sendable {
         return line
     }
 
+    /// Whether a session of this agent comes back after an update (plan 035 U7): Claude Code's by `claude --resume`,
+    /// Codex's by `thread/resume`. An ACP agent's session is a command like any other.
+    public var resumesSessions: Bool { protocolKind != .acp }
+
+    /// The line that resumes session `sessionID` of this agent in a restored tab: `launcher agent ID --resume SESSION`. The
+    /// id is one `AgentSessionVersion.isSessionID` takes, quoted all the same.
+    public func resumeLine(launcher: String, sessionID: String) -> String {
+        launcher + " agent " + id + " --resume " + ShellQuote.quote(sessionID)
+    }
+
     /// The ids, for a refusal that says which would run.
     public static func listed(_ agents: [ACPAgent]) -> String {
         agents.isEmpty ? "none of them is installed here" : agents.map(\.id).joined(separator: ", ")

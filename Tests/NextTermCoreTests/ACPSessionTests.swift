@@ -249,4 +249,64 @@ import Testing
         #expect(gemini.sessionLine(launcher: "nxtrm", prompt: "  ") == "nxtrm agent gemini")
         #expect(gemini.sessionLine(launcher: "'/A B/nxtrm'", prompt: "fix Bob's test") == "'/A B/nxtrm' agent gemini --prompt 'fix Bob'\\''s test'")
     }
+
+    /// The menu shows the tool's whole input (plan 035 R5): a 300-character command is kept whole in the request, wrapped
+    /// in the menu rather than cut, and read back whole as the tab's question, which answer_agent matches.
+    @Test func aLongCommandShowsWholeInTheMenuAndTheQuestion() {
+        let steps: [String] = (1...40).map { "step\($0)" }
+        let long = "Run `" + steps.joined(separator: " && ") + "`"
+        #expect(long.count >= 300)
+        var session = ACPSession()
+        session.prompted("build it")
+        session.apply(update: update(#"{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Would you like to see the plan? Here it is."}}"#))
+        let params = value(#"{"toolCall":{"toolCallId":"t1","title":""# + long + #"","kind":"execute"},"options":[{"optionId":"a","name":"Allow once","kind":"allow_once"},{"optionId":"r","name":"Reject","kind":"reject_once"}]}"#)
+        let permission = session.requested(permission: .string("p1"), params: params)
+        #expect(permission?.action == long)
+        let screen = ACPTranscript.lines(session, from: 0, width: 80).map(\.text)
+            + [ACPTranscript.inputLine(session, typed: "", width: 80).text]
+        #expect(screen.allSatisfy { $0.count <= 80 })
+        #expect(!screen.contains { $0.hasSuffix("\u{2026}") })
+        let asked = ACPTranscript.questionLead + long + "?"
+        #expect(AgentScreen.activity(screenLines: screen, mask: .empty) == .asking(asked))
+        let menu = AgentScreen.menu(screenLines: screen, mask: .empty)
+        #expect(menu?.question == asked)
+        #expect(menu?.choices == ["Allow once", "Reject"])
+        #expect(menu?.keys(toPick: 1) == ["down", "enter"])
+        #expect(AgentScreen.menu(asking: asked, screenLines: screen, shown: screen, mask: .empty)?.choices.count == 2)
+        // A tool call's long title is kept whole too; the transcript's line still fits the width.
+        session.apply(update: update(#"{"sessionUpdate":"tool_call","toolCallId":"t2","title":""# + long + #"","kind":"execute","status":"in_progress"}"#))
+        #expect(session.tools["t2"]?.title == long)
+    }
+
+    /// The app keeps the last version each agent ran: a new one gives one line, the same one none, the first none
+    /// (plan 035 U7). A session's resume line names the agent and the id, and only an id of plain characters is taken.
+    @Test func aChangedVersionGivesOneLineAndAResumeLineNamesTheSession() {
+        var stored: [String: String] = [:]
+        var seen = AgentSessionVersion.remember("2.1.4", for: "claude", in: stored)
+        #expect(seen.previous == nil)
+        stored = seen.stored
+        seen = AgentSessionVersion.remember("2.1.4", for: "claude", in: stored)
+        #expect(seen.previous == nil)
+        seen = AgentSessionVersion.remember("2.2.0", for: "claude", in: stored)
+        #expect(seen.previous == "2.1.4")
+        #expect(seen.stored == ["claude": "2.2.0"])
+        stored = seen.stored
+        #expect(AgentSessionVersion.remember("2.2.0", for: "claude", in: stored).previous == nil)
+        // Another agent's version is its own.
+        #expect(AgentSessionVersion.remember("0.154.0", for: "codex", in: stored).stored == ["claude": "2.2.0", "codex": "0.154.0"])
+        #expect(AgentSessionVersion.updatedLine(agent: "Claude Code", from: "2.1.4", to: "2.2.0") == "Claude Code updated 2.1.4 \u{2192} 2.2.0")
+
+        let claude = ACPAgent.named("claude")!
+        #expect(claude.resumeLine(launcher: "nxtrm", sessionID: "5e4d3c2b-1a09-4f8e-9d7c-6b5a4f3e2d1c")
+                == "nxtrm agent claude --resume 5e4d3c2b-1a09-4f8e-9d7c-6b5a4f3e2d1c")
+        #expect(ACPAgent.named("codex")!.resumeLine(launcher: "'/A B/nxtrm'", sessionID: "thr_1") == "'/A B/nxtrm' agent codex --resume thr_1")
+        #expect(AgentSessionVersion.isSessionID("thr_1.a-B"))
+        #expect(!AgentSessionVersion.isSessionID(""))
+        #expect(!AgentSessionVersion.isSessionID("a b"))
+        #expect(!AgentSessionVersion.isSessionID("x;rm -rf /"))
+        #expect(!AgentSessionVersion.isSessionID(String(repeating: "a", count: 129)))
+        // Only Claude Code and Codex sessions resume.
+        #expect(claude.resumesSessions && ACPAgent.named("codex")!.resumesSessions)
+        #expect(!ACPAgent.named("gemini")!.resumesSessions)
+    }
 }

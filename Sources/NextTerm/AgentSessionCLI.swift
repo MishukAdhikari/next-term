@@ -9,17 +9,19 @@ import NextTermCore
 /// answer. The agent uses its own tools; it is given Next Term's MCP server when it runs in a Next Term tab.
 enum AgentSessionCLI {
     static let usage = """
-        nxtrm agent NAME [--prompt TEXT]
+        nxtrm agent NAME [--prompt TEXT] [--resume ID]
           Runs an agent that speaks the Agent Client Protocol in this tab, as an agent session: its turns, tool calls,
           plan and permission requests drawn as text, and its state followed exactly by Next Term.
           NAME is one of: \(ACPAgent.known.map(\.id).joined(separator: ", ")).
           --prompt TEXT   the first prompt, sent at once.
+          --resume ID     Claude Code and Codex: go on with session ID (what a restore after an update runs).
         Type a prompt and Return to send it; ⌃C or Esc stops a turn; ⌃D on an empty line ends the session.
         """
 
     static func run(_ arguments: [String]) -> Never {
         var name: String?
         var prompt: String?
+        var resume: String?
         var rest = arguments[...]
         while let argument = rest.popFirst() {
             switch argument {
@@ -29,6 +31,11 @@ enum AgentSessionCLI {
             case "--prompt", "-p":
                 guard let text = rest.popFirst() else { fail("--prompt needs its text") }
                 prompt = text
+            case "--resume":
+                guard let id = rest.popFirst(), AgentSessionVersion.isSessionID(id) else {
+                    fail("--resume needs a session id: letters, digits, -, _ and . only")
+                }
+                resume = id
             default:
                 guard name == nil, !argument.hasPrefix("-") else { fail("unknown argument \(argument)") }
                 name = argument
@@ -47,8 +54,10 @@ enum AgentSessionCLI {
         guard let program = locate(agent.program, path: path) else {
             fail("\(agent.name) (\(agent.program)) isn't on the PATH. Installed here: \(ACPAgent.listed(installed)).")
         }
+        if resume != nil, !agent.resumesSessions { fail("\(agent.name) sessions don\u{2019}t resume; only Claude Code\u{2019}s and Codex\u{2019}s do") }
         guard isatty(STDIN_FILENO) == 1, isatty(STDOUT_FILENO) == 1 else { fail("nxtrm agent runs in a terminal tab") }
         let runner = AgentSessionRunner(agent: agent, program: program, firstPrompt: prompt)
+        runner.resumeID = resume
         runner.start()
         dispatchMain()
     }
@@ -100,6 +109,13 @@ final class AgentSessionRunner {
     let agent: ACPAgent
     let program: String
     var firstPrompt: String?
+    /// The session to go on with (`--resume`, plan 035 U7): Claude Code's session id, Codex's thread id.
+    var resumeID: String?
+    /// What the session reports to the app (plan 035 U7): the CLI's version, the model, and the session's id, which the
+    /// tab's saved state keeps so an update brings the session back.
+    var agentVersion: String?
+    var model: String?
+    var sessionID: String?
 
     private let process = Process()
     private let toAgent = Pipe()
@@ -313,24 +329,47 @@ final class AgentSessionRunner {
     func report() {
         var fields = "app=nxtrm-agent"
         if let permission = session.pending {
-            let words = Data(ACPTranscript.question(permission).utf8.prefix(1500)).base64EncodedString()
+            // Cut by characters, never inside one: words that don't decode would drop the whole report.
+            var asked = ACPTranscript.question(permission)
+            while asked.utf8.count > 1500 { asked.removeLast() }
+            let words = Data(asked.utf8).base64EncodedString()
             fields = "state=blocked:kind=permission:msg=" + words + ":" + fields
         } else if session.working {
             fields = "state=working:" + fields
         } else {
             fields = (session.lastStop == nil ? "state=idle:" : "state=done:") + fields
         }
-        guard fields != lastReport else { return }
-        lastReport = fields
+        // A new version, model or session id is reported too, though the tab's state stays the same.
+        let key = [fields, agentVersion ?? "", model ?? "", sessionID ?? ""].joined(separator: "\n")
+        guard key != lastReport else { return }
+        let stateChanged = !lastReport.hasPrefix(fields + "\n")
+        lastReport = key
         let osc = "\u{1b}]7501;" + fields + "\u{1b}\\"
         guard appSocket != nil else { return write(osc) }
         let state = session.pending != nil ? "attention" : (session.working ? "working" : (session.lastStop == nil ? "idle" : "done"))
-        if state == "done" { turnsEnded += 1 }
+        if state == "done", stateChanged { turnsEnded += 1 }
         var update: [String: Any] = ["op": "report", "agent": agent.name, "state": state, "turns": turnsEnded,
                                      "last_message": session.lastMessage]
         if let stop = session.lastStop { update["stop_reason"] = stop.rawValue }
-        callApp(update, timeout: 2) { [weak self] _ in self?.write(osc) }
+        update["agent_id"] = agent.id
+        update["folder"] = FileManager.default.currentDirectoryPath
+        if let agentVersion { update["agent_version"] = agentVersion }
+        if let model { update["model"] = model }
+        if let sessionID { update["session_id"] = sessionID }
+        callApp(update, timeout: 2) { [weak self] answer in
+            guard let self else { return }
+            if stateChanged { self.write(osc) }
+            // The app keeps the last version each agent ran: one line when this session's differs.
+            if let old = answer?["previous_version"] as? String, let new = self.agentVersion, !self.toldVersion {
+                self.toldVersion = true
+                self.session.note(AgentSessionVersion.updatedLine(agent: self.agent.name, from: ACPSession.oneLine(old, limit: 40), to: new))
+                self.draw()
+            }
+        }
     }
+
+    /// The version change was told: once a session.
+    private var toldVersion = false
 
     func fatal(_ message: String) {
         session.note(message)

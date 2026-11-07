@@ -8,7 +8,9 @@ import NextTermCore
 /// for it.
 ///
 /// - `report`: the session's state after each change: working, attention, done, the last turn's stop reason and the
-///   agent's last message, which read_tab, wait_for_tab and list_tabs give exactly (`reports`).
+///   agent's last message, which read_tab, wait_for_tab and list_tabs give exactly (`reports`); and the CLI's version, the
+///   model and the session's id (plan 035 U7). The tab's saved state keeps the id, so an update brings the session back;
+///   the app keeps the last version each agent ran, and answers with the one before when this session's differs.
 /// - `confirm_always`: an Allow always picked in the session's menu, by the user's keys or an agent's answer_agent
 ///   (the tab can't tell them apart), is asked of the user on the Mac first (R16). The session answers the agent only
 ///   once this says approved.
@@ -28,6 +30,14 @@ enum AgentSessionSocket {
         var lastMessage: String
         /// Turns ended so far: wait_for_tab tells a new end from the last one by it.
         var turns: Int
+        /// The agent's id in the catalog (claude, codex, gemini…).
+        var agentID: String? = nil
+        /// The CLI's version and the model, when the session knows them.
+        var version: String? = nil
+        var model: String? = nil
+        /// The session's id (Claude Code's session, Codex's thread) and the folder it runs in: what a restore resumes.
+        var sessionID: String? = nil
+        var folder: String? = nil
     }
 
     /// Each session tab's last report, by tab id. Main thread.
@@ -68,8 +78,8 @@ enum AgentSessionSocket {
                 }
                 switch arguments["op"] as? String {
                 case "report":
-                    record(arguments, for: tab)
                     reply = ["ok": true]
+                    if let previous = record(arguments, for: tab) { reply["previous_version"] = previous }
                     done.signal()
                 case "confirm_always":
                     confirm(arguments, tab: tab) { approved in
@@ -92,21 +102,47 @@ enum AgentSessionSocket {
         answer(fd, reply)
     }
 
+    /// The report kept for the tab; the version this agent ran before, when this one differs.
     @MainActor
-    private static func record(_ arguments: [String: Any], for tab: TerminalTab) {
+    @discardableResult
+    private static func record(_ arguments: [String: Any], for tab: TerminalTab) -> String? {
         var message = arguments["last_message"] as? String ?? ""
         if message.utf8.count > messageLimit { message = String(message.prefix(messageLimit)) }
-        let report = Report(agent: ACPSession.oneLine(arguments["agent"] as? String ?? "", limit: 60),
+        var report = Report(agent: ACPSession.oneLine(arguments["agent"] as? String ?? "", limit: 60),
                             state: arguments["state"] as? String ?? "idle",
                             stopReason: arguments["stop_reason"] as? String,
                             lastMessage: message, turns: arguments["turns"] as? Int ?? 0)
+        let agentID = (arguments["agent_id"] as? String).flatMap { ACPAgent.named($0)?.id }
+        report.agentID = agentID
+        report.version = (arguments["agent_version"] as? String).map { ACPSession.oneLine($0, limit: 64) }.flatMap { $0.isEmpty ? nil : $0 }
+        report.model = (arguments["model"] as? String).map { ACPSession.oneLine($0, limit: 120) }.flatMap { $0.isEmpty ? nil : $0 }
+        report.sessionID = (arguments["session_id"] as? String).flatMap { AgentSessionVersion.isSessionID($0) ? $0 : nil }
+        report.folder = (arguments["folder"] as? String).flatMap { $0.hasPrefix("/") ? $0 : nil }
         reports[tab.id] = report
+        guard let agentID, let version = report.version else { return nil }
+        let stored = versionStore.dictionary(forKey: versionsKey) as? [String: String] ?? [:]
+        let seen = AgentSessionVersion.remember(version, for: agentID, in: stored)
+        if seen.stored != stored { versionStore.set(seen.stored, forKey: versionsKey) }
+        return seen.previous
+    }
+
+    /// The last version each agent's sessions ran, by agent id, in the app's own defaults.
+    nonisolated(unsafe) static var versionStore = UserDefaults.standard
+    static let versionsKey = "AgentSessionVersions"
+
+    /// The agent session a tab runs, for its saved state (plan 035 U7): Claude Code's or Codex's, with the id its session
+    /// reported. Nil for any other tab.
+    @MainActor
+    static func record(of tab: TerminalTab) -> SessionSnapshot.AgentSessionRecord? {
+        guard tab.status.running, tab.status.program == CommandClassifier.agentSessionProgram, let report = reports[tab.id],
+              let agentID = report.agentID, let id = report.sessionID, ACPAgent.named(agentID)?.resumesSessions == true else { return nil }
+        return SessionSnapshot.AgentSessionRecord(agent: agentID, sessionID: id, folder: report.folder)
     }
 
     @MainActor
     private static func confirm(_ arguments: [String: Any], tab: TerminalTab, then: @escaping (Bool) -> Void) {
         let agent = ACPSession.oneLine(arguments["agent"] as? String ?? "The agent", limit: 60)
-        let action = ACPSession.oneLine(arguments["action"] as? String ?? "act", limit: 200)
+        let action = ACPSession.oneLine(arguments["action"] as? String ?? "act", limit: 2000) // the whole command (R5)
         let option = ACPSession.oneLine(arguments["option"] as? String ?? "Allow always", limit: 60)
         let details = "\(agent) asks to \(action). \u{201C}\(option)\u{201D} lets it do this again in this session without asking. "
             + "It was picked in the session\u{2019}s tab, by you or by an agent that steers it."
@@ -163,9 +199,23 @@ enum AgentSessionSocket {
     @MainActor
     static func fields(_ tab: TerminalTab) -> [String: Any] {
         guard let report = reports[tab.id], tab.status.running, tab.status.program == CommandClassifier.agentSessionProgram else { return [:] }
-        var info: [String: Any] = ["agent_session": report.agent]
+        var info = summary(report)
         if let reason = report.stopReason { info["stop_reason"] = reason }
         if !report.lastMessage.isEmpty { info["last_message"] = SecretMask.current.mask(report.lastMessage) }
+        return info
+    }
+
+    /// What list_tabs adds for a session tab: its agent, and the CLI's version and the model when known (plan 035 U7).
+    @MainActor
+    static func listFields(_ tab: TerminalTab) -> [String: Any] {
+        guard let report = reports[tab.id], tab.status.program == CommandClassifier.agentSessionProgram else { return [:] }
+        return summary(report)
+    }
+
+    private static func summary(_ report: Report) -> [String: Any] {
+        var info: [String: Any] = ["agent_session": report.agent]
+        if let version = report.version { info["agent_version"] = version }
+        if let model = report.model { info["model"] = model }
         return info
     }
 }

@@ -18,6 +18,8 @@ public struct ClaudeStream: Sendable {
         public let mcpServers: [MCPServerStatus]
         /// The slash commands, for the input line's "/".
         public let commands: [String]
+        /// The session's id, which `claude --resume` takes (a restore after an update resumes it, plan 035 U7).
+        public var sessionID: String? = nil
     }
 
     public struct MCPServerStatus: Equatable, Sendable {
@@ -104,7 +106,29 @@ public struct ClaudeStream: Sendable {
         case unknownControl(requestID: String, subtype: String)
         /// Claude isn't signed in: say `signInLine`.
         case authFailure
+        /// A JSON object of a type Next Term doesn't know (its type, or "" with none): counted by the drift watch
+        /// (`ProtocolDriftWatch.observe(claude:at:)`), as Codex's unknown notifications are.
+        case unknownLine(String)
         case ignore
+    }
+
+    /// The line types Claude Code writes today that aren't shown: known, so they aren't counted as drift.
+    static let knownQuiet: Set<String> = [
+        "keep_alive", "rate_limit_event", "tool_progress", "auth_status", "streamlined_text", "streamlined_tool_use_summary",
+    ]
+
+    /// The start of the note that ends a session whose stream isn't what Next Term reads (plan 035 U7, as R9's for Codex).
+    public static let driftLead = "Claude Code's stream changed; run claude in a terminal tab for now."
+
+    /// How long the `initialize` control request may go unanswered before the session ends with the drift note.
+    public static let initializeTimeout: TimeInterval = 30
+
+    /// The drift note, with what didn't match and the version when they are known.
+    public static func driftNote(version: String?, detail: String?) -> String {
+        let named: String? = version.map { "Claude Code " + $0 }
+        let parts = [detail, named].compactMap { $0 }.filter { !$0.isEmpty }
+        guard !parts.isEmpty else { return driftLead }
+        return driftLead + " (" + parts.joined(separator: "; ") + ")"
     }
 
     /// What a session says when Claude Code isn't signed in (R2). Next Term never offers a login of its own.
@@ -138,8 +162,8 @@ public struct ClaudeStream: Sendable {
     /// One line of Claude's stdout. Anything that isn't a JSON object of a known type is `ignore`.
     public mutating func decode(_ line: some DataProtocol) -> Event {
         guard let parsed = try? JSONSerialization.jsonObject(with: Data(line), options: [.fragmentsAllowed]),
-              let value = ACPWire.Value(serialized: parsed), case .object = value,
-              let type = value["type"]?.string else { return .ignore }
+              let value = ACPWire.Value(serialized: parsed), case .object = value else { return .ignore }
+        guard let type = value["type"]?.string else { return .unknownLine("") }
         switch type {
         case "system":
             return value["subtype"]?.string == "init" ? .initialized(Self.initInfo(value)) : .ignore
@@ -162,7 +186,7 @@ public struct ClaudeStream: Sendable {
         case "control_cancel_request":
             return value["request_id"]?.string.map(Event.cancelRequest) ?? .ignore
         default:
-            return .ignore
+            return Self.knownQuiet.contains(type) ? .ignore : .unknownLine(type)
         }
     }
 
@@ -183,7 +207,7 @@ public struct ClaudeStream: Sendable {
         let tools = (value["tools"]?.array ?? []).compactMap(\.string)
         let commands = (value["slash_commands"]?.array ?? []).compactMap(\.string)
         return Init(capabilities: capabilities(in: value), model: value["model"]?.string, tools: tools,
-                    mcpServers: servers, commands: commands)
+                    mcpServers: servers, commands: commands, sessionID: value["session_id"]?.string)
     }
 
     private mutating func streamEvent(_ value: ACPWire.Value) -> Event {

@@ -63,6 +63,8 @@ public struct CodexAppServer: Sendable {
         case unknownNotification(String)
         /// One of Next Term's requests (other than a turn's start) was answered with an error.
         case requestFailed(method: String, message: String)
+        /// `thread/resume` isn't offered, or failed: the session starts a fresh thread, with a note (plan 035 U7).
+        case resumeFailed(String)
         case ignore
     }
 
@@ -98,8 +100,10 @@ public struct CodexAppServer: Sendable {
 
     /// The server's user agent, from `initialize`.
     public private(set) var userAgent: String?
-    /// The thread `thread/start` gave.
+    /// The thread `thread/start` or `thread/resume` gave.
     public private(set) var threadID: String?
+    /// The model the thread's start or resume named.
+    public private(set) var model: String?
     /// The turn running now, if any.
     public private(set) var turnID: String?
 
@@ -135,6 +139,19 @@ public struct CodexAppServer: Sendable {
     /// `thread/start` in `cwd`, asking before acting (`approvalPolicy: on-request`, so the menu always applies) and,
     /// in a Next Term tab, with Next Term's MCP server under its own name (R11), which replaces a user entry of that name.
     public mutating func threadStartRequest(cwd: String, mcpServer: ACPWire.StdioServer?) -> (id: Int, line: Data) {
+        request("thread/start", .object(Self.threadParams(cwd: cwd, mcpServer: mcpServer)))
+    }
+
+    /// `thread/resume` of thread `threadID` (a session restored after an update, plan 035 U7), with what `thread/start`
+    /// sends, its past turns left out of the answer: the transcript starts from the resume.
+    public mutating func threadResumeRequest(threadID: String, cwd: String, mcpServer: ACPWire.StdioServer?) -> (id: Int, line: Data) {
+        var params = Self.threadParams(cwd: cwd, mcpServer: mcpServer)
+        params["threadId"] = .string(threadID)
+        params["excludeTurns"] = .bool(true)
+        return request("thread/resume", .object(params))
+    }
+
+    private static func threadParams(cwd: String, mcpServer: ACPWire.StdioServer?) -> [String: ACPWire.Value] {
         var params: [String: ACPWire.Value] = ["cwd": .string(cwd), "approvalPolicy": .string("on-request")]
         if let mcpServer {
             let entry = ACPWire.Value.object([
@@ -143,7 +160,7 @@ public struct CodexAppServer: Sendable {
             ])
             params["config"] = .object(["mcp_servers": .object([mcpServer.name: entry])])
         }
-        return request("thread/start", .object(params))
+        return params
     }
 
     /// `turn/start`: the user's text as one input. A new turn starts, not stopped.
@@ -232,6 +249,12 @@ public struct CodexAppServer: Sendable {
                 return drift("thread/start gave no thread id")
             }
             threadID = id
+            model = result["model"]?.string
+            return .threadStarted(id)
+        case "thread/resume":
+            guard let id = result["thread"]?["id"]?.string, !id.isEmpty else { return .resumeFailed("it gave no thread id") }
+            threadID = id
+            model = result["model"]?.string
             return .threadStarted(id)
         case "turn/start":
             // turn/started names the turn too, so an answer without it isn't drift on its own.
@@ -247,6 +270,10 @@ public struct CodexAppServer: Sendable {
     }
 
     private mutating func failed(_ method: String, code: Int?, message: String) -> Event {
+        if method == "thread/resume" {
+            if code == -32601 { return .resumeFailed("it isn't offered") }
+            return Self.isAuthentication(message) ? .authFailure : .resumeFailed(message)
+        }
         if code == -32601 {
             return Self.required.contains(method) ? drift(method + " is not offered") : .ignore
         }
@@ -561,48 +588,6 @@ public struct CodexAppServer: Sendable {
 
     // MARK: Drift over time
 
-    /// Tells a turn that hears only notifications Next Term doesn't know (R9): once 60 seconds pass with unknown ones
-    /// and none it knows, the protocol has changed under the session. A slow turn that hears nothing isn't drift. The
-    /// clock is the caller's, so the watch stays pure.
-    public struct DriftWatch: Equatable, Sendable {
-        /// How long only unknown notifications may arrive.
-        public static let quiet: TimeInterval = 60
-
-        /// Unknown notifications in this turn.
-        public private(set) var unknownCount = 0
-        private var lastKnown: Date?
-        /// An unknown notification came since the last known event.
-        private var unknownSinceKnown = false
-
-        public init() {}
-
-        /// A turn starts: count from nothing.
-        public mutating func turnStarted(at now: Date) {
-            unknownCount = 0
-            unknownSinceKnown = false
-            lastKnown = now
-        }
-
-        /// An event decoded at `now`. A turn's end, a sign-in failure or drift stops the watch.
-        public mutating func observe(_ event: Event, at now: Date) {
-            guard lastKnown != nil else { return }
-            switch event {
-            case .unknownNotification:
-                unknownCount += 1
-                unknownSinceKnown = true
-            case .turnEnded, .authFailure, .drift:
-                lastKnown = nil
-                unknownSinceKnown = false
-            default:
-                lastKnown = now
-                unknownSinceKnown = false
-            }
-        }
-
-        /// Whether the turn has heard only unknown notifications for `quiet` seconds.
-        public func isDrifting(at now: Date) -> Bool {
-            guard let lastKnown, unknownSinceKnown else { return false }
-            return now.timeIntervalSince(lastKnown) >= Self.quiet
-        }
-    }
+    /// Tells a turn that hears only notifications it doesn't know (`ProtocolDriftWatch`, shared with Claude Code's).
+    public typealias DriftWatch = ProtocolDriftWatch
 }

@@ -21,6 +21,9 @@ final class ClaudeDriver: AgentSessionDriver {
     /// The open AskUserQuestion call, and the answers picked so far, one per question in order (R6).
     private var question: ClaudeStream.Question?
     private var answers: [String] = []
+    /// A turn that hears only lines of types Next Term doesn't know for a minute is drift (plan 035 U7), as for Codex.
+    private var watch = ProtocolDriftWatch()
+    private var timer: DispatchSourceTimer?
 
     init(runner: AgentSessionRunner) {
         self.runner = runner
@@ -29,6 +32,8 @@ final class ClaudeDriver: AgentSessionDriver {
     var arguments: [String] {
         var words = ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
                      "--include-partial-messages", "--permission-prompt-tool", "stdio"]
+        // A session restored after an update goes on (plan 035 U7).
+        if let id = runner.resumeID { words += ["--resume", id] }
         // Beside the user's own servers, which load as usual (R11).
         if let server = runner.nextTermMCPServer, let config = Self.mcpConfig(server) {
             words += ["--mcp-config", config]
@@ -50,9 +55,46 @@ final class ClaudeDriver: AgentSessionDriver {
         return String(decoding: data, as: UTF8.self)
     }
 
-    // MARK: Folder trust (R8)
+    // MARK: The version, then folder trust (R8)
+
+    /// How long `claude --version` may take.
+    static let versionTimeout: TimeInterval = 3
 
     func prepare(then go: @escaping () -> Void) {
+        let program = runner.program
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let version = Self.version(of: program)
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.runner.agentVersion = version
+                self.trust(then: go)
+            }
+        }
+    }
+
+    /// The first line of `claude --version`, read once before the spawn, its version alone; nil when it says none in
+    /// `versionTimeout`. Nothing else is run or read.
+    static func version(of program: String) -> String? {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: program)
+        process.arguments = ["--version"]
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = FileHandle.nullDevice
+        process.standardInput = FileHandle.nullDevice
+        let done = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in done.signal() }
+        do { try process.run() } catch { return nil }
+        if done.wait(timeout: .now() + versionTimeout) == .timedOut {
+            process.terminate()
+            return nil
+        }
+        // A version line is short: what is read past 4 KB is never wanted.
+        let data: Data? = try? output.fileHandleForReading.read(upToCount: 4096)
+        return data.flatMap { AgentSessionVersion.parse(String(decoding: $0, as: UTF8.self)) }
+    }
+
+    private func trust(then go: @escaping () -> Void) {
         let folder = AgentSessionTrust.canonical(FileManager.default.currentDirectoryPath)
         guard runner.appSocket != nil else {
             // Outside a Next Term tab nothing can ask on the Mac: only a folder trusted there before runs.
@@ -81,15 +123,38 @@ final class ClaudeDriver: AgentSessionDriver {
         let (id, line) = stream.initializeRequest()
         initializeID = id
         runner.sendToAgent(line)
+        // No answer to initialize, or a turn of only unknown lines: Claude Code's stream changed (plan 035 U7).
+        DispatchQueue.main.asyncAfter(deadline: .now() + ClaudeStream.initializeTimeout) { [weak self] in
+            guard let self, self.initializeID == id else { return }
+            self.drift("no answer to initialize in \(Int(ClaudeStream.initializeTimeout)) seconds")
+        }
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(deadline: .now() + 5, repeating: 5)
+        timer.setEventHandler { [weak self] in self?.checkDrift() }
+        timer.resume()
+        self.timer = timer
+    }
+
+    private func checkDrift() {
+        guard runner.session.working, watch.isDrifting(at: Date()) else { return }
+        drift("only lines of unknown types for \(Int(ProtocolDriftWatch.quiet)) seconds")
+    }
+
+    private func drift(_ detail: String) {
+        runner.fatal(ClaudeStream.driftNote(version: runner.agentVersion, detail: detail))
     }
 
     func received(line: Data) {
         let event = stream.decode(line)
-        if event == .ignore {
-            // Not stream-json: Claude's own words (an error before it speaks JSON), kept for the line that says why it quit.
-            if line.first(where: { $0 != 0x20 && $0 != 0x09 }) != UInt8(ascii: "{") { runner.keepWords(line) }
+        if event == .ignore, line.first(where: { $0 != 0x20 && $0 != 0x09 }) != UInt8(ascii: "{") {
+            // Not stream-json: Claude's own words (an error before it speaks JSON), kept for the line that says why it
+            // quit, and nothing the stream knows.
+            runner.keepWords(line)
+            if !line.isEmpty { watch.observe(claude: .unknownLine(""), at: Date()) }
             return
         }
+        watch.observe(claude: event, at: Date())
+        if event == .ignore { return }
         handle(event)
     }
 
@@ -97,6 +162,9 @@ final class ClaudeDriver: AgentSessionDriver {
         switch event {
         case .initialized(let info):
             model = info.model
+            runner.model = info.model ?? runner.model
+            if let id = info.sessionID, AgentSessionVersion.isSessionID(id) { runner.sessionID = id }
+            if ready { runner.report() }
             if !info.commands.isEmpty {
                 let commands: [ACPWire.Value] = info.commands.map { .object(["name": .string($0)]) }
                 let update: [String: ACPWire.Value] = [
@@ -107,7 +175,7 @@ final class ClaudeDriver: AgentSessionDriver {
         case .controlResponse(let id, _, let error):
             if id == initializeID {
                 initializeID = nil
-                if let error { return runner.fatal("Claude Code didn\u{2019}t open its control channel: \(error).") }
+                if let error { return drift("initialize answered with an error: " + ACPSession.oneLine(error, limit: 200)) }
                 becomeReady()
             } else if id == interruptID {
                 interruptID = nil
@@ -166,7 +234,8 @@ final class ClaudeDriver: AgentSessionDriver {
             runner.draw()
         case .authFailure:
             runner.fatal(ClaudeStream.signInLine + ".")
-        case .ignore:
+        case .unknownLine, .ignore:
+            // Counted by the drift watch.
             break
         }
     }
@@ -174,8 +243,10 @@ final class ClaudeDriver: AgentSessionDriver {
     private func becomeReady() {
         guard !ready else { return }
         ready = true
+        let version = runner.agentVersion.map { " " + $0 } ?? ""
         let named = model.map { " (\($0))" } ?? ""
-        runner.session.note("Claude Code\(named) is ready.")
+        let resumed = runner.resumeID.map { ", going on with session " + $0 } ?? ""
+        runner.session.note("Claude Code\(version)\(named) is ready\(resumed).")
         runner.report()
         runner.draw()
         if let first = runner.firstPrompt {
@@ -213,6 +284,7 @@ final class ClaudeDriver: AgentSessionDriver {
     func send(_ text: String) {
         guard ready, !runner.session.working else { return }
         runner.session.prompted(text)
+        watch.turnStarted(at: Date())
         runner.report()
         runner.draw()
         runner.sendToAgent(stream.userMessage(text))
@@ -245,6 +317,7 @@ final class ClaudeDriver: AgentSessionDriver {
     }
 
     func quitting() {
+        timer?.cancel()
         if runner.session.pending != nil { denyOpen(message: "The user closed the session in Next Term.") }
     }
 }
@@ -266,6 +339,8 @@ final class CodexDriver: AgentSessionDriver {
     private var stopWanted = false
     /// The open approval the menu shows.
     private var permission: CodexAppServer.Permission?
+    /// `thread/resume` was asked (plan 035 U7): its failure starts a fresh thread instead.
+    private var resuming = false
 
     init(runner: AgentSessionRunner) {
         self.runner = runner
@@ -311,16 +386,37 @@ final class CodexDriver: AgentSessionDriver {
 
     private func handle(_ event: CodexAppServer.Event) {
         switch event {
-        case .initialized:
+        case .initialized(let userAgent):
+            runner.agentVersion = AgentSessionVersion.fromUserAgent(userAgent)
             runner.sendToAgent(CodexAppServer.initializedNotification())
             // A missing login is told before the first turn; the server answers in order, so before thread/start.
             runner.sendToAgent(codex.accountReadRequest().line)
             let cwd = FileManager.default.currentDirectoryPath
+            if let id = runner.resumeID {
+                // A session restored after an update goes on with its thread (plan 035 U7).
+                resuming = true
+                runner.sendToAgent(codex.threadResumeRequest(threadID: id, cwd: cwd, mcpServer: runner.nextTermMCPServer).line)
+            } else {
+                runner.sendToAgent(codex.threadStartRequest(cwd: cwd, mcpServer: runner.nextTermMCPServer).line)
+            }
+        case .resumeFailed(let why):
+            // Codex can't go on with the thread: a fresh one, said so.
+            resuming = false
+            let id = runner.resumeID ?? ""
+            runner.session.note("Codex couldn\u{2019}t go on with thread \(id) (" + ACPSession.oneLine(why, limit: 200) + "); this is a new thread.")
+            runner.draw()
+            let cwd = FileManager.default.currentDirectoryPath
             runner.sendToAgent(codex.threadStartRequest(cwd: cwd, mcpServer: runner.nextTermMCPServer).line)
-        case .threadStarted:
+        case .threadStarted(let thread):
             guard !ready else { return }
             ready = true
-            runner.session.note("Codex is ready.")
+            if AgentSessionVersion.isSessionID(thread) { runner.sessionID = thread }
+            runner.model = codex.model
+            let version = runner.agentVersion.map { " " + $0 } ?? ""
+            let named = codex.model.map { " (\($0))" } ?? ""
+            let resumed = resuming ? ", going on with thread " + thread : ""
+            resuming = false
+            runner.session.note("Codex\(version)\(named) is ready\(resumed).")
             runner.report()
             runner.draw()
             if let first = runner.firstPrompt {

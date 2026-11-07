@@ -42,6 +42,9 @@ public enum ACPTranscript {
         (permission.isQuestion ? "" : questionLead) + permission.action + "?"
     }
 
+    /// The lead of the menu question's later rows, when it wraps.
+    public static let questionIndent = "  "
+
     /// The hint under the menu, which tells AgentScreen the choices are a question's.
     public static let menuHint = "Enter to select \u{00B7} \u{2191}\u{2193} to move \u{00B7} Esc to stop"
 
@@ -114,7 +117,8 @@ public enum ACPTranscript {
     /// The open permission request as AgentScreen reads an agent's menu.
     static func menu(_ permission: ACPSession.Permission?, width: Int) -> [Line] {
         guard let permission else { return [] }
-        var lines = [Line(fit(question(permission), width), .bold)]
+        // The question whole, wrapped (R5, plan 035): its later rows are indented, which tells AgentScreen where it starts.
+        var lines = wrap(question(permission), width: width, first: "", rest: questionIndent).map { Line($0, .bold) }
         for (index, option) in permission.options.enumerated() {
             let cursor = index == permission.highlighted ? "\u{276F} " : "  "
             lines.append(Line(fit(cursor + "\(index + 1). " + option.name, width), index == permission.highlighted ? .cyan : .plain))
@@ -139,7 +143,8 @@ public enum ACPTranscript {
         var lead = first
         for paragraph in text.components(separatedBy: "\n") {
             let clean = String(paragraph.unicodeScalars.map { $0 == "\t" ? " " : ($0.value < 0x20 || (0x7F...0x9F).contains($0.value) ? " " : Character($0)) })
-            let room = max(width - lead.count, 1)
+            // The room is the current lead's: the first line's and the rest's can differ (the menu's question).
+            var room: Int { max(width - lead.count, 1) }
             var line = ""
             for word in clean.split(separator: " ", omittingEmptySubsequences: false) {
                 var word = String(word)
@@ -149,9 +154,10 @@ public enum ACPTranscript {
                         lead = rest
                         line = ""
                     }
-                    out.append(lead + String(word.prefix(room)))
+                    let cut = room
+                    out.append(lead + String(word.prefix(cut)))
                     lead = rest
-                    word = String(word.dropFirst(room))
+                    word = String(word.dropFirst(cut))
                 }
                 if line.isEmpty { line = word }
                 else if line.count + 1 + word.count <= room { line += " " + word }

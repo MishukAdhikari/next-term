@@ -39,10 +39,12 @@ enum RestorePlanning {
         let checkFolder = { (path: String) -> FolderCheck in checks[path] ?? .notChecked }
         let hosts = hostNames()
         let lookup = SessionLookup.live(home: agents).freeing(freed)
+        // How a tab's shell starts `nxtrm` in this build: an agent session resumes by it (plan 035 U7).
+        let launcher = ACPSessionTabs.launcher
         let world = RestorePlanner.World(home: home, checkFolder: checkFolder, resumeFacts: { evidence, folder, projects in
             ResumeFacts.read(for: evidence, projects: projects, tabFolder: folder,
                              sessionAvailable: lookup.available(evidence, home: agents), home: agents)
-        }, sessions: lookup, hostNames: hosts)
+        }, sessions: lookup, hostNames: hosts, agentLauncher: launcher)
         let result = Result()
         let done = DispatchSemaphore(value: 0)
         let job = Job(snapshot: snapshot, kind: kind, safeMode: safeMode, quitConsent: quitConsent, world: world)
@@ -54,7 +56,7 @@ enum RestorePlanning {
         // Out of time: the same plan with nothing more read. Folders keep what was found of them.
         let empty = SessionLookup(read: { _, _, _ in [] }, newest: { _, _, _, _ in nil })
         let blind = RestorePlanner.World(home: home, checkFolder: checkFolder, resumeFacts: { _, _, _ in ResumeFacts() },
-                                         sessions: empty, hostNames: hosts)
+                                         sessions: empty, hostNames: hosts, agentLauncher: launcher)
         let plans = RestorePlanner.plan(snapshot, kind: kind, safeMode: safeMode, quitConsent: quitConsent, world: blind)
         return Planned(plans: plans, folders: checks)
     }

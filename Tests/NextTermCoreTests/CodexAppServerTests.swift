@@ -505,4 +505,44 @@ import Testing
         let read = object(codex.accountReadRequest().line)
         #expect(read["params"]?["refreshToken"]?.bool != true)
     }
+
+    // MARK: Resume and version (plan 035 U7)
+
+    /// A restored session resumes its thread with `thread/resume`, asking before acting and with Next Term's MCP server as
+    /// `thread/start` does, and its answer gives the thread and model as a start's does. A server without it, or one that
+    /// fails it, is told apart, so the session starts a fresh thread with a note.
+    @Test func aThreadResumesByItsIDOrIsToldItCannot() {
+        var codex = CodexAppServer()
+        _ = codex.initializeRequest(version: "1.0")
+        _ = decode(&codex, #"{"id":1,"result":{"userAgent":"codex_cli_rs/0.154.0 (Mac OS 15.5.0; arm64) Next Term"}}"#)
+        let server = ACPWire.StdioServer(name: "next-term-test", command: "/x/NextTerm", arguments: ["--cli", "mcp"])
+        let resume = codex.threadResumeRequest(threadID: "thr_9", cwd: "/project", mcpServer: server)
+        let sent = object(resume.line)
+        #expect(sent["method"]?.string == "thread/resume")
+        #expect(sent["params"]?["threadId"]?.string == "thr_9")
+        #expect(sent["params"]?["cwd"]?.string == "/project")
+        #expect(sent["params"]?["approvalPolicy"]?.string == "on-request")
+        #expect(sent["params"]?["config"]?["mcp_servers"]?["next-term-test"]?["command"]?.string == "/x/NextTerm")
+        let answer = #"{"id":\#(resume.id),"result":{"thread":{"id":"thr_9","turns":[]},"model":"gpt-test","cwd":"/project","approvalPolicy":"on-request"}}"#
+        #expect(decode(&codex, answer) == .threadStarted("thr_9"))
+        #expect(codex.threadID == "thr_9")
+        #expect(codex.model == "gpt-test")
+
+        // Not offered, or failed: told, never drift, so a fresh thread can start.
+        for error in [#"{"code":-32601,"message":"method not found"}"#, #"{"code":-32000,"message":"no rollout for thr_9"}"#] {
+            var other = CodexAppServer()
+            let request = other.threadResumeRequest(threadID: "thr_9", cwd: "/project", mcpServer: nil)
+            let failed = decode(&other, #"{"id":\#(request.id),"error":\#(error)}"#)
+            guard case .resumeFailed(let message) = failed else { Issue.record("not told: \(failed)"); continue }
+            #expect(!message.isEmpty)
+        }
+
+        // A thread's start keeps its model too.
+        let fresh = started()
+        #expect(fresh.model == "test-model")
+        // The version in the user agent, for the session's opening line.
+        #expect(AgentSessionVersion.fromUserAgent("codex_cli_rs/0.154.0 (Mac OS 15.5.0; arm64) Next Term") == "0.154.0")
+        #expect(AgentSessionVersion.fromUserAgent("codex_test/0.0.1") == "0.0.1")
+        #expect(AgentSessionVersion.fromUserAgent("codex") == nil)
+    }
 }

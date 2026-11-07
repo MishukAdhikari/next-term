@@ -250,6 +250,9 @@ extension SessionSnapshot {
         /// Its shell was the system /bin/zsh: only there does a typed line go back on the prompt (R9).
         /// Not known reads as false.
         public var systemZsh = false
+        /// The agent session (`nxtrm agent NAME`) it ran, with the id the session reported: a restore after an update
+        /// resumes it (plan 035 U7).
+        public var agentSession: AgentSessionRecord?
 
         public init(id: UUID, folder: String? = nil, userTitle: String? = nil, remote: RemoteTabRecord? = nil, command: Command? = nil,
                     stateBefore: PriorState = .unknown, interrupted: Bool = false, lastSelected: Date = .distantPast,
@@ -273,6 +276,21 @@ extension SessionSnapshot {
             guard let remote else { return nil }
             if keepIsUnknown { return .unknown }
             return Keep(rawValue: remote.keep.rawValue) ?? .unknown
+        }
+    }
+
+    /// An agent session a tab ran (`nxtrm agent NAME`, plan 035 U7): the agent's id in the catalog, the id its session
+    /// reported (Claude Code's session, Codex's thread), and the folder it ran in, where it resumes.
+    public struct AgentSessionRecord: Equatable, Sendable, Codable {
+        /// `ACPAgent.id`: claude or codex.
+        public var agent: String
+        public var sessionID: String
+        public var folder: String?
+
+        public init(agent: String, sessionID: String, folder: String?) {
+            self.agent = agent
+            self.sessionID = sessionID
+            self.folder = folder
         }
     }
 
@@ -321,6 +339,14 @@ extension SessionSnapshot {
         public func programOnly(of agent: Agent) -> Command {
             var kept = self
             if line != nil { kept.line = agent.program }
+            return kept
+        }
+
+        /// An agent session's line (`nxtrm agent NAME --prompt …`) with its prompt left out: `nxtrm agent NAME`. Nothing
+        /// reads it back but the note; the resume comes from the session's record.
+        public func sessionOnly(of record: AgentSessionRecord) -> Command {
+            var kept = self
+            if line != nil { kept.line = "nxtrm agent " + record.agent }
             return kept
         }
 
@@ -1382,7 +1408,7 @@ extension SessionSnapshot.Split: Codable {
 extension SessionSnapshot.Pane: Codable {
     private enum Keys: String, CodingKey {
         case id, folder, userTitle, remote, command, stateBefore, interrupted, lastSelected, agent, scrollback, pending, note, reminted
-        case systemZsh
+        case systemZsh, agentSession
     }
 
     public init(from decoder: Decoder) throws {
@@ -1408,6 +1434,7 @@ extension SessionSnapshot.Pane: Codable {
         note = c.optional(SessionSnapshot.Note.self, .note)
         reminted = c.flag(.reminted)
         systemZsh = c.flag(.systemZsh)
+        agentSession = c.optional(SessionSnapshot.AgentSessionRecord.self, .agentSession)
         if let budget = decoder.snapshotBudget, !budget.takePane() { throw SessionSnapshot.DecodeError.tooLarge }
     }
 
@@ -1424,9 +1451,14 @@ extension SessionSnapshot.Pane: Codable {
             }
         }
         // An agent's typed line holds its prompt words: the file keeps its program alone (`Command.programOnly`).
-        let written: SessionSnapshot.Command? = agent.flatMap { (evidence: SessionSnapshot.Evidence) -> SessionSnapshot.Command? in
+        let program: SessionSnapshot.Command? = agent.flatMap { (evidence: SessionSnapshot.Evidence) -> SessionSnapshot.Command? in
             command?.programOnly(of: evidence.agent)
-        } ?? command
+        }
+        // An agent session's line holds its first prompt too.
+        let session: SessionSnapshot.Command? = agentSession.flatMap { (record: SessionSnapshot.AgentSessionRecord) -> SessionSnapshot.Command? in
+            command?.sessionOnly(of: record)
+        }
+        let written: SessionSnapshot.Command? = program ?? session ?? command
         try c.encodeIfPresent(written, forKey: .command)
         try c.encode(stateBefore.rawValue, forKey: .stateBefore)
         try c.encode(interrupted, forKey: .interrupted)
@@ -1437,6 +1469,7 @@ extension SessionSnapshot.Pane: Codable {
         try c.encodeIfPresent(note, forKey: .note)
         if reminted { try c.encode(true, forKey: .reminted) }
         try c.encode(systemZsh, forKey: .systemZsh)
+        try c.encodeIfPresent(agentSession, forKey: .agentSession)
     }
 }
 
