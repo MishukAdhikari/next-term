@@ -36,6 +36,12 @@ public enum ACPTranscript {
 
     /// The words the menu's question starts with: AgentScreen's question pattern takes "Do you want to …?".
     public static let questionLead = "Do you want to allow: "
+    /// The menu's question line, and the words the tab reports for it: a permission's starts with `questionLead`, a
+    /// question the agent asks is its own words.
+    public static func question(_ permission: ACPSession.Permission) -> String {
+        (permission.isQuestion ? "" : questionLead) + permission.action + "?"
+    }
+
     /// The hint under the menu, which tells AgentScreen the choices are a question's.
     public static let menuHint = "Enter to select \u{00B7} \u{2191}\u{2193} to move \u{00B7} Esc to stop"
 
@@ -108,7 +114,7 @@ public enum ACPTranscript {
     /// The open permission request as AgentScreen reads an agent's menu.
     static func menu(_ permission: ACPSession.Permission?, width: Int) -> [Line] {
         guard let permission else { return [] }
-        var lines = [Line(fit(questionLead + permission.action + "?", width), .bold)]
+        var lines = [Line(fit(question(permission), width), .bold)]
         for (index, option) in permission.options.enumerated() {
             let cursor = index == permission.highlighted ? "\u{276F} " : "  "
             lines.append(Line(fit(cursor + "\(index + 1). " + option.name, width), index == permission.highlighted ? .cyan : .plain))

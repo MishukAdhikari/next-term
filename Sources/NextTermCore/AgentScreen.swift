@@ -100,6 +100,24 @@ public enum AgentScreen {
             // Masked before the cut: a stored key across it would keep its start, with no mark left to match.
             return (row, String(mask.mask(asked).prefix(200)))
         }
+        return sessionQuestion(in: lines, from: start, mask: mask)
+    }
+
+    /// A question an agent session (`nxtrm agent`) draws in its own words, with no fixed lead (Claude's AskUserQuestion,
+    /// plan 035): known by the session's own hint under the menu, the question being the line ending in "?" just over
+    /// option 1.
+    private static func sessionQuestion(in lines: [String], from start: Int, mask: SecretMask) -> (row: Int, question: String)? {
+        guard let hint = lines[start...].lastIndex(where: { $0.contains(ACPTranscript.menuHint) }) else { return nil }
+        var row = hint - 1
+        while row > start {
+            let line = inner(lines[row])
+            if let (number, _) = numberedLabel(splitCursor(line).rest), number == 1 {
+                let asked = inner(lines[row - 1])
+                guard asked.hasSuffix("?") else { return nil }
+                return (row - 1, String(mask.mask(asked).prefix(200)))
+            }
+            row -= 1
+        }
         return nil
     }
 

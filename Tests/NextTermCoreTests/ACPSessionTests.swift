@@ -170,8 +170,58 @@ import Testing
         #expect(found.map(\.id) == ["gemini", "cursor"])
         #expect(ACPAgent.named("cursor-agent")?.arguments == ["acp"])
         #expect(ACPAgent.named("Gemini")?.arguments == ["--acp"])
-        #expect(ACPAgent.named("claude") == nil)
+        #expect(ACPAgent.named("claude")?.protocolKind == .claudeStream)
         #expect(ACPAgent.listed([]) == "none of them is installed here")
+    }
+
+    /// Claude Code and Codex join the catalog with their own protocols (plan 035 U1); the ACP agents stay as they were.
+    @Test func claudeAndCodexAreInTheCatalogWithTheirOwnProtocols() {
+        let present: Set<String> = ["/usr/local/bin/gemini", "/opt/bin/codex", "/opt/bin/claude"]
+        let found = ACPAgent.installed(path: "/usr/local/bin:/opt/bin") { present.contains($0) }
+        #expect(found.map(\.id) == ["claude", "codex", "gemini"])
+        let claude = ACPAgent.named("claude")
+        #expect(claude?.name == "Claude Code")
+        #expect(claude?.program == "claude")
+        #expect(claude?.protocolKind == .claudeStream)
+        #expect(claude?.arguments == [])
+        #expect(claude?.terminalNote?.contains("/usage") == true)
+        let codex = ACPAgent.named("Codex")
+        #expect(codex?.name == "Codex")
+        #expect(codex?.program == "codex")
+        #expect(codex?.protocolKind == .codexAppServer)
+        #expect(codex?.terminalNote?.isEmpty == false)
+        // The ACP agents keep their ids, order, arguments and protocol, and have no note.
+        let acp = ACPAgent.known.filter { $0.protocolKind == .acp }
+        #expect(acp.map(\.id) == ["gemini", "qwen", "opencode", "cursor", "copilot", "goose", "kimi", "auggie", "kiro", "cline",
+                                   "junie", "droid", "devin", "vibe"])
+        #expect(acp.allSatisfy { $0.terminalNote == nil })
+        #expect(ACPAgent.named("droid")?.arguments == ["exec", "--output-format", "acp-daemon"])
+        #expect(ACPAgent(id: "x", name: "X", program: "x", arguments: []).protocolKind == .acp)
+    }
+
+    /// A question (Claude's AskUserQuestion) is a permission flagged as one: its menu has no "Do you want to allow" lead,
+    /// in the transcript or in the words the tab reports, and still reads as an agent's question (plan 035 KTD8).
+    @Test func aQuestionDropsTheAllowLeadAndStillReadsAsAQuestion() {
+        var session = ACPSession()
+        session.prompted("set up the database")
+        let params = value(#"{"toolCall":{"toolCallId":"toolu_q","title":"Which database should we use?"},"options":[{"optionId":"Postgres","name":"Postgres","kind":"allow_once"},{"optionId":"SQLite","name":"SQLite","kind":"allow_once"}]}"#)
+        let asked = session.requested(permission: .string("c1"), params: params, question: true)
+        #expect(asked?.isQuestion == true)
+        #expect(asked.map(ACPTranscript.question) == "Which database should we use?")
+        let screen = ACPTranscript.lines(session, from: 0, width: 100).map(\.text)
+            + [ACPTranscript.inputLine(session, typed: "", width: 100).text]
+        #expect(screen.contains("Which database should we use?"))
+        #expect(!screen.contains { $0.contains(ACPTranscript.questionLead) })
+        #expect(AgentScreen.activity(screenLines: screen, mask: .empty) == .asking("Which database should we use?"))
+        let menu = AgentScreen.menu(screenLines: screen, mask: .empty)
+        #expect(menu?.choices == ["Postgres", "SQLite"])
+        #expect(menu?.keys(toPick: 1) == ["down", "enter"])
+        // A permission keeps its lead.
+        var other = ACPSession()
+        other.prompted("clean up")
+        let permission = other.requested(permission: .string("p1"), params: value(self.permission))
+        #expect(permission?.isQuestion == false)
+        #expect(permission.map(ACPTranscript.question) == "Do you want to allow: Run `rm -rf build`?")
     }
 
     @Test func anAgentSessionIsAnAgentTabThatIsNoOtherAgent() {

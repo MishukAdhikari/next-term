@@ -1,28 +1,48 @@
 import Foundation
 
-/// The agents Next Term knows that speak ACP themselves, with the command that starts each in ACP mode (research
-/// Part A §3.1, the ACP Registry's commands on 2026-10-26). `nxtrm agent NAME` runs one; an agent's program has to be
-/// on the PATH, and Next Term installs nothing (R2, R4). Claude Code and Codex speak ACP only through adapters run with
-/// npx, which wait for the consent sheet of a later slice. Plan 030.
+/// The agents Next Term runs as sessions: those that speak ACP themselves, with the command that starts each in ACP mode
+/// (research Part A §3.1, the ACP Registry's commands on 2026-10-26), and Claude Code and Codex, each over its own
+/// protocol (plan 035). `nxtrm agent NAME` runs one; an agent's program has to be on the PATH, and Next Term installs
+/// nothing (R2, R4). Plan 030.
 public struct ACPAgent: Equatable, Sendable {
+    /// How Next Term talks to the agent.
+    public enum ProtocolKind: String, Equatable, Sendable {
+        /// The Agent Client Protocol, with `arguments` for its ACP mode.
+        case acp
+        /// Claude Code's `claude -p` with stream-json in and out and its control channel (`ClaudeStream`).
+        case claudeStream
+        /// Codex's `codex app-server`, JSON-RPC over stdio.
+        case codexAppServer
+    }
+
     /// What `nxtrm agent` and `new_tab` take: gemini, qwen, opencode, ...
     public let id: String
     /// What the tab and the menu call it.
     public let name: String
     /// The program looked for on the PATH.
     public let program: String
-    /// Its arguments for ACP mode.
+    /// Its arguments for ACP mode. Empty for Claude Code and Codex, whose drivers build their own.
     public let arguments: [String]
+    public let protocolKind: ProtocolKind
+    /// One line for the new session sheet on what still needs the agent's own terminal tab (R10), or nil.
+    public let terminalNote: String?
 
-    public init(id: String, name: String, program: String, arguments: [String]) {
+    public init(id: String, name: String, program: String, arguments: [String], protocolKind: ProtocolKind = .acp,
+                terminalNote: String? = nil) {
         self.id = id
         self.name = name
         self.program = program
         self.arguments = arguments
+        self.protocolKind = protocolKind
+        self.terminalNote = terminalNote
     }
 
-    /// Native ACP agents, in the order the menu lists them.
+    /// The agents, in the order the menu lists them: Claude Code and Codex, then the native ACP agents.
     public static let known: [ACPAgent] = [
+        ACPAgent(id: "claude", name: "Claude Code", program: "claude", arguments: [], protocolKind: .claudeStream,
+                 terminalNote: "Claude Code\u{2019}s /usage, /rewind and /login, and its plugin and MCP panels, work in a terminal tab running claude."),
+        ACPAgent(id: "codex", name: "Codex", program: "codex", arguments: [], protocolKind: .codexAppServer,
+                 terminalNote: "Codex\u{2019}s own screens, such as /status and /approvals, work in a terminal tab running codex."),
         ACPAgent(id: "gemini", name: "Gemini CLI", program: "gemini", arguments: ["--acp"]),
         ACPAgent(id: "qwen", name: "Qwen Code", program: "qwen", arguments: ["--acp"]),
         ACPAgent(id: "opencode", name: "OpenCode", program: "opencode", arguments: ["acp"]),

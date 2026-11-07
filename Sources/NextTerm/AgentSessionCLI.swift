@@ -359,7 +359,7 @@ final class AgentSessionRunner {
     private func report() {
         var fields = "app=nxtrm-agent"
         if let permission = session.pending {
-            let words = Data((ACPTranscript.questionLead + permission.action + "?").utf8.prefix(1500)).base64EncodedString()
+            let words = Data(ACPTranscript.question(permission).utf8.prefix(1500)).base64EncodedString()
             fields = "state=blocked:kind=permission:msg=" + words + ":" + fields
         } else if session.working {
             fields = "state=working:" + fields
