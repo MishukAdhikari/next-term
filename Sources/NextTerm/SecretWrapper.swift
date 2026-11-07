@@ -60,9 +60,10 @@ enum SecretWrapper {
             end(.peerCheck, names: invocation.names, program: program)
         }
         let environment = ProcessInfo.processInfo.environment
-        let request = SecretRun.Request(names: invocation.names, map: invocation.map, argv: invocation.argv, executable: executable,
+        var request = SecretRun.Request(names: invocation.names, map: invocation.map, argv: invocation.argv, executable: executable,
                                         directory: FileManager.default.currentDirectoryPath, argvFull: argvFull,
                                         warn: SecretRun.warnings(environment: environment), ticket: invocation.ticket)
+        if isTicket { request.path = environment["PATH"] }
         guard let line = request.line(), send(line, on: fd) else {
             close(fd)
             end(.noSocket, names: invocation.names, program: program)

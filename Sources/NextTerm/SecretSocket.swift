@@ -323,8 +323,10 @@ enum SecretSocket {
     }
 
     /// Whether `agent` is the agent in front of `tab`, the one its panel names: the leader of the tab's foreground process
-    /// group, or below that leader with no agent of another program between them or as the leader (an alias, a script or
-    /// npx starting it). An agent another one started (a codex its Bash runs) is not.
+    /// group, or below that leader with no agent between them or as the leader (an alias, a script or npx starting it).
+    /// An agent another one started (a codex its Bash runs) is not, nor one by the same program's name started below the
+    /// agent in front (a `claude` its Bash runs, or a program named so): only a launcher of the same program directly
+    /// above it (Codex's node starting its own binary) may be.
     static func isFrontAgent(_ agent: Agent, in tab: TerminalTab) -> Bool {
         guard tab.remote == nil else { return false }
         let leader: pid_t = tcgetpgrp(tab.view.process.childfd)
@@ -333,10 +335,13 @@ enum SecretSocket {
         // itself. Not just any member of the group: an agent another one starts shares its group, but not its parent.
         if getpgid(agent.pid) == leader, parent(of: agent.pid) == tab.view.process.shellPid { return true }
         var current: pid_t = agent.pid
+        let launcher: pid_t? = parent(of: agent.pid)
         for _ in 0...parentsWalked {
             if current == leader { return true }
             guard let up = parent(of: current), up > 1 else { return false }
-            if let between = Self.agent(at: up), between.program != agent.program { return false }
+            if let between = Self.agent(at: up) {
+                guard between.program == agent.program, up == launcher else { return false }
+            }
             current = up
         }
         return false

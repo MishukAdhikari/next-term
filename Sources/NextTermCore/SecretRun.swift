@@ -176,9 +176,12 @@ public enum SecretRun {
         /// The variables that can redirect a command, by name, with a SHA-256 of each value.
         public var warn: [String: String]
         public var ticket: String?
+        /// A ticket's wrapper's own `PATH`: the one its tab's shell runs the ticket's command with, so an Always grant
+        /// binds the executable the command resolves to there.
+        public var path: String?
 
         enum CodingKeys: String, CodingKey {
-            case names, map, argv, executable, directory, warn, ticket
+            case names, map, argv, executable, directory, warn, ticket, path
             case argvFull = "argv_full"
         }
 
