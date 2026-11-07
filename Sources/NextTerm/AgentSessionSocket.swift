@@ -12,6 +12,10 @@ import NextTermCore
 /// - `confirm_always`: an Allow always picked in the session's menu, by the user's keys or an agent's answer_agent
 ///   (the tab can't tell them apart), is asked of the user on the Mac first (R16). The session answers the agent only
 ///   once this says approved.
+/// - `trust_folder`: a Claude Code session asks before it starts in a folder (plan 035 R8), since `claude -p` runs a
+///   folder's hooks and MCP servers with no dialog of its own. A folder already in the app's list is trusted at once;
+///   another is asked on the Mac, by click only, in the window `confirm_always` uses, and the app records a yes itself
+///   (AgentSessionTrust), so nothing typed into the tab can answer it or grant it.
 enum AgentSessionSocket {
     static let tool = "agent_session"
 
@@ -72,6 +76,11 @@ enum AgentSessionSocket {
                         reply = ["approved": approved]
                         done.signal()
                     }
+                case "trust_folder":
+                    trust(arguments, tab: tab) { trusted in
+                        reply = ["trusted": trusted]
+                        done.signal()
+                    }
                 default:
                     reply = ["error": "unknown op"]
                     done.signal()
@@ -105,6 +114,31 @@ enum AgentSessionSocket {
                                                agentWords: nil, details: details, approveTitle: option),
                                          approve: { window in
                                              window.finish()
+                                             then(true)
+                                         },
+                                         decline: { _ in then(false) })
+        window.present()
+    }
+
+    /// The folders Claude Code sessions may start in, in the app's own defaults: only the app writes them.
+    nonisolated(unsafe) static var trustStore = UserDefaults.standard
+
+    @MainActor
+    private static func trust(_ arguments: [String: Any], tab: TerminalTab, then: @escaping (Bool) -> Void) {
+        guard let given = arguments["folder"] as? String, given.hasPrefix("/") else { return then(false) }
+        let folder = AgentSessionTrust.canonical(given)
+        guard !AgentSessionTrust.isTrusted(folder, in: AgentSessionTrust.list(in: trustStore)) else { return then(true) }
+        let agent = ACPSession.oneLine(arguments["agent"] as? String ?? "Claude Code", limit: 60)
+        let details = AgentSessionTrust.question(folder: folder) + " Its CLAUDE.md and plugins load too. "
+            + "Only this folder is trusted, not the folders in it; the session in the tab starts once you trust it."
+        let request = AgentApprovalWindow.Request(title: "Trust this folder for \(agent)?",
+                                                  requester: "The session in \u{201C}\(tab.title)\u{201D}",
+                                                  agentWords: nil, details: details, approveTitle: "Trust Folder")
+        let window = AgentApprovalWindow(request,
+                                         approve: { window in
+                                             window.finish()
+                                             let list = AgentSessionTrust.list(in: trustStore)
+                                             trustStore.set(AgentSessionTrust.adding(folder, to: list), forKey: AgentSessionTrust.defaultsKey)
                                              then(true)
                                          },
                                          decline: { _ in then(false) })

@@ -67,7 +67,35 @@ enum AgentSessionCLI {
     }
 }
 
-/// One session: the agent's process, the protocol, the drawing and the keys. Everything runs on the main queue.
+/// What a session speaks to its agent (plan 035 KTD1): ACP, Claude Code's stream-json or Codex's app-server. The runner
+/// keeps the process, the drawing, the keys, OSC 7501, the app socket and the Allow always question on the Mac, one copy
+/// for every agent; a driver turns the agent's lines into the session model (`runner.session`) and the user's actions into
+/// the agent's lines. Everything runs on the main queue.
+protocol AgentSessionDriver: AnyObject {
+    /// The program's arguments.
+    var arguments: [String] { get }
+    /// The command the opening note shows.
+    var startWords: String { get }
+    /// A session is up: prompts can go.
+    var isReady: Bool { get }
+    /// Before the spawn: `go` starts the agent, or the driver ends the session (Claude's folder trust, R8).
+    func prepare(then go: @escaping () -> Void)
+    /// Just after the spawn: the handshake.
+    func started()
+    /// One line of the agent's stdout, its newline gone.
+    func received(line: Data)
+    /// A prompt typed and sent.
+    func send(_ text: String)
+    /// ⌃C or Esc: the turn stops, an open request answered cancel or deny.
+    func cancelTurn()
+    /// Option `index` of the open menu is picked (an Allow always already approved on the Mac).
+    func answer(_ index: Int)
+    /// The session ends (the tab closes): an open request is answered cancel or deny, never allowed.
+    func quitting()
+}
+
+/// One session: the agent's process, the drawing and the keys, with the protocol behind its driver. Everything runs on
+/// the main queue.
 final class AgentSessionRunner {
     let agent: ACPAgent
     let program: String
@@ -81,11 +109,10 @@ final class AgentSessionRunner {
     /// The agent's last words on stderr, shown if it quits.
     private var errorTail = ""
 
-    private var nextID = 1
-    private var waiting: [Int: (ACPWire.Value?, String?) -> Void] = [:]
-    private var sessionID: String?
-
-    private var session = ACPSession()
+    var session = ACPSession()
+    /// What the input line says instead of the prompt while the session waits on the Mac (Claude's folder trust); keys
+    /// other than \u{2303}C and \u{2303}D do nothing meanwhile.
+    var waitingLine: String?
     /// The prompt being typed, as bytes: a character typed or pasted in UTF-8 can come in pieces.
     private var typedBytes: [UInt8] = []
     private var typed: String {
@@ -106,6 +133,14 @@ final class AgentSessionRunner {
     private var pasting = false
     private var lastReport = ""
 
+    private lazy var driver: AgentSessionDriver = {
+        switch agent.protocolKind {
+        case .acp: return ACPDriver(runner: self)
+        case .claudeStream: return ClaudeDriver(runner: self)
+        case .codexAppServer: return CodexDriver(runner: self)
+        }
+    }()
+
     init(agent: ACPAgent, program: String, firstPrompt: String?) {
         self.agent = agent
         self.program = program
@@ -115,10 +150,14 @@ final class AgentSessionRunner {
     func start() {
         rawTerminal()
         write("\u{1b}]2;\(agent.name)\u{07}") // the tab's title
-        session.note("Starting \(agent.name) (\(([agent.program] + agent.arguments).joined(separator: " ")))\u{2026}")
+        session.note("Starting \(agent.name) (\(driver.startWords))\u{2026}")
         draw()
+        driver.prepare { [weak self] in self?.spawn() }
+    }
+
+    private func spawn() {
         process.executableURL = URL(fileURLWithPath: program)
-        process.arguments = agent.arguments
+        process.arguments = driver.arguments
         process.currentDirectoryURL = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         process.standardInput = toAgent
         process.standardOutput = fromAgent
@@ -145,50 +184,17 @@ final class AgentSessionRunner {
             session.note("Couldn\u{2019}t start \(agent.name): \(error.localizedDescription)")
             finish(1)
         }
-        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "development"
-        ask("initialize", ACPWire.initializeParams(version: version)) { [weak self] result, error in
-            guard let self else { return }
-            guard let result, error == nil else { return self.fatal("The agent didn\u{2019}t start ACP: \(error ?? "no answer").") }
-            guard result["protocolVersion"]?.int == ACPWire.protocolVersion else {
-                return self.fatal("\(self.agent.name) speaks ACP version \(result["protocolVersion"]?.int.map(String.init) ?? "?"); Next Term speaks version 1.")
-            }
-            self.newSession()
-        }
+        driver.started()
     }
 
-    private func newSession() {
-        var servers: [ACPWire.StdioServer] = []
-        // In a Next Term tab, the agent gets Next Term's MCP server, as agents in other tabs do (R26).
-        if ProcessInfo.processInfo.environment["NEXTTERM_MCP_SOCKET"] != nil, let me = Bundle.main.executablePath {
-            servers.append(.init(name: "next-term", command: me, arguments: ["--cli", "mcp"]))
-        }
-        let cwd = FileManager.default.currentDirectoryPath
-        ask("session/new", ACPWire.newSessionParams(cwd: cwd, servers: servers)) { [weak self] result, error in
-            guard let self else { return }
-            guard let id = result?["sessionId"]?.string else {
-                let words = error ?? "no session"
-                let auth = words.lowercased().contains("auth")
-                return self.fatal(auth ? "\(self.agent.name) needs you to sign in: run \(self.agent.program) in a tab once, then start the session again." : "The agent couldn\u{2019}t start a session: \(words).")
-            }
-            self.sessionID = id
-            self.session.note("\(self.agent.name) is ready.")
-            self.report()
-            self.draw()
-            if let first = self.firstPrompt {
-                self.firstPrompt = nil
-                self.send(first)
-            }
-        }
+    /// Next Term's MCP server for the agent, in a Next Term tab (R26, plan 035 R11): the command the other tabs'
+    /// agents are given, under the name a user-scope entry has, so it replaces that entry rather than doubling it.
+    var nextTermMCPServer: ACPWire.StdioServer? {
+        guard appSocket != nil, let me = Bundle.main.executablePath else { return nil }
+        return .init(name: MCPRegistrar.serverName, command: me, arguments: ["--cli", "mcp"])
     }
 
     // MARK: the protocol
-
-    private func ask(_ method: String, _ params: ACPWire.Value, then: @escaping (ACPWire.Value?, String?) -> Void) {
-        let id = nextID
-        nextID += 1
-        waiting[id] = then
-        sendToAgent(ACPWire.request(id: id, method: method, params: params))
-    }
 
     private func received(_ data: Data) {
         guard !data.isEmpty else { return }
@@ -196,74 +202,23 @@ final class AgentSessionRunner {
         while let newline = buffer.firstIndex(of: 0x0A) {
             let line = buffer[buffer.startIndex..<newline]
             buffer.removeSubrange(buffer.startIndex...newline)
-            guard let message = ACPWire.decode(line) else {
-                // Not ACP: an agent that doesn't speak it here prints its own words (a sign-in screen); kept for the
-                // line that says why it quit.
-                keepWords(Data(line))
-                continue
-            }
-            handle(message)
+            driver.received(line: Data(line))
         }
         // A line that never ends isn't kept past 16 MB.
         if buffer.count > 16 << 20 { buffer.removeAll() }
     }
 
-    private func handle(_ message: ACPWire.Incoming) {
-        switch message {
-        case .response(let id, let result, let error):
-            guard let key = id.int, let then = waiting.removeValue(forKey: key) else { return }
-            then(result, error)
-        case .notification(let method, let params):
-            if method == "session/update" {
-                session.apply(update: params)
-                scheduleDraw()
-            }
-        case .request(let id, let method, let params):
-            if method == "session/request_permission" {
-                if session.pending != nil, let earlier = session.cancelPending() {
-                    reply(earlier, ACPWire.permissionOutcome(optionID: nil))
-                }
-                if session.requested(permission: id, params: params) == nil {
-                    // No option to give: cancelled, never allowed by default (R17).
-                    reply(id, ACPWire.permissionOutcome(optionID: nil))
-                    session.note("The agent asked permission with no options; it was cancelled.")
-                }
-                report()
-                draw()
-            } else {
-                sendToAgent(ACPWire.error(id: id, code: -32601, message: "Next Term doesn\u{2019}t offer \(method)"))
-            }
-        }
-    }
-
     /// A line to the agent; one that has quit takes nothing (its pipe's end is gone, and that is no crash).
-    private func sendToAgent(_ data: Data) {
+    func sendToAgent(_ data: Data) {
         try? toAgent.fileHandleForWriting.write(contentsOf: data)
     }
 
-    private func reply(_ id: ACPWire.Value, _ result: ACPWire.Value) {
-        sendToAgent(ACPWire.result(id: id, result))
-    }
-
     private func send(_ text: String) {
-        guard let sessionID, !session.working else { return }
-        session.prompted(text)
-        report()
-        draw()
-        ask("session/prompt", ACPWire.promptParams(session: sessionID, text: text)) { [weak self] result, error in
-            guard let self else { return }
-            if let error { self.session.turnFailed(error) } else { self.session.turnEnded(result?["stopReason"]?.string) }
-            self.draw()
-            self.freeze()
-            self.report()
-        }
+        driver.send(text)
     }
 
     private func cancelTurn() {
-        guard let sessionID, session.working else { return }
-        if let pending = session.cancelPending() { reply(pending, ACPWire.permissionOutcome(optionID: nil)) }
-        sendToAgent(ACPWire.notification(method: "session/cancel", params: .object(["sessionId": .string(sessionID)])))
-        draw()
+        driver.cancelTurn()
     }
 
     /// An Allow always waiting for the user's OK on the Mac: the menu takes no other answer meanwhile.
@@ -297,8 +252,7 @@ final class AgentSessionRunner {
     }
 
     private func answer(_ index: Int) {
-        guard let (id, option) = session.choose(index) else { return }
-        reply(id, ACPWire.permissionOutcome(optionID: option))
+        driver.answer(index)
         report()
         draw()
     }
@@ -306,14 +260,14 @@ final class AgentSessionRunner {
     // MARK: the app
 
     /// Next Term's socket, when the session runs in one of its tabs.
-    private let appSocket = ProcessInfo.processInfo.environment["NEXTTERM_MCP_SOCKET"]
+    let appSocket = ProcessInfo.processInfo.environment["NEXTTERM_MCP_SOCKET"]
     /// One request to the app at a time, in order: a report is in before the tab hears the state it reports.
     private let appQueue = DispatchQueue(label: "nxtrm-agent.app")
     private var turnsEnded = 0
 
     /// A request to the app (AgentSessionSocket), answered on the main queue: its fields, or nil when it couldn't be
     /// asked or didn't answer in `timeout` seconds.
-    private func callApp(_ fields: [String: Any], timeout: Int, then: @escaping ([String: Any]?) -> Void) {
+    func callApp(_ fields: [String: Any], timeout: Int, then: @escaping ([String: Any]?) -> Void) {
         guard let path = appSocket else { return then(nil) }
         appQueue.async {
             let answer = Self.ask(path: path, fields: fields, timeout: timeout)
@@ -356,7 +310,7 @@ final class AgentSessionRunner {
 
     /// The state for the app (stop reason, last message), then OSC 7501 for the tab: working, blocked on a permission
     /// (with the question's words), or done. In order, so wait_for_tab never finds a turn done before its last message.
-    private func report() {
+    func report() {
         var fields = "app=nxtrm-agent"
         if let permission = session.pending {
             let words = Data(ACPTranscript.question(permission).utf8.prefix(1500)).base64EncodedString()
@@ -378,14 +332,14 @@ final class AgentSessionRunner {
         callApp(update, timeout: 2) { [weak self] _ in self?.write(osc) }
     }
 
-    private func fatal(_ message: String) {
+    func fatal(_ message: String) {
         session.note(message)
         draw()
         finish(1)
     }
 
-    /// The words of output that isn't ACP, escape sequences out, at the end of `errorTail`.
-    private func keepWords(_ data: Data) {
+    /// The words of output that isn't the agent's protocol, escape sequences out, at the end of `errorTail`.
+    func keepWords(_ data: Data) {
         let text = String(decoding: data, as: UTF8.self)
             .replacingOccurrences(of: "\u{1b}\\[[0-9;?]*[A-Za-z]|\u{1b}\\][^\u{07}\u{1b}]*(\u{07}|\u{1b}\\\\)", with: "", options: .regularExpression)
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -398,7 +352,7 @@ final class AgentSessionRunner {
         buffer.removeAll()
         let tail = errorTail.split(whereSeparator: \.isNewline).suffix(3).joined(separator: " / ")
         session.note("\(agent.name) quit (exit \(status))" + (tail.isEmpty ? "." : ": " + ACPSession.oneLine(tail, limit: 300)))
-        if sessionID == nil {
+        if !driver.isReady {
             // It quit before a session started: signed out, or a version without ACP.
             session.note("Run \(agent.program) in a tab to sign in or update it, then start the session again.")
         }
@@ -406,7 +360,8 @@ final class AgentSessionRunner {
         finish(status == 0 ? 0 : 1)
     }
 
-    private func finish(_ code: Int32) -> Never {
+    func finish(_ code: Int32) -> Never {
+        driver.quitting()
         if process.isRunning { process.terminate() }
         write("\u{1b}]7501;state=clear\u{1b}\\")
         write("\r\n")
@@ -427,7 +382,7 @@ final class AgentSessionRunner {
     }
 
     /// Streaming chunks draw at most 30 times a second.
-    private func scheduleDraw() {
+    func scheduleDraw() {
         guard !drawScheduled else { return }
         drawScheduled = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.033) { [weak self] in
@@ -438,7 +393,7 @@ final class AgentSessionRunner {
 
     /// Redraws the live part: the current turn's lines not printed for good yet, and the input line. Lines past the
     /// screen's height are printed for good, as a terminal scrolls.
-    private func draw() {
+    func draw() {
         let width = self.width
         var out = "\r"
         if liveCount > 1 { out += "\u{1b}[\(liveCount - 1)A" }
@@ -453,13 +408,18 @@ final class AgentSessionRunner {
             lines.removeFirst(head)
         }
         for line in lines { out += line.ansi + "\r\n" }
-        out += ACPTranscript.inputLine(session, typed: typed, width: width).ansi
+        if let waitingLine {
+            let fitted = waitingLine.count > width ? String(waitingLine.prefix(max(width - 1, 1))) + "\u{2026}" : waitingLine
+            out += ACPTranscript.Line(fitted, .dim).ansi
+        } else {
+            out += ACPTranscript.inputLine(session, typed: typed, width: width).ansi
+        }
         liveCount = lines.count + 1
         write(out)
     }
 
     /// The finished turn stays as printed: the live part is the input line alone again.
-    private func freeze() {
+    func freeze() {
         liveFrom = session.items.count
         committed = 0
         liveCount = 1
@@ -514,6 +474,11 @@ final class AgentSessionRunner {
     // MARK: keys
 
     private func keysArrived(_ data: Data) {
+        if waitingLine != nil {
+            // Nothing typed answers the Mac's question (R8): ⌃C or ⌃D ends the session, the rest is dropped.
+            if data.contains(0x03) || data.contains(0x04) { finish(0) }
+            return
+        }
         keys.append(data)
         while !keys.isEmpty {
             if pasting {
@@ -588,5 +553,143 @@ final class AgentSessionRunner {
             typedBytes.append(byte)
             draw()
         }
+    }
+}
+
+/// The Agent Client Protocol (plan 030): `initialize`, `session/new` with Next Term's MCP server, a `session/prompt` per
+/// turn, `session/cancel`, and `session/request_permission` as the menu.
+final class ACPDriver: AgentSessionDriver {
+    private unowned let runner: AgentSessionRunner
+    private var nextID = 1
+    private var waiting: [Int: (ACPWire.Value?, String?) -> Void] = [:]
+    private var sessionID: String?
+
+    init(runner: AgentSessionRunner) {
+        self.runner = runner
+    }
+
+    private var agent: ACPAgent { runner.agent }
+
+    var arguments: [String] { agent.arguments }
+
+    var startWords: String { ([agent.program] + agent.arguments).joined(separator: " ") }
+
+    var isReady: Bool { sessionID != nil }
+
+    func prepare(then go: @escaping () -> Void) {
+        go()
+    }
+
+    func started() {
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "development"
+        ask("initialize", ACPWire.initializeParams(version: version)) { [weak self] result, error in
+            guard let self else { return }
+            guard let result, error == nil else { return self.runner.fatal("The agent didn\u{2019}t start ACP: \(error ?? "no answer").") }
+            guard result["protocolVersion"]?.int == ACPWire.protocolVersion else {
+                return self.runner.fatal("\(self.agent.name) speaks ACP version \(result["protocolVersion"]?.int.map(String.init) ?? "?"); Next Term speaks version 1.")
+            }
+            self.newSession()
+        }
+    }
+
+    private func newSession() {
+        // In a Next Term tab, the agent gets Next Term's MCP server, as agents in other tabs do (R26).
+        let servers: [ACPWire.StdioServer] = runner.nextTermMCPServer.map { [$0] } ?? []
+        let cwd = FileManager.default.currentDirectoryPath
+        ask("session/new", ACPWire.newSessionParams(cwd: cwd, servers: servers)) { [weak self] result, error in
+            guard let self else { return }
+            guard let id = result?["sessionId"]?.string else {
+                let words = error ?? "no session"
+                let auth = words.lowercased().contains("auth")
+                return self.runner.fatal(auth ? "\(self.agent.name) needs you to sign in: run \(self.agent.program) in a tab once, then start the session again." : "The agent couldn\u{2019}t start a session: \(words).")
+            }
+            self.sessionID = id
+            self.runner.session.note("\(self.agent.name) is ready.")
+            self.runner.report()
+            self.runner.draw()
+            if let first = self.runner.firstPrompt {
+                self.runner.firstPrompt = nil
+                self.send(first)
+            }
+        }
+    }
+
+    private func ask(_ method: String, _ params: ACPWire.Value, then: @escaping (ACPWire.Value?, String?) -> Void) {
+        let id = nextID
+        nextID += 1
+        waiting[id] = then
+        runner.sendToAgent(ACPWire.request(id: id, method: method, params: params))
+    }
+
+    func received(line: Data) {
+        guard let message = ACPWire.decode(line) else {
+            // Not ACP: an agent that doesn't speak it here prints its own words (a sign-in screen); kept for the
+            // line that says why it quit.
+            runner.keepWords(line)
+            return
+        }
+        handle(message)
+    }
+
+    private func handle(_ message: ACPWire.Incoming) {
+        switch message {
+        case .response(let id, let result, let error):
+            guard let key = id.int, let then = waiting.removeValue(forKey: key) else { return }
+            then(result, error)
+        case .notification(let method, let params):
+            if method == "session/update" {
+                runner.session.apply(update: params)
+                runner.scheduleDraw()
+            }
+        case .request(let id, let method, let params):
+            if method == "session/request_permission" {
+                if runner.session.pending != nil, let earlier = runner.session.cancelPending() {
+                    reply(earlier, ACPWire.permissionOutcome(optionID: nil))
+                }
+                if runner.session.requested(permission: id, params: params) == nil {
+                    // No option to give: cancelled, never allowed by default (R17).
+                    reply(id, ACPWire.permissionOutcome(optionID: nil))
+                    runner.session.note("The agent asked permission with no options; it was cancelled.")
+                }
+                runner.report()
+                runner.draw()
+            } else {
+                runner.sendToAgent(ACPWire.error(id: id, code: -32601, message: "Next Term doesn\u{2019}t offer \(method)"))
+            }
+        }
+    }
+
+    private func reply(_ id: ACPWire.Value, _ result: ACPWire.Value) {
+        runner.sendToAgent(ACPWire.result(id: id, result))
+    }
+
+    func send(_ text: String) {
+        guard let sessionID, !runner.session.working else { return }
+        runner.session.prompted(text)
+        runner.report()
+        runner.draw()
+        ask("session/prompt", ACPWire.promptParams(session: sessionID, text: text)) { [weak self] result, error in
+            guard let self else { return }
+            if let error { self.runner.session.turnFailed(error) } else { self.runner.session.turnEnded(result?["stopReason"]?.string) }
+            self.runner.draw()
+            self.runner.freeze()
+            self.runner.report()
+        }
+    }
+
+    func cancelTurn() {
+        guard let sessionID, runner.session.working else { return }
+        if let pending = runner.session.cancelPending() { reply(pending, ACPWire.permissionOutcome(optionID: nil)) }
+        runner.sendToAgent(ACPWire.notification(method: "session/cancel", params: .object(["sessionId": .string(sessionID)])))
+        runner.draw()
+    }
+
+    func answer(_ index: Int) {
+        guard let (id, option) = runner.session.choose(index) else { return }
+        reply(id, ACPWire.permissionOutcome(optionID: option))
+    }
+
+    func quitting() {
+        // As before the seam: the agent's process ends with the session, which ends its request with it.
     }
 }
