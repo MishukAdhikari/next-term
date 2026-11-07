@@ -194,8 +194,8 @@ struct MenuKeysTests {
         #expect(note == "⌘B is Bold while a Markdown file’s editor has the keyboard, Hide Project Sidebar everywhere else")
     }
 
-    /// ⌘K is Link in a Markdown file's editor and Clear Buffer everywhere else; under JetBrains' set ⌘K is Commit…, a
-    /// command for everywhere, so Link has no key there.
+    /// ⌘K is Link in a Markdown file's editor, Clear Buffer in a terminal and Go to Anything everywhere else, in every
+    /// set: JetBrains' Commit… keeps ⇧⌘C (plan 034).
     @Test func linkSharesCommandKWithClearBuffer() {
         let bindings = KeyBindings()
         let keys = Self.defaults(under: .nextTerm)
@@ -205,7 +205,9 @@ struct MenuKeysTests {
         let titles = ["insertMarkdownLink:": "Link", "clearBuffer:": "Clear Buffer"]
         let note = KeyBindings.sharingNote(commandK, ["insertMarkdownLink:", "clearBuffer:"], title: { titles[$0] ?? $0 })
         #expect(note == "⌘K is Link while a Markdown file’s editor has the keyboard, Clear Buffer everywhere else")
-        #expect(Self.defaults(under: .jetBrains)["insertMarkdownLink:"] == .some(nil))
+        #expect(Self.defaults(under: .jetBrains)["insertMarkdownLink:"] == .some(commandK))
+        #expect(keys["goToAnything:"] == .some(commandK) && Self.defaults(under: .jetBrains)["goToAnything:"] == .some(commandK))
+        #expect(KeyBindings.canShareKey("clearBuffer:", "goToAnything:") && KeyBindings.canShareKey("insertMarkdownLink:", "goToAnything:"))
     }
 
     @Test func theMarkdownKeys() {

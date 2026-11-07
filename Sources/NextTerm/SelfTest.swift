@@ -718,6 +718,7 @@ enum SelfTest {
         case "windowNav": return await windowNavChecks() // titles, ⇧⌘U, ⌘O's rows and the Dock menu across windows
         case "windowColumn": return await windowColumnChecks() // the window column in every window, on either side, and its budget
         case "hints": return await hintsChecks() // the window column's three hints: showing, counting, retiring, the off switch and Reset Tips
+        case "goToAnything": return await goToAnythingChecks(c) // ⌘K: Clear in a terminal, Go to Anything elsewhere (plan 034)
         case "tabHover": return await tabHoverChecks(c) // a tab's whole name under it in the title strip
         case "firstRun": return await firstRunChecks() // the first run's agent setup: the cards and the apply_setup window
         case "windowTabs": return await windowTabsChecks(c) // a system tab bar over a project window: everything moves below it
