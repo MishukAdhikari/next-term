@@ -16,7 +16,7 @@ public struct ChatDecision: Equatable, Sendable {
         public let number: Int
     }
 
-    /// The action in full (the tool call's title), or the question's own words.
+    /// The action in full (the tool call's title), or the question's own words with their question mark.
     public let title: String
     /// "Claude Code asks to:" above a permission's action; nil for a question.
     public let lead: String?
@@ -39,7 +39,8 @@ public struct ChatDecision: Equatable, Sendable {
         let reject = permission.isQuestion ? nil : choices.firstIndex { $0.kind.hasPrefix("reject") }
         let preferred = choices.firstIndex { $0.kind == "allow_once" } ?? 0
         let highlighted = choices.isEmpty ? 0 : min(max(permission.highlighted, 0), choices.count - 1)
-        return ChatDecision(title: permission.action, lead: permission.isQuestion ? nil : agent + " asks to:", choices: choices,
+        let title = permission.isQuestion && !permission.words.isEmpty ? permission.words : permission.action
+        return ChatDecision(title: title, lead: permission.isQuestion ? nil : agent + " asks to:", choices: choices,
                             highlighted: highlighted, rejectIndex: reject, defaultIndex: permission.isQuestion ? 0 : preferred,
                             isQuestion: permission.isQuestion, question: ACPTranscript.question(permission))
     }

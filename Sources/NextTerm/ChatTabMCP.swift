@@ -11,11 +11,12 @@ enum ChatTabMCP {
     // MARK: reading
 
     /// read_tab's and wait_for_tab's `screen` (the transcript as plain text, its last `lines` lines) and `input` (the
-    /// draft), masked as a terminal's are; nil for a terminal tab.
+    /// draft), masked as a terminal's are, and `kind: chat`, as list_tabs says it; nil for a terminal tab.
     static func screenFields(_ tab: TerminalTab, lines: Int) -> [String: Any]? {
         guard let host = tab.chatHost else { return nil }
         let blocks = ChatTranscript.blocks(from: host.session, expanded: host.expanded, thoughtTimes: host.thoughtTimes)
-        return ["screen": MCPControl.field(ChatTranscript.plainText(blocks, lastLines: lines)), "input": MCPControl.field(host.draft)]
+        return ["screen": MCPControl.field(ChatTranscript.plainText(blocks, lastLines: lines)), "input": MCPControl.field(host.draft),
+                "kind": "chat"]
     }
 
     /// The menu under a chat tab's question: its card's choices, while the card is the question the tab reports. This

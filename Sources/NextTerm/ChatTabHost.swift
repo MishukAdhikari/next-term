@@ -113,6 +113,7 @@ final class ChatTabHost: AgentSessionPresenter {
         ending = nil
         launching = true
         let starting = start
+        if promptQueued { follow(state: "working") } // wait_for_tab waits for the first prompt's turn from now on
         notify()
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let made = ChatEnvironment.make()
@@ -352,9 +353,20 @@ final class ChatTabHost: AgentSessionPresenter {
         return previous
     }
 
-    /// The tab's status as a session tab's: one running agent whose state is the report's.
+    /// A first prompt waits to be sent while the agent starts (new_tab's, New Chat's): from the moment it is queued until
+    /// its turn begins, the tab reports working, so wait_for_tab waits for that turn however slow the cold start is.
+    private var promptQueued: Bool {
+        guard !closing, !isIdle, ending == nil else { return false }
+        if launching { return start.prompt != nil }
+        guard let engine, !engine.isEnded else { return false }
+        return engine.firstPrompt != nil
+    }
+
+    /// The tab's status as a session tab's: one running agent whose state is the report's, or working while a first
+    /// prompt is queued.
     private func follow(state: String) {
         guard let tab else { return }
+        let state = (state == "idle" || state == "done") && promptQueued ? "working" : state
         let before = (tab.status.state, tab.status.question)
         tab.status.observeChatSession(program: CommandClassifier.agentSessionProgram, at: TerminalTab.now)
         let question = session.pending.map(ACPTranscript.question)

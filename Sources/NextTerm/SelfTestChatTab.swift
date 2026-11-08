@@ -203,6 +203,10 @@ extension SelfTest {
         func allows() -> Int { rig.answers("perm-rm").filter { $0.contains("\"behavior\": \"allow\"") }.count }
         func cardUp() async -> Bool { await wait(10) { !card.isHidden && card.decision != nil && tab.status.state == .attention } }
         func settled() async { _ = await wait(10) { host.state == .ready && tab.status.state != .attention } }
+        // An answered card's row: the view draws "Rejected: …", read_tab words it as the session tab's transcript does.
+        func row(_ drawn: String, _ read: String) async -> Bool {
+            await wait(5) { host.view.transcript.textView.string.contains(drawn) && rig.plain(tab).contains(read) }
+        }
 
         // The card, the tab's question and its notice's choices.
         rig.typeAndReturn(tab, "please rm it")
@@ -233,8 +237,10 @@ extension SelfTest {
         card.keyDown(with: ChatTabRig.key(36, "\r"))
         let second = await wait(10) { denies() == 1 }
         await settled()
-        check(second && rig.plain(tab).contains("Rejected: Bash(rm -rf build)"),
-              "chat tab: ↓ then Return picks the second choice, and the card becomes a row", rig.plain(tab).suffix(200).description)
+        let rejectedRow = await row("Rejected: Bash(rm -rf build)", "\u{21B3} Bash(rm -rf build): Reject")
+        check(second && rejectedRow,
+              "chat tab: ↓ then Return picks the second choice, and the card becomes a row",
+              host.view.transcript.textView.string.suffix(200).description + " | " + rig.plain(tab).suffix(200))
 
         rig.typeAndReturn(tab, "please rm it")
         _ = await cardUp()
@@ -242,14 +248,16 @@ extension SelfTest {
         card.keyDown(with: ChatTabRig.key(18, "1"))
         let first = await wait(10) { allows() == 1 }
         await settled()
+        let allowedRow = await row("Allowed once: Bash(rm -rf build)", "\u{21B3} Bash(rm -rf build): Allow once")
         rig.typeAndReturn(tab, "please rm it")
         _ = await cardUp()
         try? await Task.sleep(nanoseconds: 500_000_000)
         card.keyDown(with: ChatTabRig.key(53, "\u{1b}"))
         let escaped = await wait(10) { denies() == 2 }
         await settled()
-        check(first && escaped && rig.plain(tab).contains("Allowed once: Bash(rm -rf build)"),
-              "chat tab: 1 picks the first choice, Esc rejects", "\(rig.answers("perm-rm"))")
+        check(first && escaped && allowedRow,
+              "chat tab: 1 picks the first choice, Esc rejects",
+              "\(rig.answers("perm-rm")): " + host.view.transcript.textView.string.suffix(200))
 
         // answer_agent and press_keys pick from the card as from any tab's menu.
         rig.typeAndReturn(tab, "please rm it")

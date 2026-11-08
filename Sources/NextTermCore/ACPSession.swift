@@ -76,6 +76,9 @@ public struct ACPSession: Sendable {
         /// A question the agent asks (Claude's AskUserQuestion), not a permission: its menu has no "Do you want to
         /// allow" lead, and its options are the answers.
         public var isQuestion = false
+        /// A question's own words, its question marks kept (`action` drops them for the tab's question, which ends in
+        /// one): what a chat tab's card shows. Empty for a permission.
+        public var words = ""
     }
 
     public enum Item: Equatable, Sendable {
@@ -210,7 +213,8 @@ public struct ACPSession: Sendable {
         guard !options.isEmpty else { return nil }
         // Whole (R5, plan 035): the menu wraps it and the tab's question carries it; only a runaway input is cut.
         let action = Self.oneLine(title.isEmpty ? "act" : title, limit: Self.wholeLimit).replacingOccurrences(of: "?", with: "")
-        let permission = Permission(requestID: id, action: action, options: options, highlighted: 0, isQuestion: question)
+        let words = question ? Self.oneLine(title.isEmpty ? action : title, limit: Self.wholeLimit) : ""
+        let permission = Permission(requestID: id, action: action, options: options, highlighted: 0, isQuestion: question, words: words)
         pending = permission
         items.append(.permission(action: action, answer: nil))
         return permission

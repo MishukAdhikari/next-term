@@ -49,6 +49,19 @@ import Testing
         #expect(decision.choices.allSatisfy { !$0.needsMac })
     }
 
+    @Test func aQuestionKeepsItsQuestionMarkOnTheCardWhileTheTabsQuestionHasOne() throws {
+        let options = #"[{"optionId":"Red","name":"Red","kind":"allow_once"},{"optionId":"Blue","name":"Blue","kind":"allow_once"}]"#
+        let session = asking(question: true, options: options, title: "Which color?")
+        let permission = try #require(session.pending)
+        let decision = ChatDecision.from(permission, agent: "Claude Code")
+        #expect(decision.title == "Which color?")
+        #expect(decision.question == "Which color?")
+        #expect(permission.action == "Which color")
+        // A permission's card still shows its action, never words of its own.
+        let asked = try #require(asking(title: "Bash(echo why?)").pending)
+        #expect(ChatDecision.from(asked, agent: "Claude Code").title == "Bash(echo why)")
+    }
+
     @Test func theMenuIsAListWithTheSameNamesAndHighlight() throws {
         var session = asking()
         session.moveHighlight(1)
