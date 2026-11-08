@@ -599,6 +599,13 @@ public struct SecretPlaces: Equatable, Sendable {
         return scopes
     }
 
+    /// The places a choice until Next Term quits offers: the linked worktree when the folder is in one, and the folder
+    /// itself unless it is that worktree's root (the same place twice). Never the project: that is Always's alone.
+    public var untilQuitScopes: [SecretAlwaysScope.Kind] {
+        guard let worktree else { return [.folder] }
+        return SecretAlwaysScope.same(worktree, folder, caseSensitive: true) ? [.worktree] : [.worktree, .folder]
+    }
+
     /// The root a scope's grant holds at.
     public func path(for kind: SecretAlwaysScope.Kind) -> String? {
         switch kind {

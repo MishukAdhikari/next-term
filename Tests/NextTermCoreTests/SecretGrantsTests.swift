@@ -317,7 +317,7 @@ private func toolBinding(tab: String = "tab-2", target: String = "new") -> Secre
         #expect(book.end(.sessionEnded(session)).count == 1 && book.grants.isEmpty)
     }
 
-    @Test func itIsOfferedOnlyForAFollowableLocalSessionAndKeysThatDoNotAskEveryTime() {
+    @Test func itIsOfferedOnlyForAFollowableLocalSession() {
         #expect(SecretApprovalChoices.offered(isWrapper: false, isRemote: false, asksEveryUse: false, hasSession: true)
                 == [.once, .fifteenMinutes, .session])
         // The widest last.
@@ -325,7 +325,8 @@ private func toolBinding(tab: String = "tab-2", target: String = "new") -> Secre
                 == [.once, .fifteenMinutes, .untilLock, .session])
         #expect(SecretApprovalChoices.offered(isWrapper: false, isRemote: false, asksEveryUse: false) == [.once, .fifteenMinutes])
         #expect(SecretApprovalChoices.offered(isWrapper: false, isRemote: true, asksEveryUse: false, hasSession: true) == [.once])
-        #expect(SecretApprovalChoices.offered(isWrapper: true, isRemote: false, asksEveryUse: true, hasSession: true) == [.once])
+        // A key that asks every time keeps it (Touch ID confirms it once), and loses 15 minutes and until lock.
+        #expect(SecretApprovalChoices.offered(isWrapper: true, isRemote: false, asksEveryUse: true, hasSession: true) == [.once, .session])
         #expect(SecretApprovalChoice.session.approval == .session && SecretApprovalChoice.session.grantKind == .session)
         #expect(SecretAudit.Approval.session.rawValue == "this session")
     }

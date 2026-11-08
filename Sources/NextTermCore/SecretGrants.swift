@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 #if canImport(Darwin)
 import Darwin
@@ -116,12 +117,24 @@ public enum SecretGrantEvent: Equatable, Sendable {
 }
 
 /// "Allow for 15 minutes", "Allow this command until the Mac locks", or one use within 2 minutes, for a wrapper that
-/// left during Touch ID: the same request again, and only that, starts with no panel. "Allow for this session" is wider:
-/// any request of the same agent's session (`session`) for keys it holds, with no warning on it, until that session ends,
-/// whatever the command; a lock or a sleep does not end it (the owner's choice, 2026-11-01).
+/// left during Touch ID: the same request again, and only that, starts with no panel. "Allow for this session" is wider
+/// for an agent in front of its tab (`wide`): any request of the same agent's session (`session`) for keys it holds, with
+/// no warning on it, until that session ends, whatever the command; a lock or a sleep does not end it (the owner's choice,
+/// 2026-11-01). It answers the same request again too, warnings and all, as it was shown. Outside the tabs, or for a key
+/// that asks every time, it answers only that same request, of the same session (the agent process by pid, start time
+/// and executable outside the tabs).
+///
+/// "In this worktree until Next Term quits" and "In this folder until Next Term quits" (`worktree`, `folder`): the same
+/// request, from the same agent program (`agent`), run in a folder the scope covers (a linked worktree by whole path
+/// components, or the folder itself, each by its inode too), until Next Term quits. All of these live in memory alone.
 public struct SecretGrant: Identifiable, Sendable {
     public enum Kind: String, Sendable {
         case fifteenMinutes, untilLock, oneUse, session
+        /// Until Next Term quits, in a linked worktree or one folder.
+        case worktree, folder
+
+        /// Whether a lock, a sleep or a switch of users leaves it: the time-bound grants end with their session or at quit.
+        public var outlastsLock: Bool { self == .session || self == .worktree || self == .folder }
     }
 
     public static let fifteenMinutes: Duration = .seconds(15 * 60)
@@ -137,15 +150,31 @@ public struct SecretGrant: Identifiable, Sendable {
     /// A session grant's agent session: "tab:<tab id>:<the agent's run there>" for an agent in a tab, or
     /// "pid:<pid>:<its start time>" for the agent above a wrapper, so a reused pid never inherits it. Nil for the others.
     public let session: String?
+    /// A session grant's reach: any plain command of its session (an agent in front of its tab, with no key that asks
+    /// every time), or only the same request again.
+    public let wide: Bool
+    /// A worktree or folder grant's place, by its path and inode.
+    public let scope: SecretAlwaysScope?
+    /// A worktree or folder grant's agent program: its executable's file and signature, its script under an interpreter.
+    public let agent: SecretAgentIdentity?
+    /// The keys that asked for Touch ID every time when it was made: Touch ID confirmed it for them, so it is not ended
+    /// for their asking (`SecretGrantEvent.askEveryUse`). A key set to ask every time since still ends it.
+    public let everyUse: Set<String>
 
     public init(kind: Kind, binding: SecretBinding, made: ContinuousClock.Instant, madeAt: Date = Date(), id: String = UUID().uuidString,
-                session: String? = nil) {
+                session: String? = nil, wide: Bool = true, scope: SecretAlwaysScope? = nil, agent: SecretAgentIdentity? = nil,
+                everyUse: Set<String> = []) {
         self.id = id
         self.kind = kind
         self.binding = binding
         self.made = made
         self.madeAt = madeAt
         self.session = kind == .session ? session : nil
+        self.wide = kind == .session && wide
+        let placed = kind == .worktree || kind == .folder
+        self.scope = placed ? scope : nil
+        self.agent = placed ? agent : nil
+        self.everyUse = kind == .oneUse ? [] : everyUse.intersection(binding.keys.keys)
         usesLeft = kind == .oneUse ? 1 : nil
     }
 
@@ -156,7 +185,7 @@ public struct SecretGrant: Identifiable, Sendable {
         switch kind {
         case .fifteenMinutes: return made.advanced(by: Self.fifteenMinutes)
         case .oneUse: return made.advanced(by: Self.oneUseWindow)
-        case .untilLock, .session: return nil
+        case .untilLock, .session, .worktree, .folder: return nil
         }
     }
 
@@ -176,10 +205,20 @@ public struct SecretGrant: Identifiable, Sendable {
     /// instead a request of its own session (`session`) with no warnings (`plain`: the panel would warn about it, so it
     /// shows), from the same door, asker and agent, for keys it holds under the same names, and for run_with_secrets the
     /// same target tab, whatever the command or folder.
-    public func matches(_ binding: SecretBinding, session: String? = nil, plain: Bool = true, at now: ContinuousClock.Instant) -> Bool {
+    ///
+    /// A worktree or folder grant answers the same request (but for its folder, and run_with_secrets' asking tab) from the
+    /// same agent program (`agent`, nil never matching), run in a folder its scope covers now (`identify` reads a folder's
+    /// device and inode).
+    public func matches(_ binding: SecretBinding, session: String? = nil, plain: Bool = true, agent: SecretAgentIdentity? = nil,
+                        at now: ContinuousClock.Instant,
+                        identify: (String) -> (device: UInt64, inode: UInt64)? = SecretAlwaysScope.identify) -> Bool {
         guard !isExpired(at: now) else { return false }
+        if kind == .worktree || kind == .folder { return placed(binding, agent: agent, identify: identify) }
         guard kind == .session else { return binding == self.binding }
-        guard let session, session == self.session, plain else { return false }
+        guard let session, session == self.session else { return false }
+        // The request it was made for, again: warnings and all, as the panel showed them.
+        if binding == self.binding { return true }
+        guard wide, plain else { return false }
         let mine: SecretBinding = self.binding
         // A wrapper's `program` is its agent's, so it must be the same; run_with_secrets' is the command's own program
         // (npm, make), which any command of the session may change: its tab and run name the agent there.
@@ -193,17 +232,30 @@ public struct SecretGrant: Identifiable, Sendable {
         return binding.keys.allSatisfy { (name: String, envName: String) -> Bool in mine.keys[name] == envName }
     }
 
+    /// A worktree or folder grant's match: every fact of the request the same but its folder, which its scope must cover,
+    /// and run_with_secrets' asking tab; and the same agent program.
+    private func placed(_ binding: SecretBinding, agent: SecretAgentIdentity?,
+                        identify: (String) -> (device: UInt64, inode: UInt64)?) -> Bool {
+        guard let scope, let mine = self.agent, let agent, agent == mine, !binding.keys.isEmpty else { return false }
+        var asked = binding
+        asked.folder = self.binding.folder
+        if asked.source == .tool { asked.asker = self.binding.asker }
+        guard asked == self.binding else { return false }
+        return scope.covers(folder: canonicalPath(binding.folder), project: nil, identify: identify)
+    }
+
     /// Whether `event` ends it.
     public func ended(by event: SecretGrantEvent) -> Bool {
         switch event {
         // A session grant lasts through a lock, a sleep and a switch of users, as the owner chose: its session's end ends it.
-        case .screenLocked, .systemSleep, .sessionResigned: return kind != .session
+        // A worktree or folder grant lasts until Next Term quits.
+        case .screenLocked, .systemSleep, .sessionResigned: return !kind.outlastsLock
         case .quit, .revokeAll, .hourPause, .startedOver: return true
         case .sessionEnded(let ended): return session == ended
         case .displaySleep: return false
         case .revoke(let id): return id == self.id
         case .keyChanged(let name): return binding.keys[name] != nil
-        case .askEveryUse(let name): return kind != .oneUse && binding.keys[name] != nil
+        case .askEveryUse(let name): return kind != .oneUse && binding.keys[name] != nil && !everyUse.contains(name)
         // A session in that tab too, a wrapper's agent's included ("tab:<id>:<run>|pid:…").
         case .tabGotInput(let tab): return (binding.source == .tool && binding.asker == tab) || (session?.hasPrefix("tab:\(tab):") ?? false)
         }
@@ -249,9 +301,12 @@ public struct SecretGrantBook: Sendable {
 
     /// The grant that answers `binding` now, used once (a one-use grant is then spent), or nil. `session` and `plain`: the
     /// request's agent session and whether it carries no warnings, for a session grant.
-    public mutating func take(_ binding: SecretBinding, session: String? = nil, plain: Bool = true,
-                              at now: ContinuousClock.Instant) -> SecretGrant? {
-        guard let index = grants.firstIndex(where: { $0.matches(binding, session: session, plain: plain, at: now) }) else { return nil }
+    public mutating func take(_ binding: SecretBinding, session: String? = nil, plain: Bool = true, agent: SecretAgentIdentity? = nil,
+                              at now: ContinuousClock.Instant,
+                              identify: (String) -> (device: UInt64, inode: UInt64)? = SecretAlwaysScope.identify) -> SecretGrant? {
+        guard let index = grants.firstIndex(where: {
+            $0.matches(binding, session: session, plain: plain, agent: agent, at: now, identify: identify)
+        }) else { return nil }
         grants[index].use()
         return grants[index]
     }
@@ -402,5 +457,57 @@ public struct SecretLimits: Sendable {
     /// The askers whose own count is reached.
     public var limitedAskers: [String] {
         counts.filter { $0.value >= Self.perAsker }.map(\.key).sorted()
+    }
+}
+
+/// The agent sessions a session grant binds to, as strings the grant keeps: an agent's run in a tab
+/// ("tab:<tab id>:<run>"), its process ("pid:<pid>:<start time>", so a reused pid is another session) and, outside the
+/// tabs, that process's executable too ("exe:<pid>:<digest of its path>", so a process that `exec`s another program keeps
+/// its pid and start time but is another session). Parts are joined by "|"; a session is live while every part is.
+public enum SecretSessions {
+    /// "pid:<pid>:<start>", as `SecretRequests.session(ofProcess:)` has always written it.
+    public static func process(pid: Int32, started: Double) -> String {
+        "pid:\(pid):\(started)"
+    }
+
+    /// "exe:<pid>:<SHA-256 of the executable's path, cut to 32 hex digits>".
+    public static func executable(pid: Int32, path: String) -> String {
+        let digest = SHA256.hash(data: Data(path.utf8)).prefix(16).map { String(format: "%02x", $0) }.joined()
+        return "exe:\(pid):\(digest)"
+    }
+
+    /// The session of an agent process outside Next Term's tabs: its pid, start time and executable. Nil without either.
+    public static func outside(pid: Int32, started: Double?, executable path: String?) -> String? {
+        guard pid > 1, let started, let path, path.hasPrefix("/") else { return nil }
+        return process(pid: pid, started: started) + "|" + executable(pid: pid, path: path)
+    }
+
+    /// Whether `session` is a process's alone, with no tab part: an agent outside Next Term's tabs.
+    public static func isOutsideTabs(_ session: String) -> Bool {
+        let parts = session.split(separator: "|")
+        return !parts.isEmpty && parts.allSatisfy { !$0.hasPrefix("tab:") }
+    }
+
+    /// Whether every part of `session` still holds: `process` gives a pid's start time and executable path now (nil when
+    /// it is gone or a zombie), `tab` a tab's run part now ("tab:<id>:<run>", nil when no agent runs in front of it).
+    public static func isLive(_ session: String, process: (Int32) -> (started: Double, executable: String?)?,
+                              tab: (String) -> String?) -> Bool {
+        let parts = session.split(separator: "|").map(String.init)
+        guard !parts.isEmpty else { return false }
+        for part in parts {
+            let fields = part.split(separator: ":", maxSplits: 2).map(String.init)
+            guard fields.count == 3 else { return false }
+            switch fields[0] {
+            case "pid":
+                guard let pid = Int32(fields[1]), let now = process(pid), Self.process(pid: pid, started: now.started) == part else { return false }
+            case "exe":
+                guard let pid = Int32(fields[1]), let path = process(pid)?.executable, executable(pid: pid, path: path) == part else { return false }
+            case "tab":
+                guard tab(fields[1]) == part else { return false }
+            default:
+                return false
+            }
+        }
+        return true
     }
 }

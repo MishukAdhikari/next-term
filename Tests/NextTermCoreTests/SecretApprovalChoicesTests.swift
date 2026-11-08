@@ -67,14 +67,15 @@ import Testing
     /// vault the use unlocked, so a box ticked in another copy during Touch ID is recorded as Allow once.
     @Test func theAuditLineRecordsTheApprovalKept() throws {
         let index = try Self.index()
-        let lasting: [SecretAudit.Approval] = [.fifteenMinutes, .untilLock, .session]
+        let lasting: [SecretAudit.Approval] = [.fifteenMinutes, .untilLock]
         for approval in lasting {
             #expect(SecretApprovalChoices.recorded(approval, names: ["LASTING_KEY"], in: index) == approval)
             #expect(SecretApprovalChoices.recorded(approval, names: ["LASTING_KEY", "ASKS_KEY"], in: index) == .once)
             #expect(SecretApprovalChoices.recorded(approval, names: ["GONE_KEY"], in: index) == .once)
             #expect(SecretApprovalChoices.recorded(approval, names: ["LASTING_KEY"], in: nil) == .once)
         }
-        let others: [SecretAudit.Approval?] = [.once, .grant, .remote, nil]
+        // The time-bound choices are offered for a key that asks every time, which this Touch ID confirms: kept as they are.
+        let others: [SecretAudit.Approval?] = [.once, .grant, .remote, nil, .session, .worktreeUntilQuit, .folderUntilQuit]
         for approval in others {
             #expect(SecretApprovalChoices.recorded(approval, names: ["ASKS_KEY"], in: index) == approval)
         }

@@ -3,8 +3,9 @@ import NextTermCore
 
 /// Next Term's own panel before a stored key is used: one heading (who wants which key), a card of four aligned rows
 /// (Who, Key, For, In), the warnings, and one primary, Allow, with a Remember pop-up beside it: Only this time, the
-/// lasting choices the request may have (15 minutes, until the Mac locks, this session) and the Always choices. Details
-/// keeps the facts that are the same on every request. After Allow comes the Touch ID or Mac password sheet.
+/// lasting choices the request may have (15 minutes, until the Mac locks, this session, this worktree or folder until Next
+/// Term quits) and the Always choices. Details keeps the facts that are the same on every request. After Allow comes the
+/// Touch ID or Mac password sheet.
 ///
 /// It follows `AgentApprovalWindow`'s rules: it never takes the keyboard on its own (`becomesKeyOnlyIfNeeded`), Allow
 /// is the one primary, rightmost and tinted, and refuses first responder, Escape declines and closing it declines. Once
@@ -68,6 +69,11 @@ final class SecretApprovalPanel: NSWindowController, NSWindowDelegate {
         /// The In row's name for the folder (the project's or worktree's, with the path inside it), when known.
         var place: String?
         var always: Always?
+        /// For this session reaches any plain command of the agent's session (an agent in front of its tab, no key that asks
+        /// every time); else only this exact request.
+        var sessionIsWide = true
+        /// The agent runs outside Next Term's tabs: its session is its process.
+        var outsideTabs = false
     }
 
     static let headersNote = "Next Term sends the key in its requests to this server itself. The agent gets only the server\u{2019}s answers."
@@ -77,6 +83,21 @@ final class SecretApprovalPanel: NSWindowController, NSWindowDelegate {
 
     static let cardText = "This MCP server stopped waiting. Allow it, then restart it in your agent (in Claude Code: /mcp, then Reconnect)."
     static let stoppedDuringApprovalText = "This MCP server stopped waiting. Restart it within 2 minutes to use this approval."
+
+    /// What an Allow given after the MCP server stopped waiting holds for: Only this time waits 2 minutes for the restart;
+    /// a remembered choice holds for its whole time, so the restart is no race.
+    static func lateText(_ how: SecretRequests.How, agent: String?) -> String {
+        let lead = "This MCP server stopped waiting. Restart it in your agent; this approval holds "
+        let who = agent.map { sanitized($0, limit: 60) } ?? "the agent"
+        switch how {
+        case .once: return stoppedDuringApprovalText
+        case .fifteenMinutes: return lead + "for 15 minutes."
+        case .untilLock: return lead + "until the Mac locks or Next Term quits."
+        case .session: return lead + "until \(who) exits or Next Term quits."
+        case .worktreeUntilQuit, .folderUntilQuit: return lead + "until Next Term quits."
+        case .alwaysProject, .alwaysWorktree, .alwaysFolder: return lead + "from now on."
+        }
+    }
 
     private let content: Content
     private let onAllow: (SecretRequests.How) -> Void
@@ -430,6 +451,8 @@ final class SecretApprovalPanel: NSWindowController, NSWindowDelegate {
         case .fifteenMinutes: return "For 15 minutes"
         case .untilLock: return "Until the Mac locks"
         case .session: return "For this session"
+        case .worktreeUntilQuit: return "In this worktree until Next Term quits"
+        case .folderUntilQuit: return "In this folder until Next Term quits"
         case .alwaysProject, .alwaysWorktree, .alwaysFolder: return content.always?.labels[how] ?? "Always"
         }
     }
@@ -506,17 +529,45 @@ final class SecretApprovalPanel: NSWindowController, NSWindowDelegate {
         var text: String?
         switch how {
         case .once:
-            text = content.askingEveryUse.isEmpty || durationChoice.count <= 1 ? nil
-                : Self.askingNote(content.askingEveryUse).replacingOccurrences(of: ", so only Allow once is offered", with: "")
+            if !content.askingEveryUse.isEmpty, durationChoice.count > 1 {
+                text = Self.askingConfirmNote(content.askingEveryUse)
+            }
+            // A pending card: Only this time waits 2 minutes for the restart; a remembered choice holds for its whole time.
+            if !cardLabel.isHidden, durationChoice.keys.contains(where: \.isTimeBound) {
+                text = [text, Self.goneOnceNote].compactMap { $0 }.joined(separator: " ")
+            }
         case .fifteenMinutes:
             text = content.isWrapper ? Self.fifteenMinutesNote + " " + Self.wrapperRestartNote : Self.fifteenMinutesNote
         case .untilLock:
             text = "For this exact command, started by \(agent) in this folder. Ends when you lock the Mac, it goes to sleep, "
                 + "or Next Term quits. Revoke it in Settings \u{203A} Secrets."
         case .session:
-            text = "These keys, for any command \(agent) runs with them, until \(agent) exits, its tab closes or another agent "
-                + "types into it, a key changes, or Next Term quits. Locking the Mac or switching users doesn\u{2019}t end it. A command "
-                + "Next Term would warn about still asks. Revoke it in Settings \u{203A} Secrets."
+            let what = content.reachesURL ? "this server" : "this exact command"
+            if content.outsideTabs {
+                text = "\(SecretRun.keysText(content.keys.map(\.name))) for \(what), started by this \(agent) process, until it exits "
+                    + "or Next Term quits. Anything different asks again. Revoke it in Settings \u{203A} Secrets."
+            } else if content.sessionIsWide {
+                let warned = content.warnings.isEmpty ? "A command Next Term would warn about still asks."
+                    : "This command is covered as shown; other commands Next Term would warn about still ask."
+                text = "These keys, for any command \(agent) runs with them, until \(agent) exits, its tab closes or another agent "
+                    + "types into it, a key changes, or Next Term quits. Locking the Mac or switching users doesn\u{2019}t end it. "
+                    + warned + " Revoke it in Settings \u{203A} Secrets."
+            } else {
+                text = "\(SecretRun.keysText(content.keys.map(\.name))) for \(what), until \(agent) exits, its tab closes or another "
+                    + "agent types into it, or Next Term quits. Anything different asks again. Revoke it in Settings \u{203A} Secrets."
+            }
+            if !content.askingEveryUse.isEmpty {
+                let until = content.outsideTabs ? "until this \(agent) process exits or Next Term quits" : "until \(agent) exits or Next Term quits"
+                text = Self.timeBoundAskingNote(content.askingEveryUse, what: what, until: until)
+            }
+        case .worktreeUntilQuit, .folderUntilQuit:
+            let what = content.reachesURL ? "this server" : "this exact command"
+            let place = how == .worktreeUntilQuit ? "anywhere in this worktree" : "in this folder"
+            text = "\(agent) can use \(SecretRun.keysText(content.keys.map(\.name))) for \(what) \(place) until Next Term quits, "
+                + "with no panel. Anything different asks again. Revoke it in Settings \u{203A} Secrets."
+            if !content.askingEveryUse.isEmpty {
+                text = Self.timeBoundAskingNote(content.askingEveryUse, what: what, until: place + " until Next Term quits")
+            }
         case .alwaysProject, .alwaysWorktree, .alwaysFolder:
             let what = content.reachesURL ? "this server" : "this exact command"
             let place: String
@@ -634,6 +685,7 @@ final class SecretApprovalPanel: NSWindowController, NSWindowDelegate {
             if selectedHow == .once { select(.fifteenMinutes) }
             durationChoice[.once]?.isEnabled = false
         }
+        updateRememberNote()
         announce(Self.cardText)
     }
 
@@ -648,23 +700,46 @@ final class SecretApprovalPanel: NSWindowController, NSWindowDelegate {
         return "\(SecretRun.keysText(names)) \(verb) for Touch ID every time \(used), so only Allow once is offered."
     }
 
+    /// "PE_TOKEN asks for Touch ID every time it’s used. Remembering it asks for Touch ID once to confirm." Under Only this
+    /// time, when a time-bound choice is offered for such a key.
+    static func askingConfirmNote(_ names: [String]) -> String {
+        let one: Bool = names.count == 1
+        return "\(SecretRun.keysText(names)) \(one ? "asks" : "ask") for Touch ID every time \(one ? "it\u{2019}s" : "they\u{2019}re") used. "
+            + "Remembering \(one ? "it" : "them") asks for Touch ID once to confirm."
+    }
+
+    /// Under a time-bound choice for a key that asks every time: what Allow confirms, and that elsewhere it still asks.
+    static func timeBoundAskingNote(_ names: [String], what: String, until: String) -> String {
+        let one: Bool = names.count == 1
+        return "\(SecretRun.keysText(names)) \(one ? "asks" : "ask") for Touch ID every time. Allow asks for Touch ID once to confirm; "
+            + "then \(what) uses \(one ? "it" : "them") with no panel \(until). Elsewhere \(one ? "it" : "they") still "
+            + "\(one ? "asks" : "ask") every time."
+    }
+
+    static let goneOnceNote = "Only this time waits 2 minutes for the restart; a remembered choice holds for its whole time."
+
     /// An identical request took the card over: its wrapper waits again.
     func markBack() {
         cardLabel.isHidden = true
         durationChoice[.once]?.isEnabled = !isBusy
+        updateRememberNote()
     }
 
-    /// The wrapper left during Touch ID after "Only this time": a one-use approval waits 2 minutes.
-    func showStoppedDuringApproval() {
+    /// The wrapper stopped waiting and the user allowed it: after "Only this time" a one-use approval waits 2 minutes; a
+    /// remembered choice holds for its whole time (`lateText`).
+    func showStoppedDuringApproval(_ late: String? = nil) {
+        let text = late ?? Self.stoppedDuringApprovalText
         answered = true
         window?.level = .normal // nothing waits on it any more
         setBusy(false)
         for button in [allowButton, declineButton, stopButton, pauseButton, serverButton] { button?.isEnabled = false }
         rememberPopUp?.isEnabled = false
-        cardLabel.stringValue = Self.stoppedDuringApprovalText
+        cardLabel.stringValue = text
         cardLabel.isHidden = false
+        rememberNote.isHidden = true
         setStatus("")
-        announce(Self.stoppedDuringApprovalText)
+        fitHeight()
+        announce(text)
     }
 
     private func setStatus(_ text: String) {
