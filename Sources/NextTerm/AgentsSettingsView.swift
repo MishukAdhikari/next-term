@@ -65,8 +65,8 @@ final class AgentsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
             label.textColor = .secondaryLabelColor
             label.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         }
-        let columns: [(String, String, CGFloat)] = [("agent", "Agent", 118), ("version", "Version", 92), ("method", "Installed by", 104),
-                                                    ("latest", "Latest", 96), ("schedule", "Auto-update", 116)]
+        let columns: [(String, String, CGFloat)] = [("agent", "Agent", 112), ("version", "Version", 128), ("method", "Installed by", 108),
+                                                    ("latest", "Latest", 92), ("schedule", "Auto-update", 116)]
         for (id, title, width) in columns {
             let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(id))
             column.title = title
@@ -196,30 +196,32 @@ final class AgentsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
         detail.stringValue = Self.detail(row)
     }
 
-    /// The selected agent's line: where it runs from, how it updates, and any other copy PATH hides.
+    /// The selected agent's lines: where it runs from and what updates it, whether it updates itself, and any other
+    /// copy PATH hides behind it.
     static func detail(_ row: AgentCLIs.Status) -> String {
         guard let copy = row.copy else { return "" }
         let agent = row.agent
-        var parts: [String] = [abbreviated(copy.path) + (copy.resolved != copy.path ? " \u{2192} " + abbreviated(copy.resolved) : "") + "."]
+        var first = "Runs from \(abbreviated(copy.path))."
         if let refusal = AgentCLIs.refusal(agent, copy) {
-            parts.append(refusal)
+            first += " " + refusal
         } else if let command = AgentCLIs.updateCommand(agent, copy) {
-            parts.append("Updates with \u{201C}\(command)\u{201D}.")
+            first += " Update Now runs \u{201C}\(command)\u{201D} in a new tab."
         }
+        var lines = [first]
         switch agent.selfUpdate(copy.method) {
         case .yes(let off?):
-            parts.append("\(agent.name) updates itself; its own switch is \(off). A schedule here is for when that is off.")
+            lines.append("\(agent.name) updates itself; its own switch is \(off). A schedule here is for when that is off.")
         case .yes(nil):
-            parts.append("\(agent.name) updates itself, so Next Term offers no schedule for it.")
+            lines.append("\(agent.name) updates itself, so there is no schedule for it here.")
         case .notifies:
-            parts.append("\(agent.name) tells you about updates itself, and installs none.")
+            lines.append("\(agent.name) tells you about its updates, and installs none itself.")
         case .no: break
         }
         for other in row.copies.dropFirst() {
             let version = other.version.map { " \($0)" } ?? ""
-            parts.append("Also on your PATH, after it: \(other.method.name)\(version) at \(abbreviated(other.path)).")
+            lines.append("Also on your PATH, after it: \(other.method.name)\(version) at \(abbreviated(other.path)).")
         }
-        return parts.joined(separator: " ")
+        return lines.joined(separator: "\n")
     }
 
     static func abbreviated(_ path: String) -> String {
@@ -320,7 +322,7 @@ final class AgentsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
     }
 
     private func secondary(_ column: String, _ status: AgentCLIs.Status) -> Bool {
-        guard status.installed else { return column != "agent" }
+        guard status.installed else { return true }
         switch column {
         case "latest": return !status.updateAvailable
         case "schedule", "method": return true

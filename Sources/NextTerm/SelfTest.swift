@@ -675,7 +675,7 @@ enum SelfTest {
               "a self-test's tabs read its own zsh config, never the user's", "test config \(ownConfig): " + zdotTab.screenTail(4).joined(separator: " | "))
         c.remove(zdotTab)
         #if DEBUG
-        // One part on the project set up so far (NEXTTERM_SELFTEST_ONLY=gitAndViewKeys, import, rollback, held, closeWorktree, worktrees, markdown, mcpWrite, parallel (with scrollback), skills, notifications, services, secrets, agentSession, mcpHub, mcpHubSettings, mcpHubOAuth (only when asked), opencode, tasks, welcome, tabList, terminalPosition, completion, ghostText, gitRefresh, clicks, mouse, remote, mcp, newTerminal, cellSnap, projectColor, windowNav, windowColumn, hints, settingsSections or database), for its own failures
+        // One part on the project set up so far (NEXTTERM_SELFTEST_ONLY=gitAndViewKeys, import, rollback, held, closeWorktree, worktrees, markdown, mcpWrite, parallel (with scrollback), skills, notifications, services, secrets, agentSession, mcpHub, mcpHubSettings, mcpHubOAuth (only when asked), opencode, tasks, welcome, tabList, terminalPosition, completion, ghostText, gitRefresh, clicks, mouse, remote, mcp, newTerminal, cellSnap, projectColor, windowNav, windowColumn, hints, settingsSections, agentsSettings or database), for its own failures
         // without the whole run's 25 minutes.
         switch ProcessInfo.processInfo.environment["NEXTTERM_SELFTEST_ONLY"] {
         case "gitAndViewKeys": return await gitAndViewKeyChecks(c, proj: proj)
@@ -696,6 +696,7 @@ enum SelfTest {
         case "mcpHubOAuth": return await mcpHubOAuthChecks(c) // signing in to a fake OAuth server, consent, refresh, a lapse, revoke
         case "agentsMenu": return await agentsMenuChecks(c) // the Agents menu: Skills…, MCP Servers…, the moved commands and their keys
         case "settingsSections": return await settingsSectionsChecks(c) // each Settings section's screenshot, one size, over full screen
+        case "agentsSettings": return await agentsSettingsChecks() // Settings › Agents with made-up agents: rows, a scheduled update, empty
         case "notifications":
             notificationsMenuChecks()
             return agentSpinnerChecks()
@@ -1094,6 +1095,7 @@ enum SelfTest {
         await tasksChecks(c, proj: proj)
         agentSpinnerChecks()
         await skillsChecks()
+        await agentsSettingsChecks()
         await secretsChecks(c, proj: proj)
         await mcpWriteChecks(c, proj: proj)
         #if DEBUG

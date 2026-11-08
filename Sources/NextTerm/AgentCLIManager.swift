@@ -43,7 +43,18 @@ final class AgentCLIManager {
     private var timer: Timer?
     private var scheduledLook = false
 
-    private var defaults: UserDefaults { Self.defaultsForTest ?? .standard }
+    /// The schedules, the tries and the cache: the user's, or (in any self-test, whether or not its part set its own)
+    /// a volatile domain of the run's own, never Next Term's prefs.
+    private var defaults: UserDefaults { Self.defaultsForTest ?? (SelfTest.isRequested ? Self.selfTestDefaults : .standard) }
+    private static let selfTestDefaults: UserDefaults = {
+        let name = "nt-selftest-agentclis-\(getpid())"
+        let defaults = UserDefaults(suiteName: name) ?? .standard
+        defaults.removePersistentDomain(forName: name)
+        return defaults
+    }()
+
+    /// The PATH looked along: the self-test's own (none, unless its part gives one), else the login shell's.
+    private static var testPath: [String]? { pathForTest ?? (SelfTest.isRequested ? [] : nil) }
 
     // MARK: What is kept
 
@@ -95,7 +106,7 @@ final class AgentCLIManager {
     func reload(fetch: Bool, force: Bool = false, only ids: Set<String>? = nil, done: (() -> Void)? = nil) {
         checking = true
         NotificationCenter.default.post(name: Self.changed, object: self)
-        let path = Self.pathForTest
+        let path = Self.testPath
         let cache = self.cache
         let previous = statuses
         DispatchQueue.global(qos: .userInitiated).async {
@@ -170,6 +181,7 @@ final class AgentCLIManager {
     /// The latest version `source` names, asked now (10 seconds at most), or nil.
     nonisolated static func fetchLatest(_ source: AgentCLIs.Latest) -> String? {
         if let stub = latestForTest { return stub(source) }
+        if SelfTest.isRequested { return nil } // a self-test never asks the network
         guard let url = source.url else { return nil }
         var request = URLRequest(url: url, timeoutInterval: 10)
         request.setValue("NextTerm", forHTTPHeaderField: "User-Agent")
@@ -286,6 +298,7 @@ final class AgentCLIManager {
     /// The log a background update writes to.
     func logURL(_ id: String) -> URL {
         let folder = Self.logFolderForTest
+            ?? (SelfTest.isRequested ? NSTemporaryDirectory() + "nt-agent-updates-\(getpid())" : nil)
             ?? (NSHomeDirectory() as NSString).appendingPathComponent("Library/Application Support/Next Term/Agent Updates")
         return URL(fileURLWithPath: folder).appendingPathComponent("\(id).log")
     }
@@ -299,7 +312,7 @@ final class AgentCLIManager {
         updating.insert(agent.id)
         NotificationCenter.default.post(name: Self.changed, object: self)
         let log = logURL(agent.id)
-        let testPath = Self.pathForTest
+        let testPath = Self.testPath
         var folders = testPath ?? LoginShell.path
         if let manager = copy.manager { folders.insert((manager as NSString).deletingLastPathComponent, at: 0) }
         let before = copy.version
@@ -351,15 +364,17 @@ final class AgentCLIManager {
         } else {
             code = process.terminationStatus
         }
-        let end = (try? handle.offset()) ?? start
-        try? handle.write(contentsOf: Data("\u{2014} exit \(code.map(String.init) ?? "none: ran out of time")\n".utf8))
+        let end = (try? handle.seekToEnd()) ?? start
         var last = ""
+        // The output's last line, read before the exit line goes in after it.
         if end > start, let reader = try? FileHandle(forReadingFrom: log) {
-            try? reader.seek(toOffset: end > start + 4096 ? end - 4096 : start)
-            let tail = String(decoding: (try? reader.read(upToCount: 4096)) ?? Data(), as: UTF8.self)
+            let from = end > start + 4096 ? end - 4096 : start
+            try? reader.seek(toOffset: from)
+            let tail = String(decoding: (try? reader.read(upToCount: Int(end - from))) ?? Data(), as: UTF8.self)
             last = tail.split(whereSeparator: \.isNewline).last.map { String($0.prefix(160)) } ?? ""
             try? reader.close()
         }
+        try? handle.write(contentsOf: Data("\u{2014} exit \(code.map(String.init) ?? "none: ran out of time")\n".utf8))
         if code == nil { last = "It took longer than \(Int(timeout / 60)) minutes and was stopped." }
         return (code, last)
     }
