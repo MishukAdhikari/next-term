@@ -659,11 +659,12 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
     private var rows: [KeyboardShortcuts.Command] = []
 
     /// Each section's toolbar item: its name as the toolbar shows it, and its SF Symbol (all in macOS 13's set).
-    /// Keyboard Shortcuts shows as Shortcuts, so all ten fit whole; its tooltip and the window's title name it fully.
+    /// Keyboard Shortcuts shows as Shortcuts, so all eleven fit whole; its tooltip and the window's title name it fully.
     static let sections: [(id: String, label: String, symbol: String)] = [
         ("general", "General", "gearshape"), ("editor", "Editor", "doc.text"), ("terminal", "Terminal", "terminal"),
         ("notifications", "Notifications", "bell.badge"), ("keys", "Shortcuts", "keyboard"),
-        ("import", "Import", "square.and.arrow.down"), ("skills", "Skills", "sparkles"), ("mcp", "MCP Servers", "server.rack"),
+        ("import", "Import", "square.and.arrow.down"), ("agents", "Agents", "cpu"), ("skills", "Skills", "sparkles"),
+        ("mcp", "MCP Servers", "server.rack"),
         ("tasks", "Tasks", "checklist"), ("secrets", "Secrets", "key"),
     ]
 
@@ -714,6 +715,11 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
         tabs.addTabViewItem(notificationsTab)
         tabs.addTabViewItem(keysTab)
         tabs.addTabViewItem(importTab)
+        // The coding agents' CLIs: their versions, how each was installed, and their updates (plan 038).
+        let agentsTab = NSTabViewItem(identifier: "agents")
+        agentsTab.label = "Agents"
+        agentsTab.view = AgentsSettingsView()
+        tabs.addTabViewItem(agentsTab)
         let skillsTab = NSTabViewItem(identifier: "skills")
         skillsTab.label = "Skills"
         skillsTab.view = SkillsPane()

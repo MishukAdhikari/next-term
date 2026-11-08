@@ -1,6 +1,6 @@
 import AppKit
 
-/// Settings, section by section, as the user sees it: a screenshot of each of the ten, the window's frame the same in
+/// Settings, section by section, as the user sees it: a screenshot of each of the eleven, the window's frame the same in
 /// every one, nothing cut off; and Settings over a project window in full screen, never full screen itself.
 extension SelfTest {
     static func settingsSectionsChecks(_ c: TerminalWindowController) async {
@@ -18,7 +18,7 @@ extension SelfTest {
             if let cut = settingsSectionCutOff(in: window) { problems.append("\(section.label): \(cut)") }
             await screenshot(window, suffix: "-settings-\(section.id)")
         }
-        check(problems.isEmpty, "settings sections: each of the ten at the window's one size, nothing cut off",
+        check(problems.isEmpty, "settings sections: each of the eleven at the window's one size, nothing cut off",
               problems.joined(separator: "; "))
         note("settings sections: the window is \(Int(steady.width)) × \(Int(steady.height)) pt")
 
