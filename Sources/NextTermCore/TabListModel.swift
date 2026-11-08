@@ -1,5 +1,17 @@
 import Foundation
 
+/// The passive mark before a tab's title that says what kind of tab it is (plan 037 U5): a chat tab's bubble. A terminal
+/// tab has none. It is no button: it only says what the tab is.
+public enum TabKindGlyph: String, Equatable, Sendable {
+    case chat
+
+    /// The SF Symbol it draws.
+    public var symbol: String { "bubble.left" }
+
+    /// What VoiceOver says for it.
+    public var spoken: String { "Chat" }
+}
+
 /// One row of the terminal's tab list, the tabs shown down the terminal's side instead of along its top: a tab, or
 /// one pane of a split tab, under it. A value, so the list tells a change from nothing new by comparing; keyed by
 /// what it shows, so a tab opening or closing touches its own rows and no other.
@@ -50,11 +62,14 @@ public struct TabListRow: Equatable, Sendable {
     /// What VoiceOver says for the title when it is not the title as shown (an agent's row says its time with its
     /// state, in full words); nil: the title.
     public var spokenTitle: String?
+    /// A tab row whose tab (its pane with the keyboard) is a chat: the kind mark before its title. Never on a pane's row:
+    /// the tab's row follows its pane with the keyboard, as its title does.
+    public var kindGlyph: TabKindGlyph?
 
     public init(key: String, kind: Kind = .tab, title: String, truncatesTail: Bool = false, shorterTitles: [String] = [],
                 editableTitle: String? = nil, state: TabState = .idle, tooltip: String = "", spokenStatus: String = "",
                 shortcut: String? = nil, remote: RemoteMark? = nil, place: String? = nil, detail: String? = nil,
-                detailIsQuestion: Bool = false, focused: Bool = false, herdrPane: String? = nil) {
+                detailIsQuestion: Bool = false, focused: Bool = false, herdrPane: String? = nil, kindGlyph: TabKindGlyph? = nil) {
         self.key = key
         self.kind = kind
         self.title = title
@@ -71,6 +86,7 @@ public struct TabListRow: Equatable, Sendable {
         self.detailIsQuestion = detailIsQuestion
         self.focused = focused
         self.herdrPane = herdrPane
+        self.kindGlyph = kindGlyph
     }
 
     /// A row under its tab's: a pane's, a herdr agent's, or the folded idle agents'.
@@ -96,7 +112,7 @@ public struct TabListRow: Equatable, Sendable {
         if case .herdrFolded(let count, let open) = kind {
             return "\(count) idle herdr agent\(count == 1 ? "" : "s"), \(open ? "expanded" : "collapsed")"
         }
-        var parts: [String] = [spokenTitle ?? title]
+        var parts: [String] = [kindGlyph?.spoken ?? "", spokenTitle ?? title]
         if case .pane(let index, let count) = kind { parts.append("pane \(index + 1) of \(count)") }
         if case .herdrAgent(let index, let count) = kind { parts.append("herdr agent \(index + 1) of \(count)") }
         parts.append(spokenStatus)
@@ -163,15 +179,18 @@ public enum TabListRows {
         /// pane with the keyboard's own.
         public var tooltip: String?
         public var spokenStatus: String?
+        /// The kind mark the tab's pane with the keyboard has, as the top bar's tab shows it.
+        public var kindGlyph: TabKindGlyph?
 
         public init(key: String, panes: [Pane], shortcut: String? = nil, place: String? = nil, tooltip: String? = nil,
-                    spokenStatus: String? = nil) {
+                    spokenStatus: String? = nil, kindGlyph: TabKindGlyph? = nil) {
             self.key = key
             self.panes = panes
             self.shortcut = shortcut
             self.place = place
             self.tooltip = tooltip
             self.spokenStatus = spokenStatus
+            self.kindGlyph = kindGlyph
         }
     }
 
@@ -244,7 +263,7 @@ public enum TabListRows {
 
     private static func tabRow(_ source: Source, showsFolders: Bool, home: String, workingShown: Bool) -> TabListRow {
         guard let focused = source.panes.first(where: \.focused) ?? source.panes.first else {
-            return TabListRow(key: source.key, title: "", shortcut: source.shortcut, place: source.place)
+            return TabListRow(key: source.key, title: "", shortcut: source.shortcut, place: source.place, kindGlyph: source.kindGlyph)
         }
         let split = source.panes.count > 1
         let state: TabState = mostUrgent(source.panes.map(\.state), workingShown: workingShown)
@@ -252,7 +271,7 @@ public enum TabListRows {
         var row = TabListRow(key: source.key, title: focused.title, truncatesTail: focused.truncatesTail, shorterTitles: focused.shorterTitles,
                              editableTitle: focused.editableTitle, state: state, tooltip: source.tooltip ?? focused.tooltip,
                              spokenStatus: source.spokenStatus ?? focused.spokenStatus, shortcut: source.shortcut, remote: remote,
-                             place: source.place)
+                             place: source.place, kindGlyph: source.kindGlyph)
         guard showsFolders else { return row }
         // The pane that asks says so on the tab's line, the keyboard's first; else the keyboard pane's folder.
         let asking: Pane? = ([focused] + source.panes).first { hasQuestion($0.question) }

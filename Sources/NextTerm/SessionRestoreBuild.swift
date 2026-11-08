@@ -39,12 +39,10 @@ enum RestorePlanning {
         let checkFolder = { (path: String) -> FolderCheck in checks[path] ?? .notChecked }
         let hosts = hostNames()
         let lookup = SessionLookup.live(home: agents).freeing(freed)
-        // How a tab's shell starts `nxtrm` in this build: an agent session resumes by it (plan 035 U7).
-        let launcher = ACPSessionTabs.launcher
         let world = RestorePlanner.World(home: home, checkFolder: checkFolder, resumeFacts: { evidence, folder, projects in
             ResumeFacts.read(for: evidence, projects: projects, tabFolder: folder,
                              sessionAvailable: lookup.available(evidence, home: agents), home: agents)
-        }, sessions: lookup, hostNames: hosts, agentLauncher: launcher)
+        }, sessions: lookup, hostNames: hosts)
         let result = Result()
         let done = DispatchSemaphore(value: 0)
         let job = Job(snapshot: snapshot, kind: kind, safeMode: safeMode, quitConsent: quitConsent, world: world)
@@ -56,7 +54,7 @@ enum RestorePlanning {
         // Out of time: the same plan with nothing more read. Folders keep what was found of them.
         let empty = SessionLookup(read: { _, _, _ in [] }, newest: { _, _, _, _ in nil })
         let blind = RestorePlanner.World(home: home, checkFolder: checkFolder, resumeFacts: { _, _, _ in ResumeFacts() },
-                                         sessions: empty, hostNames: hosts, agentLauncher: launcher)
+                                         sessions: empty, hostNames: hosts)
         let plans = RestorePlanner.plan(snapshot, kind: kind, safeMode: safeMode, quitConsent: quitConsent, world: blind)
         return Planned(plans: plans, folders: checks)
     }
@@ -85,6 +83,7 @@ enum RestorePlanning {
         for pane in snapshot.panes where pane.remote == nil {
             add(pane.folder)
             add(pane.agent?.sessionFolder)
+            add(pane.chat?.folder ?? pane.agentSession?.folder)
         }
         return paths
     }
@@ -353,6 +352,13 @@ enum RestoreBuild {
             }
             taken.insert(id)
             tab.userTitle = pane.userTitle
+            // A chat tab (plan 037 U5): its chat is registered by its id before its start(), which hands it to a host
+            // instead of a shell. One whose conversation is live in an open tab already waits idle, saying where.
+            if let chat = plan.chat {
+                let owner = chat.resumes ? chat.start.resumeID.flatMap { ConversationOwners.owner(agent: chat.start.agentID, sessionID: $0) } : nil
+                let note = owner.map { ConversationHandoff.Refusal.openElsewhere($0.title).text(agent: nil) } ?? plan.note.text()
+                ChatTabs.register(chat.start, idle: !chat.resumes || owner != nil, note: note, draft: chat.draft, for: id)
+            }
             tab.lastSelected = pane.lastSelected
             var record = pane
             record.id = id

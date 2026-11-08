@@ -25,6 +25,8 @@ struct TabBarItem: Equatable {
     /// Agent tabs: what the place mark after the title says (its agent works in another checkout than the
     /// window shows, or its branch was switched under it); nil without one.
     var place: String? = nil
+    /// A chat tab (plan 037 U5): the passive kind mark before the title; nil for a terminal tab.
+    var kindGlyph: TabKindGlyph? = nil
 }
 
 protocol TabBarViewDelegate: AnyObject {
@@ -627,6 +629,8 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
     private let label = NSTextField(labelWithString: "")
     /// The place mark, right after the title.
     private let placeMark = NSImageView()
+    /// A chat tab's kind mark, just before the title. Not a button.
+    private let kindMark = NSImageView()
     private let closeButton = NSButton()
     private var closeTip: ShortcutToolTip?
     /// "⌘1": how to get to this tab from the keyboard.
@@ -665,6 +669,8 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
         placeMark.contentTintColor = Theme.textDim
         placeMark.isHidden = true
         addSubview(placeMark)
+        TabKindMark.style(kindMark)
+        addSubview(kindMark)
 
         closeButton.bezelStyle = .regularSquare
         closeButton.isBordered = false
@@ -721,11 +727,16 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
         // The title makes room for the place mark, or takes it back; the mark follows the title's end.
         if (newItem.place == nil) != placeMark.isHidden || (newItem.place != nil && newItem.title != item?.title) { needsLayout = true }
         placeMark.isHidden = newItem.place == nil
+        if newItem.kindGlyph != item?.kindGlyph {
+            TabKindMark.show(newItem.kindGlyph, in: kindMark)
+            needsLayout = true // the title moves over, or back
+        }
         item = newItem
         selected = isSelected
         // "web-1: app (connecting), Remote: web-1 (deploy@203.0.113.5), connecting": a state that is only
         // the connection's comes once, in the remote part.
-        let spoken = [newItem.title, newItem.accessibilityStatus, newItem.remote?.summary ?? "", newItem.place ?? ""]
+        let spoken = [newItem.kindGlyph?.spoken ?? "", newItem.title, newItem.accessibilityStatus, newItem.remote?.summary ?? "",
+                      newItem.place ?? ""]
         setAccessibilityLabel(spoken.filter { !$0.isEmpty }.joined(separator: ", "))
         setAccessibilityValue(isSelected)
         refresh()
@@ -764,7 +775,10 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
         // Its server sits on the title's centre line; the dot hangs a point lower.
         remoteMark.frame = NSRect(x: 25, y: (h - 16) / 2, width: RemoteMarkView.size.width, height: RemoteMarkView.size.height)
         let remoteLabelX = remoteMark.frame.maxX + 3
-        let labelX: CGFloat = remoteMark.isHidden ? 29 : remoteLabelX
+        // A chat tab's mark sits where the title would start, and the title after it.
+        let markX: CGFloat = remoteMark.isHidden ? 29 : remoteLabelX
+        kindMark.frame = NSRect(x: markX, y: (h - TabKindMark.size) / 2, width: TabKindMark.size, height: TabKindMark.size)
+        let labelX: CGFloat = kindMark.isHidden ? markX : markX + TabKindMark.size + TabKindMark.gap
         let labelHeight = label.intrinsicContentSize.height
         // The shortcut: in the close button's place while that is hidden (ending where the × would, 14 points
         // from the edge, so it doesn't crowd the next tab), else just before it, as long as the title keeps room
@@ -804,6 +818,8 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
 
     /// For the self-test: the place mark shows.
     var showsPlaceMark: Bool { !placeMark.isHidden }
+    /// For the self-test: the kind mark shows.
+    var showsKindMark: Bool { !kindMark.isHidden }
 
     /// A remote tab too narrow for "web-1: app (connecting)" says less rather than "web-1: a…g)": first
     /// "web-1: " goes (the mark says it is on a server, the tooltip which one), then the note (the dot on
@@ -1242,4 +1258,28 @@ extension Array {
 /// A borderless icon button that does not drag the window (it sits in the title-bar strip).
 final class HoverButton: NSButton {
     override var mouseDownCanMoveWindow: Bool { false }
+}
+
+// MARK: - kind mark
+
+/// A chat tab's kind mark (plan 037 U5), drawn alike in the tab bar and the tab list: the bubble, at the ×'s point size,
+/// dim. It is an image, not a control; the tab's own label says "Chat" to VoiceOver.
+enum TabKindMark {
+    /// Its square, in points, and the room after it before the title.
+    static let size: CGFloat = 12
+    static let gap: CGFloat = 4
+
+    static func style(_ view: NSImageView) {
+        view.imageScaling = .scaleProportionallyDown
+        view.contentTintColor = Theme.textDim
+        view.isHidden = true
+        view.setAccessibilityElement(false)
+    }
+
+    static func show(_ glyph: TabKindGlyph?, in view: NSImageView) {
+        view.isHidden = glyph == nil
+        guard let glyph else { return view.image = nil }
+        view.image = NSImage(systemSymbolName: glyph.symbol, accessibilityDescription: glyph.spoken)?
+            .withSymbolConfiguration(.init(pointSize: 9, weight: .semibold))
+    }
 }

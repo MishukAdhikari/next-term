@@ -824,6 +824,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     #endif
 
     func start() {
+        if ChatTabs.start(self) { return } // a chat tab (plan 037): its host runs the agent, no shell starts
         #if DEBUG
         sizeAtStart = view.frame.size
         #endif
@@ -913,6 +914,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     /// false, by the caller, who gets them back (Quit waits once for all its tabs).
     @discardableResult
     func terminate(snapshot: [ProcessRecord]? = nil, finishLater: Bool = true) -> [ProcessRecord] {
+        let chat = ChatTabs.closed(self) // a chat tab's agent group ends; it has no shell to hang up
         execWatcher?.cancel()
         execWatcher = nil
         reconnectWork?.cancel()
@@ -922,7 +924,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         MCPControl.forget(self)
         AppDelegate.shared?.withdrawHerdrNotices(of: self)
         if localHerdr != nil { LocalHerdrWatch.shared.follow(self, false) }
-        guard !exited else { return [] }
+        guard !exited, !chat else { exited = true; return [] }
         // A disconnected remote tab's ssh has exited and was reaped: its pid may be another process's now,
         // so neither SwiftTerm (SIGTERM) nor we (SIGHUP) signal it, as for a shell that already exited.
         let gone = disconnected || waitingForConnection
@@ -1174,7 +1176,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     /// Twice a second. For shells without integration this is how the tab knows what runs and where it
     /// is; with integration it only looks behind commands that look plain, for agents run by functions.
     func pollForeground() {
-        guard !exited else { return }
+        guard !exited, !ChatTabs.isChat(self) else { return }
         guard remote == nil else { return watchLogin() } // a remote tab's foreground comes from its host (applyRemote)
         watchLocalHerdr()
         if status.integrated && !(status.running && status.kind == .command) { return }
@@ -1545,6 +1547,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     /// agent itself, or, once it has reported over OSC 7501 this run, its reports. Not herdr's own screen, here or on a
     /// server: its agents report their states.
     func pollAgentScreen() {
+        guard !ChatTabs.isChat(self) else { return } // a chat's host reports its state
         guard !exited, status.running, status.kind == .agent, remote?.keep != .herdr || fellBack else { return } // herdr reports its own
         guard status.program != "herdr" else { return }
         let before = (status.state, status.question)

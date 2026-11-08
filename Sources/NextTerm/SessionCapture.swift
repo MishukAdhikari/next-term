@@ -98,6 +98,7 @@ enum SessionCapture {
             restored.scrollback = scrollback
             return restored
         }
+        if let host = tab.chatHost { return chatPane(tab, host: host) }
         let status = tab.status
         var pane = SessionSnapshot.Pane(id: tab.id, userTitle: tab.userTitle, command: command(tab), stateBefore: state(tab),
                                         interrupted: interrupted(tab), lastSelected: tab.lastSelected, scrollback: scrollback)
@@ -120,6 +121,16 @@ enum SessionCapture {
                                                             home: RestorePlanning.agentHome, shownSession: tab.shownSessionID)
             }
         }
+        return pane
+    }
+
+    /// A chat tab's record (plan 037 U5): its agent, the conversation its session reported, its folder and its draft (one
+    /// that holds no secret). It has no shell, so no command line, agent evidence or scrollback.
+    static func chatPane(_ tab: TerminalTab, host: ChatTabHost) -> SessionSnapshot.Pane {
+        var pane = SessionSnapshot.Pane(id: tab.id, folder: host.folder, userTitle: tab.userTitle, stateBefore: state(tab),
+                                        interrupted: interrupted(tab), lastSelected: tab.lastSelected)
+        pane.chat = SessionSnapshot.ChatTabRecord(agent: host.start.agentID, sessionID: host.sessionID, folder: host.folder,
+                                                  draft: SessionSnapshot.ChatTabRecord.keptDraft(host.draft))
         return pane
     }
 

@@ -12,8 +12,17 @@ enum ChatTabs {
     /// The start the next `TerminalTab.start()` claims: set only around `open`'s synchronous `addTab` or `split`.
     nonisolated(unsafe) private static var opening: ChatStart?
 
-    /// Starts registered by a restored tab's id, claimed by its `start()`; `idle`: shown with a Resume button, nothing run.
-    nonisolated(unsafe) private static var registered: [UUID: (start: ChatStart, idle: Bool, note: String?)] = [:]
+    /// A restored tab's chat, claimed by its `start()`.
+    private struct Registered {
+        var start: ChatStart
+        /// Shown with a Resume button, nothing run.
+        var idle: Bool
+        var note: String?
+        var draft: String?
+    }
+
+    /// Starts registered by a restored tab's id, claimed by its `start()`.
+    nonisolated(unsafe) private static var registered: [UUID: Registered] = [:]
 
     /// The handoff's key as the user has it (⇧⌘J by default), for the note on a terminal-only command; nil until the
     /// menu item exists.
@@ -23,38 +32,54 @@ enum ChatTabs {
 
     static func host(for tab: TerminalTab) -> ChatTabHost? { hosts[tab.id] }
 
-    /// The kind glyph the tab strips show at rest: a chat bubble for a chat tab, none for a terminal tab.
-    static func glyph(for tab: TerminalTab) -> String? { isChat(tab) ? "bubble.left" : nil }
+    /// The kind mark the tab strips show at rest (plan 037 U5): a chat bubble for a chat tab, none for a terminal tab.
+    /// The tab strips ask on every refresh, so a chat tab renamed back to automatic takes its agent's name here too.
+    static func glyph(for tab: TerminalTab) -> TabKindGlyph? {
+        guard isChat(tab) else { return nil }
+        tab.applyChatTitle()
+        return .chat
+    }
 
     /// A restored tab's chat, claimed when that tab starts. `idle` brings it back with Resume instead of running it
-    /// (a crash restore, safe mode, or a conversation open elsewhere, which `note` says).
-    static func register(_ start: ChatStart, idle: Bool, note: String? = nil, for id: UUID) {
-        registered[id] = (start, idle, note)
+    /// (a crash restore, safe mode, or a conversation open elsewhere); `note` says why, in the transcript. `draft` goes
+    /// back in the input box.
+    static func register(_ start: ChatStart, idle: Bool, note: String? = nil, draft: String? = nil, for id: UUID) {
+        registered[id] = Registered(start: start, idle: idle, note: note, draft: draft)
     }
 
     /// `TerminalTab.start()`'s hook: true when `tab` is a chat, which its host now runs; no shell starts then.
     static func start(_ tab: TerminalTab) -> Bool {
-        let claimed: (start: ChatStart, idle: Bool, note: String?)
+        let claimed: Registered
         if let spec = registered.removeValue(forKey: tab.id) {
             claimed = spec
         } else if let spec = opening {
             opening = nil
-            claimed = (spec, false, nil)
+            claimed = Registered(start: spec, idle: false)
         } else {
             return false
         }
         let host = ChatTabHost(tab: tab, start: claimed.start)
+        if let draft = claimed.draft { host.draft = draft }
         hosts[tab.id] = host
         observeQuit()
+        // The tab was placed in its pane as a terminal before it started: the pane takes the chat's view instead.
+        (tab.view.superview as? PaneView)?.adopt()
         if claimed.idle { host.showIdle(note: claimed.note) } else { host.begin() }
+        tab.delegate?.tabDidChange(tab)
         return true
     }
 
-    /// `TerminalTab.terminate`'s hook: the chat's agent and its whole group end (KTD7), its report goes.
-    static func closed(_ tab: TerminalTab) {
-        guard let host = hosts.removeValue(forKey: tab.id) else { return }
-        host.close()
+    /// `TerminalTab.terminate`'s hook: true for a chat tab, whose agent and whole group end (KTD7) and whose report goes;
+    /// it has no shell to hang up. While Next Term quits, every chat's group ends at once and is waited for here, as the
+    /// quit's own observer may come after the tabs are closed.
+    @discardableResult
+    static func closed(_ tab: TerminalTab) -> Bool {
+        registered[tab.id] = nil
+        guard let host = hosts[tab.id] else { return false }
+        if AppDelegate.shared?.isTerminating == true { endAll() } else { host.close() }
+        hosts[tab.id] = nil
         AgentSessionSocket.reports[tab.id] = nil
+        return true
     }
 
     /// Opens a chat tab for `start` in `controller`: a new tab (right after `source`'s group when given, else beside the
@@ -108,10 +133,11 @@ enum ChatTabs {
                                                               queue: .main) { _ in endAll() }
     }
 
-    /// Every chat's input closed at once, then their groups ended together, waited for here: 5 seconds at most.
+    /// Every chat's input closed at once, then their groups ended together, waited for here: 5 seconds at most. The hosts
+    /// stay, closed, so the quit's save still reads each chat (whichever of the quit's observers runs first), and a
+    /// second call ends nothing more.
     static func endAll() {
         let groups = hosts.values.compactMap { $0.closeForQuit() }
-        hosts.removeAll()
         guard !groups.isEmpty else { return }
         AgentSessionProcess.endGroups(groups)
     }

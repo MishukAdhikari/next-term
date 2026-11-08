@@ -37,13 +37,21 @@ final class ChatTabHost: AgentSessionPresenter {
     /// The view's hook: called when what it shows changed; `soon` for streamed chunks, which it may coalesce.
     var onChange: ((_ soon: Bool) -> Void)?
 
+    /// What the tab's pane shows (`TerminalTab.contentView`): for now a plain-text stand-in, until the native view (U6).
+    private(set) lazy var view: NSView = ChatPlaceholderView(host: self)
+
     init(tab: TerminalTab, start: ChatStart) {
         self.tab = tab
         tabID = tab.id
         self.start = start
-        let name = ACPAgent.named(start.agentID)?.name ?? start.agentID
-        if tab.userTitle == nil { tab.userTitle = start.title ?? name }
+        if tab.userTitle?.isEmpty != false { tab.userTitle = automaticTitle }
     }
+
+    /// The tab's name when the user gave none: the start's title, else the agent's name.
+    var automaticTitle: String { start.title ?? ACPAgent.named(start.agentID)?.name ?? start.agentID }
+
+    /// The agent runs now, so the conversation it reported is live in this tab (KTD11); an ended or idle chat holds none.
+    var holdsConversation: Bool { engine.map { !$0.isEnded } ?? false }
 
     var agent: ACPAgent? { ACPAgent.named(start.agentID) }
 
@@ -183,6 +191,13 @@ final class ChatTabHost: AgentSessionPresenter {
     /// conversation the session reported, never a new one in its place.
     func restart() {
         guard !closing, state == .ended || state == .idle else { return }
+        // One place per conversation (KTD11): one live in another tab stays there, said so here.
+        if let id = engine?.sessionID ?? start.resumeID, let tab,
+           let owner = MainActor.assumeIsolated({ ConversationOwners.owner(agent: start.agentID, sessionID: id, excluding: tab) }) {
+            let words = ConversationHandoff.Refusal.openElsewhere(owner.title).text(agent: nil)
+            if let engine { engine.session.note(words) } else { carried.note(words) }
+            return notify()
+        }
         if let engine {
             guard engine.isEnded else { return }
             carried = engine.session

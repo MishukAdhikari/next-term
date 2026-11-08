@@ -1,7 +1,8 @@
 import Foundation
 
-/// What the restore decides for an agent's pane: a plain agent tab's resume or put-back line, and an agent session's
-/// (`nxtrm agent NAME --resume ID`, plan 035 U7). Kept apart from the rest of the planner for its size.
+/// What the restore decides for an agent's pane: a plain agent tab's resume or put-back line, and a chat tab's (plan 037
+/// U5), which an agent session's tab (`nxtrm agent NAME`, plan 035 U7) comes back as. Kept apart from the rest of the
+/// planner for its size.
 extension RestorePlanner {
     static func decide(agent evidence: SessionSnapshot.Evidence, _ input: PaneInput, integrated: Bool) -> Decision {
         // The user's launch with the resume form (KTD7): the launcher replayed, or the program and argv's options.
@@ -42,24 +43,48 @@ extension RestorePlanner {
         return command == evidence.resumeCommand ? command : nil
     }
 
-    /// An agent session's tab (`nxtrm agent NAME`, plan 035 U7), still running at the save with the id its session
-    /// reported: the session resumes as a plain agent tab's does, by `nxtrm agent NAME --resume ID` in the folder it ran
-    /// in, on an update restore or a consented quit restore, never after a crash or in safe mode, where that line goes back
-    /// unrun. In a shell without the integration, a note names it. Nil for anything else: its line is a command's.
-    static func decide(agentSession input: PaneInput, integrated: Bool) -> Decision? {
-        let pane = input.pane
+    // MARK: chat tabs (plan 037 U5)
+
+    /// The chat a pane comes back as: a chat tab's own record, or an agent session's tab (`nxtrm agent NAME`, plan 035
+    /// U7) still running at the save with the id its session reported, which comes back as a chat tab of that agent, id
+    /// and folder. Nil for any other pane, and for an agent session that ended or that Next Term can't resume (its line
+    /// is then a command's, as before).
+    static func chatRecord(of pane: SessionSnapshot.Pane) -> SessionSnapshot.ChatTabRecord? {
+        if let chat = pane.chat { return chat }
         guard let record = pane.agentSession, pane.command?.running == true, let agent = ACPAgent.named(record.agent),
               agent.id == record.agent, agent.resumesSessions, AgentSessionVersion.isSessionID(record.sessionID),
-              let kind = restoreAgent(agent) else { return nil }
-        let line = agent.resumeLine(launcher: input.agentLauncher, sessionID: record.sessionID)
-        let session = NamedSession(agent: kind, id: record.sessionID, naming: .exact)
-        let folder = input.sessionFolder
-        guard integrated else {
-            return Decision(outcome: .agentNote, noteLine: line, session: session, folder: folder, sessionAgent: kind)
-        }
-        let resumes: Bool = mayResume(input.kind, consent: input.quitConsent, safeMode: input.safeMode) && folder != nil
-        let outcome: RestoreOutcome = resumes ? .resume : .agentOnTheLine
-        return Decision(outcome: outcome, line: line, noteLine: line, session: session, folder: folder, sessionAgent: kind)
+              restoreAgent(agent) != nil else { return nil }
+        return SessionSnapshot.ChatTabRecord(agent: record.agent, sessionID: record.sessionID, folder: record.folder)
+    }
+
+    /// The conversation a chat pane goes on with: its agent's, by the exact id its session reported, when that agent
+    /// resumes conversations and the id is a plain one. Nil for a chat that named none, or an ACP agent's.
+    static func chatSession(of pane: SessionSnapshot.Pane) -> NamedSession? {
+        guard let record = chatRecord(of: pane), let agent = ACPAgent.named(record.agent), agent.id == record.agent,
+              agent.resumesSessions, let kind = restoreAgent(agent), let id = record.sessionID,
+              AgentSessionVersion.isSessionID(id) else { return nil }
+        return NamedSession(agent: kind, id: id, naming: .exact)
+    }
+
+    /// A chat tab's restore: its host goes on with its conversation by itself on an update restore or a consented quit
+    /// restore, with the conversation's exact id, its folder still there, and no tab selected after it holding the same
+    /// conversation (KTD11). Otherwise, after a crash, in safe mode, or with no conversation named, it comes back idle with
+    /// a Resume button. Nothing is typed anywhere: the pane has no shell. Nil for a pane that isn't a chat.
+    static func decide(chat input: PaneInput) -> Decision? {
+        let pane = input.pane
+        guard let record = chatRecord(of: pane) else { return nil }
+        let session = chatSession(of: pane)
+        let agent = ACPAgent.named(record.agent)
+        let kind = agent.flatMap(restoreAgent)
+        // The conversation's own folder when it is still there, as both agents find a conversation by its folder; else
+        // the folder the tab opens in.
+        let folder: String? = input.sessionFolder ?? input.folder?.path
+        let resumes: Bool = session != nil && input.sessionFolder != nil && !input.selectedEarlier
+            && mayResume(input.kind, consent: input.quitConsent, safeMode: input.safeMode)
+        let start = ChatStart(agentID: record.agent, folder: folder, resumeID: session?.id, resumeOnly: session != nil,
+                              title: pane.userTitle)
+        let chat = ChatRestore(start: start, resumes: resumes, draft: record.draft)
+        return Decision(outcome: resumes ? .resume : .agentNote, session: session, folder: folder, sessionAgent: kind, chat: chat)
     }
 
     /// The restore's agent for a session's catalog agent.

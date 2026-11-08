@@ -150,9 +150,7 @@ final class RestoreActions {
     /// command, and the tab says why.
     private func resume(_ entry: Waiting) {
         let tab = entry.tab
-        // An agent session's (plan 035 U7) is its own record's: no other process runs it after the restart.
-        let record = tab.restoredRecord
-        let available: Bool = record?.agentSession != nil || (record?.agent.map(sessionAvailable) ?? false)
+        let available: Bool = tab.restoredRecord?.agent.map(sessionAvailable) ?? false
         switch RestoreLayout.resumeStart(entry.plan, sessionAvailable: available) {
         case .putBack(let line, let note):
             if let note { Self.note(note, in: tab) }

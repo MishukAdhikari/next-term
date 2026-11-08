@@ -146,7 +146,15 @@ import Testing
         plan([pane], kind: kind, safeMode: safeMode, quitConsent: quitConsent, world: world)[0]
     }
 
-    // MARK: agent sessions (plan 035 U7)
+    // MARK: chat tabs (plan 037 U5)
+
+    /// A chat tab hosting `agent`, whose session reported `id` (nil before it named one).
+    func chatTab(_ n: Int, agent: String = "claude", id: String? = s, folder: String? = nil, draft: String? = nil,
+                 selected: TimeInterval = 0) -> Pane {
+        var tab = pane(n, nil, folder: folder, selected: selected)
+        tab.chat = SessionSnapshot.ChatTabRecord(agent: agent, sessionID: id, folder: folder ?? self.folder, draft: draft)
+        return tab
+    }
 
     /// A tab running `nxtrm agent NAME`, whose session reported its id: Claude Code's session, Codex's thread.
     func sessionTab(_ n: Int, agent: String = "claude", id: String = s, line: String? = nil, running: Bool = true) -> Pane {
@@ -155,59 +163,110 @@ import Testing
         return tab
     }
 
-    /// An update restore runs `nxtrm agent NAME --resume ID` in the session's folder, as plain agent tabs resume; a crash
-    /// restore, safe mode and a quit without its consent put that line back unrun, and never resume (R12).
-    @Test func anAgentSessionTabResumesAfterAnUpdateAndNeverAfterACrash() {
+    /// An update restore, or a quit restore with its consent, goes on with the chat's conversation by its exact id, in
+    /// its folder, never a new one in its place; nothing is typed, as the tab has no shell.
+    @Test func aChatTabResumesItsConversationAfterAnUpdate() throws {
         let world = self.world()
-        let claude = plan(sessionTab(1), world: world)
+        let claude = plan(chatTab(1, draft: "next, the tests"), world: world)
         #expect(claude.outcome == .resume)
-        #expect(claude.line == "nxtrm agent claude --resume \(s)")
+        #expect(claude.line == nil)
         #expect(claude.folder == folder)
-        #expect(claude.pending == PendingAction(action: .resume, reason: .update))
         #expect(claude.session == NamedSession(agent: .claude, id: s, naming: .exact))
-        #expect(claude.listLine == "Claude Code resumes")
+        let chat = try #require(claude.chat)
+        #expect(chat.resumes)
+        #expect(chat.start == ChatStart(agentID: "claude", folder: folder, resumeID: s, resumeOnly: true))
+        #expect(chat.draft == "next, the tests")
+        #expect(claude.listLine == "Claude Code resumes in its chat")
         #expect(text(claude) == "Resumed Claude Code session \(s).")
-        let codex = plan(sessionTab(2, agent: "codex", id: "thr_1"), world: world)
-        #expect(codex.outcome == .resume && codex.line == "nxtrm agent codex --resume thr_1")
+        let codex = plan(chatTab(2, agent: "codex", id: "thr_1"), world: world)
+        #expect(codex.outcome == .resume && codex.chat?.start.resumeID == "thr_1")
         #expect(codex.session == NamedSession(agent: .codex, id: "thr_1", naming: .exact))
-        // The launcher the app has now.
-        var launched = world
-        launched.agentLauncher = "'/A B/nxtrm'"
-        #expect(plan(sessionTab(1), world: launched).line == "'/A B/nxtrm' agent claude --resume \(s)")
-        // A quit with its consent resumes as an update does.
-        #expect(plan(sessionTab(1), kind: .quit, quitConsent: true, world: world).outcome == .resume)
+        #expect(plan(chatTab(1), kind: .quit, quitConsent: true, world: world).chat?.resumes == true)
+        // The title the user gave it comes back as the chat's.
+        var named = chatTab(1)
+        named.userTitle = "api work"
+        #expect(plan(named, world: world).chat?.start.title == "api work")
+    }
 
+    /// After a crash, in safe mode, or after a quit without its consent, a chat comes back idle, its conversation named
+    /// for Resume, and nothing runs (R12).
+    @Test func aChatTabComesBackIdleAfterACrashOrInSafeMode() throws {
+        let world = self.world()
         let held: [(SessionSnapshot.RestoreKind, Bool, Bool)] = [(.crash, false, false), (.unknown, false, false), (.quit, false, false),
                                                                   (.update, true, false), (.crash, true, true), (.safeMode, false, true)]
         for (kind, safeMode, consent) in held {
-            let result = plan(sessionTab(1), kind: kind, safeMode: safeMode, quitConsent: consent, world: world)
-            #expect(result.outcome == .agentOnTheLine, "\(kind), \(safeMode)")
-            #expect(result.line == "nxtrm agent claude --resume \(s)")
-            #expect(result.pending.action == .onTheLine)
+            let result = plan(chatTab(1), kind: kind, safeMode: safeMode, quitConsent: consent, world: world)
+            let chat = try #require(result.chat, "\(kind), \(safeMode)")
+            #expect(!chat.resumes, "\(kind), \(safeMode)")
+            #expect(result.outcome == .agentNote && result.line == nil)
+            #expect(result.pending.action == .note)
+            #expect(chat.start.resumeID == s && chat.start.resumeOnly)
         }
+        let crash = plan(chatTab(1), kind: .crash, world: world)
+        #expect(text(crash) == "Claude Code was running. Resume goes on with session \(s).")
+        #expect(crash.listLine == "Claude Code waits for Resume")
+        let safe = plan(chatTab(1), safeMode: true, world: world)
+        #expect(text(safe) == "Nothing ran, because the last two restores did not finish. This tab held: Claude Code was running. "
+            + "Resume goes on with session \(s).")
+        #expect(safe.listLine == "Claude Code waits for Resume")
     }
 
-    /// Only a session still running, with a plain id and its folder there, in a shell with the integration, resumes; an
-    /// ACP agent's session is a command like any other.
-    @Test func anAgentSessionResumesOnlyFromWhatItsRecordHolds() {
-        // Ended before the save: nothing to resume.
-        #expect(plan(sessionTab(1, running: false), world: world()).outcome == .idle)
-        // Its folder gone: the line waits, unrun.
-        let gone = plan(sessionTab(1), world: world(exists: { $0 != self.folder }))
-        #expect(gone.outcome != .resume)
-        // An id with a shell character is not taken.
-        #expect(plan(sessionTab(1, id: "x;rm -rf ~"), world: world()).outcome != .resume)
-        // An agent that doesn't resume, or one Next Term doesn't know.
-        #expect(plan(sessionTab(1, agent: "gemini", id: "g1"), world: world()).outcome == .commandOnTheLine)
-        #expect(plan(sessionTab(1, agent: "nope", id: "g1"), world: world()).outcome == .commandOnTheLine)
-        // A line the shell didn't report typed: a note naming the line, as for a plain agent.
-        var polled = sessionTab(1)
-        polled.command = typed("nxtrm agent claude", source: .polled)
-        #expect(plan(polled, world: world()).outcome == .agentNote)
+    /// A chat with no conversation named yet, an ACP agent's, one with an id that isn't plain, or one whose folder is gone
+    /// comes back idle; Resume then starts a new conversation only when there was none to go on with.
+    @Test func aChatTabResumesOnlyFromWhatItsRecordHolds() throws {
+        let world = self.world()
+        let fresh = plan(chatTab(1, id: nil), world: world)
+        #expect(fresh.chat?.resumes == false && fresh.chat?.start.resumeID == nil && fresh.chat?.start.resumeOnly == false)
+        #expect(fresh.session == nil)
+        #expect(text(fresh) == "Claude Code was running. Next Term can\u{2019}t tell which conversation it was, so Resume starts a new one.")
+        let gemini = plan(chatTab(1, agent: "gemini", id: "g1"), world: world)
+        #expect(gemini.chat?.resumes == false && gemini.chat?.start.agentID == "gemini" && gemini.chat?.start.resumeID == nil)
+        #expect(plan(chatTab(1, id: "x;rm -rf ~"), world: world).chat?.resumes == false)
+        let gone = plan(chatTab(1), world: self.world(exists: { $0 != self.folder }))
+        #expect(gone.chat?.resumes == false)
+        #expect(gone.chat?.start.folder == "/Users/x")
+        // A draft that looks like it holds a secret is never kept, in the record or the file.
+        let secret = SessionSnapshot.ChatTabRecord(agent: "claude", sessionID: s, folder: folder,
+                                                   draft: "export AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY")
+        let data = try JSONEncoder().encode(secret)
+        #expect(!String(decoding: data, as: UTF8.self).contains("wJalr"))
+        #expect(SessionSnapshot.ChatTabRecord.keptDraft("   ") == nil)
+        #expect(SessionSnapshot.ChatTabRecord.keptDraft(String(repeating: "a", count: 5000)) == nil)
     }
 
-    /// The record is saved with the tab and read back; the typed line keeps no prompt words.
-    @Test func anAgentSessionsRecordIsSavedWithoutItsPrompt() throws {
+    /// Of two tabs that held one conversation, only the one selected last goes on with it (KTD11): a chat and a chat, or a
+    /// chat and a terminal tab's Claude Code. The other waits, saying another tab resumed it.
+    @Test func oneConversationResumesInOneTab() throws {
+        let world = self.world()
+        let plans = plan([chatTab(1, selected: 10), chatTab(2, selected: 20)], world: world)
+        #expect(plans[0].chat?.resumes == false && plans[1].chat?.resumes == true)
+        #expect(text(plans[0]) == "Claude Code was running. Resume goes on with session \(s). Another tab resumed this session.")
+        let (evidence, facts) = exactClaude()
+        let terminal = pane(3, typed("claude"), agent: evidence, selected: 30)
+        let mixed = plan([chatTab(1, selected: 10), terminal], world: self.world(facts: facts))
+        #expect(mixed[0].chat?.resumes == false)
+        #expect(mixed[1].outcome == .resume)
+        // The chat selected last wins over the terminal.
+        let chatLast = plan([pane(3, typed("claude"), agent: evidence, selected: 10), chatTab(1, selected: 30)], world: self.world(facts: facts))
+        #expect(chatLast[1].chat?.resumes == true)
+        #expect(chatLast[0].outcome != .resume)
+    }
+
+    /// A `nxtrm agent` tab saved by an earlier version, still running with its session's id, comes back as a chat tab of
+    /// that agent, id and folder; its typed line keeps no prompt words.
+    @Test func anAgentSessionTabComesBackAsAChat() throws {
+        let world = self.world()
+        let claude = plan(sessionTab(1), world: world)
+        #expect(claude.outcome == .resume && claude.line == nil)
+        #expect(claude.chat?.start == ChatStart(agentID: "claude", folder: folder, resumeID: s, resumeOnly: true))
+        #expect(plan(sessionTab(2, agent: "codex", id: "thr_1"), world: world).chat?.start.resumeID == "thr_1")
+        #expect(plan(sessionTab(1), kind: .crash, world: world).chat?.resumes == false)
+        // Ended before the save, or an agent Next Term doesn't resume: a command like any other.
+        #expect(plan(sessionTab(1, running: false), world: world).outcome == .idle)
+        #expect(plan(sessionTab(1, agent: "gemini", id: "g1"), world: world).chat == nil)
+        #expect(plan(sessionTab(1, agent: "nope", id: "g1"), world: world).outcome == .commandOnTheLine)
+        #expect(plan(sessionTab(1, id: "x;rm -rf ~"), world: world).chat == nil)
+
         let tab = sessionTab(1, line: "nxtrm agent claude --prompt 'the staging db password is Tr0ub4dor'")
         let groups = [SessionSnapshot.Group(root: .pane(tab), focused: tab.id)]
         let header = SessionSnapshot.Header(launchID: id(900), generation: 1, clean: false, savedAt: start)
@@ -215,8 +274,7 @@ import Testing
         #expect(!String(decoding: data, as: UTF8.self).contains("Tr0ub4dor"))
         let read = try #require(try SessionSnapshot.decode(data).panes.first)
         #expect(read.agentSession == SessionSnapshot.AgentSessionRecord(agent: "claude", sessionID: s, folder: folder))
-        #expect(read.command?.line == "nxtrm agent claude")
-        #expect(plan(read, world: world()).line == "nxtrm agent claude --resume \(s)")
+        #expect(plan(read, world: world).chat?.start.resumeID == s)
     }
 
     // MARK: agents that resume by themselves

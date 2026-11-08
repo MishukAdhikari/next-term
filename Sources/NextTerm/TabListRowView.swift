@@ -52,6 +52,8 @@ final class TabListRowView: NSView, NSTextFieldDelegate {
     private let detail = TabListText(labelWithString: "")
     /// The place mark, right after the title.
     private let placeMark = NSImageView()
+    /// A chat tab's kind mark, just before the title, as on the bar. Not a button.
+    private let kindMark = NSImageView()
     private let closeButton = NSButton()
     /// "⌘1": how to get to this tab from the keyboard, in the ×'s place on the rows that show none.
     private let hint = TabListText(labelWithString: "")
@@ -129,6 +131,8 @@ final class TabListRowView: NSView, NSTextFieldDelegate {
         placeMark.contentTintColor = Theme.textDim
         placeMark.isHidden = true
         addSubview(placeMark)
+        TabKindMark.style(kindMark)
+        addSubview(kindMark)
 
         closeButton.bezelStyle = .regularSquare
         closeButton.isBordered = false
@@ -194,6 +198,10 @@ final class TabListRowView: NSView, NSTextFieldDelegate {
         // The title makes room for the place mark, or takes it back; the mark follows the title's end.
         let placeMoved: Bool = (newRow.place == nil) != (old?.place == nil) || (newRow.place != nil && newRow.title != old?.title)
         if placeMoved { needsLayout = true }
+        if newRow.kindGlyph != old?.kindGlyph {
+            TabKindMark.show(newRow.kindGlyph, in: kindMark)
+            needsLayout = true // the title moves over, or back
+        }
         row = newRow
         selected = isSelected
         setAccessibilityLabel(newRow.accessibilityLabel)
@@ -215,6 +223,7 @@ final class TabListRowView: NSView, NSTextFieldDelegate {
     var shownDetail: String? { detail.isHidden ? nil : detail.stringValue }
     var showsClose: Bool { !closeButton.isHidden }
     var showsPlaceMark: Bool { !placeMark.isHidden }
+    var showsKindMark: Bool { !kindMark.isHidden }
     var shownRemoteLink: RemoteLink? { remoteMark.isHidden ? nil : remoteMark.link }
 
     /// Whether `point`, in the row's coordinates, is on the × it shows.
@@ -282,7 +291,7 @@ final class TabListRowView: NSView, NSTextFieldDelegate {
         dot.frame = NSRect(x: markX, y: markY, width: 10, height: 10)
         slot.frame = bounds.insetBy(dx: 3, dy: 2)
         idleDot.frame = CGRect(x: bounds.midX - 2.5, y: bounds.midY - 2.5, width: 5, height: 5)
-        let words: [NSView] = [label, detail, remoteMark, placeMark]
+        let words: [NSView] = [label, detail, remoteMark, placeMark, kindMark]
         for view in words { view.isHidden = true }
         hintFits = false
     }
@@ -308,7 +317,12 @@ final class TabListRowView: NSView, NSTextFieldDelegate {
         let columnX: CGFloat = Self.remoteX + indent
         let afterColumn: CGFloat = columnX + RemoteMarkView.size.width + 3
         let markBeforeTitle = remote && !twoLines
-        let labelX: CGFloat = markBeforeTitle || (remoteColumn && !twoLines) ? afterColumn : Self.titleX + indent
+        let titleX: CGFloat = markBeforeTitle || (remoteColumn && !twoLines) ? afterColumn : Self.titleX + indent
+        // A chat tab's mark where the title would start, and the title after it.
+        let kind: Bool = row.kindGlyph != nil
+        kindMark.isHidden = !kind
+        kindMark.frame = NSRect(x: titleX, y: lineMid - TabKindMark.size / 2, width: TabKindMark.size, height: TabKindMark.size)
+        let labelX: CGFloat = kind ? titleX + TabKindMark.size + TabKindMark.gap : titleX
 
         // "⌘N" ends 14 points from the edge, in the ×'s place, as long as the title keeps 40 points to be read
         // (the bar's rule without its ×). Every tab row leaves the widest key's room, so they all decide alike.

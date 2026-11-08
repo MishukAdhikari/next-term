@@ -38,9 +38,11 @@ final class PaneView: NSView {
 
     required init?(coder: NSCoder) { fatalError("not used") }
 
-    /// Takes the terminal (from wherever it was) and keeps the veil above it, under the header.
+    /// Takes the terminal, or a chat tab's view (from wherever it was), and keeps the veil above it, under the header. A
+    /// tab that became a chat as it started gives up the terminal it was placed with.
     func adopt() {
-        let view = tab.view
+        let view = tab.contentView
+        if view !== tab.view, tab.view.superview === self { tab.view.removeFromSuperview() }
         guard view.superview !== self else { return }
         view.removeFromSuperview()
         view.translatesAutoresizingMaskIntoConstraints = false
@@ -90,7 +92,7 @@ final class PaneView: NSView {
     /// moved on to another pane).
     override func viewWillMove(toWindow newWindow: NSWindow?) {
         super.viewWillMove(toWindow: newWindow)
-        if newWindow == nil { hadKeyboard = window?.firstResponder === tab.view }
+        if newWindow == nil { hadKeyboard = window?.firstResponder === tab.contentView }
     }
 
     override func viewDidMoveToWindow() {
@@ -99,7 +101,7 @@ final class PaneView: NSView {
         defer { hadKeyboard = false }
         guard hadKeyboard, window.firstResponder === window,
               (window.windowController as? TerminalWindowController)?.activeTab === tab else { return }
-        window.makeFirstResponder(tab.view)
+        window.makeFirstResponder(tab.contentView)
     }
 
     private(set) var showsHeader = false {
@@ -677,7 +679,7 @@ extension TerminalWindowController {
     /// A click on a header gives its pane the keyboard, as a click in its terminal does.
     func focusPane(_ tab: TerminalTab) {
         guard group(of: tab) != nil else { return }
-        window?.makeFirstResponder(tab.view)
+        window?.makeFirstResponder(tab.contentView)
     }
 
     /// A header's rename names its pane, as the tab bar's names the pane with the keyboard; empty goes back
@@ -693,7 +695,7 @@ extension TerminalWindowController {
         DispatchQueue.main.async { [weak self] in
             guard let self, let window = self.window, self.group(of: tab) === self.activeGroup,
                   window.firstResponder === window || window.firstResponder == nil else { return }
-            window.makeFirstResponder(tab.view)
+            window.makeFirstResponder(tab.contentView)
         }
     }
 }

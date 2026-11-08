@@ -243,10 +243,31 @@ public struct PanePlan: Equatable, Sendable {
     public var note: RestoreNote
     /// The keep-sessions sheet's words for it ("Claude Code resumes", "connection closes"), after the tab's title.
     public var listLine: String
+    /// A chat tab's restore (plan 037 U5): the chat it starts, and whether it runs at once. Nil for every other pane.
+    public var chat: ChatRestore? = nil
 
     /// The action that carries it out, not yet applied.
     public var pending: SessionSnapshot.PendingAction {
         SessionSnapshot.PendingAction(action: outcome.action, reason: reason)
+    }
+}
+
+/// How a chat tab comes back (plan 037 U5). It never types into a shell: its host starts the agent, going on with the
+/// conversation it had, or waits idle with a Resume button.
+public struct ChatRestore: Equatable, Sendable {
+    /// The chat its host starts: the agent, the folder, and the conversation it goes on with (never a new one in its
+    /// place: `resumeOnly`).
+    public var start: ChatStart
+    /// The agent starts at once: an update restore or a consented quit restore, with the conversation's exact id and
+    /// its folder still there, in the tab selected last of those that held it. Otherwise the tab waits idle.
+    public var resumes: Bool
+    /// The input box's draft, as the save kept it.
+    public var draft: String?
+
+    public init(start: ChatStart, resumes: Bool, draft: String? = nil) {
+        self.start = start
+        self.resumes = resumes
+        self.draft = draft
     }
 }
 
@@ -264,18 +285,15 @@ public enum RestorePlanner {
         public var sessions: SessionLookup
         /// The names the user gave hosts, by host id.
         public var hostNames: [String: String]
-        /// How a tab's shell starts `nxtrm` now, for an agent session's resume line (plan 035 U7).
-        public var agentLauncher: String
 
         public init(home: String = NSHomeDirectory(), checkFolder: @escaping (String) -> FolderCheck = World.check,
                     resumeFacts: @escaping (SessionSnapshot.Evidence, String?, [String]) -> ResumeFacts, sessions: SessionLookup? = nil,
-                    hostNames: [String: String] = [:], agentLauncher: String = "nxtrm") {
+                    hostNames: [String: String] = [:]) {
             self.home = home
             self.checkFolder = checkFolder
             self.resumeFacts = resumeFacts
             self.sessions = sessions ?? .live(home: home)
             self.hostNames = hostNames
-            self.agentLauncher = agentLauncher
         }
 
         /// A folder is found when it is a directory now. The time budget is the caller's to set.
@@ -308,8 +326,6 @@ public enum RestorePlanner {
         var sharedSession: Bool
         /// A remote tab's host, by name.
         var host: String?
-        /// How a tab's shell starts `nxtrm`, for an agent session's resume line.
-        var agentLauncher = "nxtrm"
 
         init(pane: SessionSnapshot.Pane, kind: SessionSnapshot.RestoreKind, safeMode: Bool = false, folder: FolderChoice? = nil,
              session: NamedSession? = nil, sessionFolder: String? = nil, verdict: ResumeVerdict? = nil, selectedEarlier: Bool = false,
@@ -366,13 +382,14 @@ public enum RestorePlanner {
         let folder = decision.folder ?? input.folder?.path
         var note = RestoreNote(outcome: decision.outcome)
         if pane.remote == nil { note.agent = pane.agent?.agent ?? decision.sessionAgent }
+        note.chat = decision.chat != nil
         note.line = decision.noteLine
         note.session = decision.session
         note.leftOff = decision.noteLine == nil ? [] : decision.leftOff
         note.permissions = decision.permissions
         note.interrupted = pane.interrupted
         note.afterQuit = input.kind == .quit
-        note.sharedSession = input.sharedSession && decision.noteLine != nil
+        note.sharedSession = input.sharedSession && (decision.noteLine != nil || decision.chat != nil)
         // An agent's typed line holds its prompt words: its note names only its put-back line (R8).
         if pane.agent == nil || pane.remote != nil {
             note.command = pane.command?.line
@@ -390,7 +407,7 @@ public enum RestorePlanner {
         note.safeMode = input.safeMode && pane.remote == nil
         let reason: SessionSnapshot.RestoreKind = input.safeMode ? .safeMode : input.kind
         return PanePlan(pane: pane.id, outcome: decision.outcome, reason: reason, line: decision.line, folder: folder,
-                        session: decision.session, note: note, listLine: note.listLine)
+                        session: decision.session, note: note, listLine: note.listLine, chat: decision.chat)
     }
 
     /// The folder a local tab opens in: its own; when that is gone or was not found in time, the nearest folder above it
@@ -457,8 +474,10 @@ public enum RestorePlanner {
         var leftOff: [String] = []
         /// The permission options an automatic resume carries, or that Aider's note names, each as its words.
         var permissions: [String] = []
-        /// The agent of an agent session's resume (plan 035 U7), for its note.
+        /// A chat tab's agent (plan 037 U5), for its note.
         var sessionAgent: RestoreAgent?
+        /// A chat tab's restore (plan 037 U5).
+        var chat: ChatRestore?
     }
 
     private static func decide(_ input: PaneInput) -> Decision {
@@ -468,8 +487,8 @@ public enum RestorePlanner {
             return Decision(outcome: kept ? .reattach : .freshConnection)
         }
         if pane.command?.check == .secret { return Decision(outcome: .notKept) }
+        if let decision = decide(chat: input) { return decision }
         let integrated = pane.command?.source == .integration
-        if let decision = decide(agentSession: input, integrated: integrated) { return decision }
         if let evidence = pane.agent { return decide(agent: evidence, input, integrated: integrated) }
         guard let command = pane.command, command.running else { return Decision(outcome: .idle) }
         if let reason = NotPutBack.reason(command, systemZsh: pane.systemZsh) {
@@ -503,11 +522,10 @@ public enum RestorePlanner {
         }
         input.folder = folder(for: pane.folder, project: place.project, home: world.home, check: world.checkFolder)
         input.session = session
-        let recordedFolder: String? = pane.agent?.sessionFolder ?? pane.agentSession?.folder
+        let recordedFolder: String? = pane.agent?.sessionFolder ?? chatRecord(of: pane)?.folder ?? pane.agentSession?.folder
         if let recorded = recordedFolder, let sessionFolder = lexical(recorded), world.checkFolder(sessionFolder) == .found {
             input.sessionFolder = sessionFolder
         }
-        input.agentLauncher = world.agentLauncher
         input.verdict = verdict(for: pane, kind: kind, consent: consent, safeMode: safeMode, projects: place.projects, world: world)
         return input
     }
@@ -576,6 +594,13 @@ public enum RestorePlanner {
         var taken: [RestoreAgent: Set<String>] = [:]
         var holders: [Holder] = []
         for (index, pane) in panes.enumerated() {
+            // A chat tab's conversation, by the id its session reported: exact, so of two tabs that held it (a chat and a
+            // terminal, or two chats) only the one selected last goes on with it (plan 037 KTD11).
+            if pane.remote == nil, let chat = chatSession(of: pane) {
+                named[index] = chat
+                taken[chat.agent, default: []].insert(chat.id.lowercased())
+                continue
+            }
             guard pane.remote == nil, let evidence = pane.agent, evidence.agent.hasResumeForm else { continue }
             let folder = evidence.sessionFolder ?? pane.folder
             let holder = Holder(index: index, agent: evidence.agent, folder: folder, place: folder.map(lookup.canonical),
@@ -726,6 +751,8 @@ public struct RestoreNote: Equatable, Sendable {
     public var reminted = false
     /// Safe mode: nothing ran, and the note says what the tab held.
     public var safeMode = false
+    /// A chat tab (plan 037 U5): it resumes in its own view or waits for Resume; nothing goes on a line.
+    public var chat = false
 
     public init(outcome: RestoreOutcome) {
         self.outcome = outcome
@@ -811,6 +838,7 @@ public struct RestoreNote: Equatable, Sendable {
     /// What the outcome says. In safe mode, an action that did not happen is told as what the tab held. `waiting`: an
     /// action that types has not happened yet, and says what happens once the shell is ready; `cancelled`: it never will.
     private func sentences(dates: (Date) -> String, when: Moment) -> [String] {
+        if chat { return chatSentences(dates) }
         let name = agent?.name ?? "An agent"
         let waiting = when == .waiting
         let back = waiting ? "goes back on the line, not run, \(Self.onceReady)." : "is back on the line, not run."
@@ -884,6 +912,24 @@ public struct RestoreNote: Equatable, Sendable {
         }
     }
 
+    /// A chat tab's note: it resumed its conversation, or waits with a Resume button. Nothing is typed, so whether the
+    /// shell is ready never matters.
+    private func chatSentences(_ dates: (Date) -> String) -> [String] {
+        let name = agent?.name ?? "The agent"
+        if outcome == .resume, !safeMode {
+            var said = ["Resumed \(name) session \(session?.id ?? "")."]
+            if interrupted { said.append("Its last turn was cut off by \(afterQuit ? "the quit" : "the update") and did not continue.") }
+            return said
+        }
+        guard let session else {
+            return ["\(name) was running. Next Term can\u{2019}t tell which conversation it was, so Resume starts a new one."]
+        }
+        var said = ["\(name) was running. Resume goes on with session \(session.id)."]
+        if interrupted { said.append("Its last turn was cut off by \(afterQuit ? "the quit" : "the update").") }
+        said += sharedText
+        return said
+    }
+
     /// An agent's note when nothing is typed: that it was running, what is known of its session, and the line that
     /// resumes it, last, so nothing runs on after the line.
     private func typeToResume(_ dates: (Date) -> String) -> [String] {
@@ -941,8 +987,12 @@ public struct RestoreNote: Equatable, Sendable {
         let name = agent.flatMap { $0 == .unknown ? nil : $0.name } ?? "the agent"
         let words: String
         switch outcome {
+        case .resume where chat:
+            words = "\(name) resumes in its chat"
         case .resume:
             words = "\(name) resumes"
+        case _ where chat:
+            words = "\(name) waits for Resume"
         case .agentOnTheLine where session == nil:
             words = "\(line ?? name) goes on the line, with no session named"
         case .agentOnTheLine:

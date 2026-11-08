@@ -133,10 +133,10 @@ enum AgentSessionSocket {
     static let versionsKey = "AgentSessionVersions"
 
     /// The agent session a tab runs, for its saved state (plan 035 U7): Claude Code's or Codex's, with the id its session
-    /// reported. Nil for any other tab.
+    /// reported. Nil for any other tab, a chat tab among them: its host's record is its own (`SessionCapture.chatPane`).
     @MainActor
     static func record(of tab: TerminalTab) -> SessionSnapshot.AgentSessionRecord? {
-        guard tab.status.running, tab.status.program == CommandClassifier.agentSessionProgram, let report = reports[tab.id],
+        guard !ChatTabs.isChat(tab), tab.status.running, tab.status.program == CommandClassifier.agentSessionProgram, let report = reports[tab.id],
               let agentID = report.agentID, let id = report.sessionID, ACPAgent.named(agentID)?.resumesSessions == true else { return nil }
         return SessionSnapshot.AgentSessionRecord(agent: agentID, sessionID: id, folder: report.folder)
     }

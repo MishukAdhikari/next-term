@@ -1088,4 +1088,37 @@ import Testing
         let twice = Node.split(Split(vertical: true, children: [.pane(pane(1)), .pane(pane(1))]))
         #expect(Snapshot(header: header(), windows: [Window(groups: [Group(root: twice, focused: id(1))])]).panesLeftOut().isEmpty)
     }
+
+    // MARK: chat tabs (plan 037 U5)
+
+    @Test func aChatPaneRoundTripsAndOlderFilesStillDecode() throws {
+        var chat = pane(1)
+        chat.userTitle = "Claude Code"
+        chat.stateBefore = .working
+        chat.chat = Snapshot.ChatTabRecord(agent: "claude", sessionID: "0d9c8b7a-6f5e-4d3c-8b2a-1f0e9d8c7b6a",
+                                           folder: "/Users/sam/Projects/garden", draft: "now the README\nand the tests")
+        var fresh = pane(2)
+        fresh.chat = Snapshot.ChatTabRecord(agent: "gemini", sessionID: nil, folder: nil)
+        let groups = [Group(root: .pane(chat), focused: id(1)), Group(root: .pane(fresh), focused: id(2))]
+        let snapshot = Snapshot(header: header(), windows: [Window(project: "/Users/sam/Projects/garden", groups: groups)])
+        let read = try Snapshot.decode(snapshot.encoded())
+        #expect(read.panes.map(\.chat) == [chat.chat, fresh.chat])
+        #expect(read.panes.first == chat)
+
+        // A file from before chat tabs has none; one with an agent session's record still reads it.
+        var session = pane(3)
+        session.agentSession = Snapshot.AgentSessionRecord(agent: "codex", sessionID: "thr_1", folder: "/Users/sam/Projects/garden")
+        let older = Snapshot(header: header(), windows: [Window(groups: [Group(root: .pane(pane(4)), focused: id(4)),
+                                                                         Group(root: .pane(session), focused: id(3))])])
+        let text = String(decoding: try older.encoded(), as: UTF8.self)
+        #expect(!text.contains("\"chat\""))
+        let back = try Snapshot.decode(Data(text.utf8))
+        #expect(back.panes.map(\.chat) == [nil, nil])
+        #expect(back.panes.last?.agentSession == session.agentSession)
+
+        // A chat record that is not one (no agent) drops the record, never the pane.
+        let broken = text.replacingOccurrences(of: "\"agentSession\"", with: "\"chat\":{\"sessionID\":\"x\"},\"agentSession\"")
+        let kept = try Snapshot.decode(Data(broken.utf8))
+        #expect(kept.panes.count == 2 && kept.panes.last?.chat == nil)
+    }
 }

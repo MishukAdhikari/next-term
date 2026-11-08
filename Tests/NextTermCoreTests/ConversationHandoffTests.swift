@@ -372,3 +372,39 @@ import Testing
         #expect(Handoff.terminalOnlyLine("/mcp", shortcut: nil) == "/mcp works in the terminal: Open in Terminal")
     }
 }
+
+/// One place per conversation (plan 037 KTD11): which tab, if any, holds a conversation live.
+@Suite struct ConversationHandoffOwnersTests {
+    typealias Holder = ConversationOwnership.Holder
+
+    private func id(_ n: Int) -> UUID { UUID(uuidString: String(format: "00000000-0000-4000-8000-%012d", n))! }
+
+    private let s = "5e4d3c2b-1a09-4f8e-9d7c-6b5a4f3e2d1c"
+
+    @Test func aLiveExactHolderOfTheSameAgentOwnsIt() {
+        let chat = Holder(tab: id(1), title: "Claude Code", agent: "claude", sessionID: s, exact: true, live: true)
+        #expect(ConversationOwnership.owner(agent: "claude", sessionID: s, among: [chat]) == chat)
+        // Whatever the id's case.
+        #expect(ConversationOwnership.owner(agent: "claude", sessionID: s.uppercased(), among: [chat]) == chat)
+        // Not the tab asking, not another agent's id, not an empty id.
+        #expect(ConversationOwnership.owner(agent: "claude", sessionID: s, excluding: id(1), among: [chat]) == nil)
+        #expect(ConversationOwnership.owner(agent: "codex", sessionID: s, among: [chat]) == nil)
+        #expect(ConversationOwnership.owner(agent: "claude", sessionID: "", among: [chat]) == nil)
+        // The refusal names the owner.
+        let words = ConversationHandoff.Refusal.openElsewhere(chat.title).text(agent: nil)
+        #expect(words == "This conversation is open in \u{201C}Claude Code\u{201D}.")
+    }
+
+    @Test func anEndedOrGuessedHolderOwnsNothingAndTheFirstLiveOneWins() {
+        let ended = Holder(tab: id(1), title: "a", agent: "claude", sessionID: s, exact: true, live: false)
+        let guessed = Holder(tab: id(2), title: "b", agent: "claude", sessionID: s, exact: false, live: true)
+        let other = Holder(tab: id(3), title: "c", agent: "claude", sessionID: "0a1b2c3d-0000-4000-8000-00000000000a", exact: true, live: true)
+        #expect(ConversationOwnership.owner(agent: "claude", sessionID: s, among: [ended, guessed, other]) == nil)
+        let first = Holder(tab: id(4), title: "d", agent: "claude", sessionID: s, exact: true, live: true)
+        let second = Holder(tab: id(5), title: "e", agent: "claude", sessionID: s, exact: true, live: true)
+        #expect(ConversationOwnership.owner(agent: "claude", sessionID: s, among: [ended, first, second])?.tab == id(4))
+        // A terminal agent's own record of the conversation it has open is exact; its typed line or a guess is not.
+        #expect(ConversationOwnership.isExact(.sessionFile) && ConversationOwnership.isExact(.openRollout))
+        #expect(!ConversationOwnership.isExact(nil))
+    }
+}

@@ -226,7 +226,26 @@ import Testing
         #expect(TabListRows.moving(made, tab: 1, to: 1).map(\.key) == made.map(\.key))
         #expect(TabListRows.moving(made, tab: 5, to: 0).map(\.key) == made.map(\.key))
     }
+
+    @Test func aChatTabsKindMarkReachesItsRowAndNeverAPanesRow() {
+        let chat = TabListRows.Source(key: "a", panes: [pane("a1", "Claude Code", focused: true)], kindGlyph: .chat)
+        let split = TabListRows.Source(key: "g", panes: [pane("p1", "Codex", focused: true), pane("p2", "zsh")], kindGlyph: .chat)
+        let made = rows([chat, split, tab("c", [pane("c1", "zsh")])])
+        #expect(made.map(\.kind) == [.tab, .tab, .pane(index: 0, count: 2), .pane(index: 1, count: 2), .tab])
+        #expect(made[0].kindGlyph == .chat && made[1].kindGlyph == .chat)
+        #expect(made[2].kindGlyph == nil && made[3].kindGlyph == nil && made[4].kindGlyph == nil)
+        // VoiceOver hears what kind of tab it is before its name; a terminal tab says nothing more.
+        #expect(made[0].accessibilityLabel.hasPrefix("Chat, Claude Code"))
+        #expect(!made[4].accessibilityLabel.contains("Chat"))
+        #expect(TabKindGlyph.chat.symbol == "bubble.left")
+        // The same rows made again are equal, so nothing redraws; the mark coming or going is a change.
+        #expect(rows([chat]) == rows([chat]))
+        var plain = chat
+        plain.kindGlyph = nil
+        #expect(rows([plain]) != rows([chat]))
+    }
 }
+
 
 /// herdr's agents as rows under the tab or pane that shows herdr: herdr's order, its names and titles, the time in
 /// their states, and the idle ones folded past six.

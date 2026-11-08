@@ -152,14 +152,14 @@ extension TerminalWindowController: TabListViewDelegate {
                                         tooltip: item.tooltip, spokenStatus: item.accessibilityStatus, folder: folders ? tab.directory : "",
                                         question: folders ? tab.status.question : nil, remote: item.remote, focused: true,
                                         herdrAgents: tab.herdrRows, herdrIdleOpen: tab.herdrIdleOpen)
-            return TabListRows.Source(key: key, panes: [pane], shortcut: item.shortcut, place: item.place)
+            return TabListRows.Source(key: key, panes: [pane], shortcut: item.shortcut, place: item.place, kindGlyph: item.kindGlyph)
         }
         let focused: TerminalTab = group.focused
         let panes: [TabListRows.Pane] = group.panes.map { (tab: TerminalTab) -> TabListRows.Pane in
             tabListPane(tab, focused: tab === focused, folders: folders)
         }
         return TabListRows.Source(key: key, panes: panes, shortcut: item.shortcut, place: item.place, tooltip: item.tooltip,
-                                  spokenStatus: item.accessibilityStatus)
+                                  spokenStatus: item.accessibilityStatus, kindGlyph: item.kindGlyph)
     }
 
     /// One pane of a split tab: its own title, mark, tooltip and words, as its pane header has them.

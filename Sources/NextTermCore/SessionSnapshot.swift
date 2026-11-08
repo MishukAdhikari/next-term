@@ -253,6 +253,9 @@ extension SessionSnapshot {
         /// The agent session (`nxtrm agent NAME`) it ran, with the id the session reported: a restore after an update
         /// resumes it (plan 035 U7).
         public var agentSession: AgentSessionRecord?
+        /// A chat tab (plan 037): the agent it hosts, its conversation and its draft. A chat tab starts no shell, so it has
+        /// no command line or agent evidence of its own.
+        public var chat: ChatTabRecord?
 
         public init(id: UUID, folder: String? = nil, userTitle: String? = nil, remote: RemoteTabRecord? = nil, command: Command? = nil,
                     stateBefore: PriorState = .unknown, interrupted: Bool = false, lastSelected: Date = .distantPast,
@@ -291,6 +294,57 @@ extension SessionSnapshot {
             self.agent = agent
             self.sessionID = sessionID
             self.folder = folder
+        }
+    }
+
+    /// A chat tab's record (plan 037 U5): the catalog agent it hosts, the conversation its session reported (nil before
+    /// the agent named one, or for an agent that resumes none), the folder it ran in, and the input box's draft.
+    public struct ChatTabRecord: Equatable, Sendable, Codable {
+        /// `ACPAgent.id`: claude, codex, or an ACP agent's.
+        public var agent: String
+        public var sessionID: String?
+        public var folder: String?
+        /// What was typed in the input box and not sent; only a draft `keptDraft` allows.
+        public var draft: String?
+
+        public init(agent: String, sessionID: String?, folder: String?, draft: String? = nil) {
+            self.agent = agent
+            self.sessionID = sessionID
+            self.folder = folder
+            self.draft = draft
+        }
+
+        /// The longest draft a save keeps, in characters.
+        public static let longestDraft = 4096
+
+        /// The draft as a save may keep it: nil when empty, too long, or when it looks like it holds a secret, as a typed
+        /// line that does is never kept either. Unlike a typed line it may run over several lines: it goes back in the
+        /// input box, never on a shell's line.
+        public static func keptDraft(_ draft: String) -> String? {
+            guard !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, draft.count <= longestDraft,
+                  CommandSecrets.mask(draft) == draft else { return nil }
+            return draft
+        }
+
+        private enum Keys: String, CodingKey {
+            case agent, sessionID, folder, draft
+        }
+
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: Keys.self)
+            agent = try c.decode(String.self, forKey: .agent)
+            sessionID = try c.decodeIfPresent(String.self, forKey: .sessionID)
+            folder = try c.decodeIfPresent(String.self, forKey: .folder)
+            // A draft from a file is held to the same rule as one saved now.
+            draft = try c.decodeIfPresent(String.self, forKey: .draft).flatMap(Self.keptDraft)
+        }
+
+        public func encode(to encoder: Encoder) throws {
+            var c = encoder.container(keyedBy: Keys.self)
+            try c.encode(agent, forKey: .agent)
+            try c.encodeIfPresent(sessionID, forKey: .sessionID)
+            try c.encodeIfPresent(folder, forKey: .folder)
+            try c.encodeIfPresent(draft.flatMap(Self.keptDraft), forKey: .draft)
         }
     }
 
@@ -1408,7 +1462,7 @@ extension SessionSnapshot.Split: Codable {
 extension SessionSnapshot.Pane: Codable {
     private enum Keys: String, CodingKey {
         case id, folder, userTitle, remote, command, stateBefore, interrupted, lastSelected, agent, scrollback, pending, note, reminted
-        case systemZsh, agentSession
+        case systemZsh, agentSession, chat
     }
 
     public init(from decoder: Decoder) throws {
@@ -1435,6 +1489,7 @@ extension SessionSnapshot.Pane: Codable {
         reminted = c.flag(.reminted)
         systemZsh = c.flag(.systemZsh)
         agentSession = c.optional(SessionSnapshot.AgentSessionRecord.self, .agentSession)
+        chat = c.optional(SessionSnapshot.ChatTabRecord.self, .chat)
         if let budget = decoder.snapshotBudget, !budget.takePane() { throw SessionSnapshot.DecodeError.tooLarge }
     }
 
@@ -1470,6 +1525,7 @@ extension SessionSnapshot.Pane: Codable {
         if reminted { try c.encode(true, forKey: .reminted) }
         try c.encode(systemZsh, forKey: .systemZsh)
         try c.encodeIfPresent(agentSession, forKey: .agentSession)
+        try c.encodeIfPresent(chat, forKey: .chat)
     }
 }
 
