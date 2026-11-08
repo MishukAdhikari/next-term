@@ -31,6 +31,9 @@ public enum SecretAudit {
         case fifteenMinutes = "15 minutes"
         case untilLock = "until lock"
         case session = "this session"
+        /// "In this worktree until Next Term quits", "In this folder until Next Term quits". A build before them skips the line.
+        case worktreeUntilQuit = "worktree until quit"
+        case folderUntilQuit = "folder until quit"
         /// An Always approval, made or used (SecretAlwaysGrants.swift). A build before it skips the line.
         case always
         case grant, remote

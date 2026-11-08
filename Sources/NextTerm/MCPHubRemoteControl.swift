@@ -177,6 +177,11 @@ enum MCPHubRemoteControl {
             // Always too, bound to the server's URL, its header templates and its list (never its name alone).
             request.always = SecretAlways.offer(agent: agent, tab: caller, server: need.server, list: need.list,
                                                 keys: Dictionary(uniqueKeysWithValues: names.map { ($0, $0) }), folder: need.folder)
+        } else if caller == nil, let bridge = pid, let agent = SecretSocket.agentAbove(bridge),
+                  let session = SecretRequests.session(outside: agent.pid) {
+            // Outside Next Term's tabs: For this session, bound to the agent process (pid, start time, executable) and this server.
+            request.session = session
+            request.outsideTabs = true
         }
         var answered = false
         let waitLeft = max(0, need.deadline.timeIntervalSinceNow - 1)

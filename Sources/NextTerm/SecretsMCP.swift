@@ -457,6 +457,8 @@ enum SecretsMCP {
             case .fifteenMinutes: approved = "for 15 minutes"
             case .untilLock: approved = "until the Mac locks"
             case .session: approved = "for this session"
+            case .worktreeUntilQuit: approved = "in this worktree until Next Term quits"
+            case .folderUntilQuit: approved = "in this folder until Next Term quits"
             case .always: approved = "always, here"
             case .grant: approved = "by an earlier approval"
             }

@@ -551,6 +551,20 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
     /// command, until it ends".
     static func grantText(_ grant: SecretGrant, now: ContinuousClock.Instant = .now) -> String {
         let binding = grant.binding
+        let command = SecretApprovalPanel.sanitized(binding.command.joined(separator: " "), limit: 80)
+        if grant.kind == .session, !grant.wide {
+            // This exact request again, for its session: outside the tabs that agent process, else its run in its tab.
+            let agent = binding.program.isEmpty ? "The agent" : AgentName.of(program: binding.program)
+            let outside = grant.session.map(SecretSessions.isOutsideTabs) ?? false
+            return "\(agent)\u{2019}s session\(outside ? " outside Next Term\u{2019}s tabs" : ""): \(SecretRun.keysText(binding.names)) for "
+                + "\(command), until the session ends"
+        }
+        if let scope = grant.scope, grant.kind == .worktree || grant.kind == .folder {
+            let who = binding.program.isEmpty ? "A command" : AgentName.of(program: binding.program)
+            let place = (scope.path as NSString).lastPathComponent
+            let where_ = grant.kind == .worktree ? "anywhere in the worktree \u{201C}\(place)\u{201D}" : "in \u{201C}\(place)\u{201D}"
+            return "\(who): \(SecretRun.keysText(binding.names)) for \(command) \(where_), until Next Term quits"
+        }
         if grant.kind == .session {
             // A wrapper names its agent; run_with_secrets names the command's program, so its tab says whose session it is.
             let tabID: String? = grant.session.flatMap { $0.hasPrefix("tab:") ? $0.split(separator: ":").dropFirst().first.map(String.init) : nil }
@@ -564,7 +578,6 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
             return "\(agent)\u{2019}s session\(place): \(SecretRun.keysText(binding.names)) \(door), until the session ends"
         }
         let who = binding.program.isEmpty ? "A command" : AgentName.of(program: binding.program)
-        let command = SecretApprovalPanel.sanitized(binding.command.joined(separator: " "), limit: 80)
         let folder = (binding.folder as NSString).lastPathComponent
         let left: String
         if let expires = grant.expires {

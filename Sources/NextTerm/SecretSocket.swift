@@ -179,6 +179,11 @@ enum SecretSocket {
             guard let tab, found.pid > 1, isFrontAgent(found, in: tab) else { return nil }
             return SecretRequests.session(agent: found.pid, in: tab)
         }
+        // Outside Next Term's tabs: the agent process above, by its pid, start time and executable, for this exact request.
+        if tab == nil, let found = agent, let session = SecretRequests.session(outside: found.pid) {
+            asking.session = session
+            asking.outsideTabs = true
+        }
         // Always, only for the agent in front of its tab, for a fixed command (SecretAlways.offer).
         asking.always = SecretAlways.offer(agent: agent, tab: tab, door: .wrapper, words: request.argv, keys: request.map,
                                            folder: request.directory, path: nil, resolved: request.executable, warned: request.warn,
