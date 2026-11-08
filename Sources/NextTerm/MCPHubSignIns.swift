@@ -393,8 +393,9 @@ enum MCPHubSignIns {
 
     /// Between a need's keys and its request: `use` with the sign-in's token, or nil when the server has no sign-in in
     /// Next Term (or is given its own Authorization header, a key, which no sign-in joins); `fail` with the sentence when
-    /// the sign-in can't be used for this agent now.
-    static func withSignIn(_ server: MCPHubServer, deadline: Date, caller: TerminalTab?, pid: pid_t?,
+    /// the sign-in can't be used for this agent now. `byUser`: the user's own Check Now in Settings, for which no agent
+    /// is asking, so R15's consent (which agents may use the sign-in) has no one to ask about; the token stays in the app.
+    static func withSignIn(_ server: MCPHubServer, deadline: Date, caller: TerminalTab?, pid: pid_t?, byUser: Bool = false,
                            fail: @escaping (String) -> Void, use: @escaping (Use?) -> Void) {
         if server.headers.keys.contains(where: { $0.lowercased() == "authorization" }) { return use(nil) }
         guard let found = record(for: server.url) else { return use(nil) }
@@ -406,7 +407,8 @@ enum MCPHubSignIns {
         case .needsMoreAccess(let scopes): return fail(MCPHubSignInWords.moreAccess(name, scopes: scopes))
         case .signedIn, .refreshing: break
         }
-        guard let agent = agent(caller) else { return fail(MCPHubSignInWords.notAnAgent(name)) }
+        let agent = byUser ? nil : Self.agent(caller)
+        if !byUser, agent == nil { return fail(MCPHubSignInWords.notAnAgent(name)) }
         withKey(reason: "use its sign-in to \(name) for your agents", makes: false) { key in
             guard let key else { return fail(MCPHubSignInWords.notUnlocked(name)) }
             let signIns = store(key)
@@ -414,7 +416,7 @@ enum MCPHubSignIns {
             // Found again by the server's URL in the checked file, never by the unchecked one's id: a file changed
             // between the two reads can't hand this server another server's token.
             guard let record = body.record(server: server.url) else { return use(nil) }
-            consent(record, agent: agent, name: name, store: signIns, deadline: deadline, caller: caller, pid: pid, fail: fail) {
+            @MainActor func granted() {
                 guard let refresher = refresher(record, key: key) else { return fail(MCPHubSignInWords.lapsed(name)) }
                 DispatchQueue.global(qos: .userInitiated).async {
                     let outcome = refresher.token()
@@ -435,6 +437,8 @@ enum MCPHubSignIns {
                     }
                 }
             }
+            guard let agent else { return granted() }
+            consent(record, agent: agent, name: name, store: signIns, deadline: deadline, caller: caller, pid: pid, fail: fail) { granted() }
         }
     }
 

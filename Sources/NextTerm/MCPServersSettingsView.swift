@@ -19,6 +19,11 @@ import NextTermCore
 ///
 /// A server at a URL that asks for a sign-in has Sign In… under the table; signed in, Sign Out, and the agents allowed
 /// to use the sign-in in its detail with Change… beside them; lapsed, Reconnect… (MCPHubSignIns).
+///
+/// Nothing starts or reaches a server until an agent uses it, so the State column says what is known: a dot before the
+/// words (MCPHubOverview.Indicator: working, not checked yet, needs you, failing, off), the rows that need the user first
+/// on Personal. Check Now reaches a server at a URL as an agent's first need would (MCPHubRemoteControl.check), and
+/// opening the tab reaches, once a launch, the ones that need no key and no sign-in, which can ask nothing.
 final class MCPServersSettingsView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     /// The open projects, for the self-test (its projects are its own).
     static var projectsForTest: [String]?
@@ -34,6 +39,7 @@ final class MCPServersSettingsView: NSView, NSTableViewDataSource, NSTableViewDe
     let editButton = NSButton(title: "Edit\u{2026}", target: nil, action: nil)
     let removeButton = NSButton(title: "Remove", target: nil, action: nil)
     let toggleButton = NSButton(title: "Turn Off", target: nil, action: nil)
+    let checkButton = NSButton(title: "Check Now", target: nil, action: nil)
     let approveButton = NSButton(title: "Approve\u{2026}", target: nil, action: nil)
     let undoButton = NSButton(title: "Undo", target: nil, action: nil)
     let signInButton = NSButton(title: "Sign In\u{2026}", target: nil, action: nil)
@@ -83,6 +89,7 @@ final class MCPServersSettingsView: NSView, NSTableViewDataSource, NSTableViewDe
             MainActor.assumeIsolated { self?.reload() }
         }
         reload()
+        checkOnOpen()
     }
 
     // MARK: layout
@@ -111,7 +118,7 @@ final class MCPServersSettingsView: NSView, NSTableViewDataSource, NSTableViewDe
         }
 
         let columns: [(String, String, CGFloat)] = [("name", "Server", 110), ("applies", "Applies to", 110), ("runs", "Runs", 190),
-                                                    ("state", "State", 150)]
+                                                    ("state", "State", 160)]
         for (id, title, width) in columns {
             let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(id))
             column.title = title
@@ -135,6 +142,7 @@ final class MCPServersSettingsView: NSView, NSTableViewDataSource, NSTableViewDe
 
         let actions: [(NSButton, Selector)] = [(addButton, #selector(add)), (pasteButton, #selector(paste)), (editButton, #selector(edit)),
                                                (removeButton, #selector(remove)), (toggleButton, #selector(toggle)),
+                                               (checkButton, #selector(checkNow)),
                                                (approveButton, #selector(approve)), (undoButton, #selector(undo)), (emptyButton, #selector(add)),
                                                (signInButton, #selector(signInOrOut)), (agentsButton, #selector(changeAgents))]
         for (button, action) in actions {
@@ -147,7 +155,7 @@ final class MCPServersSettingsView: NSView, NSTableViewDataSource, NSTableViewDe
         detailRow = NSStackView(views: [detail, agentsButton])
         detailRow.spacing = 6
         detailRow.alignment = .firstBaseline
-        buttons = NSStackView(views: [editButton, removeButton, toggleButton, approveButton, signInButton, NSView(), undoButton])
+        buttons = NSStackView(views: [editButton, removeButton, toggleButton, checkButton, approveButton, signInButton, NSView(), undoButton])
         buttons.spacing = 8
         buildFound()
         for view in [pickerRow, intro, scroll, detailRow, buttons, foundSection, note] { content.addArrangedSubview(view) }
@@ -268,7 +276,11 @@ final class MCPServersSettingsView: NSView, NSTableViewDataSource, NSTableViewDe
             }
         } else {
             let user = MCPHubScope.sources(folder: nil, home: home, userFile: userFile).user
-            rows = MCPHubOverview.personal(user, runs: runs, signIns: signIns)
+            // The ones that need the user (amber, red) first, each group in the file's order. Selection and Undo find a
+            // row by its name and list, never its place.
+            let listed = MCPHubOverview.personal(user, runs: runs, signIns: signIns)
+            let attention = listed.filter { MCPHubOverview.indicator($0.state).needsAttention }
+            rows = attention + listed.filter { !MCPHubOverview.indicator($0.state).needsAttention }
             if case .failure(let problem)? = user?.read { unreadable = [MCPHubScope.Unreadable(file: userFile, problem: problem)] }
             // Read again where an agent's file changed; a change comes back as MCPHubControl.changed.
             MCPHubAgentServers.refresh(projects: open)
@@ -338,6 +350,13 @@ final class MCPServersSettingsView: NSView, NSTableViewDataSource, NSTableViewDe
         if tableView === foundTable { return foundCell(tableColumn, row: index) }
         guard let column = tableColumn, rows.indices.contains(index) else { return nil }
         let row = rows[index]
+        if column.identifier.rawValue == "state" {
+            let cell = MCPStateCell()
+            let checking = isChecking(row)
+            cell.show(cellText(row, column: "state"), indicator: checking ? .unchecked : MCPHubOverview.indicator(row.state),
+                      tip: checking ? "Next Term is reaching it now." : MCPHubOverview.stateTip(row.state, remote: row.isRemote))
+            return cell
+        }
         let cell = NSTextField(labelWithString: cellText(row, column: column.identifier.rawValue))
         cell.lineBreakMode = .byTruncatingTail
         switch column.identifier.rawValue {
@@ -346,13 +365,6 @@ final class MCPServersSettingsView: NSView, NSTableViewDataSource, NSTableViewDe
             cell.lineBreakMode = .byTruncatingMiddle
             cell.toolTip = row.server.map(MCPHubOverview.runsText) ?? cell.stringValue
             cell.textColor = .secondaryLabelColor
-        case "state":
-            cell.toolTip = MCPHubOverview.stateTip(row.state, remote: row.isRemote)
-            switch row.state {
-            case .failed, .broken, .needsApproval, .needsSignIn, .signedOut, .needsMoreAccess: cell.textColor = .systemOrange
-            case .off, .offHere, .shadowed, .remote: cell.textColor = .tertiaryLabelColor
-            case .ready, .signedIn: cell.textColor = .secondaryLabelColor
-            }
         case "applies": cell.toolTip = SkillStep.short(row.list)
         default: break
         }
@@ -365,7 +377,7 @@ final class MCPServersSettingsView: NSView, NSTableViewDataSource, NSTableViewDe
         case "applies": return MCPHubOverview.appliesText(row, home: NSHomeDirectory())
         // What it runs, as Found in your agents shows it: the command inside `nxtrm secret run`, whose keys are Secrets'.
         case "runs": return row.server.map { $0.transport == .stdio ? MCPHubOverview.keys(of: $0).inner.map(ShellQuote.quote).joined(separator: " ") : $0.url } ?? "\u{2014}"
-        case "state": return MCPHubOverview.stateText(row.state, remote: row.isRemote)
+        case "state": return isChecking(row) ? "Checking\u{2026}" : MCPHubOverview.stateText(row.state, remote: row.isRemote)
         default: return ""
         }
     }
@@ -431,10 +443,16 @@ final class MCPServersSettingsView: NSView, NSTableViewDataSource, NSTableViewDe
         let usable = row?.server != nil
         editButton.isEnabled = usable
         removeButton.isEnabled = row != nil
-        approveButton.isHidden = !showsProject
+        // On Project, Approve… (off for a server not waiting) gives its place to the sign-in button, so the row fits
+        // Settings' width with Check Now in it.
+        approveButton.isHidden = !showsProject || (action != nil && row?.state != .needsApproval)
         approveButton.isEnabled = row?.state == .needsApproval
         toggleButton.isEnabled = usable && row?.state != .shadowed
         toggleButton.title = toggleTitle(row)
+        let check = checkState(row)
+        checkButton.isEnabled = check.enabled
+        checkButton.toolTip = check.tip
+        checkButton.title = row.map { isChecking($0) } == true ? "Checking\u{2026}" : "Check Now"
         let last = MCPHubEdits.last
         undoButton.isEnabled = last != nil
         undoButton.toolTip = last.map { "Undo \u{201C}\($0.title)\u{201D}" }
@@ -498,6 +516,88 @@ final class MCPServersSettingsView: NSView, NSTableViewDataSource, NSTableViewDe
             updateButtons()
         case nil:
             return
+        }
+    }
+
+    // MARK: checking
+
+    /// Whether Check Now is reaching the row's server now.
+    func isChecking(_ row: MCPHubOverview.Row) -> Bool {
+        MCPHubRemoteControl.checking.contains(MCPHubOverview.runKey(list: row.list, server: row.name))
+    }
+
+    /// Whether Check Now can reach the row's server: at a URL, needing no key, in a state an agent's need would reach.
+    func isCheckable(_ row: MCPHubOverview.Row) -> Bool {
+        guard row.isRemote, let server = row.server, MCPHubRemoteControl.canCheck(server) else { return false }
+        switch row.state {
+        case .ready, .signedIn, .failed, .needsSignIn: return true
+        case .off, .offHere, .shadowed, .remote, .broken, .needsApproval, .signedOut, .needsMoreAccess: return false
+        }
+    }
+
+    /// Check Now's state for the selected row (or, with none, for every server it can check), with its tip saying why
+    /// when it can't.
+    func checkState(_ row: MCPHubOverview.Row?) -> (enabled: Bool, tip: String) {
+        guard let row else {
+            let any = rows.contains { isCheckable($0) && !isChecking($0) }
+            return (any, any ? "Reaches every server at a URL that needs no key from Secrets, as an agent\u{2019}s first use would."
+                : "No server here can be checked from Settings: each is checked the first time an agent uses it.")
+        }
+        if isChecking(row) { return (false, "Next Term is reaching it now.") }
+        if isCheckable(row) { return (true, "Reaches it now, as an agent\u{2019}s first use would, and shows what it found.") }
+        guard let server = row.server else { return (false, "It can\u{2019}t be used, so there is nothing to check.") }
+        if server.transport == .stdio {
+            return (false, "Next Term starts a local server only in an agent\u{2019}s session: it is checked the first time an agent uses it.")
+        }
+        switch row.state {
+        case .signedOut, .needsMoreAccess: return (false, "Reconnect first: until then it can\u{2019}t be reached.")
+        case .needsApproval: return (false, "Approve the project\u{2019}s list first.")
+        case .ready, .signedIn, .failed, .needsSignIn:
+            return (false, "It needs a key from Secrets, which Next Term releases only when an agent uses it: it is checked then.")
+        case .off, .offHere, .shadowed, .remote, .broken: return (false, "Agents don\u{2019}t get it here, so there is nothing to check.")
+        }
+    }
+
+    /// Check Now: the selected server, or every one it can check, each reached once; what it found is its state.
+    @objc func checkNow() {
+        let picked = selected.map { [$0] } ?? rows
+        let targets = picked.filter { isCheckable($0) && !isChecking($0) }
+        guard !targets.isEmpty else { return }
+        var left = targets.count
+        var failures: [String] = []
+        for row in targets {
+            check(row) { [weak self] failure in
+                if let failure { failures.append(failure) }
+                left -= 1
+                guard left == 0 else { return }
+                if targets.count == 1 {
+                    self?.said(failures.first ?? "Reached \(row.name).")
+                } else {
+                    let reached = targets.count - failures.count
+                    self?.said("Reached \(reached) of \(targets.count) servers." + (failures.isEmpty ? "" : " Select one to see why it wasn\u{2019}t."))
+                }
+            }
+        }
+        updateButtons()
+    }
+
+    private func check(_ row: MCPHubOverview.Row, done: @escaping (String?) -> Void) {
+        guard let server = row.server else { return done(nil) }
+        let folder = showsProject ? project ?? NSHomeDirectory() : NSHomeDirectory()
+        let userFile = MCPHubControl.userFile ?? MCPHubScope.userPath()
+        MCPHubRemoteControl.check(server, list: row.list, folder: folder, userFile: userFile, done: done)
+    }
+
+    /// On opening the tab: the servers at a URL nothing has reached yet that need no key and no sign-in, so reaching them
+    /// can ask nothing (no Secrets panel, no presence check), each once a launch, in the background. The rest wait for
+    /// Check Now or an agent's use. Never in the self-test, whose servers are made up.
+    private func checkOnOpen() {
+        guard Self.projectsForTest == nil, MCPHubControl.userFile == nil else { return }
+        for row in rows where row.state == .ready(tools: nil) && isCheckable(row) {
+            guard let server = row.server, MCPHubSignIns.record(for: server.url) == nil else { continue }
+            let once = MCPHubOverview.runKey(list: row.list, server: row.name) + "\u{0}" + server.url
+            guard MCPHubRemoteControl.checkedOnOpen.insert(once).inserted else { continue }
+            check(row) { _ in } // its end comes back as MCPHubControl.changed, and the table reads it
         }
     }
 
@@ -655,6 +755,62 @@ final class MCPServersSettingsView: NSView, NSTableViewDataSource, NSTableViewDe
         if let text, !text.isEmpty {
             note.stringValue = text
             note.isHidden = false
+        }
+    }
+}
+
+/// The State column's cell: a dot marking the state at a glance (MCPHubOverview.Indicator), then the words, which say it
+/// too, centred in the row. The dot is the cell's alone: VoiceOver reads the words, and the tooltip says it in a sentence.
+final class MCPStateCell: NSView {
+    let dot = NSImageView()
+    let label = NSTextField(labelWithString: "")
+    private(set) var indicator: MCPHubOverview.Indicator = .unchecked
+
+    init() {
+        super.init(frame: .zero)
+        dot.setAccessibilityElement(false)
+        dot.setContentHuggingPriority(.required, for: .horizontal)
+        label.lineBreakMode = .byTruncatingTail
+        label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        let stack = NSStackView(views: [dot, label])
+        stack.orientation = .horizontal
+        stack.alignment = .centerY
+        stack.spacing = 5
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 2),
+            stack.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -2),
+            stack.centerYAnchor.constraint(equalTo: centerYAnchor),
+        ])
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    func show(_ text: String, indicator: MCPHubOverview.Indicator, tip: String) {
+        self.indicator = indicator
+        let look = Self.look(indicator)
+        dot.image = NSImage(systemSymbolName: look.symbol, accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(pointSize: 7, weight: .regular))
+        dot.contentTintColor = look.dot
+        label.stringValue = text
+        label.textColor = look.text
+        toolTip = tip
+        label.toolTip = tip
+        setAccessibilityElement(true)
+        setAccessibilityRole(.staticText)
+        setAccessibilityLabel(text)
+    }
+
+    /// Each mark's symbol and colours: green working, a hollow circle for not checked yet, amber for what needs the user,
+    /// red failing, grey off. The words of what needs the user read in the label's own colour, a step above the rest.
+    static func look(_ indicator: MCPHubOverview.Indicator) -> (symbol: String, dot: NSColor, text: NSColor) {
+        switch indicator {
+        case .working: return ("circle.fill", .systemGreen, .secondaryLabelColor)
+        case .unchecked: return ("circle", .tertiaryLabelColor, .secondaryLabelColor)
+        case .needsYou: return ("circle.fill", .systemOrange, .labelColor)
+        case .failing: return ("circle.fill", .systemRed, .labelColor)
+        case .off: return ("circle.fill", .tertiaryLabelColor, .tertiaryLabelColor)
         }
     }
 }

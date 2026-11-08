@@ -25,7 +25,7 @@ struct MCPHubSignInStatesTests {
 
         #expect(MCPHubOverview.stateText(.needsSignIn) == "Needs sign-in")
         #expect(MCPHubOverview.stateText(.signedIn(tools: 12)) == "Signed in \u{00B7} 12 tools")
-        #expect(MCPHubOverview.stateText(.signedOut) == "Signed out")
+        #expect(MCPHubOverview.stateText(.signedOut) == "Needs reconnect")
         #expect(MCPHubOverview.stateText(.needsMoreAccess([])) == "Needs more access")
         #expect(MCPHubOverview.stateTip(.signedIn(tools: nil)).contains("never get the sign-in"))
         #expect(MCPServer.stateFields(.signedOut)["state"] as? String == "signed_out")
