@@ -549,8 +549,8 @@ final class SecretApprovalPanel: NSWindowController, NSWindowDelegate {
             } else if content.sessionIsWide {
                 let warned = content.warnings.isEmpty ? "A command Next Term would warn about still asks."
                     : "This command is covered as shown; other commands Next Term would warn about still ask."
-                text = "These keys, for any command \(agent) runs with them, until \(agent) exits, its tab closes or another agent "
-                    + "types into it, a key changes, or Next Term quits. Locking the Mac or switching users doesn\u{2019}t end it. "
+                text = "\(agent) can use \(SecretRun.keysText(content.keys.map(\.name))) in any command it runs, until \(agent) exits, "
+                    + "its tab closes or another agent types into it, a key changes, or Next Term quits. Locking the Mac or switching users doesn\u{2019}t end it. "
                     + warned + " Revoke it in Settings \u{203A} Secrets."
             } else {
                 text = "\(SecretRun.keysText(content.keys.map(\.name))) for \(what), until \(agent) exits, its tab closes or another "

@@ -444,7 +444,7 @@ extension SelfTest {
             let note = texts(tabWindow.contentView)
             let says: Bool
             switch how {
-            case .session: says = note.contains("for any command Codex runs with them")
+            case .session: says = note.contains("Codex can use SECOND_KEY in any command it runs, until Codex exits")
             case .worktreeUntilQuit: says = note.contains("anywhere in this worktree until Next Term quits")
             default: says = note.contains("in this folder until Next Term quits")
             }
