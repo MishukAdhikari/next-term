@@ -103,6 +103,29 @@ enum ChatTabs {
         return tab
     }
 
+    // MARK: the keyboard
+
+    /// What takes the keyboard when something gives it to a chat tab's terminal, which is never shown (plan 037 U6):
+    /// the chat's view instead (its card or its input box). Anything else is given as it is. `TerminalWindow` asks,
+    /// so every place that hands a tab the keyboard by its terminal reaches the chat.
+    static func keyboardTarget(for responder: NSResponder?) -> NSResponder? {
+        if let chat = responder as? ChatView { return chat.preferredResponder }
+        guard let terminal = responder as? NextTermView, let host = hosts.values.first(where: { $0.tab?.view === terminal }) else {
+            return responder
+        }
+        return host.view.preferredResponder
+    }
+
+    /// The chat tab's terminal, for a responder inside a chat's view: the window focuses that pane as it does for a click
+    /// in a terminal. Anything else is told as it is.
+    static func paneResponder(for responder: NSResponder?) -> NSResponder? {
+        guard let view = responder as? NSView, !(view is NextTermView), !hosts.isEmpty,
+              let host = hosts.values.first(where: { view.isDescendant(of: $0.view) }), let terminal = host.tab?.view else {
+            return responder
+        }
+        return terminal
+    }
+
     // MARK: the agents' processes (KTD8)
 
     private static let pidsLock = NSLock()

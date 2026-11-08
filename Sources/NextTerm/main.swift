@@ -9,6 +9,13 @@ if CommandLine.arguments.count > 1, CommandLine.arguments[1] == "--cli" {
     CommandLineTool.run(Array(CommandLine.arguments.dropFirst(2)))
 }
 
+#if DEBUG
+// A picture of the chat view, offscreen, for checking its look (ChatSnapshot).
+if CommandLine.arguments.count > 1, CommandLine.arguments[1] == "--chat-snapshot" {
+    ChatSnapshot.run(Array(CommandLine.arguments.dropFirst(2)))
+}
+#endif
+
 let app = NSApplication.shared
 let delegate = AppDelegate()
 AppDelegate.shared = delegate

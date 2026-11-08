@@ -249,7 +249,8 @@ final class SessionRestore {
             let fronts: [TerminalTab] = controllers.compactMap(\.activeTab)
             let ordered = SessionWriter.scrollbackOrder(tabs, visible: { (tab: TerminalTab) -> Bool in tab.status.visible },
                                                         inFront: { (tab: TerminalTab) -> Bool in fronts.contains { $0 === tab } })
-            for tab in ordered {
+            // A chat tab has no terminal output to keep: its record carries the conversation (plan 037 U5).
+            for tab in ordered where !tab.isChat {
                 guard Date() < deadline else { break }
                 let capture = SessionScrollback.capture(tab)
                 captures.append(capture)

@@ -255,89 +255,27 @@ enum ReleaseNotesRenderer {
     }
 
     private static func render(_ block: ReleaseNotes.Block, into out: NSMutableAttributedString, nested: Bool) {
-        let body = NSFont.systemFont(ofSize: bodySize)
-        switch block {
-        case let .heading(level, text):
-            // Under a version's own heading, the notes' headings sit one step lower.
-            let size: CGFloat = level + (nested ? 1 : 0) <= 2 ? 15 : 13
-            append(out, text, font: .systemFont(ofSize: size, weight: .semibold), color: .labelColor,
-                   style: style(before: out.length == 0 ? 0 : 12, after: 4), markdown: true)
-        case let .bullet(depth, text):
-            append(out, (depth == 0 ? "•" : "◦") + "\t" + text, font: body, color: .labelColor, style: listStyle(depth), markdown: true)
-        case let .numbered(depth, number, text):
-            append(out, number + ".\t" + text, font: body, color: .labelColor, style: listStyle(depth), markdown: true)
-        case let .paragraph(depth, text):
-            let style = style(before: 0, after: 6)
-            style.firstLineHeadIndent = CGFloat(depth) * indentStep
-            style.headIndent = style.firstLineHeadIndent
-            append(out, text, font: body, color: .labelColor, style: style, markdown: true)
-        case let .code(text):
-            let style = style(before: 2, after: 8)
-            style.firstLineHeadIndent = 8
-            style.headIndent = 8
-            append(out, text, font: .monospacedSystemFont(ofSize: bodySize - 1, weight: .regular), color: .labelColor, style: style)
-        }
+        var style = MarkdownBlocksRenderer.Style()
+        style.body = bodySize
+        style.code = bodySize - 1
+        style.indentStep = indentStep
+        // Under a version's own heading, the notes' headings sit one step lower.
+        style.nested = nested
+        MarkdownBlocksRenderer.render(block, style: style, into: out)
     }
 
     private static func style(before: CGFloat, after: CGFloat) -> NSMutableParagraphStyle {
-        let style = NSMutableParagraphStyle()
-        style.paragraphSpacingBefore = before
-        style.paragraphSpacing = after
-        style.lineSpacing = 2
-        return style
-    }
-
-    /// The marker hangs in the margin; wrapped lines line up with the text after it.
-    private static func listStyle(_ depth: Int) -> NSMutableParagraphStyle {
-        let style = style(before: 0, after: 4)
-        let start = CGFloat(depth) * indentStep
-        style.firstLineHeadIndent = start
-        style.headIndent = start + indentStep
-        style.tabStops = [NSTextTab(textAlignment: .left, location: start + indentStep)]
-        style.defaultTabInterval = indentStep
-        return style
+        MarkdownBlocksRenderer.paragraph(MarkdownBlocksRenderer.Style(), before: before, after: after)
     }
 
     private static func append(_ out: NSMutableAttributedString, _ text: String, font: NSFont, color: NSColor,
                                style: NSParagraphStyle, markdown: Bool = false) {
-        let line = markdown ? inline(text, font: font, color: color) : NSAttributedString(string: text, attributes: [.font: font, .foregroundColor: color])
-        let piece = NSMutableAttributedString(attributedString: line)
-        piece.append(NSAttributedString(string: "\n", attributes: [.font: font]))
-        piece.addAttribute(.paragraphStyle, value: style, range: NSRange(location: 0, length: piece.length))
-        out.append(piece)
+        MarkdownBlocksRenderer.append(out, text, font: font, color: color, style: style, markdown: markdown)
     }
 
     /// Bold, italics, code and links inside one block. Only web links are followed.
     static func inline(_ text: String, font: NSFont, color: NSColor) -> NSAttributedString {
-        let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
-        guard let parsed = try? AttributedString(markdown: text, options: options) else {
-            return NSAttributedString(string: text, attributes: [.font: font, .foregroundColor: color])
-        }
-        let out = NSMutableAttributedString()
-        for run in parsed.runs {
-            var runFont = font
-            var attributes: [NSAttributedString.Key: Any] = [.foregroundColor: color]
-            if let intent = run.inlinePresentationIntent {
-                if intent.contains(.code) {
-                    runFont = .monospacedSystemFont(ofSize: font.pointSize - 1, weight: .regular)
-                    attributes[.backgroundColor] = NSColor.quaternaryLabelColor
-                }
-                var traits: NSFontDescriptor.SymbolicTraits = []
-                if intent.contains(.stronglyEmphasized) { traits.insert(.bold) }
-                if intent.contains(.emphasized) { traits.insert(.italic) }
-                if !traits.isEmpty {
-                    let descriptor = runFont.fontDescriptor.withSymbolicTraits(runFont.fontDescriptor.symbolicTraits.union(traits))
-                    runFont = NSFont(descriptor: descriptor, size: runFont.pointSize) ?? runFont
-                }
-            }
-            if let link = run.link, ["https", "http"].contains(link.scheme?.lowercased() ?? "") {
-                attributes[.link] = link
-                attributes[.toolTip] = link.absoluteString
-            }
-            attributes[.font] = runFont
-            out.append(NSAttributedString(string: String(parsed[run.range].characters), attributes: attributes))
-        }
-        return out
+        MarkdownBlocksRenderer.inline(text, font: font, color: color)
     }
 }
 

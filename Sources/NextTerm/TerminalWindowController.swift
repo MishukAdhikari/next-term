@@ -22,8 +22,9 @@ final class TerminalWindow: NSWindow {
     override func makeFirstResponder(_ responder: NSResponder?) -> Bool {
         // A tab an agent opened that the user hasn't chosen takes no keyboard, whatever asks for it (AgentArrival).
         if let view = responder as? NextTermView, view.awaitsChoice { return false }
-        let made = super.makeFirstResponder(responder)
-        if made { onFirstResponderChange?(firstResponder) }
+        // A chat tab's terminal is never shown: its chat takes the keyboard, and its pane is focused (plan 037 U6).
+        let made = super.makeFirstResponder(ChatTabs.keyboardTarget(for: responder))
+        if made { onFirstResponderChange?(ChatTabs.paneResponder(for: firstResponder)) }
         return made
     }
 

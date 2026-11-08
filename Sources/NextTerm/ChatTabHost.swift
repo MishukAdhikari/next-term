@@ -37,8 +37,8 @@ final class ChatTabHost: AgentSessionPresenter {
     /// The view's hook: called when what it shows changed; `soon` for streamed chunks, which it may coalesce.
     var onChange: ((_ soon: Bool) -> Void)?
 
-    /// What the tab's pane shows (`TerminalTab.contentView`): for now a plain-text stand-in, until the native view (U6).
-    private(set) lazy var view: NSView = ChatPlaceholderView(host: self)
+    /// What the tab's pane shows (`TerminalTab.contentView`): the native chat view.
+    private(set) lazy var view: ChatView = ChatView(source: self)
 
     init(tab: TerminalTab, start: ChatStart) {
         self.tab = tab
