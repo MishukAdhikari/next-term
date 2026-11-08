@@ -1022,6 +1022,17 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         }
     }
 
+    /// Types a line at the prompt once the shell is ready (as `runWhenReady` waits), and leaves it there for the user to
+    /// read and run themselves.
+    func typeWhenReady(_ line: String, waited: TimeInterval = 0) {
+        guard !exited else { return }
+        if !status.integrated && waited < 3 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in self?.typeWhenReady(line, waited: waited + 0.1) }
+            return
+        }
+        _ = view.typeText(line)
+    }
+
     /// Return for a line Next Term or an agent typed into this tab by itself (`typed`, as typeText or typeIn returned
     /// it), never for the user's: every such Return comes here (MCP's send_to_tab, new_tab and press_keys, run_with_secrets,
     /// runWhenReady's resumes and clients, a restore's resume). Where the tab's zsh can take history's key now, the key

@@ -691,6 +691,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         MainActor.assumeIsolated { HintCenter.shared.seed(columnSideChosen: columnSideChosen, columnExpandedEver: columnExpandedEver) }
         // Skill updates, once a day, for Agents › Skills…' count.
         MainActor.assumeIsolated { SkillsUpdateCheck.start() }
+        // Settings › Agents' scheduled updates: every schedule is Off until the user picks one, and then nothing is read.
+        MainActor.assumeIsolated { AgentCLIManager.shared.start() }
         if let command { handle(command) }
         open(named, asRequest: true)
         let show = { [self] in
@@ -2273,6 +2275,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 completionHandler()
             }
         }
+        // An agent's scheduled update (Settings › Agents): Show Log, or a click, opens its log.
+        if let log = response.notification.request.content.userInfo[AgentCLIManager.logKey] as? String {
+            return DispatchQueue.main.async {
+                MainActor.assumeIsolated { AgentCLIManager.showLog(log) }
+                completionHandler()
+            }
+        }
         let reminder = SecretReminder(userInfo: response.notification.request.content.userInfo)
         let signIn = response.notification.request.content.userInfo[MCPHubSignIns.noticeKey] as? String
         DispatchQueue.main.async { [self] in
@@ -2673,6 +2682,18 @@ extension AppDelegate {
             noticeActions[category] = [NoticeActions.Action(id: NoticeActions.reply, title: "Reply")]
         }
         noticeCategories[category] = UNNotificationCategory(identifier: category, actions: actions, intentIdentifiers: [], options: [])
+        noticeCategoryOrder = NoticeActions.kept(noticeCategoryOrder, adding: category)
+        registerNoticeCategories()
+        return category
+    }
+
+    /// The category of an agent update's notification (Settings › Agents' schedules): its one button, Show Log.
+    func showLogCategory() -> String {
+        let category = "agent-cli-update"
+        if noticeCategories[category] == nil {
+            let show = UNNotificationAction(identifier: "show-log", title: "Show Log", options: [.foreground])
+            noticeCategories[category] = UNNotificationCategory(identifier: category, actions: [show], intentIdentifiers: [], options: [])
+        }
         noticeCategoryOrder = NoticeActions.kept(noticeCategoryOrder, adding: category)
         registerNoticeCategories()
         return category

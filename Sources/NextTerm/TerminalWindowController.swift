@@ -1955,8 +1955,9 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     /// A tab in `directory` running `command` once its shell is at the prompt. An untouched first tab in
     /// the same folder is used rather than a second one; never a restored one, which may hold a put-back line.
+    /// `submit` false types the line and leaves Return to the user (Settings › Agents' Install…).
     @discardableResult
-    func runInNewTab(directory: String, command: String, title: String?) -> TerminalTab {
+    func runInNewTab(directory: String, command: String, title: String?, submit: Bool = true) -> TerminalTab {
         let folder = canonicalPath(directory)
         let tab: TerminalTab
         if groups.count == 1, tabs.count == 1, let only = tabs.first, only.remote == nil, only.isUntouched,
@@ -1967,7 +1968,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         }
         if let title { tab.userTitle = title }
         show(tab)
-        tab.runWhenReady(command)
+        if submit { tab.runWhenReady(command) } else { tab.typeWhenReady(command) }
         return tab
     }
 

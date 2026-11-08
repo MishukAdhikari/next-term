@@ -521,16 +521,16 @@ public enum AgentCLIs {
 
     public enum Decision: Equatable, Sendable {
         case update(command: String)
-        /// Nothing now. `counts`: the try is recorded, so the next comes a whole interval later; otherwise the next
-        /// hourly look tries again (the agent was busy).
+        /// Nothing now (`Skip.counts` says whether the look counts as the interval's).
         case skip(Skip)
     }
 
     public enum Skip: String, Equatable, Sendable {
         case off, notDue, notInstalled, updatesItself, noCommand, running, upToDate, noLatest
 
-        /// Whether the try counts as the interval's.
-        public var counts: Bool { self == .upToDate || self == .noLatest }
+        /// Whether the look counts as the interval's try, so the next comes a whole interval later. A busy agent or no
+        /// answer about the latest version (offline) is looked at again within the hour.
+        public var counts: Bool { ![.off, .notDue, .running, .noLatest].contains(self) }
     }
 
     /// What a scheduled look does for one agent. `running`: a tab runs it, or any process of it is running (an
@@ -585,6 +585,11 @@ public enum AgentCLIs {
         public struct Entry: Codable, Equatable, Sendable {
             public var version: String?
             public var checked: Date
+
+            public init(version: String?, checked: Date) {
+                self.version = version
+                self.checked = checked
+            }
         }
 
         public var entries: [String: Entry] = [:]
