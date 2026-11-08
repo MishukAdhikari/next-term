@@ -73,6 +73,43 @@ enum MCPHubRemoteControl {
         }
     }
 
+    // MARK: Check Now
+
+    /// The servers Settings is checking now, by MCPHubOverview.runKey.
+    private(set) static var checking = Set<String>()
+    /// The servers Settings checked by itself on opening the tab, by runKey and URL: once each a launch.
+    static var checkedOnOpen = Set<String>()
+
+    /// Whether Settings can check a server itself: one at a Streamable HTTP URL whose URL and headers name no key from
+    /// Secrets, since those are released only for an agent's need, on Secrets' panel naming that agent.
+    static func canCheck(_ server: MCPHubServer) -> Bool {
+        server.transport == .http && server.enabled && Need.names(of: server).isEmpty
+    }
+
+    /// Settings' Check Now: one need of the server's tools, as an agent's first need sends it (its sign-in's token when
+    /// it has one, released with the sign-ins' key, the same refresh, 401 and 403 handling), whose end is the server's
+    /// state as an agent's is (MCPHubControl.lastRuns). No agent asks, so no consent is asked and no key is released.
+    /// `done` with the failure's words (masked as an agent's answer is), or nil once reached.
+    static func check(_ server: MCPHubServer, list: String, folder: String, userFile: String, done: @escaping (String?) -> Void) {
+        let key = MCPHubOverview.runKey(list: list, server: server.name)
+        guard canCheck(server), !checking.contains(key) else { return done(nil) }
+        checking.insert(key)
+        NotificationCenter.default.post(name: MCPHubControl.changed, object: nil)
+        func finish(_ failure: String?) {
+            checking.remove(key)
+            NotificationCenter.default.post(name: MCPHubControl.changed, object: nil)
+            done(failure)
+        }
+        let seconds = min(limits.call, 30)
+        MCPHubSignIns.withSignIn(server, deadline: Date().addingTimeInterval(seconds), caller: nil, pid: nil, byUser: true,
+                                 fail: { finish($0) }) { signIn in
+            // Its time from here: a presence check for the sign-ins' key takes none of it.
+            let need = Need(server: server, list: list, folder: folder, op: "tools", tool: "", arguments: [:],
+                            deadline: Date().addingTimeInterval(seconds), userFile: userFile)
+            reach(need, values: [:], signIn: signIn) { result in finish(result.isError ? result.text : nil) }
+        }
+    }
+
     struct Need {
         let server: MCPHubServer
         let list: String
@@ -84,7 +121,10 @@ enum MCPHubRemoteControl {
         /// The user's list, beside which the server's cached tool list is kept (MCPHubManifest).
         let userFile: String
 
-        var names: [String] {
+        var names: [String] { Self.names(of: server) }
+
+        /// The keys a server's URL and headers name, each once.
+        static func names(of server: MCPHubServer) -> [String] {
             var seen = Set<String>()
             return MCPHubRules.secretNames(in: ([server.url] + server.headers.keys.sorted().compactMap { server.headers[$0] })
                 .joined(separator: "\n")).filter { seen.insert($0).inserted }

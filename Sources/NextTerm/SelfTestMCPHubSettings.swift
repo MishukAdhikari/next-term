@@ -144,15 +144,19 @@ extension SelfTest {
     }
 
     /// The sign-in states in Settings, one server each: Needs sign-in (its last need got a Bearer challenge), Signed in
-    /// with its tools, Signed out and Needs more access, each with its one button under the table and its words whole in
-    /// the State column; a local server has none. Then a lapse's notice, once however often it is met, and its click: Settings
+    /// with its tools, Needs reconnect and Needs more access, each with its one button under the table, its dot, and its
+    /// words whole in the State column; a local server has none, and no Check Now. The rows that need the user come
+    /// first. Then a lapse's notice, once however often it is met, and its click: Settings
     /// opened on the server with Reconnect…. (The mcpHubOAuth part signs in for real.)
     private static func signInStateChecks(_ view: MCPServersSettingsView, window: NSWindow, userFile: String) async {
-        let cases: [(name: String, signIn: MCPHubOverview.SignIn?, run: MCPHubOverview.Run?, text: String, button: String)] = [
-            ("signs-in", nil, .init(failure: MCPHubSignInWords.needsSignIn("signs-in"), tools: 0, needsSignIn: true), "Needs sign-in", "Sign In\u{2026}"),
-            ("signed-in", .signedIn, .init(failure: nil, tools: 12), "Signed in \u{00B7} 12 tools", "Sign Out"),
-            ("lapsed", .signedOut, nil, "Signed out", "Reconnect\u{2026}"),
-            ("more-access", .needsMoreAccess(["files:write"]), nil, "Needs more access", "Reconnect\u{2026}"),
+        typealias Mark = MCPHubOverview.Indicator
+        let cases: [(name: String, signIn: MCPHubOverview.SignIn?, run: MCPHubOverview.Run?, text: String, button: String, mark: Mark,
+                     checks: Bool)] = [
+            ("signs-in", nil, .init(failure: MCPHubSignInWords.needsSignIn("signs-in"), tools: 0, needsSignIn: true), "Needs sign-in",
+             "Sign In\u{2026}", .needsYou, true),
+            ("signed-in", .signedIn, .init(failure: nil, tools: 12), "Signed in \u{00B7} 12 tools", "Sign Out", .working, true),
+            ("lapsed", .signedOut, nil, "Needs reconnect", "Reconnect\u{2026}", .needsYou, false),
+            ("more-access", .needsMoreAccess(["files:write"]), nil, "Needs more access", "Reconnect\u{2026}", .needsYou, false),
         ]
         func url(_ name: String) -> String { "https://\(name).example.com/mcp" }
         var states: [String: MCPHubOverview.SignIn] = [:]
@@ -179,12 +183,29 @@ extension SelfTest {
             view.table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
             let shown = view.cellText(view.rows[row], column: "state")
             let column = view.table.column(withIdentifier: NSUserInterfaceItemIdentifier("state"))
-            let cell = column < 0 ? nil : view.table.view(atColumn: column, row: row, makeIfNecessary: true) as? NSTextField
-            let fits = cell.map { $0.attributedStringValue.size().width <= $0.frame.width } ?? false
+            let cell = column < 0 ? nil : view.table.view(atColumn: column, row: row, makeIfNecessary: true) as? MCPStateCell
+            cell?.layoutSubtreeIfNeeded()
+            let label = cell?.label
+            let fits = label.map { $0.attributedStringValue.size().width <= $0.frame.width + 0.5 } ?? false
             check(shown == each.text && view.signInButton.title == each.button && !view.signInButton.isHidden && fits,
                   "MCP settings: \(each.name) reads \(each.text), whole, with \(each.button) under the table",
-                  "\(shown) | \(view.signInButton.title) | fits \(fits) in \(cell?.frame.width ?? 0)")
+                  "\(shown) | \(view.signInButton.title) | fits \(fits) in \(label?.frame.width ?? 0)")
+            check(cell?.indicator == each.mark && cell?.dot.image != nil && cell?.label.stringValue == each.text,
+                  "MCP settings: \(each.name)\u{2019}s State has its dot, \(each.mark), before its words", "\(String(describing: cell?.indicator))")
+            check(!view.checkButton.isHidden && view.checkButton.isEnabled == each.checks && !(view.checkButton.toolTip ?? "").isEmpty,
+                  "MCP settings: Check Now is \(each.checks ? "offered" : "off, with why,") for \(each.name)",
+                  "\(view.checkButton.isEnabled) | \(view.checkButton.toolTip ?? "")")
         }
+        // What needs the user (amber, red) is listed before the rest.
+        let attention = view.rows.map { MCPHubOverview.indicator($0.state).needsAttention }
+        check(attention == attention.sorted { $0 && !$1 }, "MCP settings: the servers that need you come first in Personal",
+              view.rows.map { "\($0.name) \(MCPHubOverview.stateText($0.state))" }.joined(separator: ", "))
+        // Each state's dot: green working, a hollow circle not checked yet, amber needs you, red failing, grey off.
+        let looks: [(Mark, String, NSColor)] = [(.working, "circle.fill", .systemGreen), (.unchecked, "circle", .tertiaryLabelColor),
+                                                (.needsYou, "circle.fill", .systemOrange), (.failing, "circle.fill", .systemRed),
+                                                (.off, "circle.fill", .tertiaryLabelColor)]
+        check(looks.allSatisfy { MCPStateCell.look($0.0).symbol == $0.1 && MCPStateCell.look($0.0).dot == $0.2 },
+              "MCP settings: each mark has its own dot")
         if let row = view.rows.firstIndex(where: { $0.name == "lapsed" }) {
             view.table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
         }
@@ -192,6 +213,8 @@ extension SelfTest {
         if let local = view.rows.firstIndex(where: { $0.server?.transport == .stdio }) {
             view.table.selectRowIndexes(IndexSet(integer: local), byExtendingSelection: false)
             check(view.signInButton.isHidden, "MCP settings: a local server has no Sign In\u{2026}")
+            check(!view.checkButton.isEnabled && view.checkButton.toolTip?.contains("agent\u{2019}s session") == true,
+                  "MCP settings: Check Now is off for a local server, saying an agent\u{2019}s session starts it", view.checkButton.toolTip ?? "")
         }
 
         // The lapse's notice: one for the lapse, however many needs meet it; clicked, Settings on the server with Reconnect….

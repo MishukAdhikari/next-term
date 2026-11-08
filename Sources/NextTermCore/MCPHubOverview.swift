@@ -53,7 +53,8 @@ public enum MCPHubOverview {
         URL(string: url).map(MCPHubOAuthURL.canonical) ?? url
     }
 
-    /// How a server's last start in an agent's session ended.
+    /// How a server's last start in an agent's session ended (or, at a URL, its last need: an agent's, or Settings' Check
+    /// Now).
     public struct Run: Equatable, Sendable {
         public var failure: String?
         public var tools: Int
@@ -159,12 +160,40 @@ public enum MCPHubOverview {
 
     // MARK: words
 
+    /// How the State column marks a state at a glance, as a dot before its words (never in place of them): working,
+    /// not checked yet, needs the user, failing, or off.
+    public enum Indicator: Equatable, Sendable {
+        /// Its last start or need reached it, with its tools (a green dot).
+        case working
+        /// Configured, and nothing has checked it yet: nothing starts or reaches a server until an agent uses it (a
+        /// hollow circle).
+        case unchecked
+        /// The user acts before agents can use it: a sign-in, a reconnect, more access, an approval (an amber dot).
+        case needsYou
+        /// Its last start or need failed, or its entry can't be used (a red dot).
+        case failing
+        /// Turned off, replaced by another, or of a kind Next Term doesn't reach (a grey dot).
+        case off
+
+        /// The rows Personal lists first.
+        public var needsAttention: Bool { self == .needsYou || self == .failing }
+    }
+
+    public static func indicator(_ state: State) -> Indicator {
+        switch state {
+        case .ready(let tools), .signedIn(let tools): return tools == nil ? .unchecked : .working
+        case .needsSignIn, .signedOut, .needsMoreAccess, .needsApproval: return .needsYou
+        case .failed, .broken: return .failing
+        case .off, .offHere, .shadowed, .remote: return .off
+        }
+    }
+
     /// The state in a few words, for the table. `remote`: a server at a URL, which is reached rather than started. What
-    /// to do about it is the button under the table (Sign In…, Reconnect…), never words in the cell.
+    /// to do about it is the button under the table (Sign In…, Reconnect…, Check Now), never words in the cell.
     public static func stateText(_ state: State, remote: Bool = false) -> String {
         switch state {
-        case .ready(let tools?): return "Ready · \(tools) \(tools == 1 ? "tool" : "tools")"
-        case .ready(nil): return "Ready"
+        case .ready(let tools?): return "Connected \u{00B7} \(tools) \(tools == 1 ? "tool" : "tools")"
+        case .ready(nil), .signedIn(nil): return "Not checked yet"
         case .failed: return remote ? "Couldn\u{2019}t reach" : "Didn\u{2019}t start"
         case .off: return "Off"
         case .offHere: return "Off in this project"
@@ -174,8 +203,7 @@ public enum MCPHubOverview {
         case .shadowed: return "Replaced by another"
         case .needsSignIn: return "Needs sign-in"
         case .signedIn(let tools?): return "Signed in \u{00B7} \(tools) \(tools == 1 ? "tool" : "tools")"
-        case .signedIn(nil): return "Signed in"
-        case .signedOut: return "Signed out"
+        case .signedOut: return "Needs reconnect"
         case .needsMoreAccess: return "Needs more access"
         }
     }
@@ -186,10 +214,12 @@ public enum MCPHubOverview {
         case .ready(let tools?) where remote:
             return "Next Term reached it for an agent, with \(tools) \(tools == 1 ? "tool" : "tools"). Every agent in Next Term uses the same connection."
         case .ready(nil) where remote:
-            return "Next Term reaches it the first time an agent in Next Term uses it, with its keys from Secrets; the agent never gets them."
-        case .failed(let why) where remote: return "The last time an agent used it, Next Term couldn\u{2019}t reach it: \(why)"
+            return "Not checked yet. Next Term reaches it the first time an agent in Next Term uses it, or when you click Check Now, with its "
+                + "keys from Secrets; the agent never gets them."
+        case .failed(let why) where remote: return "The last time it was reached, Next Term couldn\u{2019}t reach it: \(why)"
         case .ready(let tools?): return "It started in an agent\u{2019}s session with \(tools) \(tools == 1 ? "tool" : "tools"). It starts for each session that uses it."
-        case .ready(nil): return "It starts the first time an agent in Next Term uses it, in that agent\u{2019}s folder."
+        case .ready(nil):
+            return "Not checked yet. It starts the first time an agent in Next Term uses it, in that agent\u{2019}s folder; until then nothing has started it."
         case .failed(let why): return "Its last start in an agent\u{2019}s session failed: \(why)"
         case .off: return "Turned off: agents don\u{2019}t get it."
         case .offHere: return "You turned it off in this project: agents here don\u{2019}t get it."
@@ -201,7 +231,9 @@ public enum MCPHubOverview {
             return "It asks you to sign in. Sign in once, and Next Term keeps you signed in for every agent; the agents never get the sign-in."
         case .signedIn(let tools?):
             return "Next Term is signed in to it for your agents, and reached it with \(tools) \(tools == 1 ? "tool" : "tools"). The agents never get the sign-in."
-        case .signedIn(nil): return "Next Term is signed in to it for your agents. The agents never get the sign-in."
+        case .signedIn(nil):
+            return "Next Term is signed in to it for your agents. Not checked yet: it is reached the first time an agent uses it, or when you "
+                + "click Check Now. The agents never get the sign-in."
         case .signedOut: return "Next Term\u{2019}s sign-in lapsed. Reconnect to sign in again; until then agents can\u{2019}t use it."
         case .needsMoreAccess(let scopes):
             return "It needs more access than you gave (\(scopes.joined(separator: " "))). Reconnect to give it; until then agents can\u{2019}t use it for that."
