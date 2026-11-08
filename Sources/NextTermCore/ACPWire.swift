@@ -141,13 +141,38 @@ public enum ACPWire {
               "error": .object(["code": .number(Double(code)), "message": .string(message)])])
     }
 
-    private static func line(_ fields: [String: Value]) -> Data {
+    /// An object as one line ending in a newline: ACP's lines, and the lines Claude Code's stream and Codex's
+    /// app-server read.
+    static func line(_ fields: [String: Value]) -> Data {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         // JSON never holds a raw newline: strings escape theirs, so the line is one line.
         var data = (try? encoder.encode(Value.object(fields))) ?? Data("{}".utf8)
         data.append(0x0A)
         return data
+    }
+
+    /// Option ids of a permission's menu.
+    static let allowOnce = "allow_once"
+    static let allowAlways = "allow_always"
+    static let rejectOnce = "reject_once"
+
+    /// A permission menu's option, of the kind its id names.
+    static func option(_ id: String, _ name: String) -> Value {
+        .object(["optionId": .string(id), "name": .string(name), "kind": .string(id)])
+    }
+
+    /// A `session/update` of `kind` (`agent_message_chunk`, `agent_thought_chunk`) holding text.
+    static func chunk(_ kind: String, _ text: String) -> Value {
+        let content = Value.object(["type": .string("text"), "text": .string(text)])
+        return .object(["update": .object(["sessionUpdate": .string(kind), "content": content])])
+    }
+
+    /// A tool's output as ACP content, cut at 4000 characters; none when it printed nothing.
+    static func textContent(_ output: String?) -> [Value] {
+        guard let output, !output.isEmpty else { return [] }
+        let text = Value.object(["type": .string("text"), "text": .string(String(output.prefix(4000)))])
+        return [.object(["type": .string("content"), "content": text])]
     }
 
     /// The client's `initialize`: version 1, and no file system or terminal of the client's (the agent uses its own

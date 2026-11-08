@@ -446,9 +446,8 @@ enum MCPControl {
         }
         info.merge(questionInfo(tab)) { $1 }
         info.merge(restoredFields(tab)) { $1 } // what a restart did to it (U13)
-        if let session = MainActor.assumeIsolated({ AgentSessionSocket.reports[tab.id] }), tab.status.program == CommandClassifier.agentSessionProgram {
-            info["agent_session"] = session.agent // an agent session (plan 030): read_tab gives its last message
-        }
+        // An agent session (plan 030): its agent, CLI version and model (plan 035); read_tab gives its last message.
+        info.merge(MainActor.assumeIsolated { AgentSessionSocket.listFields(tab) }) { $1 }
         if let code = tab.status.exitCode, tab.status.state == .failed { info["exit_code"] = Int(code) }
         if MCPRegistration.needsRestart(tab) { info["needs_restart"] = true } // its agent started before Next Term's tools reached it
         if tab === caller { info["you"] = true }
