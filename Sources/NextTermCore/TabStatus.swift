@@ -247,6 +247,19 @@ public struct TabStatus {
         screenSynced = true // the host's report is the truth; its UI redrawing is not work
     }
 
+    // MARK: a chat tab's agent session
+
+    /// The tab is a chat tab (plan 037 KTD9): Next Term hosts its agent session itself and reports its state exactly, so
+    /// it runs as one agent whose `observe(agentScreen:)` takes the host's working, asking and ready. Like a host of
+    /// agents (`observeAgentHost`) but hosting none: leaving it is a finish like any agent's. Called again with the same
+    /// program while it runs, it changes nothing.
+    public mutating func observeChatSession(program name: String, at now: TimeInterval) {
+        if running && kind == .agent && program == name && !hostsAgents { return }
+        start(name, kind: .agent, at: now)
+        program = name
+        screenSynced = true // the host's report is the truth, never output timing
+    }
+
     // MARK: what an agent's screen shows
 
     /// Call a few times a second for a running agent with what its screen shows.

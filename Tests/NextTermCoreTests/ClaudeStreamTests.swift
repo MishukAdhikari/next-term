@@ -434,4 +434,58 @@ import Testing
         #expect(AgentSessionVersion.parse("Usage: claude [options]") == nil)
         #expect(AgentSessionVersion.parse("") == nil)
     }
+
+    // MARK: malformed input (plan 037 U1): a chat tab parses in the app, so nothing an agent writes may trap
+
+    /// Lines no well-behaved Claude writes: truncated, of the wrong types for every field read, huge, with NULs.
+    static let malformed: [String] = [
+        "", "{", "{\"type\":", "[]", "null", "42", "\"text\"", "{\"type\":7}", "{\"type\":null}",
+        "{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":5,\"model\":[],\"tools\":\"x\",\"mcp_servers\":{}}",
+        "{\"type\":\"stream_event\",\"event\":\"x\"}",
+        "{\"type\":\"stream_event\",\"event\":{\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":3}}}",
+        "{\"type\":\"stream_event\",\"event\":{\"type\":\"message_start\",\"message\":{\"id\":{}}}}",
+        "{\"type\":\"assistant\",\"message\":{\"content\":\"no\"}}",
+        "{\"type\":\"assistant\",\"message\":{\"id\":1,\"content\":[{\"type\":\"tool_use\",\"id\":2,\"name\":{},\"input\":7}]}}",
+        "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"id\":\"t\",\"name\":\"Edit\",\"input\":{\"file_path\":3,\"old_string\":[],\"new_string\":null}}]}}",
+        "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"id\":\"t\",\"name\":\"TodoWrite\",\"input\":{\"todos\":[1,{\"content\":2}]}}]}}",
+        "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"id\":\"t\",\"name\":\"MultiEdit\",\"input\":{\"file_path\":\"a\",\"edits\":\"x\"}}]}}",
+        "{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":9,\"content\":{\"a\":1}}]}}",
+        "{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"t\",\"is_error\":\"yes\",\"content\":[1,null]}]}}",
+        "{\"type\":\"result\",\"subtype\":4,\"is_error\":\"no\",\"result\":[],\"usage\":\"x\",\"total_cost_usd\":\"free\"}",
+        "{\"type\":\"result\",\"usage\":{\"input_tokens\":-5,\"output_tokens\":1e300},\"modelUsage\":[1]}",
+        "{\"type\":\"control_request\",\"request_id\":1,\"request\":\"x\"}",
+        "{\"type\":\"control_request\",\"request_id\":\"r\",\"request\":{\"subtype\":\"can_use_tool\",\"tool_name\":5,\"input\":[],\"permission_suggestions\":\"all\"}}",
+        "{\"type\":\"control_request\",\"request_id\":\"r\",\"request\":{\"subtype\":\"can_use_tool\",\"tool_name\":\"AskUserQuestion\",\"input\":{\"questions\":[{\"question\":1,\"options\":\"a\"}]}}}",
+        "{\"type\":\"control_response\",\"response\":{\"request_id\":[],\"subtype\":\"error\"}}",
+        "{\"type\":\"control_cancel_request\",\"request_id\":{}}",
+        "{\"type\":\"text\\u0000\",\"text\":\"a\\u0000b\"}",
+    ]
+
+    @Test func malformedLinesNeverTrap() {
+        var stream = ClaudeStream()
+        var session = ACPSession()
+        session.prompted("go")
+        for line in Self.malformed {
+            let event = stream.decode(Data(line.utf8))
+            if case .updates(let updates) = event { updates.forEach { session.apply(update: $0) } }
+            if case .permission(let permission) = event { session.requested(permission: .string(permission.requestID), params: permission.params) }
+        }
+        // Lines that aren't JSON objects are passed over.
+        for line in ["", "{", "[]", "null", "42", "\"text\""] {
+            #expect(stream.decode(Data(line.utf8)) == .ignore, "\(line)")
+        }
+        _ = ChatTranscript.plainText(ChatTranscript.blocks(from: session, expanded: [], thoughtTimes: [:]), lastLines: 50)
+    }
+
+    @Test func invalidBytesAndHugeLinesNeverTrap() {
+        var stream = ClaudeStream()
+        let invalid = Data([0x7B, 0x22, 0x74, 0xFF, 0xFE, 0x22, 0x3A, 0x00, 0x7D])
+        #expect(stream.decode(invalid) == .ignore)
+        #expect(stream.decode(Data([0xC3])) == .ignore)
+        #expect(stream.decode(Data(repeating: 0, count: 64)) == .ignore)
+        let huge = String(repeating: "\u{00E9}x", count: 512 * 1024)
+        let line = "{\"type\":\"stream_event\",\"event\":{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"" + huge + "\"}}}"
+        _ = stream.decode(Data(line.utf8))
+        _ = stream.decode(Data(("{\"type\":\"" + huge + "\"}").utf8))
+    }
 }

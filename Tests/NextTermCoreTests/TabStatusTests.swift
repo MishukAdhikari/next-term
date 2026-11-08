@@ -1013,4 +1013,47 @@ import Testing
         #expect(RecentProjects.abbreviate("/Users/me/Code/x", home: "/Users/me") == "~/Code/x")
         #expect(RecentProjects.abbreviate("/Users/meow", home: "/Users/me") == "/Users/meow")
     }
+
+// MARK: a chat tab (plan 037 U1)
+
+@Suite struct TabStatusChatSessionTests {
+    private let program = CommandClassifier.agentSessionProgram
+
+    @Test func aChatSessionRunsAsAnAgentThatHostsNone() {
+        var status = TabStatus()
+        status.observeChatSession(program: program, at: 0)
+        #expect(status.running)
+        #expect(status.kind == .agent)
+        #expect(status.program == program)
+        #expect(!status.hostsAgents)
+        #expect(status.screenSynced)
+        #expect(status.state == .idle)
+    }
+
+    @Test func itsReportsDriveTheMark() {
+        var status = TabStatus()
+        status.observeChatSession(program: program, at: 0)
+        status.observe(agentScreen: .working, at: 1)
+        #expect(status.state == .working)
+        status.observe(agentScreen: .asking("Do you want to allow: Bash(rm -rf build)?"), at: 2)
+        #expect(status.state == .attention)
+        #expect(status.question == "Do you want to allow: Bash(rm -rf build)?")
+        status.observe(agentScreen: .working, at: 3)
+        #expect(status.question == nil)
+        #expect(status.state == .working)
+        status.observe(agentScreen: .ready, at: 10)
+        #expect(status.state == .done)
+    }
+
+    @Test func callingAgainWithTheSameProgramChangesNothing() {
+        var status = TabStatus()
+        status.observeChatSession(program: program, at: 0)
+        status.observe(agentScreen: .working, at: 1)
+        let started = status.commandsStarted
+        status.observeChatSession(program: program, at: 5)
+        #expect(status.state == .working)
+        #expect(status.commandsStarted == started)
+        #expect(status.runningSince == 0)
+    }
+}
 }

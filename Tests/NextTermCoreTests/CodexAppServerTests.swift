@@ -571,4 +571,51 @@ import Testing
         #expect(AgentSessionVersion.fromUserAgent("codex_test/0.0.1") == "0.0.1")
         #expect(AgentSessionVersion.fromUserAgent("codex") == nil)
     }
+
+    // MARK: malformed input (plan 037 U1): a chat tab parses in the app, so nothing an agent writes may trap
+
+    /// Lines no well-behaved Codex writes: truncated, of the wrong types for every field read, huge, with NULs.
+    static let malformed: [String] = [
+        "", "{", "{\"id\":", "[]", "null", "42", "\"x\"", "{\"method\":7}", "{\"id\":{},\"result\":1}",
+        "{\"id\":1,\"result\":\"no\"}", "{\"id\":2,\"result\":{\"thread\":{\"id\":5}}}", "{\"id\":2,\"error\":\"x\"}",
+        "{\"id\":3,\"error\":{\"code\":\"a\",\"message\":[]}}",
+        "{\"method\":\"item/agentMessage/delta\",\"params\":{\"itemId\":1,\"delta\":{}}}",
+        "{\"method\":\"item/reasoning/textDelta\",\"params\":\"x\"}",
+        "{\"method\":\"item/started\",\"params\":{\"item\":{\"type\":\"commandExecution\",\"id\":[],\"command\":5}}}",
+        "{\"method\":\"item/started\",\"params\":{\"item\":{\"type\":\"fileChange\",\"id\":\"f\",\"changes\":\"all\"}}}",
+        "{\"method\":\"item/completed\",\"params\":{\"item\":{\"type\":\"fileChange\",\"id\":\"f\",\"changes\":[{\"path\":1,\"diff\":2,\"kind\":{}}]}}}",
+        "{\"method\":\"item/completed\",\"params\":{\"item\":{\"type\":\"commandExecution\",\"id\":\"c\",\"status\":3,\"aggregatedOutput\":[],\"exitCode\":\"x\"}}}",
+        "{\"method\":\"turn/plan/updated\",\"params\":{\"plan\":[1,{\"step\":2,\"status\":[]}]}}",
+        "{\"method\":\"turn/completed\",\"params\":{\"turn\":{\"status\":5,\"error\":\"x\"}}}",
+        "{\"method\":\"thread/tokenUsage/updated\",\"params\":{\"tokenUsage\":{\"total\":\"x\",\"modelContextWindow\":-1}}}",
+        "{\"method\":\"error\",\"params\":{\"error\":7}}",
+        "{\"id\":9,\"method\":\"item/commandExecution/requestApproval\",\"params\":{\"itemId\":[],\"command\":{},\"reason\":1}}",
+        "{\"id\":\"a\",\"method\":\"item/fileChange/requestApproval\",\"params\":\"x\"}",
+        "{\"id\":null,\"method\":\"serverRequest/resolved\",\"params\":{\"requestId\":{}}}",
+        "{\"method\":\"m\\u0000\",\"params\":{\"a\":\"b\\u0000c\"}}",
+    ]
+
+    @Test func malformedLinesNeverTrap() {
+        var codex = started()
+        _ = codex.turnStartRequest(threadID: "t", text: "go")
+        var session = ACPSession()
+        session.prompted("go")
+        for line in Self.malformed {
+            let event = codex.decode(Data(line.utf8))
+            if case .updates(let updates) = event { updates.forEach { session.apply(update: $0) } }
+        }
+        for line in ["", "{", "[]", "null", "42", "\"x\""] {
+            #expect(codex.decode(Data(line.utf8)) == .ignore, "\(line)")
+        }
+        _ = ChatTranscript.plainText(ChatTranscript.blocks(from: session, expanded: [], thoughtTimes: [:]), lastLines: 50)
+    }
+
+    @Test func invalidBytesAndHugeLinesNeverTrap() {
+        var codex = started()
+        #expect(codex.decode(Data([0x7B, 0x22, 0x69, 0xFF, 0x22, 0x3A, 0x00, 0x7D])) == .ignore)
+        #expect(codex.decode(Data([0xC3])) == .ignore)
+        let huge = String(repeating: "\u{00E9}x", count: 512 * 1024)
+        _ = codex.decode(Data(("{\"method\":\"item/agentMessage/delta\",\"params\":{\"itemId\":\"m\",\"delta\":\"" + huge + "\"}}").utf8))
+        _ = codex.decode(Data(("{\"method\":\"" + huge + "\"}").utf8))
+    }
 }
