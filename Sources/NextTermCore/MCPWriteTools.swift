@@ -52,7 +52,7 @@ extension MCPServer {
     static let scopeTags: [String: Scope] = {
         let read = ["list_tabs", "read_tab", "wait_for_tab", "list_projects", "get_editor_selection", "get_open_files",
                     "read_file", "find_in_files", "git_status", "get_diff", "list_hosts", "check_host", "host_sessions",
-                    "host_changes", "list_skills", "get_skill", "list_shortcuts", "settings_get", "list_import_sources",
+                    "host_changes", "list_skills", "get_skill", "list_shortcuts", "list_agent_clis", "settings_get", "list_import_sources",
                     "preview_import", "list_secrets", "list_mcp_servers",
                     "mcp_servers"] // the MCP hub's catalog (MCPHubCatalog), listed only once a server applies
         let write = ["open_project", "new_tab", "send_to_tab", "press_keys", "answer_agent", "show_tab", "close_tab", "rename_tab", "start_agent",

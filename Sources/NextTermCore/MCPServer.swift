@@ -235,6 +235,10 @@ public enum MCPServer {
              inputSchema: #"{"type": "object", "properties": {"query": {"type": "string", "description": "Words in the command's title or menu path (\"split\", \"terminal position\"), or a key such as ⌘T. Default: every command."}}, "additionalProperties": false}"#,
              readOnly: true, destructive: false, idempotent: true, timeout: 15),
         showSettings,
+        Tool(name: "list_agent_clis", title: "List the coding agents' CLIs",
+             description: "The coding agents' command-line tools on this Mac, as Settings › Agents shows them: each one's id, name, path (the copy a shell runs first, and other_copies after it), version, installed_by (npm, pnpm, Yarn, Bun, Volta, Homebrew, uv, pipx, Go, Own installer, npx or Unknown), latest (as last checked; Settings › Agents checks again) with update_available, updates_itself (true, false or notifies, and its_own_switch), auto_update (off, daily, weekly, or not offered), update_command, and a note when Next Term can't update it (an administrator's folder: it never uses sudo). Read-only: changing a schedule or updating is the user's, in Settings › Agents (show_settings with tab agents). all: also the agents not installed.",
+             inputSchema: #"{"type": "object", "properties": {"all": {"type": "boolean", "description": "Also list the agents not installed. Default false."}}, "additionalProperties": false}"#,
+             readOnly: true, destructive: false, idempotent: true, timeout: 15),
         Tool(name: "install_skill", title: "Ask to install a skill",
              description: "Asks the user to install an agent skill from a public GitHub repository. Nothing is fetched or written on this request alone: the user sees it in Next Term, chooses to review the skill's files, and decides. Answers within about 50 seconds: installed (with the names), declined, failed (with a note saying why), busy (another request is waiting; ask later), or pending with a request_id: call again with only request_id to keep waiting. A source the user declined stays declined until Next Term quits.",
              inputSchema: #"{"type": "object", "properties": {"source": {"type": "string", "description": "owner/repo, owner/repo/path/to/skill, or a github.com link to a repository, folder or SKILL.md."}, "reason": {"type": "string", "description": "Why, in a sentence; shown to the user as your words."}, "request_id": {"type": "string", "description": "A pending request's id, to keep waiting for the user's answer."}}, "additionalProperties": false}"#,
@@ -254,7 +258,7 @@ public enum MCPServer {
     /// show_settings, with Settings › MCP Servers (`mcp`) among its tabs.
     static var showSettings: Tool {
         let tabs = MCPShortcuts.settingsTabs
-        let named = "skills, mcp (MCP Servers: the servers agents reach through Next Term), tasks"
+        let named = "agents (the coding agents' CLIs: versions, how each was installed, updates), skills, mcp (MCP Servers: the servers agents reach through Next Term), tasks"
         let schema = #"{"type": "object", "properties": {"tab": {"type": "string", "enum": ["# + tabs.map { "\"\($0)\"" }.joined(separator: ", ")
             + #"], "description": "The Settings tab."}}, "required": ["tab"], "additionalProperties": false}"#
         return Tool(name: "show_settings", title: "Show Settings",
