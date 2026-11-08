@@ -266,8 +266,9 @@ final class AgentsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
         let status = rows[row]
         if id == "schedule", let copy = status.copy, AgentCLIs.offersSchedule(status.agent, copy) {
             let popup = NSPopUpButton(frame: .zero, pullsDown: false)
-            popup.controlSize = .small
-            popup.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+            // The row's own type size, as the other cells: a smaller popup reads as a lesser column.
+            popup.controlSize = .regular
+            popup.font = .systemFont(ofSize: NSFont.systemFontSize)
             popup.isBordered = false
             for schedule in AgentCLIs.Schedule.allCases {
                 popup.addItem(withTitle: schedule.title)

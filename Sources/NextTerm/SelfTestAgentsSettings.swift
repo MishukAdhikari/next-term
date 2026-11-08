@@ -62,6 +62,13 @@ extension SelfTest {
                                    latest: "2099.01.01") == .skip(.updatesItself),
                   "agents settings: a tool that updates itself with no switch of its own is never scheduled")
         }
+        // The Auto-update popups are set in the row's type size, as the cells beside them.
+        let scheduleColumn = pane.table.column(withIdentifier: NSUserInterfaceItemIdentifier("schedule"))
+        let popupSizes = (0..<pane.table.numberOfRows).compactMap {
+            (pane.table.view(atColumn: scheduleColumn, row: $0, makeIfNecessary: true) as? NSPopUpButton)?.font?.pointSize
+        }
+        check(!popupSizes.isEmpty && popupSizes.allSatisfy { $0 == NSFont.systemFontSize },
+              "agents settings: the Auto-update popups are in the row's type size", "\(popupSizes)")
         // The toolbar: eleven names, each whole, none in an overflow menu.
         let items = settings.toolbarItems
         let visible = window.toolbar?.visibleItems?.count ?? 0
