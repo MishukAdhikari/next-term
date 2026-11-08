@@ -302,9 +302,11 @@ public struct ACPSession: Sendable {
                 break
             }
         }
-        // Content replaces what the call showed (ACP's tool_call_update sends the whole list).
+        // Content replaces what the call showed (ACP's tool_call_update sends the whole list). Content with no diff in it
+        // keeps the file changes shown, though: Claude Code's tool result is its text alone, and an Edit's +N −M came
+        // with the call (plan 037 R2).
         call.output = output.joined(separator: "\n")
-        call.changes = changes
+        if content.contains(where: { $0["type"]?.string == "diff" }) { call.changes = changes }
     }
 
     /// Lines added and removed from `old` to `new`.

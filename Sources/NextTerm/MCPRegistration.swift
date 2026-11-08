@@ -212,6 +212,7 @@ enum LoginShell {
         guard let output = capture(shell, ["-l", "-i", "-c", command], timeout: 5) else { return ([], nil, nil, nil) }
         let parts = output.components(separatedBy: marker)
         guard parts.count >= 3 else { return ([], nil, nil, nil) }
+        environmentListing = parts[1]
         var path: [String] = []
         var socket: String?
         for line in parts[1].split(separator: "\n") {
@@ -229,6 +230,15 @@ enum LoginShell {
         OpencodePaths.shell.probed(OpencodePaths.printed(Array(parts.dropFirst(3))), keepIn: .standard)
         return (path, socket, state, AgentEvidence.routingDigests(environmentListing: parts[1]))
     }()
+
+    /// The login shell's whole environment, as the probe's `/usr/bin/env` listed it, for a chat tab's agent (plan 037
+    /// KTD7); nil when the probe failed. Reading it waits for the probe: off the main thread.
+    static var environment: [String: String]? {
+        _ = probed
+        return environmentListing.flatMap(ChatAgentEnvironment.parse)
+    }
+
+    nonisolated(unsafe) private static var environmentListing: String?
 
     /// The probe has run (reading `path` or `sshAuthSock` will not wait for it).
     nonisolated(unsafe) static var isProbed = false

@@ -436,11 +436,13 @@ final class ClaudeIDEServer: @unchecked Sendable { // mutable state lives on `qu
     /// .env files (and *.env, .flaskenv), keys and credentials files; the list is IDELink's.
     static func isSensitive(_ path: String) -> Bool { IDELink.isSensitive(path) }
 
-    /// Which tab a `claude` process runs in: walk its parents up to a tab's shell.
+    /// Which tab a `claude` process runs in: walk its parents up to a tab's shell, or to a chat tab's agent.
     static func tab(for pid: pid_t, among tabs: [TerminalTab]) -> TerminalTab? {
         var current = pid
         for _ in 0..<12 {
             if let tab = tabs.first(where: { $0.view.process.shellPid == current }) { return tab }
+            // A chat tab's agent runs under no shell: the chat's host knows its process (plan 037 KTD8).
+            if let id = ChatTabs.tabID(agentPid: current), let tab = tabs.first(where: { $0.id == id }) { return tab }
             var info = kinfo_proc()
             var size = MemoryLayout<kinfo_proc>.stride
             var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, current]

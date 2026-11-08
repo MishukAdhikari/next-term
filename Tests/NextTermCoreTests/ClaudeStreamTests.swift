@@ -101,6 +101,17 @@ import Testing
         #expect(session.tools["toolu_w"]?.changes.first?.path == "/project/new.py")
     }
 
+    /// The result of an Edit carries only its text: the call's file change, with its +N −M, stays (plan 037 R2).
+    @Test func anEditsResultTextKeepsItsFileChange() {
+        let (session, _) = session([
+            #"{"type":"assistant","message":{"id":"msg_5","role":"assistant","content":[{"type":"tool_use","id":"toolu_e","name":"Edit","input":{"file_path":"/project/app.py","old_string":"a = 1","new_string":"a = 2\nb = 3"}}]},"parent_tool_use_id":null}"#,
+            #"{"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_e","type":"tool_result","content":"The file /project/app.py has been updated.","is_error":false}]},"parent_tool_use_id":null}"#,
+        ])
+        #expect(session.tools["toolu_e"]?.status == .completed)
+        #expect(session.tools["toolu_e"]?.output == "The file /project/app.py has been updated.")
+        #expect(session.tools["toolu_e"]?.changes == [.init(path: "/project/app.py", added: 2, removed: 1, created: false)])
+    }
+
     @Test func todoWriteGivesThePlanAndNoToolCall() {
         let (session, _) = session([
             #"{"type":"assistant","message":{"id":"msg_6","role":"assistant","content":[{"type":"tool_use","id":"toolu_t","name":"TodoWrite","input":{"todos":[{"content":"Find the bug","status":"completed","activeForm":"Finding"},{"content":"Fix it","status":"in_progress","activeForm":"Fixing"},{"content":"Test","status":"pending","activeForm":"Testing"}]}}]},"parent_tool_use_id":null}"#,

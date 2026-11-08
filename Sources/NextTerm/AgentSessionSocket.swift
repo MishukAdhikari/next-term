@@ -69,7 +69,7 @@ enum AgentSessionSocket {
         }
         let done = DispatchSemaphore(value: 0)
         var reply: [String: Any] = ["error": "no tab"]
-        let gate = AnswerGate()
+        let gate = AgentApprovals.Gate()
         DispatchQueue.main.async {
             MainActor.assumeIsolated {
                 guard let tab = ClaudeIDEServer.tab(for: pid, among: MCPControl.allTabs) else {
@@ -80,15 +80,20 @@ enum AgentSessionSocket {
                 switch arguments["op"] as? String {
                 case "report":
                     reply = ["ok": true]
-                    if let previous = record(arguments, for: tab) { reply["previous_version"] = previous }
+                    if let previous = AgentSessionReports.record(arguments, for: tab) { reply["previous_version"] = previous }
                     done.signal()
                 case "confirm_always":
-                    confirm(arguments, tab: tab, gate: gate) { approved in
+                    AgentApprovals.confirmAlways(agent: arguments["agent"] as? String ?? "The agent",
+                                                 action: arguments["action"] as? String ?? "act",
+                                                 option: arguments["option"] as? String ?? "Allow always",
+                                                 requester: "The session in “\(tab.title)”", gate: gate) { approved in
                         reply = ["approved": approved]
                         done.signal()
                     }
                 case "trust_folder":
-                    trust(arguments, tab: tab, gate: gate) { trusted in
+                    AgentApprovals.trustFolder(agent: arguments["agent"] as? String ?? "Claude Code",
+                                               folder: arguments["folder"] as? String ?? "",
+                                               requester: "The session in \u{201C}\(tab.title)\u{201D}", gate: gate) { trusted in
                         reply = ["trusted": trusted]
                         done.signal()
                     }
@@ -123,59 +128,6 @@ enum AgentSessionSocket {
         return recv(fd, &byte, 1, MSG_PEEK | MSG_DONTWAIT) == 0
     }
 
-    /// One request's answer, given once: by the user's click on the Mac, or by the wait running out (or the session
-    /// hanging up), whichever comes first. A click after the wait ran out does nothing, and a trust is never written for a
-    /// session that was already told no.
-    final class AnswerGate: @unchecked Sendable {
-        private let lock = NSLock()
-        private var settled = false
-        /// The window asking, on the main thread.
-        @MainActor weak var window: AgentApprovalWindow?
-
-        /// The click's turn: true when it is the answer, false when the wait ran out first.
-        func claim() -> Bool { settle() }
-
-        /// The wait's turn: true when nothing was clicked yet, so the session is told no.
-        func expire() -> Bool { settle() }
-
-        private func settle() -> Bool {
-            lock.lock()
-            defer { lock.unlock() }
-            guard !settled else { return false }
-            settled = true
-            return true
-        }
-
-        /// The window closes unanswered: its decline finds the gate settled and does nothing more.
-        @MainActor func closeWindow() {
-            window?.close()
-        }
-    }
-
-    /// The report kept for the tab; the version this agent ran before, when this one differs.
-    @MainActor
-    @discardableResult
-    private static func record(_ arguments: [String: Any], for tab: TerminalTab) -> String? {
-        var message = arguments["last_message"] as? String ?? ""
-        if message.utf8.count > messageLimit { message = String(message.prefix(messageLimit)) }
-        var report = Report(agent: ACPSession.oneLine(arguments["agent"] as? String ?? "", limit: 60),
-                            state: arguments["state"] as? String ?? "idle",
-                            stopReason: arguments["stop_reason"] as? String,
-                            lastMessage: message, turns: arguments["turns"] as? Int ?? 0)
-        let agentID = (arguments["agent_id"] as? String).flatMap { ACPAgent.named($0)?.id }
-        report.agentID = agentID
-        report.version = (arguments["agent_version"] as? String).map { ACPSession.oneLine($0, limit: 64) }.flatMap { $0.isEmpty ? nil : $0 }
-        report.model = (arguments["model"] as? String).map { ACPSession.oneLine($0, limit: 120) }.flatMap { $0.isEmpty ? nil : $0 }
-        report.sessionID = (arguments["session_id"] as? String).flatMap { AgentSessionVersion.isSessionID($0) ? $0 : nil }
-        report.folder = (arguments["folder"] as? String).flatMap { $0.hasPrefix("/") ? $0 : nil }
-        reports[tab.id] = report
-        guard let agentID, let version = report.version else { return nil }
-        let stored = versionStore.dictionary(forKey: versionsKey) as? [String: String] ?? [:]
-        let seen = AgentSessionVersion.remember(version, for: agentID, in: stored)
-        if seen.stored != stored { versionStore.set(seen.stored, forKey: versionsKey) }
-        return seen.previous
-    }
-
     /// The last version each agent's sessions ran, by agent id, in the app's own defaults.
     nonisolated(unsafe) static var versionStore = UserDefaults.standard
     static let versionsKey = "AgentSessionVersions"
@@ -189,72 +141,8 @@ enum AgentSessionSocket {
         return SessionSnapshot.AgentSessionRecord(agent: agentID, sessionID: id, folder: report.folder)
     }
 
-    @MainActor
-    private static func confirm(_ arguments: [String: Any], tab: TerminalTab, gate: AnswerGate, then: @escaping (Bool) -> Void) {
-        let agent = ACPSession.oneLine(arguments["agent"] as? String ?? "The agent", limit: 60)
-        let action = ACPSession.oneLine(arguments["action"] as? String ?? "act", limit: 2000) // the whole command (R5)
-        let option = ACPSession.oneLine(arguments["option"] as? String ?? "Allow always", limit: 60)
-        let details = "\(agent) asks to \(action). \u{201C}\(option)\u{201D} lets it do this again in this session without asking. "
-            + "It was picked in the session\u{2019}s tab, by you or by an agent that steers it."
-        let request = AgentApprovalWindow.Request(title: "Allow \(agent) always?", requester: "The session in “\(tab.title)”",
-                                                  agentWords: nil, details: details, approveTitle: option)
-        ask(request, gate: gate, then: then)
-    }
-
-    /// The approval windows open now. A window doesn't keep its controller (`NSWindow.windowController` is weak), and
-    /// nothing else here does: without this the controller went as soon as it was shown, its buttons answered nothing
-    /// and the session's menu waited on the Mac for good.
-    @MainActor private static var asking: [AgentApprovalWindow] = []
-
-    /// Shows `request` on the Mac and answers `then` once, Approve (true) or Decline or a close (false), keeping the
-    /// window until then. Once `gate` has expired (the wait ran out, or the session hung up), a click only closes the
-    /// window: `approved` never runs and `then` isn't called.
-    @MainActor
-    private static func ask(_ request: AgentApprovalWindow.Request, gate: AnswerGate, approved: (() -> Void)? = nil,
-                            then: @escaping (Bool) -> Void) {
-        // Let go once its own close is done: Decline answers before the window closes.
-        func letGo(_ window: AgentApprovalWindow?) {
-            DispatchQueue.main.async { MainActor.assumeIsolated { asking.removeAll { $0 === window } } }
-        }
-        weak var shown: AgentApprovalWindow?
-        let window = AgentApprovalWindow(request,
-                                         approve: { window in
-                                             window.finish()
-                                             letGo(window)
-                                             guard gate.claim() else { return }
-                                             approved?()
-                                             then(true)
-                                         },
-                                         decline: { _ in
-                                             letGo(shown)
-                                             guard gate.claim() else { return }
-                                             then(false)
-                                         })
-        shown = window
-        gate.window = window
-        asking.append(window)
-        window.present()
-    }
-
     /// The folders Claude Code sessions may start in, in the app's own defaults: only the app writes them.
     nonisolated(unsafe) static var trustStore = UserDefaults.standard
-
-    @MainActor
-    private static func trust(_ arguments: [String: Any], tab: TerminalTab, gate: AnswerGate, then: @escaping (Bool) -> Void) {
-        guard let given = arguments["folder"] as? String, given.hasPrefix("/") else { return then(false) }
-        let folder = AgentSessionTrust.canonical(given)
-        guard !AgentSessionTrust.isTrusted(folder, in: AgentSessionTrust.list(in: trustStore)) else { return then(true) }
-        let agent = ACPSession.oneLine(arguments["agent"] as? String ?? "Claude Code", limit: 60)
-        let details = AgentSessionTrust.question(folder: folder) + " Its CLAUDE.md and plugins load too. "
-            + "Only this folder is trusted, not the folders in it; the session in the tab starts once you trust it."
-        let request = AgentApprovalWindow.Request(title: "Trust this folder for \(agent)?",
-                                                  requester: "The session in \u{201C}\(tab.title)\u{201D}",
-                                                  agentWords: nil, details: details, approveTitle: "Trust Folder")
-        ask(request, gate: gate, approved: {
-            let list = AgentSessionTrust.list(in: trustStore)
-            trustStore.set(AgentSessionTrust.adding(folder, to: list), forKey: AgentSessionTrust.defaultsKey)
-        }, then: then)
-    }
 
     private static func answer(_ fd: Int32, _ fields: [String: Any]) {
         let text = (try? JSONSerialization.data(withJSONObject: fields)).map { String(decoding: $0, as: UTF8.self) } ?? "{}"
