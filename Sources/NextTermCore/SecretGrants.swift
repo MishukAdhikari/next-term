@@ -174,7 +174,8 @@ public struct SecretGrant: Identifiable, Sendable {
         let placed = kind == .worktree || kind == .folder
         self.scope = placed ? scope : nil
         self.agent = placed ? agent : nil
-        self.everyUse = kind == .oneUse ? [] : everyUse.intersection(binding.keys.keys)
+        // Only the time-bound grants are offered for a key that asks every time: 15 minutes and until lock never keep one.
+        self.everyUse = kind.outlastsLock ? everyUse.intersection(binding.keys.keys) : []
         usesLeft = kind == .oneUse ? 1 : nil
     }
 

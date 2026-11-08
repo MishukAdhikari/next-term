@@ -116,6 +116,15 @@ public enum SecretApprovalChoices {
         return (isWrapper ? [.once, .fifteenMinutes, .untilLock] : [.once, .fifteenMinutes]) + timeBound + places
     }
 
+    /// The choice an Allow keeps once it knows the place (`scope`, as it is now) and the agent program (`agent`): a worktree
+    /// or folder choice with either missing (the folder gone since the panel showed, the program no longer told) holds
+    /// nothing, so it is Allow once, and the answer says so rather than claiming a grant that was never made.
+    public static func holding(_ choice: SecretApprovalChoice, scope: SecretAlwaysScope?, agent: SecretAgentIdentity?) -> SecretApprovalChoice {
+        guard let place = choice.untilQuit else { return choice }
+        guard let scope, scope.kind == place, agent != nil else { return .once }
+        return choice
+    }
+
     /// The grant an Allow makes: the choice's own, or for Allow once whose wrapper stopped waiting (`wrapperGone`), one use
     /// held 2 minutes for its restart. A remembered choice holds for its whole time, gone or not: no 2-minute race.
     public static func grantKind(for choice: SecretApprovalChoice, wrapperGone: Bool) -> SecretGrant.Kind? {

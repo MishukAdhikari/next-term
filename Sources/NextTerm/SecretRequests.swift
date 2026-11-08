@@ -530,12 +530,22 @@ final class SecretRequests {
         // A session that ended during Touch ID is Allow once here too: one caller, no grant, "once" in the answer; the use's
         // line, written as Touch ID ended, said this session, so a line after it says what was allowed.
         let asked: How = how
-        let how: How = Self.stillOffered(how, request, offered: offered(request))
+        // Until Next Term quits: the place as it is now, by its path and inode, for this agent program. A place gone since
+        // the panel showed, or an agent program no longer told, holds nothing: Allow once, and the answer says so.
+        let identity = request.always?.identity
+        let scope: SecretAlwaysScope? = how.untilQuit.flatMap { place in
+            request.always?.places.path(for: place).flatMap { SecretAlwaysScope.at($0, kind: place) }
+        }
+        let how: How = Self.stillOffered(SecretApprovalChoices.holding(how, scope: scope, agent: identity), request,
+                                         offered: offered(request))
         if how == .once { letGo(callersLeftOf: request) }
         guard !request.isAnswered else { return }
         // Its session over, not a key ticked to ask every time: no grant, which a grant line says (not a second use).
         if asked == .session, how == .once, SecretApprovalChoices.kept(.session, offered: offered(request)) == .session {
             audit(.grant, request, approval: .once, outcome: "not made: its session ended during Touch ID, so allowed once")
+        }
+        if asked.untilQuit != nil, how == .once {
+            audit(.grant, request, approval: .once, outcome: "not made: its folder or agent program could not be told, so allowed once")
         }
         let now = now()
         // The wrapper stopped waiting (before Allow, or while the user was in the Touch ID sheet): after "Allow once", a
@@ -548,13 +558,7 @@ final class SecretRequests {
             // Asked again of the vault this unlock checked: the keys that ask every time, which this Touch ID confirmed for
             // a time-bound choice (offered for them), so their asking doesn't end it.
             let asking = Set(SecretApprovalChoices.askingEveryUse(request.names, in: SecretsStore.shared.index))
-            let identity = request.always?.identity
-            // Until Next Term quits: the place as it is now, by its path and inode, for this agent program.
-            let scope: SecretAlwaysScope? = how.untilQuit.flatMap { place in
-                request.always?.places.path(for: place).flatMap { SecretAlwaysScope.at($0, kind: place) }
-            }
-            let placed = kind != .worktree && kind != .folder || (scope != nil && identity != nil)
-            if placed {
+            if kind != .worktree && kind != .folder || (scope != nil && identity != nil) {
                 // Any plain command of the session only for an agent in front of its tab with no key that asks every time.
                 let wide = kind == .session && !request.outsideTabs && asking.isEmpty
                 let grant = SecretGrant(kind: kind, binding: request.binding, made: now, session: request.session, wide: wide,

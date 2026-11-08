@@ -262,6 +262,12 @@ private func placedBinding(folder: String = "/w/app", source: SecretBinding.Sour
         // Still ends with the key's change, and a one-use grant records none.
         #expect(confirmed.ended(by: .keyChanged("ASKS_KEY")))
         #expect(SecretGrant(kind: .oneUse, binding: placedBinding(), made: start, everyUse: ["PE_TOKEN"]).everyUse.isEmpty)
+        // Nor do 15 minutes or until lock, never offered for such a key: its asking still ends them.
+        for kind in [SecretGrant.Kind.fifteenMinutes, .untilLock] {
+            let lasting = SecretGrant(kind: kind, binding: placedBinding(keys: ["ASKS_KEY": "ASKS_KEY"]), made: start, everyUse: ["ASKS_KEY"])
+            #expect(lasting.everyUse.isEmpty && lasting.ended(by: .askEveryUse("ASKS_KEY")), "\(kind)")
+            #expect(SecretApprovalChoices.askingNames(heldBy: [lasting], in: index) == ["ASKS_KEY"], "\(kind)")
+        }
     }
 }
 
@@ -295,5 +301,25 @@ private func placedBinding(folder: String = "/w/app", source: SecretBinding.Sour
         #expect(!SecretSessions.isLive(session, process: { _ in (1.5, nil) }, tab: { _ in "tab:T-1:4" }), "another run in the tab")
         #expect(!SecretSessions.isLive("", process: { _ in (1.5, nil) }, tab: { _ in nil }))
         #expect(!SecretSessions.isLive("odd:1:2", process: { _ in (1.5, nil) }, tab: { _ in nil }))
+    }
+}
+
+/// An Allow of a worktree or folder choice whose place is gone by then, or whose agent program is no longer told, holds
+/// nothing: it is Allow once, so the answer and the audit never claim a grant that was not made.
+@Suite struct SecretTimeBoundHoldingTests {
+    @Test func aPlaceGoneSinceThePanelIsAllowOnce() throws {
+        let places = try Places()
+        defer { places.remove() }
+        let folder = try #require(SecretAlwaysScope.at(places.src, kind: .folder))
+        let worktree = try #require(SecretAlwaysScope.at(places.worktree, kind: .worktree))
+        #expect(SecretApprovalChoices.holding(.folderUntilQuit, scope: folder, agent: codex) == .folderUntilQuit)
+        #expect(SecretApprovalChoices.holding(.worktreeUntilQuit, scope: worktree, agent: codex) == .worktreeUntilQuit)
+        #expect(SecretApprovalChoices.holding(.folderUntilQuit, scope: nil, agent: codex) == .once, "the folder gone")
+        #expect(SecretApprovalChoices.holding(.worktreeUntilQuit, scope: worktree, agent: nil) == .once, "no agent program")
+        #expect(SecretApprovalChoices.holding(.worktreeUntilQuit, scope: folder, agent: codex) == .once, "another kind of place")
+        // The other choices are their own.
+        for choice in [SecretApprovalChoice.once, .fifteenMinutes, .untilLock, .session, .alwaysFolder] {
+            #expect(SecretApprovalChoices.holding(choice, scope: nil, agent: nil) == choice)
+        }
     }
 }
