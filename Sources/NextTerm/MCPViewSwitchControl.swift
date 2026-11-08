@@ -19,6 +19,8 @@ extension MCPWriteControl {
         guard let tab = findTab(arguments["tab_id"]), let controller = MCPControl.controller(of: tab) else {
             return reply(MCPControl.fail("No tab with that id; list_tabs shows them."))
         }
+        // The caller's own agent would be quit under it, its answer going nowhere.
+        if tab === context.caller { return reply(MCPControl.fail("That is your own tab.")) }
         let id = tab.id.uuidString.lowercased()
         // Planned once without acting: whatever refuses it does so before the user is asked.
         let facts = ViewSwitchRunner.facts(of: tab, wanted: wanted)
@@ -40,13 +42,15 @@ extension MCPWriteControl {
             window?.finish()
             guard MCPControl.controller(of: tab) != nil else { return reply(MCPControl.fail("That tab closed meanwhile; nothing changed.")) }
             if let why = MCPInputLine.refusal(tab) { return reply(MCPControl.fail(why)) }
-            ViewSwitchRunner.start(tab: tab, wanted: wanted ?? plan.to, showsRefusal: false) { outcome in
+            // Planned again from what the tab holds now: the same agent and conversation the user approved, or nothing.
+            ViewSwitchRunner.start(tab: tab, wanted: wanted ?? plan.to, showsRefusal: false,
+                                   expecting: (plan.agent, plan.sessionID)) { outcome in
                 switch outcome {
                 case .failure(let failure):
                     reply(MCPControl.fail(failure.text))
-                case .success(let view):
-                    var info: [String: Any] = ["id": id, "view": view.rawValue, "approved": approved]
-                    if !plan.sessionID.isEmpty { info["session_id"] = plan.sessionID }
+                case .success(let switched):
+                    var info: [String: Any] = ["id": id, "view": switched.view.rawValue, "approved": approved]
+                    if !switched.sessionID.isEmpty { info["session_id"] = switched.sessionID }
                     reply(MCPControl.ok(info))
                 }
             }

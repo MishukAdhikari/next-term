@@ -132,6 +132,14 @@ import Testing
         for source in [SessionSnapshot.IDSource.guess, .shownTitle, .childEnvironment, .unknown] {
             #expect(refusal(terminalFacts(source: source)) == .noExactID)
         }
+        // The typed line and argv name the conversation the agent started with, not the one it may have moved to since.
+        for agent in ViewSwitch.Agent.allCases {
+            for source in [SessionSnapshot.IDSource.typedAndArgv, .runtimeFile] {
+                #expect(refusal(terminalFacts(agent, source: source)) == .noExactID, "\(agent) \(source)")
+            }
+        }
+        #expect(planned(terminalFacts(.claude, source: .sessionFile)) != nil)
+        #expect(planned(terminalFacts(.codex, source: .openRollout)) != nil)
         var noID = terminalFacts()
         noID.evidence = nil
         #expect(refusal(noID) == .noExactID)
@@ -220,6 +228,22 @@ import Testing
         #expect(planned(facts)?.to == .terminal)
     }
 
+    @Test func aSwitchRunningIsSaidBeforeTheViewItIsLeaving() {
+        // While a switch runs, the offer still names the view it leaves: asking for that view is no answer then.
+        var toChat = terminalFacts()
+        toChat.switching = true
+        toChat.wanted = .terminal
+        #expect(refusal(toChat) == .alreadySwitching)
+        var leaving = chatFacts()
+        leaving.offer?.switching = true
+        leaving.wanted = .chat
+        #expect(refusal(leaving) == .alreadySwitching)
+        var offered = offerFacts(.signIn)
+        offered.switching = true
+        offered.wanted = .chat
+        #expect(refusal(offered) == .alreadySwitching)
+    }
+
     // MARK: plans
 
     @Test func claudeToChatQuitsWithItsOwnKeysAndResumesOnly() throws {
@@ -228,14 +252,14 @@ import Testing
         #expect(plan.to == .chat)
         #expect(plan.agent == .claude)
         #expect(plan.sessionID == claudeID)
-        #expect(plan.quit == [.keys("\u{3}"), .pause(150), .keys("/exit"), .pause(150), .keys("\r")])
+        #expect(plan.quit == [.keys("\u{3}"), .pause(150), .keysIfRunning("/exit"), .pause(150), .keysIfRunning("\r")])
         #expect(plan.fallback == [.keys("\u{3}"), .pause(300), .keysIfRunning("\u{3}")])
         #expect(plan.line == launcher + " agent claude --resume " + claudeID + " --resume-only")
     }
 
     @Test func codexQuitsWithQuitAndResumesOnly() throws {
         let plan = try #require(planned(terminalFacts(.codex)))
-        #expect(plan.quit == [.keys("\u{3}"), .pause(150), .keys("/quit"), .pause(150), .keys("\r")])
+        #expect(plan.quit == [.keys("\u{3}"), .pause(150), .keysIfRunning("/quit"), .pause(150), .keysIfRunning("\r")])
         #expect(plan.line == launcher + " agent codex --resume " + codexID + " --resume-only")
         let back = try #require(planned(chatFacts(.codex)))
         #expect(back.line == "codex resume " + codexID + " -C /Users/x/app")

@@ -296,21 +296,24 @@ public enum ViewSwitch {
     static let interrupt = "\u{3}"
 
     /// The switch `facts` allow, or the first reason in the table's order that refuses it. A switch already running is
-    /// said first, as what the agent it quits shows meanwhile is no reason. Only an exact id moves a conversation
-    /// (KTD3): a guess would resume another one in the user's tab.
+    /// said first, before the view asked for, as the view a switching tab shows is about to change, and what the agent
+    /// it quits shows meanwhile is no reason. Only an exact id moves a conversation (KTD3): a guess would resume another
+    /// one in the user's tab. Only the agent's own record of the conversation it has open counts here (Claude Code's
+    /// session file, Codex's open rollout): an id from the typed line and argv is the one it started with, and the user
+    /// may have moved to another conversation inside it since.
     public static func plan(_ facts: Facts) -> Result<Plan, Refusal> {
         if let terminalOffer = facts.terminalOffer { return offerPlan(facts, terminalOffer) }
         guard let offer = facts.offer else { return .failure(.notOffered) }
         let agent = offer.agent
         let to = offer.view.other
-        if let wanted = facts.wanted, wanted == offer.view { return .failure(.showsAlready(wanted)) }
         if facts.switching || offer.switching { return .failure(.alreadySwitching) }
+        if let wanted = facts.wanted, wanted == offer.view { return .failure(.showsAlready(wanted)) }
         let reported = offer.view == .chat ? facts.report?.state : nil
         if facts.state == .working || reported == .working { return .failure(.working) }
         if facts.question != nil || reported == .attention { return .failure(.asking) }
         switch offer.view {
         case .terminal:
-            guard let evidence = facts.evidence, evidence.agent == agent.restoreAgent, evidence.isExact,
+            guard let evidence = facts.evidence, evidence.agent == agent.restoreAgent, ownRecord.contains(evidence.source),
                   let id = evidence.sessionID, agent.restoreAgent.isSessionID(id) else { return .failure(.noExactID) }
             // Codex's open rollout is its conversation, with or without a turn: an empty thread resumes as one.
             if agent == .claude, !facts.transcriptExists { return .failure(.noTurnYet) }
@@ -341,8 +344,8 @@ public enum ViewSwitch {
     static func offerPlan(_ facts: Facts, _ terminalOffer: TerminalOffer) -> Result<Plan, Refusal> {
         guard let offer = facts.offer, offer.view == .chat else { return .failure(.notOffered) }
         let agent = offer.agent
-        if let wanted = facts.wanted, wanted == offer.view { return .failure(.showsAlready(wanted)) }
         if facts.switching || offer.switching { return .failure(.alreadySwitching) }
+        if let wanted = facts.wanted, wanted == offer.view { return .failure(.showsAlready(wanted)) }
         if facts.sessionRunning {
             if facts.state == .working || facts.report?.state == .working { return .failure(.working) }
             if facts.question != nil || facts.report?.state == .attention { return .failure(.asking) }
@@ -364,9 +367,13 @@ public enum ViewSwitch {
                              separator: separator))
     }
 
-    /// The terminal view's quit: ⌃C, then the agent's quit word as keys, then Return, a moment apart.
+    /// The id sources a switch moves a conversation by: the agent's own record of the one it has open now.
+    static let ownRecord: Set<SessionSnapshot.IDSource> = [.sessionFile, .openRollout]
+
+    /// The terminal view's quit: ⌃C, then the agent's quit word as keys, then Return, a moment apart; the word and the
+    /// Return only while the agent still runs, as one that quit on the ⌃C would leave them to the shell.
     static func terminalQuit(_ agent: Agent) -> [Step] {
-        [.keys(interrupt), .pause(150), .keys(agent.quitWord), .pause(150), .keys("\r")]
+        [.keys(interrupt), .pause(150), .keysIfRunning(agent.quitWord), .pause(150), .keysIfRunning("\r")]
     }
 
     /// ⌃C, and a second only while the agent still runs: a session's quit, and both agents' double ⌃C.

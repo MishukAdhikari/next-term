@@ -16,8 +16,22 @@ final class ViewSwitchRunner {
         let text: String
     }
 
-    /// The view a tab shows once its switch ends, or why it doesn't.
-    typealias Outcome = Result<ViewSwitch.View, Failure>
+    /// The view a tab shows once its switch ends, with the conversation the switch carried (empty when it carried none,
+    /// or when the tab showed that view already).
+    struct Switched: Equatable {
+        let view: ViewSwitch.View
+        let sessionID: String
+    }
+
+    /// How a switch ended, or why it didn't run.
+    typealias Outcome = Result<Switched, Failure>
+
+    /// The program the switch quits: the tab's foreground process group's leader as the switch began, by its pid and
+    /// when it started (a pid the kernel gave another process since is not it).
+    private struct Leader: Equatable {
+        let pid: pid_t
+        let startedAt: Date?
+    }
 
     /// The switches running now, by tab id. Main thread; MCPInputLine reads it.
     nonisolated(unsafe) private(set) static var running: [UUID: ViewSwitchRunner] = [:]
@@ -34,6 +48,8 @@ final class ViewSwitchRunner {
 
     /// How often the wait looks at the tab.
     private static let poll: TimeInterval = 0.1
+    /// How long, at the prompt, the switch waits for the shell's report of its line before it leaves the line to the user.
+    private static let lineReportWait: TimeInterval = 2
 
     private weak var tab: TerminalTab?
     private let tabID: UUID
@@ -45,6 +61,10 @@ final class ViewSwitchRunner {
     private let touchedAtStart: Bool
     private var expectedWrites: Int
     private let suppressedBefore: Bool
+    /// The program in front as the switch began; nil when the shell was (an ended session's offer has nothing to quit).
+    private let leader: Leader?
+    /// When the wait first found the shell's prompt without a current report of its line.
+    private var promptSince: TimeInterval?
     private var ended = false
 
     /// The switch a tab offers now, with `switching` set while one runs in it. A running switch keeps its offer, as the
@@ -70,20 +90,31 @@ final class ViewSwitchRunner {
     /// Switches `tab` to `wanted` (nil: the other view). `done` gets the view the tab then shows, once the resume line is
     /// typed, or the words that say why not; a refusal comes before any key reaches the tab, and is shown in the tab
     /// unless `showsRefusal` is false (MCP answers with it instead). `showsAlready` answers with the view as it is.
+    /// `expecting` is the agent and conversation the user approved (switch_view): a fresh plan for another is refused.
     static func start(tab: TerminalTab, wanted: ViewSwitch.View? = nil, showsRefusal: Bool = true,
+                      expecting: (agent: ViewSwitch.Agent, sessionID: String)? = nil,
                       done: @escaping (Outcome) -> Void = { _ in }) {
         prune()
         let facts = self.facts(of: tab, wanted: wanted)
+        func refuse(_ text: String) {
+            if showsRefusal { tab.view.showNote(text) }
+            done(.failure(Failure(text: text)))
+        }
         let plan: ViewSwitch.Plan
         switch ViewSwitch.plan(facts) {
         case .failure(let refusal):
-            if case .showsAlready(let view) = refusal { return done(.success(view)) }
-            let text = refusal.text(agent: facts.offer?.agent)
-            if showsRefusal { tab.view.showNote(text) }
-            return done(.failure(Failure(text: text)))
+            if case .showsAlready(let view) = refusal { return done(.success(Switched(view: view, sessionID: ""))) }
+            return refuse(refusal.text(agent: facts.offer?.agent))
         case .success(let planned):
             plan = planned
         }
+        if let expecting, expecting.agent != plan.agent || expecting.sessionID != plan.sessionID {
+            return refuse("The tab moved on meanwhile; nothing changed.")
+        }
+        // Text another feature put on the tab's line is not the switch's to replace, whoever asked for it.
+        if let why = MCPInputLine.ruleRefusal(tab) { return refuse(why) }
+        // Nothing to quit: the shell's prompt is there now, and a line on it is the user's (the bar stays for them).
+        if plan.quit.isEmpty, lineState(tab) == .holdsText { return refuse(leftText(plan, draft: true)) }
         // The switch is the bar's answer: it goes as the switch begins.
         ViewSwitchOfferBar.close(tab)
         let runner = ViewSwitchRunner(tab: tab, plan: plan, evidence: facts.evidence, done: done)
@@ -148,6 +179,39 @@ final class ViewSwitchRunner {
 
     private static var now: TimeInterval { ProcessInfo.processInfo.systemUptime }
 
+    /// What the shell's line holds, by the ghost hook's last report (TerminalTab.lastBuffer): known empty only from a
+    /// report nothing was written after, at the prompt.
+    enum LineState {
+        case empty, holdsText, unknown
+    }
+
+    static func lineState(_ tab: TerminalTab) -> LineState {
+        guard CommandSuggestionController.atPrompt(tab), tab.lineReportIsCurrent, let report = tab.lastBuffer?.report else { return .unknown }
+        guard let buffer = report.buffer else { return .holdsText } // too long to send, or not UTF-8: not empty
+        return buffer.isEmpty ? .empty : .holdsText
+    }
+
+    /// The pty's foreground group's leader, when it isn't the tab's shell.
+    private static func frontLeader(of tab: TerminalTab) -> Leader? {
+        let fd = tab.view.process.childfd
+        guard fd >= 0 else { return nil }
+        let pgid = tcgetpgrp(fd)
+        guard pgid > 0, pgid != tab.view.process.shellPid else { return nil }
+        return Leader(pid: pgid, startedAt: ProcessInspector.startTime(of: pgid))
+    }
+
+    /// The shell's own group is in front of the tab.
+    private static func shellInFront(_ tab: TerminalTab) -> Bool {
+        let fd = tab.view.process.childfd
+        return fd >= 0 && tcgetpgrp(fd) == tab.view.process.shellPid
+    }
+
+    /// The program the switch quits is still the one in front: keys sent now reach it, and nothing else.
+    private func agentInFront(_ tab: TerminalTab) -> Bool {
+        guard let leader else { return false }
+        return Self.frontLeader(of: tab) == leader
+    }
+
     private init(tab: TerminalTab, plan: ViewSwitch.Plan, evidence: SessionSnapshot.Evidence?,
                  done: @escaping (Outcome) -> Void) {
         self.tab = tab
@@ -158,6 +222,7 @@ final class ViewSwitchRunner {
         touchedAtStart = tab.touchedByUser
         expectedWrites = tab.view.inputWrites
         suppressedBefore = tab.status.suppressesNotices
+        leader = plan.quit.isEmpty ? nil : Self.frontLeader(of: tab)
         // The agent's quit is the switch's, not a finish to post (R6).
         tab.status.suppressesNotices = true
     }
@@ -179,10 +244,13 @@ final class ViewSwitchRunner {
         guard let tab = liveTab else { return }
         switch step {
         case .keys(let keys):
+            if lineTaken(tab) { return leaveToUser() }
             send(keys, to: tab)
             run(rest, then: then)
         case .keysIfRunning(let keys):
-            if tab.status.running { send(keys, to: tab) }
+            if lineTaken(tab) { return leaveToUser() }
+            // The program it quits, still in front: once it has gone they would reach the shell, or whatever runs next.
+            if agentInFront(tab) { send(keys, to: tab) }
             run(rest, then: then)
         case .pause(let milliseconds):
             DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(milliseconds)) { [self] in
@@ -191,10 +259,12 @@ final class ViewSwitchRunner {
         }
     }
 
-    /// The runner's own keys, typed as keys (never a paste): what they add to the line's count is the switch's.
+    /// The runner's own keys, typed as keys (never a paste): what this write adds to the line's count is the switch's,
+    /// and nothing written before it.
     private func send(_ keys: String, to tab: TerminalTab) {
+        let before = tab.view.inputWrites
         tab.view.send(txt: keys)
-        expectedWrites = tab.view.inputWrites
+        expectedWrites += tab.view.inputWrites - before
     }
 
     /// Anything but the switch reached the tab's line since it began: the user's key, paste or drop, or other text.
@@ -202,16 +272,40 @@ final class ViewSwitchRunner {
         (tab.touchedByUser && !touchedAtStart) || tab.view.inputWrites != expectedWrites
     }
 
-    /// Waits for the shell's prompt (KTD5): the integration reports the agent ended and the shell alone is in front. After
-    /// `quitWait` with the agent still running, the fallback's ⌃C; `fallbackWait` after that, the switch gives up.
+    /// Waits for the shell's prompt (KTD5): the integration reports the agent ended and the shell alone is in front, and
+    /// the shell's report of its line says it is empty. After `quitWait` with the agent still in front, the fallback's
+    /// ⌃C; `fallbackWait` after that, the switch gives up. The fallback goes only to the program the switch quits: if
+    /// another runs in front by then (`claude && npm test`), the switch ends with a note and types nothing.
     private func waitForPrompt(since: TimeInterval, fallbackSent: Bool) {
         guard !ended, let tab = liveTab else { return }
         let status = tab.status
-        if status.integrated, !status.running, CommandSuggestionController.atPrompt(tab) { return typeLine(in: tab) }
         if lineTaken(tab) { return leaveToUser() }
+        if status.integrated, !status.running, CommandSuggestionController.atPrompt(tab) {
+            switch Self.lineState(tab) {
+            case .empty: return typeLine(in: tab)
+            case .holdsText: return finish(.failure(Failure(text: leftText(draft: true))), note: leftText(draft: true))
+            case .unknown:
+                let seen = promptSince ?? Self.now
+                promptSince = seen
+                if Self.now - seen >= Self.lineReportWait {
+                    return finish(.failure(Failure(text: leftText(draft: true))), note: leftText(draft: true))
+                }
+            }
+        } else {
+            promptSince = nil
+        }
         let waited = Self.now - since
         if !fallbackSent, waited >= ViewSwitch.quitWait {
-            return run(plan.fallback) { [self] in self.waitForPrompt(since: Self.now, fallbackSent: true) }
+            if plan.fallback.isEmpty { return waitForPrompt(since: Self.now, fallbackSent: true) }
+            if agentInFront(tab) {
+                return run(plan.fallback) { [self] in self.waitForPrompt(since: Self.now, fallbackSent: true) }
+            }
+            if !Self.shellInFront(tab) {
+                let text = quitName + " quit, but another program runs in the tab, so nothing more was typed."
+                return finish(.failure(Failure(text: text)), note: text)
+            }
+            // The shell is back in front, its prompt not reported yet: no key is sent, and the wait goes on.
+            return waitForPrompt(since: Self.now, fallbackSent: true)
         }
         if fallbackSent, waited >= ViewSwitch.fallbackWait {
             return finish(.failure(Failure(text: gaveUpText)), note: gaveUpText)
@@ -221,14 +315,25 @@ final class ViewSwitchRunner {
         }
     }
 
-    private var gaveUpText: String {
-        let quitting = plan.from == .terminal ? plan.agent.name : plan.agent.name + "\u{2019}s session"
-        return quitting + " didn\u{2019}t quit, so nothing more was typed."
+    /// What the switch quits, as its notes name it.
+    private var quitName: String {
+        plan.from == .terminal ? plan.agent.name : plan.agent.name + "\u{2019}s session"
     }
+
+    private var gaveUpText: String { quitName + " didn\u{2019}t quit, so nothing more was typed." }
+
+    /// The words when the line is left to the user: they typed meanwhile, or the prompt holds text (or its report never
+    /// came, so it can't be known empty).
+    private static func leftText(_ plan: ViewSwitch.Plan, draft: Bool) -> String {
+        let why = draft ? "The prompt has text on it" : "You typed in the tab"
+        return why + ", so Next Term left the line to you: " + plan.line
+    }
+
+    private func leftText(draft: Bool) -> String { Self.leftText(plan, draft: draft) }
 
     /// The user typed while the agent quit: the line is theirs to run.
     private func leaveToUser() {
-        let text = "You typed in the tab, so Next Term left the line to you: " + plan.line
+        let text = leftText(draft: false)
         finish(.failure(Failure(text: text)), note: text)
     }
 
@@ -244,7 +349,7 @@ final class ViewSwitchRunner {
             Self.remembered[tabID] = Remembered(tab: tab, evidence: evidence, commandsStarted: started)
         }
         tab.submitOwnLine(typed) { [self] in
-            self.finish(.success(self.plan.to), note: nil)
+            self.finish(.success(Switched(view: self.plan.to, sessionID: self.plan.sessionID)), note: nil)
         }
     }
 

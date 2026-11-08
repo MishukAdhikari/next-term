@@ -193,6 +193,12 @@ enum MCPInputLine {
     static func refusal(_ tab: TerminalTab) -> String? {
         // A view switch owns the tab until its resume line is typed (plan 036 KTD7).
         if ViewSwitchRunner.running[tab.id] != nil { return "This tab is switching views; try again in a few seconds." }
+        return ruleRefusal(tab)
+    }
+
+    /// The features' rules alone, without the view switch's own: a switch asks them before it types, whoever asked for
+    /// it (the icon, ⇧⌘J, a menu, the Open in Terminal bar, switch_view).
+    static func ruleRefusal(_ tab: TerminalTab) -> String? {
         for rule in rules {
             if let why = rule(tab) { return why }
         }

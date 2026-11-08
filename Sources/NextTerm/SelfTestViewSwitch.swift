@@ -569,6 +569,23 @@ extension SelfTest {
         let signIn = ViewSwitchOfferBar.open(for: unsigned)
         check(ended && signIn?.shownText == "Claude Code needs you to sign in, in the terminal view.",
               "view switch: a session that isn't signed in ends with the Open in Terminal bar", rig.flat(unsigned).suffix(300).description)
+        // A draft the user left on the prompt meanwhile is theirs: Open in Terminal types nothing, the draft stays, a note
+        // says why, and the bar stays for when the prompt is clear.
+        let draft = "echo nt-draft"
+        let draftMark = rig.tuiLog("claude").count
+        unsigned.userInput()
+        unsigned.view.send(txt: draft)
+        let drafted = await wait(8) { ViewSwitchRunner.lineState(unsigned) == .holdsText && unsigned.lastBuffer?.report.buffer == draft }
+        signIn?.pressOpen()
+        try? await Task.sleep(nanoseconds: 1_500_000_000)
+        let leftNote = "The prompt has text on it, so Next Term left the line to you: claude"
+        check(drafted && rig.tuiLog("claude").count == draftMark && !unsigned.status.running
+                  && unsigned.lastBuffer?.report.buffer == draft && rig.showsNote(unsigned, leftNote)
+                  && ViewSwitchOfferBar.open(for: unsigned) != nil && !rig.flat(unsigned).contains("Switched to Terminal"),
+              "view switch: a draft on the prompt while the bar is open: Open in Terminal types nothing, leaves the draft and says why",
+              "drafted \(drafted), line \(unsigned.lastBuffer?.report.buffer ?? "unknown"): \(rig.flat(unsigned).suffix(200))")
+        unsigned.view.send(txt: String(repeating: "\u{7f}", count: draft.count))
+        _ = await wait(8) { ViewSwitchRunner.lineState(unsigned) == .empty }
         let plain = rig.tuiLog("claude").count
         signIn?.pressOpen()
         let started = await wait(15) { rig.tuiLog("claude").dropFirst(plain).contains { $0.hasPrefix("start ") && $0.contains(" [] new ") } }
@@ -599,6 +616,20 @@ extension SelfTest {
     // MARK: AE12: the Settings default
 
     static func viewSwitchDefaults(_ rig: ViewSwitchRig) async {
+        // Nothing chosen: Terminal. new_tab's bare claude with a prompt starts the agent's own interface, and says so.
+        let plainMark = rig.tuiLog("claude").count
+        let plain = await rig.call("new_tab", ["directory": rig.work, "command": "claude", "prompt": "fix it"])
+        let plainJSON = (try? JSONSerialization.jsonObject(with: Data(plain.text.utf8))) as? [String: Any] ?? [:]
+        let plainTab = rig.adopt(plainJSON["id"] as? String)
+        let own = await wait(15) { rig.tuiLog("claude").dropFirst(plainMark).contains { $0.hasPrefix("start ") && $0.contains("[\"fix it\"]") } }
+        check(AgentOpenView.opensIn(.claude, defaults: rig.suite) == .terminal && !plain.isError
+                  && plainJSON["view"] as? String == "terminal" && own,
+              "view switch: with Terminal, new_tab's bare claude with a prompt starts claude and answers the terminal view", plain.text)
+        if let plainTab {
+            rig.type(plainTab, "/exit")
+            _ = await wait(6) { !plainTab.status.running }
+        }
+
         // Settings › Editor's popup writes the key, Claude Code's alone.
         let control = AgentOpenViewControls.control(.claude)
         let popup = control.subviews.compactMap { $0 as? NSPopUpButton }.first
@@ -627,8 +658,8 @@ extension SelfTest {
         guard let typed = await rig.shell() else { return check(false, "view switch: a shell for a typed claude") }
         let typedMark = rig.tuiLog("claude").count
         rig.type(typed, "claude")
-        let own = await wait(15) { rig.tuiLog("claude").dropFirst(typedMark).contains { $0.hasPrefix("start ") } && rig.view(of: typed) == .terminal }
-        check(own, "view switch: claude typed in a shell stays in the terminal view", rig.flat(typed).suffix(200).description)
+        let typedOwn = await wait(15) { rig.tuiLog("claude").dropFirst(typedMark).contains { $0.hasPrefix("start ") } && rig.view(of: typed) == .terminal }
+        check(typedOwn, "view switch: claude typed in a shell stays in the terminal view", rig.flat(typed).suffix(200).description)
         rig.type(typed, "/exit")
         _ = await wait(6) { !typed.status.running }
     }
@@ -781,8 +812,13 @@ final class ViewSwitchRig {
     }
 
     func reached(_ outcome: ViewSwitchRunner.Outcome?) -> ViewSwitch.View? {
-        guard case .success(let view)? = outcome else { return nil }
-        return view
+        guard case .success(let switched)? = outcome else { return nil }
+        return switched.view
+    }
+
+    /// The note the tab shows now (TerminalTab.showNote's label), if it is `text`.
+    func showsNote(_ tab: TerminalTab, _ text: String) -> Bool {
+        tab.view.subviews.contains { ($0 as? NSTextField)?.stringValue == text }
     }
 
     func view(of tab: TerminalTab) -> ViewSwitch.View? { ViewSwitchRunner.offer(for: tab)?.view }

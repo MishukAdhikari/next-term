@@ -452,6 +452,12 @@ extension SelfTest {
         check(declined && untrusted && sessions().isEmpty && log().contains("version"),
               "claude session: declined on the Mac, the session ends with nothing run (only --version was read)",
               "\(log().suffix(4)): \(flatScreen(a).suffix(300))")
+        // The chat view's offer of the terminal view, where Claude Code asks its own trust question (plan 036 R13).
+        let barred = await wait(8) { ViewSwitchOfferBar.open(for: a)?.offer == .trustDeclined }
+        check(barred && ViewSwitchOfferBar.open(for: a)?.shownText == "Claude Code\u{2019}s own trust question is in the terminal view.",
+              "claude session: declined on the Mac, the Open in Terminal bar offers Claude Code's own trust question",
+              ViewSwitchOfferBar.open(for: a)?.shownText ?? "no bar")
+        ViewSwitchOfferBar.close(a)
 
         // Trusted, it starts: the stand-in runs (not the user's claude), with its version, the model and the change since.
         guard let b = await session(work, "claude", "STANDIN_VERSION=2.1.4") else { return check(false, "claude session: a second tab starts") }
