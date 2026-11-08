@@ -24,7 +24,7 @@ extension SelfTest {
               bar.map(\.title).joined(separator: ", "))
         guard let agents = bar.first(where: { $0.title == "Agents" })?.submenu else { return check(false, "agents menu: the menu bar has it") }
         let listed = agents.items.map { $0.isSeparatorItem ? "—" : $0.title }
-        let expected: [String] = ["Skills…", "MCP Servers…", "—", "Go to Next Agent Needing You", "—", "Resume Agent Session…", "Send to Agent",
+        let expected: [String] = ["Skills…", "MCP Servers…", "—", "Go to Next Agent Needing You", "—", "New Agent Session…", "Resume Agent Session…", "Send to Agent",
                                   "Suggest a Command…"]
         check(listed == expected, "agents menu: Skills… and MCP Servers…, Go to Next Agent Needing You, then the agents' commands",
               listed.joined(separator: ", "))
