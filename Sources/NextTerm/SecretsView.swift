@@ -26,18 +26,18 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
     }
     static let docsURL = URL(string: "https://nxtrm.mishuk.me/docs/secrets/")!
 
-    static let secureEnclaveLine = "Protected by this Mac's Secure Enclave. Using a key needs your approval with Touch ID or your password."
-    static let recoveryLine = "Protected by this Mac's Secure Enclave, with a copy of its key in your login keychain so updates keep working. "
+    static let secureEnclaveLine = "Protected by this Mac’s Secure Enclave. Using a key needs your approval with Touch ID or your password."
+    static let recoveryLine = "Protected by this Mac’s Secure Enclave, with a copy of its key in your login keychain so updates keep working. "
         + "Using a key needs your approval with Touch ID or your password."
     static let lessProtectedLine = "Less protected: this Mac has no Secure Enclave. Next Term asks for Touch ID or your password, but the key "
         + "that opens Secrets is in your login keychain."
-    static let cantOpenLine = "These keys were saved on another Mac, or this Mac's Secure Enclave was reset, so they can't be opened here."
-    static let tamperedLine = "Secrets' file was changed outside Next Term, so no key is released. Start Over, or restore the file from a backup."
+    static let cantOpenLine = "These keys were saved on another Mac, or this Mac’s Secure Enclave was reset, so they can’t be opened here."
+    static let tamperedLine = "Secrets’ file was changed outside Next Term, so no key is released. Start Over, or restore the file from a backup."
     static let tooLargeLine = "Secrets’ file is larger than Next Term can read (8 MB), so no key is released. Start Over, or restore an "
         + "older copy of the file from a backup."
     static let unlistedLine = "Next Term’s list of the vaults it made on this Mac is missing from the login keychain, so it can\u{2019}t tell these "
         + "keys are its own, and no key is released. Start Over to make a new vault."
-    static let agentControlLine = "Agents and MCP servers can't use these keys while “Let agents control Next Term” is off "
+    static let agentControlLine = "Agents and MCP servers can’t use these keys while “Let agents control Next Term” is off "
         + "(Settings › Editor › Agents)."
     static let writeOnlyLine = "Never shown: Next Term never shows or copies this key. Replace it to change it."
     static let emptyLine = "No keys yet. Add one, or import them from a file or your MCP configs."
@@ -223,7 +223,7 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
         }
         let footer = SecretApprovalPanel.label(Self.footer, size: 11)
         footer.textColor = .secondaryLabelColor
-        let docs = NSButton(title: "What Secrets protects, and what it doesn't", target: self, action: #selector(openDocs))
+        let docs = NSButton(title: "What Secrets protects, and what it doesn’t", target: self, action: #selector(openDocs))
         docs.bezelStyle = .inline
         signInsLabel.font = .systemFont(ofSize: 12)
         signInsLabel.textColor = .secondaryLabelColor
@@ -260,7 +260,7 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
     /// the table fills the list from the start and its columns resize together: none is squeezed out, and the list
     /// never scrolls sideways. A cell cut short has its whole text as its tooltip.
     static let columns: [Column] = [Column(id: "name", title: "Name", width: 84, minWidth: 64),
-                                    Column(id: "purpose", title: "What it's for", width: 70, minWidth: 44),
+                                    Column(id: "purpose", title: "What it’s for", width: 70, minWidth: 44),
                                     Column(id: "page", title: "Page", width: 78, minWidth: 48),
                                     Column(id: "writeOnly", title: "", width: 20, minWidth: 18, maxWidth: 28),
                                     Column(id: "rotated", title: "Rotated", width: 66, minWidth: 48),

@@ -93,10 +93,10 @@ final class SecretEditSheet: NSWindowController, NSWindowDelegate, NSTextFieldDe
         views += [Self.caption("Name"), nameField, savedAsLabel, hint]
         if case .replace = mode {} else {
             purposeField.stringValue = entry?.purpose ?? ""
-            purposeField.placeholderString = "What it's for (agents see this)"
+            purposeField.placeholderString = "What it’s for (agents see this)"
             purposeField.delegate = self
-            purposeField.setAccessibilityLabel("What it's for")
-            views += [Self.caption("What it's for"), purposeField]
+            purposeField.setAccessibilityLabel("What it’s for")
+            views += [Self.caption("What it’s for"), purposeField]
             let link = SecretLinkField(stored: entry?.link, from: entry?.linkFrom)
             link.onChange = { [weak self] in self?.refresh() }
             link.value = { [weak self] in self.flatMap { $0.hasValue ? $0.typedValue : nil } }

@@ -20,6 +20,8 @@ final class TaskSettingsView: NSView, NSTextFieldDelegate {
     let outside = NSPopUpButton()
     /// Where tasks go: the default, this project's, and each destination's details.
     let destinations = TaskDestinationsView(frame: .zero)
+    /// The problem's row, hidden with it.
+    private var problemRow: NSStackView?
     let includeContext = NSButton(checkboxWithTitle: "Add where you are to new tasks (project, branch, tab, agent)", target: nil, action: nil)
 
     override init(frame: NSRect) {
@@ -73,12 +75,14 @@ final class TaskSettingsView: NSView, NSTextFieldDelegate {
         note.preferredMaxLayoutWidth = 420
         let separator = NSBox()
         separator.boxType = .separator
+        let problemRow = row("", [problem])
+        self.problemRow = problemRow
         let links = NSStackView(views: [connect, format])
         links.spacing = 12
         let stack = NSStackView(views: [
             row("Todo folder:", [folder, folderScope]),
             row("", [chooseFolder, reveal]),
-            row("", [problem]),
+            problemRow,
             row("Outside a project:", [outside]),
             row("New tasks:", [includeContext]),
             note,
@@ -148,6 +152,7 @@ final class TaskSettingsView: NSView, NSTextFieldDelegate {
         folderScope.stringValue = setting.isShared ? "for every project" : "in each project"
         problem.stringValue = TodoFolder.problem(with: typed) ?? ""
         problem.isHidden = problem.stringValue.isEmpty
+        problemRow?.isHidden = problem.isHidden // its row too: no empty gap under Choose Folder… and Reveal
     }
 
     // MARK: choosing

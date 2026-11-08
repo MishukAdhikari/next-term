@@ -200,7 +200,7 @@ extension SelfTest {
         for id in ["editor", "terminal"] {
             tabs.selectTabViewItem(withIdentifier: id)
             tabs.layoutSubtreeIfNeeded()
-            guard let page = tabs.selectedTabViewItem?.view, let stack = page.subviews.compactMap({ $0 as? NSStackView }).first else {
+            guard let page = tabs.selectedTabViewItem?.pane, let stack = page.subviews.compactMap({ $0 as? NSStackView }).first else {
                 check(false, "Settings › \(id) has its rows")
                 continue
             }

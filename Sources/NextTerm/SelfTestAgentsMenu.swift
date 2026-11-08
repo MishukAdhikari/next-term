@@ -150,33 +150,35 @@ extension SelfTest {
             check(window.title == "Keyboard Shortcuts" && window.toolbar?.selectedItemIdentifier?.rawValue == "keys"
                   && shown.toolbarItems.first { $0.itemIdentifier.rawValue == "keys" }?.toolTip == "Keyboard Shortcuts",
                   "Settings: Shortcuts is titled and tipped Keyboard Shortcuts", window.title)
-            // Each section at its own height: nothing in it cut off by the window's edge, the window's top-left kept.
+            // One steady size: no section switch moves or resizes the window, and nothing in any section is cut off.
+            let steady = window.frame
             var cut: [String] = []
-            for section in SettingsWindowController.sections {
-                let top = NSPoint(x: window.frame.minX, y: window.frame.maxY)
+            for section in SettingsWindowController.sections + SettingsWindowController.sections.reversed() {
                 shown.showTab(section.id)
                 window.layoutIfNeeded()
-                if window.frame.minX != top.x || window.frame.maxY != top.y { cut.append("\(section.label) moved its top-left corner") }
-                guard let item = (window.contentView as? NSTabView)?.selectedTabViewItem, let pane = item.pane else { continue }
-                if let scroll = item.view as? SettingsPaneScroll {
-                    // Taller than the screen: all of it can be scrolled to.
-                    let needed = SettingsWindowController.flowingHeight(of: pane, width: pane.bounds.width)
-                    if (scroll.documentView?.frame.height ?? 0) + 0.5 < needed { cut.append("\(section.label) can't be scrolled to its end") }
-                } else if let clipped = settingsViewCutOff(in: pane) {
-                    cut.append("\(section.label): \(clipped)")
-                }
+                if window.frame != steady { cut.append("\(section.label) changed the window's frame to \(window.frame)") }
+                if let problem = settingsSectionCutOff(in: window) { cut.append("\(section.label): \(problem)") }
             }
-            check(cut.isEmpty, "Settings: every section shows whole at its own height, its lowest view inside the window",
+            check(cut.isEmpty, "Settings: one steady size across every section switch, and every section whole or scrollable to its end",
                   cut.joined(separator: "; "))
             shown.showTab("general")
-            // The check sees a cut: General held at the height Settings used to have loses Reset Tips and its note.
+            let general = (window.contentView as? NSTabView)?.selectedTabViewItem?.pane
+            let generalHeight = general.map { SettingsWindowController.flowingHeight(of: $0, width: $0.bounds.width) } ?? 0
+            let room = window.contentRect(forFrameRect: window.frame).height
+            let screenRoom = (window.screen ?? NSScreen.main).map { window.contentRect(forFrameRect: $0.visibleFrame).height } ?? .greatestFiniteMagnitude
+            check(room + 0.5 >= min(generalHeight, screenRoom) && window.frame.height <= ((window.screen ?? NSScreen.main)?.visibleFrame.height ?? .greatestFiniteMagnitude) + 0.5,
+                  "Settings: as tall as General needs, within the screen", "content \(Int(room)) pt, General \(Int(generalHeight)) pt")
+            check(window.collectionBehavior.contains(.fullScreenAuxiliary) && !window.collectionBehavior.contains(.fullScreenPrimary),
+                  "Settings: never a full-screen window, it joins the full-screen space it opens over", "\(window.collectionBehavior.rawValue)")
+            // The check sees a cut: General held at the height Settings used to have scrolls, its end out of sight.
             let ownFrame = window.frame
             window.setContentSize(NSSize(width: window.contentLayoutRect.width, height: SettingsWindowController.listHeight))
             window.layoutIfNeeded()
             let heldCut = (window.contentView as? NSTabView)?.selectedTabViewItem?.pane.flatMap(settingsViewCutOff(in:))
             window.setFrame(ownFrame, display: true)
             window.layoutIfNeeded()
-            check(heldCut != nil, "Settings: General held at the old fixed height is seen cut off", heldCut ?? "nothing cut")
+            check(heldCut != nil || generalHeight <= SettingsWindowController.listHeight,
+                  "Settings: General held at the old fixed height is seen cut off", heldCut ?? "nothing cut")
             await screenshot(window, suffix: "-settings-toolbar")
             shown.showTab("skills")
         }
@@ -266,6 +268,19 @@ func toolbarLabelsShownWhole(in window: NSWindow) -> [String: Bool] {
         found[item.label] = needed > 0 && view.bounds.width + 0.5 >= needed && inWindow
     }
     return found
+}
+
+/// What is wrong with the Settings section shown: a view the window cuts off, or for a section in its scroll view one
+/// that can't be scrolled to its end; nil when it shows whole.
+@MainActor
+func settingsSectionCutOff(in window: NSWindow) -> String? {
+    guard let item = (window.contentView as? NSTabView)?.selectedTabViewItem, let pane = item.pane else { return "no section" }
+    if let scroll = item.view as? SettingsPaneScroll {
+        let needed = SettingsWindowController.flowingHeight(of: pane, width: pane.bounds.width)
+        if (scroll.documentView?.frame.height ?? 0) + 0.5 < needed { return "can't be scrolled to its end" }
+        if needed > scroll.contentSize.height + 0.5 { return nil } // taller than the window: it scrolls
+    }
+    return settingsViewCutOff(in: pane)
 }
 
 /// The first view of a Settings section the window cuts off, lowest first, or nil when each shows whole. A scroll
