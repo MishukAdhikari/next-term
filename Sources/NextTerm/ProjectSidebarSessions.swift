@@ -111,6 +111,13 @@ extension TerminalWindowController {
             let fork = action == .fork
             if !fork, let open = sidebar.sessionsGroup.tabs.tab(of: session) { return AppDelegate.shared.goTo(open.tab, in: open.controller) }
             let directory = FileManager.default.fileExists(atPath: session.cwd) ? session.cwd : folder
+            // Claude Code and Codex open in the kind of tab Settings › Editor gives them (plan 037 R18); a fork in the terminal.
+            if let chat = AgentOpenView.resumeStart(session, fork: fork, folder: directory) {
+                if let owner = ConversationOwners.owner(agent: chat.agentID, sessionID: session.id),
+                   let open = MCPControl.controller(of: owner) { return AppDelegate.shared.goTo(owner, in: open) }
+                ChatTabs.open(chat, in: self)
+                return
+            }
             runInNewTab(directory: directory, command: SessionStore.commandPrefix + session.resumeCommand(fork: fork), title: nil)
         case .continueLatest(let agent):
             runInNewTab(directory: folder, command: SessionStore.commandPrefix + agent.continueCommand, title: nil)

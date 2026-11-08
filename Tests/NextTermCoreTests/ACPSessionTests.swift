@@ -243,13 +243,6 @@ import Testing
         #expect(CommandClassifier.kind(of: open) == .command)
     }
 
-    @Test func aSessionsLineQuotesItsFirstPrompt() {
-        let gemini = ACPAgent.named("gemini")!
-        #expect(gemini.sessionLine(launcher: "nxtrm", prompt: nil) == "nxtrm agent gemini")
-        #expect(gemini.sessionLine(launcher: "nxtrm", prompt: "  ") == "nxtrm agent gemini")
-        #expect(gemini.sessionLine(launcher: "'/A B/nxtrm'", prompt: "fix Bob's test") == "'/A B/nxtrm' agent gemini --prompt 'fix Bob'\\''s test'")
-    }
-
     /// The menu shows the tool's whole input (plan 035 R5): a 300-character command is kept whole in the request, wrapped
     /// in the menu rather than cut, and read back whole as the tab's question, which answer_agent matches.
     @Test func aLongCommandShowsWholeInTheMenuAndTheQuestion() {

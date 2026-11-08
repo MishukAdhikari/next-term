@@ -6,13 +6,15 @@ import NextTermCore
 enum ChatEndState: Equatable {
     case idle
     case ended(AgentSessionEngine.Ending)
+    /// The conversation went on in another tab (Open in Terminal): the ended row's words, and whether that tab is open.
+    case continued(String, tabOpen: Bool)
 }
 
 /// The card docked in the decision card's place once a chat isn't running: what happened in words, and what to do —
 /// Resume (idle after a crash), Restart (ended), Open in Terminal (Claude Code and Codex).
 final class ChatEndCard: ChatCardView {
     enum Action {
-        case restart, resume, openInTerminal
+        case restart, resume, openInTerminal, showTab
     }
 
     private let icon = NSImageView()
@@ -75,6 +77,8 @@ final class ChatEndCard: ChatCardView {
         icon.contentTintColor = words.warns ? .systemOrange : .secondaryLabelColor
         var actions: [Action] = [state == .idle ? .resume : .restart]
         if offersTerminal { actions.append(.openInTerminal) }
+        // Gone on elsewhere: the tab it went to is the one thing to do here (a restart would refuse while it holds it).
+        if case .continued(_, let open) = state { actions = open ? [.showTab] : [] }
         self.actions = actions
         buttons.show(actions.enumerated().map { index, action in
             let title: String
@@ -82,6 +86,7 @@ final class ChatEndCard: ChatCardView {
             case .resume: title = resumable ? "Resume" : "Start"
             case .restart: title = resumable ? "Restart" : "Start Again"
             case .openInTerminal: title = "Open in Terminal"
+            case .showTab: title = "Show Tab"
             }
             return ChatButtonRow.Item(title: title, accent: index == 0, label: title, tip: nil)
         }) { [weak self] index in
@@ -116,6 +121,8 @@ final class ChatEndCard: ChatCardView {
 
     static func words(_ state: ChatEndState, agent: String, resumable: Bool) -> Words {
         switch state {
+        case .continued(let note, _):
+            return Words(headline: "Continued in Terminal", detail: note, symbol: "arrow.right.circle", warns: false)
         case .idle:
             let detail = resumable ? "Resume goes on with this conversation." : "Start runs \(agent) here again."
             return Words(headline: "\(agent) isn\u{2019}t running", detail: detail, symbol: "pause.circle", warns: false)

@@ -279,6 +279,7 @@ enum MCPControl {
     /// The screen and `input` for read_tab and wait_for_tab: the line being typed at a zsh prompt, and a plugin's ghost,
     /// which is left out of the screen.
     static func screenFields(_ tab: TerminalTab, lines: Int) -> [String: Any] {
+        if let chat = ChatTabMCP.screenFields(tab, lines: lines) { return chat } // a chat tab's transcript and draft (plan 037)
         let typed = tab.typedInput(mask: field)
         let ghost = typed?.ghost ?? []
         let rows = fieldMasks ? tab.screenTail(lines, masked: SecretMask.current, excludingGhost: ghost) : tab.screenTail(lines, excludingGhost: ghost)
@@ -289,6 +290,7 @@ enum MCPControl {
     /// The menu under the tab's question, for an agent to read: matched on the screen as the question was read from it,
     /// its choices from `fieldTail`'s rows (`AgentScreen.menu(asking:screenLines:shown:)`).
     static func fieldMenu(_ tab: TerminalTab, question: String) -> AgentMenu? {
+        if tab.isChat { return ChatTabMCP.fieldMenu(tab, question: question) } // its card's choices (plan 037)
         // OpenCode marks its selected button only by its background: its menu is read from its rows with their colours,
         // and its options' words from the same rows masked over whole lines, as every other tab's choices are.
         if tab.isOpencodeScreen {
@@ -449,6 +451,7 @@ enum MCPControl {
         info.merge(restoredFields(tab)) { $1 } // what a restart did to it (U13)
         // An agent session (plan 030): its agent, CLI version and model (plan 035); read_tab gives its last message.
         info.merge(MainActor.assumeIsolated { AgentSessionSocket.listFields(tab) }) { $1 }
+        if tab.isChat { info["kind"] = "chat" } // Next Term's native chat view of the session (plan 037)
         if let code = tab.status.exitCode, tab.status.state == .failed { info["exit_code"] = Int(code) }
         if MCPRegistration.needsRestart(tab) { info["needs_restart"] = true } // its agent started before Next Term's tools reached it
         if tab === caller { info["you"] = true }
@@ -633,20 +636,8 @@ enum MCPControl {
         case .failure(let refusal): return reply(fail(refusal.text))
         case .success(let given): title = given
         }
-        // An agent session (plan 030): `nxtrm agent ID` instead of a command, checked before any tab opens.
-        var sessionLine: String?
-        var sessionName: String?
-        if let name = arguments["agent_session"] as? String {
-            if let command = arguments["command"] as? String, !command.trimmingCharacters(in: .whitespaces).isEmpty {
-                return reply(fail("Give command or agent_session, not both."))
-            }
-            switch ACPSessionTabs.agent(named: name) {
-            case .failure(let refusal): return reply(fail(refusal.text))
-            case .success(let agent):
-                sessionLine = agent.sessionLine(launcher: ACPSessionTabs.launcher, prompt: arguments["prompt"] as? String)
-                sessionName = agent.name
-            }
-        }
+        // An agent session, or a bare claude or codex Settings opens in Chat: a chat tab (plan 037).
+        if ChatTabMCP.newTab(arguments, directory: directory, title: title, caller: caller, reply: reply) { return }
         let tab: TerminalTab
         let controller: TerminalWindowController
         if let besideID = arguments["split_beside"] {
@@ -683,7 +674,7 @@ enum MCPControl {
         // An agent's worker: it opens no tabs of its own unless the user asks it to. A hand-off carries on the user's own
         // conversation (next-term-worktrees), so it is nobody's worker.
         if arguments["hand_off"] as? Bool != true { tab.openedBy = caller?.id }
-        if let title = title ?? sessionName { tab.userTitle = title }
+        if let title { tab.userTitle = title }
         MCPTabOpeners.record(tab, openedBy: caller)
         controller.refresh()
         let answer = {
@@ -692,9 +683,9 @@ enum MCPControl {
             if let note = arrived.note { info["note"] = note }
             reply(ok(info))
         }
-        guard let command = sessionLine ?? arguments["command"] as? String, !command.trimmingCharacters(in: .whitespaces).isEmpty else { return answer() }
-        guard sessionLine != nil || !command.contains("\n") else { return reply(fail("The command must be one line.")) }
-        let line = sessionLine ?? MCPServer.commandLine(command, prompt: arguments["prompt"] as? String)
+        guard let command = arguments["command"] as? String, !command.trimmingCharacters(in: .whitespaces).isEmpty else { return answer() }
+        guard !command.contains("\n") else { return reply(fail("The command must be one line.")) }
+        let line = MCPServer.commandLine(command, prompt: arguments["prompt"] as? String)
         // Type it once the shell is at its first prompt (its integration reports in), or after 3 s.
         whenReady(tab, until: TerminalTab.now + 3) {
             type(line, into: tab, submit: true)
@@ -740,6 +731,7 @@ enum MCPControl {
     /// take a paste in as a block and only treat a separate Return as "send". That Return is Next Term's own, so a zsh
     /// with the history hook keeps the line out of its history (TerminalTab.submitOwnLine).
     static func type(_ text: String, into tab: TerminalTab, submit: Bool) {
+        if ChatTabMCP.type(text, into: tab, submit: submit) { return } // a chat tab's prompt or draft (plan 037)
         guard canType(tab) else { return }
         // Text an earlier send_to_tab left with no Return, nothing written since, is the start of this line.
         let earlier = unsubmitted.removeValue(forKey: tab.id).flatMap { $0.writes == tab.view.inputWrites ? $0.typed : nil }
@@ -787,6 +779,7 @@ enum MCPControl {
         case .failure(let error): return reply(fail(error.text))
         case .success(let found): tab = found
         }
+        if ChatTabMCP.sendToTab(tab, arguments, reply: reply) { return } // a chat tab takes a prompt (plan 037)
         let text = arguments["text"] as? String ?? ""
         let submit = arguments["submit"] as? Bool ?? true
         guard !text.isEmpty || submit else { return reply(fail("Nothing to type.")) }
@@ -812,6 +805,7 @@ enum MCPControl {
         case .failure(let error): return reply(fail(error.text))
         case .success(let found): tab = found
         }
+        if ChatTabMCP.pressKeys(tab, arguments, reply: reply) { return } // a chat tab's keys (plan 037)
         let names = arguments["keys"] as? [String] ?? []
         guard !names.isEmpty, names.count <= 20 else { return reply(fail("Give 1 to 20 keys.")) }
         var sequences: [String] = []
@@ -871,6 +865,7 @@ enum MCPControl {
         case .failure(let error): return reply(fail(error.text))
         case .success(let found): tab = found
         }
+        if ChatTabMCP.answerAgent(tab, arguments, reply: reply) { return } // a chat tab's card (plan 037)
         guard let given = arguments["question_id"] as? String, !given.isEmpty else {
             return reply(fail("Give question_id: the one that came with the question from list_tabs, read_tab or wait_for_tab."))
         }

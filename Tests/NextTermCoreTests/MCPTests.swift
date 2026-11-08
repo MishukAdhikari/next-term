@@ -1758,8 +1758,9 @@ struct SplitMix: RandomNumberGenerator {
     @Test func toolCountAndTheInstructionsOnlyNameThem() {
         // 31 + 13 (run_command the 13th) + 4 + 5 (Secrets' five, import_secrets the fifth), and add_task, as many as without
         // herdr's agents' ids; then edit_host and end_session (plan 010a U6a), rename_tab (U5a) and start_agent (U5b), and
-        // apply_setup, and reopen_before_update; then the MCP hub's add_mcp_server and list_mcp_servers.
-        #expect(MCPServer.tools.count == 59 + MCPServer.setupTools.count + MCPServer.taskTools.count + MCPServer.hubTools.count)
+        // apply_setup, and reopen_before_update; then the MCP hub's add_mcp_server and list_mcp_servers; then list_agent_clis,
+        // and continue_in (plan 037 U7).
+        #expect(MCPServer.tools.count == 60 + MCPServer.setupTools.count + MCPServer.taskTools.count + MCPServer.hubTools.count)
         #expect(MCPServer.hubTools.count == 2)
         #expect(!MCPServer.tools.contains { $0.name.contains("herdr") })
         // Five characters more, and no sentence: list_tabs' description says the rest.

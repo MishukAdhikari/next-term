@@ -19,6 +19,9 @@ final class ChatTabHost: AgentSessionPresenter {
     private(set) var ending: AgentSessionEngine.Ending?
     /// The tab is closing: nothing is reported or shown any more.
     private var closing = false
+    /// The conversation went on in another tab (Open in Terminal, plan 037 U8): its note, and the tab it went to.
+    private(set) var continuedNote: String?
+    private(set) weak var continuedTab: TerminalTab?
 
     /// The tool and thinking rows the user unfolded, by block id.
     var expanded: Set<String> = []
@@ -191,6 +194,8 @@ final class ChatTabHost: AgentSessionPresenter {
     /// conversation the session reported, never a new one in its place.
     func restart() {
         guard !closing, state == .ended || state == .idle else { return }
+        continuedNote = nil
+        continuedTab = nil
         // One place per conversation (KTD11): one live in another tab stays there, said so here.
         if let id = engine?.sessionID ?? start.resumeID, let tab,
            let owner = MainActor.assumeIsolated({ ConversationOwners.owner(agent: start.agentID, sessionID: id, excluding: tab) }) {
@@ -209,6 +214,51 @@ final class ChatTabHost: AgentSessionPresenter {
         }
         start.prompt = nil
         begin()
+    }
+
+    // MARK: the handoff (plan 037 U8)
+
+    /// Open in Terminal: the chat ends here, its agent's whole group gone (KTD7) before `then` runs, so only one process
+    /// ever writes the conversation; `note` is the ended row the transcript and the end card show. An ended chat has
+    /// nothing to end. `then` comes on the main queue, at most 6 seconds on (the group's end takes 5 at most).
+    func endForHandoff(note: String, then: @escaping () -> Void) {
+        continuedNote = note
+        guard let engine, !engine.isEnded else {
+            carried.note(note)
+            notify()
+            return then()
+        }
+        let group = engine.agentPid
+        engine.session.note(note)
+        engine.finish(0, why: .closed)
+        notify()
+        guard let group, group > 0 else { return then() }
+        let deadline = Date().addingTimeInterval(6)
+        func check() {
+            // ESRCH once no process is left in the agent's group (its leader reaped by the group's end).
+            if killpg(group, 0) != 0 || Date() >= deadline { return then() }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { check() }
+        }
+        check()
+    }
+
+    /// A note row in the transcript: a handoff's refusal, said where the user asked for it.
+    func showNote(_ text: String) {
+        if let engine { engine.session.note(text) } else { carried.note(text) }
+        notify()
+    }
+
+    /// The tab the conversation went on in, once it is open: the end card's Show Tab brings it forward.
+    func continued(in tab: TerminalTab) {
+        continuedTab = tab
+        notify()
+    }
+
+    /// The end card's Show Tab: the tab the conversation went on in, in front.
+    func showContinuedTab() {
+        guard let target = continuedTab, let controller = MCPControl.controller(of: target) else { return NSSound.beep() }
+        controller.show(target)
+        controller.window?.makeKeyAndOrderFront(nil)
     }
 
     /// The tab closes (`ChatTabs.closed`): the agent's group ends (KTD7), the Mac's questions close unanswered.

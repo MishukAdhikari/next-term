@@ -56,7 +56,7 @@ import Testing
         // name: (destructive, idempotent)
         let expected: [String: (Bool, Bool)] = [
             "propose_edit": (false, false), "write_file": (true, true), "create_file": (false, true), "stage": (true, true),
-            "commit": (true, false), "run_command": (true, false), "focus_tab": (false, true), "split_pane": (false, false), "close_pane": (true, true),
+            "commit": (true, false), "run_command": (true, false), "focus_tab": (false, true), "continue_in": (true, false), "split_pane": (false, false), "close_pane": (true, true),
             "zoom_pane": (false, true), "set_layout": (false, true), "settings_set": (false, true), "reopen_before_update": (false, true),
         ]
         #expect(Set(expected.keys).union(["settings_get"]) == Set(MCPServer.controlTools.map(\.name)))
@@ -77,6 +77,17 @@ import Testing
         #expect(propose.description.contains("never writes the file") && propose.description.contains("Accept or Reject"))
         #expect(MCPServer.tool(named: "commit")?.description.contains("Never pushes") == true)
         #expect(MCPServer.instructions.contains("write_file") && MCPServer.instructions.contains("ask the user"))
+        // continue_in (plan 037 U7): a tab's id it requires, the two kinds only; PR #5's switch_view is not added.
+        let continueIn = try #require(MCPServer.tool(named: "continue_in"))
+        #expect(continueIn.scope == .write && MCPServer.isControlTool("continue_in"))
+        let schema = try #require((try? JSONSerialization.jsonObject(with: Data(continueIn.inputSchema.utf8))) as? [String: Any])
+        #expect(schema["required"] as? [String] == ["tab_id"])
+        #expect(schema["additionalProperties"] as? Bool == false)
+        let properties = try #require(schema["properties"] as? [String: Any])
+        #expect(Set(properties.keys) == ["tab_id", "view", "reason"])
+        #expect((properties["view"] as? [String: Any])?["enum"] as? [String] == ["chat", "terminal"])
+        #expect(continueIn.description.contains("before anything changes") && continueIn.description.contains("quits first"))
+        #expect(MCPServer.tool(named: "switch_view") == nil)
         // Long enough for the user to answer, and for hooks.
         for tool in MCPServer.controlTools where tool.scope == .write { #expect(tool.timeout >= 60, "\(tool.name)") }
     }

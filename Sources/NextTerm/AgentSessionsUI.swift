@@ -194,8 +194,15 @@ extension AppDelegate {
         if !fork, let open = tabs.tab(of: session) { return goTo(open.tab, in: open.controller) }
         let controller = openFolder(project, newWindow: false)
         let exists = FileManager.default.fileExists(atPath: session.cwd)
-        let command = SessionStore.commandPrefix + session.resumeCommand(fork: fork)
-        controller.runInNewTab(directory: exists ? session.cwd : project, command: command, title: nil)
+        let folder = exists ? session.cwd : project
+        // Claude Code and Codex open in the kind of tab Settings › Editor gives them (plan 037 R18); a fork in the terminal.
+        if let chat = AgentOpenView.resumeStart(session, fork: fork, folder: folder) {
+            if let owner = MainActor.assumeIsolated({ ConversationOwners.owner(agent: chat.agentID, sessionID: session.id) }),
+               let open = MCPControl.controller(of: owner) { return goTo(owner, in: open) }
+            ChatTabs.open(chat, in: controller)
+        } else {
+            controller.runInNewTab(directory: folder, command: SessionStore.commandPrefix + session.resumeCommand(fork: fork), title: nil)
+        }
         controller.window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }

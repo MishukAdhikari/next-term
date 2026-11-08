@@ -27,6 +27,12 @@ protocol ChatViewSource: AnyObject {
     func choose(_ index: Int)
     func moveHighlight(_ step: Int)
     func restart()
+    /// The end card's Show Tab, once the conversation went on in another tab.
+    func showContinuedTab()
+}
+
+extension ChatViewSource {
+    func showContinuedTab() {}
 }
 
 /// A chat tab's view (plan 037 U6): the header, the transcript, the docked decision or end card, and the input box,
@@ -305,6 +311,7 @@ final class ChatView: NSView {
         switch action {
         case .restart, .resume: source?.restart()
         case .openInTerminal: openInTerminal()
+        case .showTab: source?.showContinuedTab()
         }
     }
 
@@ -323,6 +330,7 @@ extension ChatTabHost: ChatViewSource {
     var agentName: String { agent?.name ?? start.agentID }
 
     var endState: ChatEndState? {
+        if state == .ended, let note = continuedNote { return .continued(note, tabOpen: continuedTab != nil) }
         switch state {
         case .idle: return .idle
         case .ended: return .ended(ending ?? .closed)

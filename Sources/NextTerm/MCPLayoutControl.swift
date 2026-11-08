@@ -17,7 +17,7 @@ extension MCPWriteControl {
         let id = tab.id.uuidString.lowercased()
         // Merged behind another project's tab (plan 032), its keyboard is nobody's until its tab comes to the front.
         let behind: Bool = controller.window?.isBackgroundTab == true
-        if !behind, controller.activeTab === tab, controller.window?.firstResponder === tab.view {
+        if !behind, controller.activeTab === tab, tab.holdsKeyboard(in: controller.window) {
             return reply(MCPControl.ok(["id": id, "focused": true, "note": "It has its window's keyboard already."]))
         }
         let ask = Ask(title: "An agent asks to move the keyboard to a tab",
@@ -516,7 +516,7 @@ extension TerminalWindowController {
     /// pane. The zoomed pane takes the window's keyboard, since the one that had it may be hidden now.
     /// Bringing the panes back keeps the keyboard where it is: in the pane that had it, or in the editor.
     func setZoomed(_ tab: TerminalTab?, in group: PaneGroup) {
-        let paneHadKeyboard = group.panes.contains { window?.firstResponder === $0.view }
+        let paneHadKeyboard = group.panes.contains { $0.holdsKeyboard(in: window) }
         group.zoomed = tab
         if let tab { group.focused = tab }
         group.layout()

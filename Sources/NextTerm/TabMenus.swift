@@ -165,6 +165,7 @@ extension TerminalWindowController {
         let menu = NSMenu()
         addPlaceChoices(to: menu, for: group) // Keep Going, for a branch switched under its chat
         menu.addCommand("Rename…", "renameTab:") { [weak self] in self?.rename(group) }
+        addHandoff(to: menu, for: group) // Continue in Chat or Open in Terminal, for Claude Code and Codex (plan 037)
         menu.addItem(.separator())
         menu.addCommand("Split Right", "splitRight:") { [weak self] in self?.split(group, vertical: true) }
         menu.addCommand("Split Down", "splitDown:") { [weak self] in self?.split(group, vertical: false) }
@@ -376,6 +377,8 @@ extension TerminalWindowController {
             return activeIndex + 1 < groups.count && !terminalRailed
         case #selector(revealInFinder(_:)), #selector(copyFilePath(_:)), #selector(copyRelativeFilePath(_:)):
             return editorArea.activePath != nil
+        case #selector(handOffConversation(_:)):
+            return validateHandoff(item) // TerminalWindowHandoff.swift
         default:
             return nil
         }

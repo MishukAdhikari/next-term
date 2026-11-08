@@ -48,6 +48,7 @@ enum MCPWriteControl {
         case "create_file": writeFile(arguments, context, creating: true, reply: reply)
         case "stage", "commit": git(tool, arguments, context, reply: reply)
         case "focus_tab": focusTab(arguments, context, reply: reply)
+        case "continue_in": continueIn(arguments, context, reply: reply)
         case "run_command": runCommand(arguments, context, reply: reply)
         case "split_pane": splitPane(arguments, context, reply: reply)
         case "close_pane": closePane(arguments, context, reply: reply)

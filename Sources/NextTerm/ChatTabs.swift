@@ -24,9 +24,11 @@ enum ChatTabs {
     /// Starts registered by a restored tab's id, claimed by its `start()`.
     nonisolated(unsafe) private static var registered: [UUID: Registered] = [:]
 
-    /// The handoff's key as the user has it (⇧⌘J by default), for the note on a terminal-only command; nil until the
-    /// menu item exists.
-    nonisolated(unsafe) static var handoffShortcut: String?
+    /// The handoff's key as the user has it (⇧⌘J by default), for the note on a terminal-only command; nil when it has
+    /// none.
+    static var handoffShortcut: String? {
+        KeyboardShortcuts.shared.key(for: #selector(TerminalWindowController.handOffConversation(_:)))?.display
+    }
 
     static func isChat(_ tab: TerminalTab) -> Bool { hosts[tab.id] != nil }
 
@@ -84,23 +86,28 @@ enum ChatTabs {
 
     /// Opens a chat tab for `start` in `controller`: a new tab (right after `source`'s group when given, else beside the
     /// active one), or a pane split beside `splitBeside`. The tab, or nil when it didn't become a chat.
+    /// `vertical` false splits below `splitBeside` instead of to its right.
     @discardableResult
     static func open(_ start: ChatStart, in controller: TerminalWindowController, after source: TerminalTab? = nil,
-                     splitBeside: TerminalTab? = nil, select: Bool = true, byAgent: Bool = false) -> TerminalTab? {
+                     splitBeside: TerminalTab? = nil, vertical: Bool = true, select: Bool = true, byAgent: Bool = false) -> TerminalTab? {
         opening = start
         defer { opening = nil }
         let tab: TerminalTab?
         if let beside = splitBeside {
-            tab = controller.split(vertical: true, from: beside, directory: start.folder, focus: select, byAgent: byAgent)
+            tab = controller.split(vertical: vertical, from: beside, directory: start.folder, focus: select, byAgent: byAgent)
         } else {
             tab = controller.addTab(directory: start.folder, select: select, byAgent: byAgent)
         }
         guard let tab, isChat(tab) else { return nil }
-        if splitBeside == nil, let source, let from = controller.groups.firstIndex(where: { $0.contains(tab) }),
-           let at = controller.groups.firstIndex(where: { $0.contains(source) }), from != at + 1 {
-            controller.tabBar(controller.tabBar, didMove: from, to: from > at ? at + 1 : at)
-        }
+        if splitBeside == nil, let source { place(tab, after: source, in: controller) }
         return tab
+    }
+
+    /// Moves `tab`'s tab to just after `source`'s, as a handoff opens the other kind beside its source.
+    static func place(_ tab: TerminalTab, after source: TerminalTab, in controller: TerminalWindowController) {
+        guard let from = controller.groups.firstIndex(where: { $0.contains(tab) }),
+              let at = controller.groups.firstIndex(where: { $0.contains(source) }), from != at + 1, from != at else { return }
+        controller.tabBar(controller.tabBar, didMove: from, to: from > at ? at + 1 : at)
     }
 
     // MARK: the keyboard

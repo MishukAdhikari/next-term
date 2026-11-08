@@ -39,7 +39,7 @@ public enum MenuKeys {
             "toggleMarkdownBold:": cmd("b"), "toggleMarkdownItalic:": cmd("i"), "insertMarkdownLink:": cmd("k"),
             "toggleMarkdownStrikethrough:": shiftCmd("x"), "toggleMarkdownTask:": shiftCmd("l"), "markdownBodyText:": optCmd("0"),
             // Agents
-            "goToNextAgentNeedingYou:": shiftCmd("u"),
+            "goToNextAgentNeedingYou:": shiftCmd("u"), "handOffConversation:": shiftCmd("j"),
             "resumeSession:": optCmd("o"), "sendToAgent:": optCmd("k"), "suggestCommand:": ctrlCmd("k"),
             // Tasks
             "addTask:": ctrlCmd("t"), "wrapUp:": ctrlCmd("w"),

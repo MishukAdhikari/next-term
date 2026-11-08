@@ -71,14 +71,6 @@ public struct ACPAgent: Equatable, Sendable {
         return known.filter { agent in folders.contains { exists(($0 as NSString).appendingPathComponent(agent.program)) } }
     }
 
-    /// The line a tab runs for a session of this agent: `launcher` (Next Term's `nxtrm`, quoted, or its binary and
-    /// `--cli`), `agent ID`, and the first prompt quoted for the shell.
-    public func sessionLine(launcher: String, prompt: String?) -> String {
-        var line = launcher + " agent " + id
-        if let prompt, !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { line += " --prompt " + ShellQuote.quote(prompt) }
-        return line
-    }
-
     /// Whether a session of this agent comes back after an update (plan 035 U7): Claude Code's by `claude --resume`,
     /// Codex's by `thread/resume`. An ACP agent's session is a command like any other.
     public var resumesSessions: Bool { protocolKind != .acp }

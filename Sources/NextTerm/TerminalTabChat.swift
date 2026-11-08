@@ -13,6 +13,13 @@ extension TerminalTab {
     /// What its pane shows and gives the keyboard to: the chat's view, or the terminal.
     var contentView: NSView { chatHost?.view ?? view }
 
+    /// Whether the tab holds `window`'s keyboard: its terminal, or anything in its chat's view.
+    func holdsKeyboard(in window: NSWindow?) -> Bool {
+        guard let window else { return false }
+        if window.firstResponder === view { return true }
+        return chatHost?.view.hasKeyboard ?? false
+    }
+
     /// A chat tab's automatic name is its agent's ("Claude Code"), never the session program's: a tab renamed back to
     /// automatic gets its agent's name again. Nothing for a terminal tab.
     func applyChatTitle() {
