@@ -126,7 +126,8 @@ final class TaskDestinationsView: NSView, NSTextFieldDelegate {
             heading,
             Self.row("Default:", [defaultPopup]),
             Self.row("", [defaultProblem]),
-            Self.row("This project:", [projectPopup, projectName]),
+            Self.row("This project:", [projectPopup]),
+            Self.row("", [projectName]),
             Self.row("", [projectProblem]),
             Self.row("Handoff folder:", [handoffRow.value, handoffRow.choose, handoffRow.useDefault]),
             Self.row("", [handoffRow.problem]),
@@ -153,6 +154,15 @@ extension TaskDestinationsView {
         projectPopup.setAccessibilityLabel("This project’s destination")
         projectPopup.toolTip = "Where the tasks of the project in front go. Every worktree of it shares one choice."
         projectName.textColor = .secondaryLabelColor
+        projectName.font = .systemFont(ofSize: 11)
+        projectName.lineBreakMode = .byTruncatingMiddle
+        projectName.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        // The popups as wide as Settings has room for: a long destination's name is cut in the button, whole in its menu.
+        for popup in [defaultPopup, projectPopup] {
+            popup.widthAnchor.constraint(lessThanOrEqualToConstant: 320).isActive = true
+            popup.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+            (popup.cell as? NSPopUpButtonCell)?.lineBreakMode = .byTruncatingTail
+        }
         save.bezelStyle = .rounded
         save.keyEquivalent = ""
         save.target = self

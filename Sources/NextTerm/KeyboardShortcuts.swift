@@ -677,27 +677,31 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
                               backing: .buffered, defer: false)
         window.title = "Settings"
         window.keepsItsOwnFrame()
+        // A Mac Settings window never goes full screen: it joins the space it opens in, over a full-screen window too.
+        window.collectionBehavior = [.fullScreenAuxiliary, .moveToActiveSpace]
         window.minSize = NSSize(width: 480, height: 320)
         window.isReleasedWhenClosed = false
         window.toolbarStyle = .preference
         super.init(window: window)
         // What a launch shows, the editor's settings, the terminal's, notifications, every shortcut, and imports.
         // General is first, so it is the tab Settings opens on.
+        // The sections laid out top-down (General, Editor, Terminal, Notifications) each sit in a scroll view of their
+        // own, which scrolls only when the window is shorter than they are (a small screen, or the user's resize).
         let tabs = NSTabView()
         tabs.tabViewType = .noTabsNoBorder
         tabs.delegate = self // set first: each pane is readied as it is selected, General as it is added
         let generalTab = NSTabViewItem(identifier: "general")
         generalTab.label = "General"
-        generalTab.view = GeneralSettingsView()
+        generalTab.view = SettingsPaneScroll(pane: GeneralSettingsView())
         let editorTab = NSTabViewItem(identifier: "editor")
         editorTab.label = "Editor"
-        editorTab.view = EditorSettingsView()
+        editorTab.view = SettingsPaneScroll(pane: EditorSettingsView())
         let terminalTab = NSTabViewItem(identifier: "terminal")
         terminalTab.label = "Terminal"
-        terminalTab.view = TerminalSettingsView()
+        terminalTab.view = SettingsPaneScroll(pane: TerminalSettingsView())
         let notificationsTab = NSTabViewItem(identifier: "notifications")
         notificationsTab.label = "Notifications"
-        notificationsTab.view = NotificationSettingsView()
+        notificationsTab.view = SettingsPaneScroll(pane: NotificationSettingsView())
         let keysTab = NSTabViewItem(identifier: "keys")
         keysTab.label = "Keyboard Shortcuts"
         keysTab.view = NSView()
@@ -741,11 +745,13 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
         // Never narrower than the toolbar with every name whole: no section goes into an overflow menu.
         window.layoutIfNeeded()
         window.minSize.width = max(window.minSize.width, toolbarFitWidth)
+        settle()
         sectionShown()
         shortcutsContent = keysTab.view
         build()
         reload()
         window.center()
+        NotificationCenter.default.addObserver(self, selector: #selector(resized), name: NSWindow.didResizeNotification, object: window)
     }
 
     // MARK: Toolbar
@@ -785,20 +791,21 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
 
     func tabView(_ tabView: NSTabView, didSelect tabViewItem: NSTabViewItem?) { sectionShown() }
 
-    /// The toolbar marks the section shown, the window is titled with its whole name, and it takes the section's own
-    /// height, as Mac Settings windows do.
+    /// The toolbar marks the section shown and the window is titled with its whole name. The window keeps its size:
+    /// a switch never moves or resizes it.
     private func sectionShown() {
         guard let item = tabs?.selectedTabViewItem, let id = item.identifier as? String else { return }
         window?.toolbar?.selectedItemIdentifier = NSToolbarItem.Identifier(id)
         window?.title = item.label
-        fit(item)
+        ready(item)
     }
 
-    // MARK: Each section's height
+    // MARK: One steady size
 
-    /// The sections laid out from the top down, as tall as what they hold. The others fill the window: their lists
-    /// grow with it, and they keep the height Settings always had.
+    /// The sections laid out from the top down: they sit at the top with the room below them left empty. The others
+    /// hold lists, which fill the window.
     static let flowingSections: Set<String> = ["general", "editor", "terminal", "notifications"]
+    /// The least height of the sections with lists: the room Settings always gave them.
     static let listHeight: CGFloat = 684
     static let baseWidth: CGFloat = 620
 
@@ -809,7 +816,7 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
         return screen.visibleFrame.height - chrome
     }
 
-    private var contentWidth: CGFloat { window.map { $0.contentRect(forFrameRect: $0.frame).width } ?? 620 }
+    private var contentWidth: CGFloat { window.map { $0.contentRect(forFrameRect: $0.frame).width } ?? Self.baseWidth }
 
     /// A flowing section's own height at `width`: its lowest view's bottom, and the margin its top has.
     static func flowingHeight(of pane: NSView, width: CGFloat) -> CGFloat {
@@ -824,41 +831,33 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
         return ceil(extent + 24)
     }
 
-    /// Before a section shows: a flowing one taller than the screen goes into a scroll view rather than be cut off,
-    /// and comes out of it once there is room.
-    private func ready(_ item: NSTabViewItem) {
-        guard let id = item.identifier as? String, Self.flowingSections.contains(id), let pane = item.pane else { return }
-        let height = Self.flowingHeight(of: pane, width: contentWidth)
-        if height > roomyHeight {
-            let scroll = item.view as? SettingsPaneScroll ?? SettingsPaneScroll(pane: pane)
-            scroll.paneHeight = height
-            if item.view !== scroll { item.view = scroll }
-        } else if let scroll = item.view as? SettingsPaneScroll {
-            pane.removeFromSuperview()
-            item.view = pane
-            _ = scroll
-        }
+    /// The one size Settings has in every section: as wide as its toolbar with every name whole, and as tall as the
+    /// tallest section laid out top-down (General), within the screen. Set once; a section switch never changes it.
+    private func settle() {
+        guard let window, let tabs else { return }
+        let width = max(Self.baseWidth, window.minSize.width)
+        let tallest = tabs.tabViewItems.filter { Self.flowingSections.contains($0.identifier as? String ?? "") }
+            .compactMap(\.pane).map { Self.flowingHeight(of: $0, width: width) }.max() ?? 0
+        window.setContentSize(NSSize(width: width, height: min(max(Self.listHeight, tallest), roomyHeight)))
     }
 
-    /// The window takes the section's height (within the screen), its top-left corner kept.
-    private func fit(_ item: NSTabViewItem) {
-        guard let window, let id = item.identifier as? String, let pane = item.pane else { return }
-        // Each section at the window's own width; one that needs more (Secrets) widens it by its own constraints.
-        let width = max(Self.baseWidth, window.minSize.width)
-        let wanted = Self.flowingSections.contains(id) ? Self.flowingHeight(of: pane, width: width)
-            : max(Self.listHeight, ceil(pane.fittingSize.height))
-        (item.view as? SettingsPaneScroll)?.paneHeight = wanted
-        let height = min(wanted, roomyHeight)
-        var frame = window.frameRect(forContentRect: NSRect(x: 0, y: 0, width: width, height: height))
-        frame.origin = NSPoint(x: window.frame.minX, y: window.frame.maxY - frame.height)
-        if let visible = (window.screen ?? NSScreen.main)?.visibleFrame, frame.minY < visible.minY { frame.origin.y = visible.minY }
-        guard frame != window.frame else { return }
-        window.setFrame(frame, display: true, animate: window.isVisible)
-        window.layoutIfNeeded()
-        // Widened by the section's constraints: its top-left corner stays where it was.
-        if window.frame.maxY != frame.maxY || window.frame.minX != frame.minX {
-            window.setFrameTopLeftPoint(NSPoint(x: frame.minX, y: frame.maxY))
-        }
+    /// The size Settings keeps across its sections (for the self-test).
+    var steadyContentSize: NSSize {
+        guard let window else { return .zero }
+        return window.contentRect(forFrameRect: window.frame).size
+    }
+
+    /// A flowing section's scroll view holds the section at its own height at the window's width: it scrolls only
+    /// when the window is shorter than that.
+    private func ready(_ item: NSTabViewItem) {
+        guard let scroll = item.view as? SettingsPaneScroll else { return }
+        let width = scroll.contentSize.width > 1 ? scroll.contentSize.width : contentWidth
+        scroll.paneHeight = Self.flowingHeight(of: scroll.pane, width: width)
+    }
+
+    /// Resized by the user: the section shown keeps its height right for the new width.
+    @objc private func resized() {
+        if let item = tabs?.selectedTabViewItem { ready(item) }
     }
 
     /// The narrowest window whose toolbar shows every item: each item's own width, and the toolbar's margins.
@@ -1116,7 +1115,7 @@ final class EditorSettingsView: NSView {
     private let markdownPreview = NSButton(checkboxWithTitle: "Show Markdown files in Live Preview", target: nil, action: nil)
     private let singleClick = NSButton(checkboxWithTitle: "Open files and folders with a single click", target: nil, action: nil)
     private let dotIcons = NSButton(checkboxWithTitle: "Icons on configuration folders (.github, .claude, .idea…)", target: nil, action: nil)
-    private let claude = NSButton(checkboxWithTitle: "Agents in a tab see the editor (Claude Code, Gemini CLI, Qwen Code, OpenCode)", target: nil, action: nil)
+    private let claude = NSButton(checkboxWithTitle: "Agents in a tab see the editor (Claude Code, Gemini, Qwen, OpenCode)", target: nil, action: nil)
     private let copilot = NSButton(checkboxWithTitle: "GitHub Copilot CLI in a tab sees the editor", target: nil, action: nil)
     private let control = NSButton(checkboxWithTitle: "Let agents control Next Term (MCP: projects, tabs, prompts, the editor)", target: nil, action: nil)
     private let controlStatus = NSTextField(wrappingLabelWithString: "")
@@ -1213,7 +1212,7 @@ final class EditorSettingsView: NSView {
             stack.spacing = 10
             return stack
         }
-        let note = NSTextField(wrappingLabelWithString: "Line height is a multiple of the font’s own; 1.35 reads well for code. Terminals use this size unless the Terminal tab gives them their own (and their font); ⌘+ and ⌘- size what has the keyboard. Agents started in a new tab see your selected lines, never from .env files; ⌥⌘K @-mentions them in the prompt. A Markdown file shows its syntax only on the lines you are on, and its bytes never change unless you type; ⇧⌘V shows one file's source.")
+        let note = NSTextField(wrappingLabelWithString: "Line height is a multiple of the font’s own; 1.35 reads well for code. Terminals use this size unless the Terminal tab gives them their own (and their font); ⌘+ and ⌘- size what has the keyboard. Agents started in a new tab see your selected lines, never from .env files; ⌥⌘K @-mentions them in the prompt. A Markdown file shows its syntax only on the lines you are on, and its bytes never change unless you type; ⇧⌘V shows one file’s source.")
         note.textColor = .secondaryLabelColor
         note.font = .systemFont(ofSize: 11)
         note.preferredMaxLayoutWidth = 420
@@ -1370,8 +1369,9 @@ final class EditorSettingsView: NSView {
     }
 }
 
-/// A Settings section taller than the screen, in a scroll view rather than cut off: the section keeps its own height
-/// and the window's width.
+/// A Settings section laid out top-down, in a scroll view: at the top of the window with the room below it empty, and
+/// scrolled when the window is shorter than it (a small screen, or the user's resize), never cut off. It takes the
+/// window's width.
 final class SettingsPaneScroll: NSScrollView {
     let pane: NSView
     var paneHeight: CGFloat = 0 { didSet { if paneHeight != oldValue { tile() } } }
@@ -1403,7 +1403,7 @@ final class SettingsPaneScroll: NSScrollView {
 }
 
 extension NSTabViewItem {
-    /// The section's own view: in its scroll view when it is taller than the screen.
+    /// The section's own view: the one in its scroll view for a section laid out top-down.
     var pane: NSView? { (view as? SettingsPaneScroll)?.pane ?? view }
 }
 

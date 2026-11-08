@@ -67,15 +67,18 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
         filter.target = self
         filter.action = #selector(filterChanged)
 
-        let columns: [(String, String, CGFloat)] = [("name", "Skill", 170), (SkillAgent.claudeCode.rawValue, "Claude Code", 100),
-                                                    (SkillAgent.codex.rawValue, "Codex", 95), (SkillAgent.commandCode.rawValue, "Command Code", 110),
-                                                    (SkillAgent.opencode.rawValue, "OpenCode", 95), ("state", "State", 140)]
+        let columns: [(String, String, CGFloat)] = [("name", "Skill", 150), (SkillAgent.claudeCode.rawValue, "Claude Code", 90),
+                                                    (SkillAgent.codex.rawValue, "Codex", 75), (SkillAgent.commandCode.rawValue, "Command Code", 105),
+                                                    (SkillAgent.opencode.rawValue, "OpenCode", 80), ("state", "State", 80)]
         for (id, title, width) in columns {
             let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(id))
             column.title = title
             column.width = width
+            column.minWidth = min(width, 60)
             table.addTableColumn(column)
         }
+        // Every column inside the list at Settings' width (no column cut at its right edge); they grow with the window.
+        table.columnAutoresizingStyle = .uniformColumnAutoresizingStyle
         table.dataSource = self
         table.delegate = self
         table.usesAlternatingRowBackgroundColors = true
@@ -133,7 +136,7 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
     /// Where agents load skills from, and who reads which folder (SkillReaders, as of October 2026).
     static var introText: String {
         let folders = "Skills your agents load from ~/.agents/skills (shared), ~/.claude/skills, ~/.codex/skills, ~/.commandcode/skills "
-            + "and OpenCode's ~/.config/opencode/skills."
+            + "and OpenCode’s ~/.config/opencode/skills."
         let readers = "Claude Code reads only its own folder. Codex, Command Code, OpenCode and most other agents read the shared one."
         let alsoClaude: [String] = ["OpenCode"] + SkillReaders.claude
         return "\(folders) \(readers) \(SkillPackage.list(alsoClaude)) also read ~/.claude/skills."
@@ -615,10 +618,10 @@ final class SkillsUnifySheet: NSObject {
         if steps.isEmpty {
             // What stands apart is OpenCode's own copy, which Next Term never changes: keeping it is what shares it.
             let canShare = row.copies.contains { $0.root.kind == .opencode && $0.realPath != winner.realPath && row.cannotWin($0) == nil }
-            let then = canShare ? "Keep OpenCode's copy instead to share it with every agent, or remove it from OpenCode's folder yourself."
-                : "Remove it from OpenCode's folder yourself."
-            stepsText.stringValue = "Keeping this copy changes nothing: what differs is OpenCode's own copy, and Next Term never changes "
-                + "OpenCode's folder. " + then
+            let then = canShare ? "Keep OpenCode’s copy instead to share it with every agent, or remove it from OpenCode’s folder yourself."
+                : "Remove it from OpenCode’s folder yourself."
+            stepsText.stringValue = "Keeping this copy changes nothing: what differs is OpenCode’s own copy, and Next Term never changes "
+                + "OpenCode’s folder. " + then
             unifyButton?.isEnabled = false
             return
         }
