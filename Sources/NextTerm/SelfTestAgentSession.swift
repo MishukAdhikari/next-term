@@ -134,10 +134,16 @@ extension SelfTest {
     /// questions, "wait" starts a turn that only an interrupt ends; anything else streams a reply and runs a tool.
     /// STANDIN_MODE=auth answers the first prompt as an account that isn't signed in, STANDIN_MODE=initerror answers
     /// initialize with an error, and STANDIN_MODE=stale quits at once when given --resume, as for a session that is gone.
+    /// For the chat tab's part (SelfTestChatTab): STANDIN_SESSION_ID names a new session (an id Claude Code's pattern
+    /// takes), STANDIN_SLOW waits that many seconds before reading anything (a cold start), and each start writes its
+    /// environment beside itself (.env). "markdown" streams a thought and Markdown with a code block, then the plan, a
+    /// Bash call that runs a second and an Edit of STANDIN_EDIT_PATH; "stream" streams 200 chunks a second; "child"
+    /// starts a `sleep 600` in its process group (the orphan check); "mcp" calls list_tabs through the Next Term MCP
+    /// server it was given and writes the answer beside itself (.mcp-answer).
     static let claudeStandIn = #"""
     #!/usr/bin/python3
     # A stand-in for Claude Code's claude -p, for testing nxtrm agent claude. Never a real model or account.
-    import json, os, sys
+    import json, os, subprocess, sys, threading, time
     log = open(sys.argv[0] + ".log", "a", buffering=1)
     def note(*words): log.write(" ".join(str(w) for w in words) + "\n")
     if "--version" in sys.argv:
@@ -147,7 +153,10 @@ extension SelfTest {
     args = sys.argv[1:]
     note("session", os.getpid(), json.dumps(args))
     mode = os.environ.get("STANDIN_MODE", "")
-    sid = args[args.index("--resume") + 1] if "--resume" in args else "sess-standin-1"
+    sid = args[args.index("--resume") + 1] if "--resume" in args else os.environ.get("STANDIN_SESSION_ID", "sess-standin-1")
+    if "--resume" in args: note("resume", sid)
+    with open(sys.argv[0] + ".env", "w") as dump: json.dump(dict(os.environ), dump)
+    if os.environ.get("STANDIN_SLOW"): time.sleep(float(os.environ["STANDIN_SLOW"]))
     if mode == "stale" and "--resume" in args:
         sys.stderr.write("No conversation found with session ID: " + sid + "\n")
         sys.exit(1)
@@ -169,6 +178,36 @@ extension SelfTest {
         if suggestions: request["permission_suggestions"] = suggestions
         asked[rid] = kind
         send({"type": "control_request", "request_id": rid, "request": request})
+    def thinking(words): send({"type": "stream_event", "event": {"type": "content_block_delta", "index": 0, "delta": {"type": "thinking_delta", "thinking": words}}, "parent_tool_use_id": None, "session_id": sid})
+    def ask_mcp():
+        # Next Term's MCP server as --mcp-config gives it: initialize, then list_tabs; the answer's line, or why not.
+        config = json.loads(args[args.index("--mcp-config") + 1]) if "--mcp-config" in args else {}
+        servers = list(config.get("mcpServers", {}).values())
+        if not servers: return "no server"
+        server = servers[0]
+        proc = subprocess.Popen([server["command"]] + server.get("args", []), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+        timer = threading.Timer(15, proc.kill)
+        timer.start()
+        calls = [{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "stand-in", "version": "1"}}},
+                 {"jsonrpc": "2.0", "method": "notifications/initialized"},
+                 {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "list_tabs", "arguments": {}}}]
+        answer = "no answer"
+        try:
+            for call in calls: proc.stdin.write(json.dumps(call) + "\n")
+            proc.stdin.flush()
+            for out in proc.stdout:
+                try: got = json.loads(out)
+                except ValueError: continue
+                if got.get("id") == 2:
+                    answer = out.strip()
+                    break
+        finally:
+            timer.cancel()
+            try: proc.stdin.close()
+            except Exception: pass
+            proc.kill()
+            proc.wait()
+        return answer
     turn = 0
     while True:
         line = sys.stdin.readline()
@@ -225,6 +264,38 @@ extension SelfTest {
             ask("perm-ask", "AskUserQuestion", {"questions": questions}, None, "question")
         elif words.startswith("wait"):
             text("Working on it", "m-wait-%d" % turn)
+        elif words.startswith("markdown"):
+            mid = "m-md-%d" % turn
+            send({"type": "stream_event", "event": {"type": "message_start", "message": {"id": mid}}, "parent_tool_use_id": None, "session_id": sid})
+            thinking("Planning the change")
+            for part in ["## The change\n\n", "It runs `ls`, then edits **one** file:\n\n", "```swift\nlet a = 2\n```\n"]: delta(part)
+            assistant(mid, [{"type": "thinking", "thinking": "Planning the change"}, {"type": "text", "text": "## The change"}])
+            tool_use("md-plan-%d" % turn, "TodoWrite", {"todos": [{"content": "Look around", "status": "completed"}, {"content": "Edit the file", "status": "in_progress"}]})
+            tool_use("md-ls-%d" % turn, "Bash", {"command": "ls -la"})
+            time.sleep(1.0)
+            tool_result("md-ls-%d" % turn, "README.md")
+            path = os.environ.get("STANDIN_EDIT_PATH", "src/a.swift")
+            tool_use("md-edit-%d" % turn, "Edit", {"file_path": path, "old_string": "let a = 1", "new_string": "let a = 2\nlet b = 3"})
+            tool_result("md-edit-%d" % turn, "The file was edited.")
+            result()
+        elif words.startswith("stream"):
+            mid = "m-stream-%d" % turn
+            send({"type": "stream_event", "event": {"type": "message_start", "message": {"id": mid}}, "parent_tool_use_id": None, "session_id": sid})
+            for n in range(200):
+                delta("c%03d " % n)
+                time.sleep(0.005)
+            text("".join("c%03d " % n for n in range(200)), mid)
+            result()
+        elif words.startswith("child"):
+            child = subprocess.Popen(["/bin/sleep", "600"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            note("child", child.pid)
+            text("Started a child", "m-child-%d" % turn)
+            result()
+        elif words.startswith("mcp"):
+            answered = ask_mcp()
+            with open(sys.argv[0] + ".mcp-answer", "w") as out: out.write(answered)
+            text("MCP answered", "m-mcp-%d" % turn)
+            result()
         else:
             mid = "m-turn-%d" % turn
             send({"type": "stream_event", "event": {"type": "message_start", "message": {"id": mid}}, "parent_tool_use_id": None, "session_id": sid})
@@ -237,7 +308,8 @@ extension SelfTest {
     """#
 
     /// A stand-in for `codex app-server` (JSON-RPC over stdio). It has no thread/resume, so a resume falls back to a new
-    /// thread. By prompt: "run" asks command approval, "other" makes a request Next Term doesn't take, "wait" starts a turn
+    /// thread, unless STANDIN_CODEX_RESUMES is set (the chat tab's part), when it goes on with the thread it is given and
+    /// logs "thread resumed ID". By prompt: "run" asks command approval, "other" makes a request Next Term doesn't take, "wait" starts a turn
     /// that only turn/interrupt ends; anything else answers and runs a command. STANDIN_MODE=drift answers initialize in a
     /// shape Next Term doesn't know, STANDIN_MODE=nologin reports no account, STANDIN_MODE=noinit never answers initialize.
     static let codexStandIn = #"""
@@ -290,6 +362,10 @@ extension SelfTest {
             else: answer(i, {"userAgent": "codex_cli_rs/0.154.0 (Mac OS; arm64) stand-in"})
         elif method == "account/read":
             answer(i, {"account": None if mode == "nologin" else {"type": "chatgpt"}, "requiresOpenaiAuth": True})
+        elif method == "thread/resume" and os.environ.get("STANDIN_CODEX_RESUMES"):
+            thread = m.get("params", {}).get("threadId", thread)
+            note("thread resumed", thread)
+            answer(i, {"thread": {"id": thread}, "model": "stand-in-codex"})
         elif method == "thread/resume":
             error(i, -32601, "method not found: thread/resume")
         elif method == "thread/start":
@@ -321,6 +397,157 @@ extension SelfTest {
             note("interrupt")
             answer(i, {})
             done("interrupted")
+    """#
+
+    /// `claude` and `codex` on the PATH (the chat tab's part, SelfTestChatTab): `claude -p`, `claude --version` and `codex
+    /// app-server` go to the stand-ins above (chat/NAME), anything else to the terminal interface's (tui/NAME). That one
+    /// runs as `python3 <tui/agent>`, so the kernel shows an interpreter running a script named for the agent, as an npm
+    /// install shows, and Next Term's evidence knows the process.
+    static let standInDispatcher = #"""
+    #!/usr/bin/python3
+    # Next Term's self-test stand-in: the agent's own terminal interface (tui/NAME), or its session protocol (chat/NAME).
+    import os, sys
+    here = os.path.dirname(os.path.abspath(__file__))
+    name = os.path.basename(__file__)
+    args = sys.argv[1:]
+    chat = ("-p" in args or "--version" in args) if name == "claude" else args[:1] == ["app-server"]
+    if chat:
+        os.execv(sys.executable, [sys.executable, os.path.join(here, "chat", name)] + args)
+    python = os.path.join(sys.base_prefix, "Resources/Python.app/Contents/MacOS/Python")
+    if not os.path.exists(python): python = sys.executable
+    os.execv(python, ["python3", os.path.join(here, "tui", name)] + args)
+    """#
+
+    /// The terminal interface's stand-in, for both agents by its file's name. ⌃C clears a typed line or arms the quit, a
+    /// second ⌃C quits; the quit word (/exit, /quit) and Return quits. "busy" shows "esc to interrupt" for 3 seconds, "ask"
+    /// a "Do you want to…?" question that 1, 2 or Esc answers, anything else is a turn. STANDIN_TUI=slow ignores the quit
+    /// word, stubborn ignores it and every ⌃C, guess names its process with another start time (a guessed id), fresh
+    /// keeps no transcript. STANDIN_ID names a new session.
+    static let tuiStandIn = #"""
+    # A stand-in for Claude Code's or Codex's own terminal interface (by this file's name), for testing the handoffs
+    # between chat and terminal tabs. Never a real model or account. It reads raw keys at a prompt row and logs what it
+    # gets beside itself.
+    import json, os, re, select, subprocess, sys, termios, time, tty, uuid
+    me = sys.argv[0]
+    agent = os.path.basename(me)
+    log = open(me + ".log", "a", buffering=1)
+    def note(*words): log.write(" ".join(str(w) for w in words) + "\n")
+    args = sys.argv[1:]
+    mode = os.environ.get("STANDIN_TUI", "")
+    name = "Claude Code" if agent == "claude" else "Codex"
+    quit_word = "/exit" if agent == "claude" else "/quit"
+    shape = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+    given = None
+    form = "--resume" if agent == "claude" else "resume"
+    if form in args:
+        given = next((a for a in args[args.index(form) + 1:] if shape.match(a)), None)
+    sid = given or os.environ.get("STANDIN_ID") or str(uuid.uuid4())
+    note("start", os.getpid(), json.dumps(args), "resume" if given else "new", sid)
+    cwd = os.getcwd()
+    def private(path, text, append=False):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | (os.O_APPEND if append else os.O_TRUNC), 0o600)
+        os.write(fd, text.encode())
+        os.close(fd)
+    rollout = None
+    transcript = None
+    if agent == "claude":
+        store = os.environ["CLAUDE_CONFIG_DIR"]
+        try:
+            started = subprocess.run(["/bin/ps", "-o", "lstart=", "-p", str(os.getpid())], env={"TZ": "UTC"},
+                                     capture_output=True, text=True).stdout.strip()
+        except Exception:
+            started = time.strftime("%a %b %e %H:%M:%S %Y", time.gmtime())
+        if mode == "guess": started = "Thu Jan  1 00:00:00 2026"
+        record = {"pid": os.getpid(), "sessionId": sid, "cwd": cwd, "procStart": started, "status": "idle"}
+        private(os.path.join(store, "sessions", "%d.json" % os.getpid()), json.dumps(record))
+        transcript = os.path.join(store, "projects", re.sub(r"[^A-Za-z0-9]", "-", cwd), sid + ".jsonl")
+    else:
+        folder = os.path.join(os.environ["CODEX_HOME"], "sessions", "2026", "11", "08")
+        os.makedirs(folder, exist_ok=True)
+        found = [f for f in os.listdir(folder) if f.endswith("-" + sid + ".jsonl")]
+        path = os.path.join(folder, found[0] if found else "rollout-2026-11-08T10-00-00-" + sid + ".jsonl")
+        fresh = not found
+        rollout = open(path, "a", buffering=1)
+        if fresh: rollout.write(json.dumps({"type": "session_meta", "payload": {"id": sid, "cwd": cwd}}) + "\n")
+    def out(text): os.write(1, text.encode())
+    saved = termios.tcgetattr(0)
+    tty.setraw(0)
+    def leave(code):
+        termios.tcsetattr(0, termios.TCSADRAIN, saved)
+        out("\r\n")
+        note("exit", code)
+        sys.exit(code)
+    out("%s stand-in, %s session %s\r\n> " % (name, "resumed" if given else "new", sid))
+    line = ""
+    armed = False
+    busy_until = 0
+    asking = False
+    while True:
+        wait = max(0.05, busy_until - time.time()) if busy_until else None
+        ready = select.select([0], [], [], wait)[0]
+        if busy_until and time.time() >= busy_until:
+            busy_until = 0
+            out("\r\x1b[K* Done\r\n> " + line)
+            note("busy over")
+        if not ready: continue
+        data = os.read(0, 1024)
+        if not data: leave(0)
+        note("keys", data.hex())
+        for byte in data:
+            ch = chr(byte)
+            if asking:
+                if ch in "12\x1b":
+                    asking = False
+                    note("answer", repr(ch))
+                    out("\r\x1b[K\x1b[1A\r\x1b[K\x1b[1A\r\x1b[K" + "Answered.\r\n> ")
+                continue
+            if byte == 3:
+                if mode == "stubborn":
+                    note("ctrl-c ignored")
+                elif line:
+                    line = ""
+                    armed = False
+                    note("ctrl-c cleared")
+                    out("\r\x1b[K> ")
+                elif armed:
+                    note("ctrl-c twice")
+                    leave(0)
+                else:
+                    armed = True
+                    note("ctrl-c")
+                    out("\r\x1b[K(Press Ctrl-C again to exit)\r\n> ")
+            elif byte in (13, 10):
+                typed, line = line, ""
+                note("line", typed)
+                if typed == quit_word:
+                    if mode in ("slow", "stubborn"):
+                        note("quit ignored")
+                        out("\r\n> ")
+                        continue
+                    leave(0)
+                elif typed == "busy":
+                    busy_until = time.time() + 3
+                    out("\r\n* Working... (3s - esc to interrupt)")
+                elif typed == "ask":
+                    asking = True
+                    out("\r\nDo you want to make this edit?\r\n❯ 1. Yes\r\n  2. No")
+                elif typed:
+                    note("turn", typed)
+                    if transcript and mode != "fresh":
+                        private(transcript, json.dumps({"type": "user", "sessionId": sid, "cwd": cwd, "message": {"role": "user", "content": typed}}) + "\n", True)
+                    if rollout:
+                        rollout.write(json.dumps({"type": "response_item", "payload": {"role": "user", "text": typed}}) + "\n")
+                    out("\r\n* Reply to: %s\r\n> " % typed)
+                else:
+                    out("\r\n> ")
+            elif byte in (127, 8):
+                line = line[:-1]
+                out("\r\x1b[K> " + line)
+            elif byte >= 32:
+                armed = False
+                line += ch
+                out(ch)
     """#
 
     static func claudeCodexSessionChecks(_ c: TerminalWindowController, binary: String) async {

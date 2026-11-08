@@ -7,7 +7,7 @@ enum ACPSessionTabs {
     /// The agents Next Term runs as sessions (Claude Code, Codex and those that speak ACP) whose program is on the login
     /// shell's PATH.
     static var installed: [ACPAgent] {
-        ACPAgent.installed(path: LoginShell.path.joined(separator: ":")) { FileManager.default.isExecutableFile(atPath: $0) }
+        ACPAgent.installed(path: ChatEnvironment.searchPath) { FileManager.default.isExecutableFile(atPath: $0) }
     }
 
     /// `new_tab`'s check of an `agent_session` name: the agent, or the refusal naming the ones that would run.

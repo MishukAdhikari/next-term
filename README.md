@@ -384,23 +384,44 @@ How it knows, most reliable first:
 3. **Other shells.** For bash and fish, or after `exec bash`, Next Term asks the kernel for the terminal's
    foreground process and working directory twice a second.
 
-### Agent sessions
+### Chat tabs
 
-Claude Code, Codex and the agents that speak the [Agent Client Protocol](https://agentclientprotocol.com) can
-also run as an agent session: Agents › New Agent Session…, or `nxtrm agent claude` in any tab (also `codex`,
-`gemini`, `qwen`, `opencode`, `cursor`, `copilot`, `goose` and others, when their program is on your PATH; Next
-Term installs none of them). Claude Code runs as `claude -p` over its stream-json, and Codex as `codex
-app-server`; each is the CLI you installed, signed in as you signed it in, and Next Term never reads or offers a
-login. The tab draws the session as text: your prompts, the agent's words, each tool call with its status, file
-changes with their line counts, the plan as a checklist, and how each turn ended (Done, Stopped, Refused, Hit the
-token limit). Next Term follows the agent's own turns instead of its screen, so the tab's mark is exact, and a
-permission request turns it amber with the agent's options as the notification's buttons. Allow always is asked
-on the Mac first and lasts for that session only. Before Claude Code's first session in a folder, Next Term asks
-on the Mac whether to trust it, as `claude -p` runs a folder's hooks and MCP servers without asking. A session
-names the CLI's version, says when it changed, and comes back after a Next Term update. An orchestrating agent
-starts one with `new_tab`'s `agent_session` and answers its requests with `answer_agent`. The agent's own
-terminal interface in a tab stays the default: a session is an addition, and what only that interface has
-(Claude Code's `/usage`, `/rewind`, `/login` and plugin panels, Codex's own screens) works in a tab running it.
+A chat tab runs Claude Code, Codex or an agent that speaks the [Agent Client Protocol](https://agentclientprotocol.com)
+(`gemini`, `qwen`, `opencode`, `cursor`, `copilot`, `goose` and others, when their program is on your PATH; Next Term
+installs none of them) in Next Term's own view instead of a terminal. Open one with Agents › New Chat…: pick the
+agent and the folder, and the chat opens with its input box ready. No command is typed. Claude Code runs as `claude
+-p` over its stream-json and Codex as `codex app-server`. Each is the CLI you installed, started with your login
+shell's environment and signed in as you signed it in; Next Term never reads or offers a login.
+
+The chat shows your prompts, the agent's replies as Markdown, its thinking folded to one row, one row per tool call
+with its status (click it for the command and its output), file changes with their line counts and an Open Diff
+link, the plan as a checklist, and how each turn ended with its usage. A permission request or a question docks as
+a card above the input, with a button per choice: ↑ and ↓ move, Return picks, 1–9 pick, Esc rejects. Allow always is
+asked on the Mac first and lasts for that session only. Before Claude Code's first chat in a folder, Next Term asks
+on the Mac whether to trust it, as `claude -p` runs a folder's hooks and MCP servers without asking. In the input,
+Return sends, ⇧Return adds a line, ⌘. or Esc stops a turn, ↑ brings back your last prompt, and "/" lists the agent's
+own commands. The tab's mark follows the agent's own turns, so it is exact, and a request turns it amber with the
+choices as the notification's buttons. A chat names the CLI's version, says when it changed, and comes back resumed
+after a Next Term update; after a crash it comes back with a Resume button.
+
+Continue in Chat and Open in Terminal (⇧⌘J, the Agents menu, or the tab's right-click menu) carry one Claude Code or
+Codex conversation between a terminal tab running the agent's own interface and a chat tab. Once the agent is idle
+and you confirm (or tick Don't ask again), the agent quits in the source tab and the same conversation opens, by its
+exact id, in a new tab of the other kind right after it, so two programs never write one conversation. It is
+refused, with the reason, while the agent works or asks you something, before its first turn, or when Next Term
+can't tell which conversation it is.
+
+Settings › Editor › Open Claude Code in and Open Codex in choose where the starts Next Term makes itself open: a
+`new_tab` an agent asks for with the bare `claude` or `codex`, the Welcome window's Set up with your agent, and
+Resume. Terminal is the default; what you type in a shell is never changed. What only the agent's own terminal
+interface has stays there: signing in (`/login`), `/mcp`, `/usage`, `/rewind`, plugin panels and Codex's own screens.
+Typed in a chat, such a command isn't sent, and a note offers Open in Terminal.
+
+An orchestrating agent sees a chat tab in `list_tabs` as `kind: "chat"`, reads it with `read_tab` and
+`wait_for_tab`, sends prompts with `send_to_tab`, answers its card with `answer_agent`, opens one with `new_tab`'s
+`agent_session`, and moves a conversation with `continue_in`, which asks you on the Mac first. `nxtrm agent claude`
+(or `codex`, or an ACP agent's name) still runs the same session as text in any terminal tab, for scripts and other
+terminals.
 
 Interactive programs (`vim`, `ssh`, `less`, REPLs) are never reported as "done". Closing a tab or quitting
 asks first if a program is running or a job is suspended (Ctrl-Z) or in the background, and names it.
@@ -436,6 +457,7 @@ One window per project, and a few keys to move between them:
 | Go to Anything: any tab or project by name (outside a terminal) | ⌘K |
 | Go to the next agent needing you, in any window (again for the one after) | ⇧⌘U |
 | Resume an agent session (↩ resume or go to its tab, ⌘↩ fork) | ⌥⌘O |
+| Continue in Chat / Open in Terminal (the conversation in the tab in front, in a new tab of the other kind) | ⇧⌘J |
 | Close tab (or the focused pane in a split tab) | ⌘W |
 | Split right / split down (in the editor, ⌘D duplicates the line) | ⌘D / ⌘⇧D |
 | Move between panes | ⌥⌘← ⌥⌘→ ⌥⌘↑ ⌥⌘↓, or ⌥⌘] / ⌥⌘[ in turn |
