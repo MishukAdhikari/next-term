@@ -190,6 +190,8 @@ enum MCPInputLine {
     static var rules: [(TerminalTab) -> String?] = []
 
     static func refusal(_ tab: TerminalTab) -> String? {
+        // A view switch owns the tab until its resume line is typed (plan 036 KTD7).
+        if ViewSwitchRunner.running[tab.id] != nil { return "This tab is switching views; try again in a few seconds." }
         for rule in rules {
             if let why = rule(tab) { return why }
         }

@@ -2,14 +2,14 @@ import Darwin
 import Foundation
 import NextTermCore
 
-/// `nxtrm agent NAME [--prompt TEXT] [--resume ID]`: an agent session in the tab it runs in (plans 030, 035). It starts
+/// `nxtrm agent NAME [--prompt TEXT] [--resume ID [--resume-only]]`: an agent session in the tab it runs in (plans 030, 035). It starts
 /// the agent in ACP mode, or Claude Code or Codex over its own protocol (AgentSessionDrivers), draws the session as text
 /// (ACPTranscript) with an input line, and says what the agent does over OSC 7501, so the tab's marks, its notification
 /// and `wait_for_tab` follow the agent's own turns rather than its screen. A permission request is drawn as a numbered
 /// menu that the tab's keys, the notification's buttons and `answer_agent` answer. The agent uses its own tools; it is given Next Term's MCP server when it runs in a Next Term tab.
 enum AgentSessionCLI {
     static let usage = """
-        nxtrm agent NAME [--prompt TEXT] [--resume ID]
+        nxtrm agent NAME [--prompt TEXT] [--resume ID [--resume-only]]
           Runs an agent in this tab as an agent session: Claude Code (claude -p over stream-json), Codex (codex
           app-server), or an agent that speaks the Agent Client Protocol. Its turns, tool calls, plan and permission
           requests are drawn as text, and Next Term follows its state exactly. It runs the agent installed here, signed
@@ -17,6 +17,8 @@ enum AgentSessionCLI {
           NAME is one of: \(ACPAgent.known.map(\.id).joined(separator: ", ")).
           --prompt TEXT   the first prompt, sent at once.
           --resume ID     Claude Code and Codex: go on with session ID (what a restore after an update runs).
+          --resume-only   with --resume: if the session can't go on, end rather than start a new one (what a
+                          switch from the agent's terminal view runs).
         Type a prompt and Return to send it; ⌃C or Esc stops a turn; ⌃D on an empty line ends the session.
         Claude Code asks on the Mac before its first session in a folder, as it runs that folder's hooks and MCP servers.
         What stays in the agent's own terminal tab: Claude Code's /usage, /rewind and /login and its plugin and MCP
@@ -27,6 +29,7 @@ enum AgentSessionCLI {
         var name: String?
         var prompt: String?
         var resume: String?
+        var resumeOnly = false
         var rest = arguments[...]
         while let argument = rest.popFirst() {
             switch argument {
@@ -41,10 +44,16 @@ enum AgentSessionCLI {
                     fail("--resume needs a session id: letters, digits, -, _ and . only, starting with a letter or digit")
                 }
                 resume = id
+            case "--resume-only":
+                resumeOnly = true
             default:
                 guard name == nil, !argument.hasPrefix("-") else { fail("unknown argument \(argument)") }
                 name = argument
             }
+        }
+        if resumeOnly, resume == nil {
+            FileHandle.standardError.write(Data((usage + "\n").utf8))
+            fail("--resume-only goes with --resume ID")
         }
         let path = ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin"
         let installed = ACPAgent.installed(path: path) { FileManager.default.isExecutableFile(atPath: $0) }
@@ -63,18 +72,21 @@ enum AgentSessionCLI {
         guard isatty(STDIN_FILENO) == 1, isatty(STDOUT_FILENO) == 1 else { fail("nxtrm agent runs in a terminal tab") }
         let runner = AgentSessionRunner(agent: agent, program: program, firstPrompt: prompt)
         runner.resumeID = resume
+        runner.resumeOnly = resumeOnly
         runner.freshArguments = without(resume: arguments)
         runner.start()
         dispatchMain()
     }
 
-    /// `arguments` without `--resume` and its id: what a session starts again with when its resume can't go on.
+    /// `arguments` without `--resume` and its id (and `--resume-only`): what a session starts again with when its resume
+    /// can't go on.
     static func without(resume arguments: [String]) -> [String] {
         var kept: [String] = []
         var rest = arguments[...]
         while let argument = rest.popFirst() {
             switch argument {
             case "--resume": _ = rest.popFirst()
+            case "--resume-only": continue
             case "--prompt", "-p":
                 kept.append(argument)
                 if let text = rest.popFirst() { kept.append(text) }
@@ -135,6 +147,13 @@ final class AgentSessionRunner {
     var resumeID: String?
     /// `nxtrm agent`'s arguments without `--resume`: a Claude Code session whose resume can't go on starts again with them.
     var freshArguments: [String] = []
+    /// `--resume-only` (a switch's, plan 036): a resume that can't go on ends the session, offering the terminal view,
+    /// instead of starting a new conversation.
+    var resumeOnly = false
+    /// The session went on with `resumeID`'s conversation: its report says so, as its turns began before this session's.
+    var resumed = false
+    /// The session is ending after a resume that couldn't go on: nothing else ends it meanwhile.
+    private var endingResume = false
 
     /// How long a session's handshake may take before it ends with the drift note (plan 035 U7). The self-test's
     /// stand-ins shorten it, in a debug build only.
@@ -379,7 +398,7 @@ final class AgentSessionRunner {
             fields = (session.lastStop == nil ? "state=idle:" : "state=done:") + fields
         }
         // A new version, model or session id is reported too, though the tab's state stays the same.
-        let key = [fields, agentVersion ?? "", model ?? "", sessionID ?? ""].joined(separator: "\n")
+        let key = [fields, agentVersion ?? "", model ?? "", sessionID ?? "", resumed ? "resumed" : ""].joined(separator: "\n")
         guard key != lastReport else { return }
         let stateChanged = !lastReport.hasPrefix(fields + "\n")
         lastReport = key
@@ -395,6 +414,7 @@ final class AgentSessionRunner {
         if let agentVersion { update["agent_version"] = agentVersion }
         if let model { update["model"] = model }
         if let sessionID { update["session_id"] = sessionID }
+        if resumed { update["resumed"] = true }
         callApp(update, timeout: 2) { [weak self] answer in
             guard let self else { return }
             if stateChanged { self.write(osc) }
@@ -438,6 +458,10 @@ final class AgentSessionRunner {
         keepWords(buffer) // a last line with no newline
         buffer.removeAll()
         let tail = errorTail.split(whereSeparator: \.isNewline).suffix(3).joined(separator: " / ")
+        if endingResume { return }
+        if !driver.isReady, agent.protocolKind == .claudeStream, resumeID != nil, resumeOnly {
+            return resumeCannotGoOn(why: ACPSession.oneLine(tail, limit: 300))
+        }
         if !driver.isReady, agent.protocolKind == .claudeStream, let id = resumeID {
             // Claude Code couldn't go on with the session (it is gone, or from another folder): a new one, said so, as
             // Codex's thread falls back, rather than a sign-in hint that isn't the reason.
@@ -453,6 +477,25 @@ final class AgentSessionRunner {
         }
         draw()
         finish(status == 0 ? 0 : 1)
+    }
+
+    /// A resume that can't go on, with `--resume-only` (plan 036 KTD6): the session says so and ends, starting no new
+    /// conversation, and its last report offers the agent's terminal view (`terminal_offer`), where the conversation may
+    /// still open. `why` is the agent's own words, when it said any.
+    func resumeCannotGoOn(why: String) {
+        guard !endingResume else { return }
+        endingResume = true
+        let id = resumeID ?? ""
+        let noun = agent.protocolKind == .codexAppServer ? "thread" : "session"
+        let words = why.isEmpty ? "" : " (" + why + ")"
+        session.note("\(agent.name) couldn\u{2019}t go on with \(noun) \(id)\(words), so no new one was started.")
+        session.note("Open it in Terminal to go on with it there.")
+        draw()
+        var update: [String: Any] = ["op": "report", "agent": agent.name, "state": "idle", "turns": turnsEnded, "last_message": "",
+                                     "agent_id": agent.id, "folder": FileManager.default.currentDirectoryPath,
+                                     "terminal_offer": "resume_failed"]
+        if AgentSessionVersion.isSessionID(id) { update["session_id"] = id }
+        callApp(update, timeout: 2) { [weak self] _ in self?.finish(1) }
     }
 
     /// The same `nxtrm agent`, run again in this process without `--resume`: every part of the session starts fresh, and

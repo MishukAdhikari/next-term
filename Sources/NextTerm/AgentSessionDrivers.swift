@@ -243,6 +243,8 @@ final class ClaudeDriver: AgentSessionDriver {
         // A resumed session goes on with the id it was given until system/init names one, so an update meanwhile brings
         // back this conversation, not none.
         if runner.sessionID == nil, let id = runner.resumeID { runner.sessionID = id }
+        // Ready with --resume: Claude Code went on with it (one that can't quits first).
+        if runner.resumeID != nil { runner.resumed = true }
         let version = runner.agentVersion.map { " " + $0 } ?? ""
         let named = model.map { " (\($0))" } ?? ""
         let resumed = runner.resumeID.map { ", going on with session " + $0 } ?? ""
@@ -403,8 +405,10 @@ final class CodexDriver: AgentSessionDriver {
                 runner.sendToAgent(codex.threadStartRequest(cwd: cwd, mcpServer: runner.nextTermMCPServer).line)
             }
         case .resumeFailed(let why):
-            // Codex can't go on with the thread: a fresh one, said so.
             resuming = false
+            // A switch's resume (--resume-only) never turns into a new thread: the session ends, offering the terminal.
+            if runner.resumeOnly { return runner.resumeCannotGoOn(why: ACPSession.oneLine(why, limit: 200)) }
+            // Codex can't go on with the thread: a fresh one, said so.
             let id = runner.resumeID ?? ""
             runner.session.note("Codex couldn\u{2019}t go on with thread \(id) (" + ACPSession.oneLine(why, limit: 200) + "); this is a new thread.")
             runner.draw()
@@ -418,6 +422,7 @@ final class CodexDriver: AgentSessionDriver {
             let version = runner.agentVersion.map { " " + $0 } ?? ""
             let named = codex.model.map { " (\($0))" } ?? ""
             let resumed = resuming ? ", going on with thread " + thread : ""
+            if resuming { runner.resumed = true }
             resuming = false
             runner.session.note("Codex\(version)\(named) is ready\(resumed).")
             runner.report()
