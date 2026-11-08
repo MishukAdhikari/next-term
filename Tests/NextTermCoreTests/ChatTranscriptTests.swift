@@ -281,3 +281,46 @@ import Testing
         }
     }
 }
+
+/// What the native view draws of an expanded tool output before Show all (plan 037 U6): lines, line length and characters
+/// are all capped, so one huge line isn't laid out whole; Show all gives it whole, and MCP always reads it whole.
+@Suite struct ChatToolShownOutputTests {
+    private func tool(_ output: String) -> ChatTool {
+        ChatTool(callID: "t", title: "Bash(x)", kind: "execute", status: .completed, output: output, expanded: true)
+    }
+
+    @Test func aShortOutputIsShownWholeWithoutItsTrailingEmptyLines() {
+        let shown = tool("a\nb\n\n").shownOutput(all: false)
+        #expect(shown == ChatTool.ShownOutput(lines: ["a", "b"], totalLines: 2, capped: false))
+    }
+
+    @Test func manyLinesStopAtTheLineCap() {
+        let output = (1...(ChatTool.lineCap + 5)).map(String.init).joined(separator: "\n")
+        let shown = tool(output).shownOutput(all: false)
+        #expect(shown.lines.count == ChatTool.lineCap && shown.totalLines == ChatTool.lineCap + 5)
+        #expect(shown.capped && shown.linesLeftOut)
+        #expect(tool(output).shownOutput(all: true).lines.count == ChatTool.lineCap + 5)
+    }
+
+    @Test func oneHugeLineIsCutShortAndShowAllGivesItWhole() {
+        let huge = String(repeating: "x", count: 5_000_000)
+        let shown = tool(huge).shownOutput(all: false)
+        #expect(shown.lines.count == 1 && shown.totalLines == 1)
+        #expect(shown.lines[0].count == ChatTool.lineCharacters + 1 && shown.lines[0].hasSuffix("\u{2026}"))
+        #expect(shown.capped && !shown.linesLeftOut)
+        let whole = tool(huge).shownOutput(all: true)
+        #expect(whole.lines[0].count == 5_000_000 && !whole.capped)
+        // MCP reads the output itself, whole.
+        #expect(tool(huge).output.count == 5_000_000)
+    }
+
+    @Test func longLinesStopAtTheCharacterCap() {
+        let line = String(repeating: "y", count: ChatTool.lineCharacters)
+        let output = Array(repeating: line, count: ChatTool.lineCap).joined(separator: "\n")
+        let shown = tool(output).shownOutput(all: false)
+        let drawn = shown.lines.reduce(0) { $0 + $1.count }
+        #expect(drawn <= ChatTool.characterCap + shown.lines.count) // an ellipsis at most on each cut line
+        #expect(shown.lines.count == ChatTool.characterCap / ChatTool.lineCharacters)
+        #expect(shown.capped && shown.linesLeftOut)
+    }
+}

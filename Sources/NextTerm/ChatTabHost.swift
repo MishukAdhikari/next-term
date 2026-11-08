@@ -15,6 +15,9 @@ final class ChatTabHost: AgentSessionPresenter {
     private var carried = ACPSession()
     /// Brought back after a crash, or in safe mode: no agent runs until Resume (`begin`).
     private(set) var isIdle = false
+    /// The agent is starting: `begin` read the environment off the main queue and no engine exists yet. The chat holds
+    /// its conversation meanwhile (KTD11).
+    private var launching = false
     /// Why the session ended, when it has; a start that never made an engine ends as `.fatal`.
     private(set) var ending: AgentSessionEngine.Ending?
     /// The tab is closing: nothing is reported or shown any more.
@@ -53,8 +56,11 @@ final class ChatTabHost: AgentSessionPresenter {
     /// The tab's name when the user gave none: the start's title, else the agent's name.
     var automaticTitle: String { start.title ?? ACPAgent.named(start.agentID)?.name ?? start.agentID }
 
-    /// The agent runs now, so the conversation it reported is live in this tab (KTD11); an ended or idle chat holds none.
-    var holdsConversation: Bool { engine.map { !$0.isEnded } ?? false }
+    /// The agent starts or runs now, so the conversation it reported is live in this tab (KTD11); an ended or idle chat
+    /// holds none.
+    var holdsConversation: Bool {
+        !closing && ConversationOwnership.chatHolds(launching: launching, engineEnded: engine.map(\.isEnded))
+    }
 
     var agent: ACPAgent? { ACPAgent.named(start.agentID) }
 
@@ -102,9 +108,10 @@ final class ChatTabHost: AgentSessionPresenter {
     /// Starts the agent: the environment is read off the main queue (the login shell's probe may still run), then the
     /// engine starts on it.
     func begin() {
-        guard !closing, engine.map({ $0.isEnded }) ?? true else { return }
+        guard !closing, !launching, engine.map({ $0.isEnded }) ?? true else { return }
         isIdle = false
         ending = nil
+        launching = true
         let starting = start
         notify()
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
@@ -114,6 +121,7 @@ final class ChatTabHost: AgentSessionPresenter {
     }
 
     private func launch(_ start: ChatStart, environment: [String: String], fromLoginShell: Bool) {
+        launching = false
         guard !closing else { return }
         guard let agent = ACPAgent.named(start.agentID) else {
             return endBeforeStart("\(start.agentID) isn\u{2019}t an agent Next Term runs in a chat.")
@@ -139,6 +147,7 @@ final class ChatTabHost: AgentSessionPresenter {
 
     /// A start that couldn't make a session (no such agent, the CLI not found): the chat ends with `note`.
     private func endBeforeStart(_ note: String) {
+        ChatTabs.setAgentPid(nil, for: tabID)
         carried.note(note)
         ending = .fatal(note)
         reportEnded()
@@ -216,25 +225,36 @@ final class ChatTabHost: AgentSessionPresenter {
 
     // MARK: the handoff (plan 037 U8)
 
-    /// Open in Terminal: the chat ends here, its agent's whole group gone (KTD7) before `then` runs, so only one process
-    /// ever writes the conversation; `note` is the ended row the transcript and the end card show. An ended chat has
-    /// nothing to end. `then` comes on the main queue, at most 6 seconds on (the group's end takes 5 at most).
-    func endForHandoff(note: String, then: @escaping () -> Void) {
+    /// Open in Terminal: the chat ends here, its agent's whole group gone (KTD7) before `then(true)` runs, so only one
+    /// process ever writes the conversation; `note` is the ended row the transcript and the end card show. An ended or
+    /// idle chat has nothing to end, and ends now (an idle one offers no Resume beside the terminal it went to). `then`
+    /// comes on the main queue, at most 6 seconds on (the group's end takes 5 at most); `then(false)` when the group is
+    /// still alive by then, so nothing may open.
+    func endForHandoff(note: String, then: @escaping (_ quit: Bool) -> Void) {
         continuedNote = note
         guard let engine, !engine.isEnded else {
-            carried.note(note)
-            notify()
-            return then()
+            if isIdle {
+                isIdle = false
+                ending = .closed
+            }
+            showNote(note) // the engine's transcript when it ended, else the carried one
+            return then(true)
         }
         let group = engine.agentPid
         engine.session.note(note)
         engine.finish(0, why: .closed)
         notify()
-        guard let group, group > 0 else { return then() }
+        guard let group, group > 0 else { return then(true) }
         let deadline = Date().addingTimeInterval(6)
         func check() {
             // ESRCH once no process is left in the agent's group (its leader reaped by the group's end).
-            if killpg(group, 0) != 0 || Date() >= deadline { return then() }
+            if killpg(group, 0) != 0 { return then(true) }
+            if Date() >= deadline {
+                // Still running: the conversation didn't go anywhere, so the end card says how the chat ended instead.
+                continuedNote = nil
+                notify()
+                return then(false)
+            }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { check() }
         }
         check()
@@ -309,6 +329,7 @@ final class ChatTabHost: AgentSessionPresenter {
     func startAfresh() {
         // Claude Code couldn't go on with the session it was given: a new one, said so (the engine's note), as `nxtrm
         // agent` runs again without --resume.
+        ChatTabs.setAgentPid(nil, for: tabID) // the reaped agent's pid is nobody's now
         if let engine { carried = engine.session }
         engine = nil
         start.resumeID = nil

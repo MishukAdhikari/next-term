@@ -407,4 +407,17 @@ import Testing
         #expect(ConversationOwnership.isExact(.sessionFile) && ConversationOwnership.isExact(.openRollout))
         #expect(!ConversationOwnership.isExact(nil))
     }
+
+    @Test func aChatHoldsItsConversationWhileItStartsAndWhileItsAgentRuns() {
+        // Starting: the environment is read and no engine exists yet, so a second Resume meanwhile must wait.
+        #expect(ConversationOwnership.chatHolds(launching: true, engineEnded: nil))
+        #expect(ConversationOwnership.chatHolds(launching: false, engineEnded: false))
+        // Idle (no engine, not starting), ended, or a start that failed: it holds none.
+        #expect(!ConversationOwnership.chatHolds(launching: false, engineEnded: nil))
+        #expect(!ConversationOwnership.chatHolds(launching: false, engineEnded: true))
+        // A starting chat counts as a live holder, so the owner rule finds it.
+        let starting = Holder(tab: id(6), title: "f", agent: "claude", sessionID: s, exact: true,
+                              live: ConversationOwnership.chatHolds(launching: true, engineEnded: nil))
+        #expect(ConversationOwnership.owner(agent: "claude", sessionID: s, excluding: id(7), among: [starting])?.tab == id(6))
+    }
 }

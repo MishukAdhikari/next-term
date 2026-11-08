@@ -92,7 +92,7 @@ final class PaneView: NSView {
     /// moved on to another pane).
     override func viewWillMove(toWindow newWindow: NSWindow?) {
         super.viewWillMove(toWindow: newWindow)
-        if newWindow == nil { hadKeyboard = window?.firstResponder === tab.contentView }
+        if newWindow == nil { hadKeyboard = tab.holdsKeyboard(in: window) } // a chat's input or card counts
     }
 
     override func viewDidMoveToWindow() {

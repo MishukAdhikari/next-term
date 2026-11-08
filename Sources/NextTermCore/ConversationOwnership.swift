@@ -41,6 +41,14 @@ public enum ConversationOwnership {
         }
     }
 
+    /// A chat tab holds its conversation while it starts (its environment is read and its agent not yet run) and while
+    /// its agent runs: a second Resume, a restore or a handoff in those seconds would start another process on the same
+    /// conversation. An idle chat, an ended one, or one whose start failed holds none. `engineEnded` is nil while no
+    /// engine exists.
+    public static func chatHolds(launching: Bool, engineEnded: Bool?) -> Bool {
+        launching || engineEnded == false
+    }
+
     /// The id sources that say which conversation a terminal agent has open now: its own record of it.
     public static func isExact(_ source: SessionSnapshot.IDSource?) -> Bool {
         source.map(ConversationHandoff.ownRecord.contains) ?? false

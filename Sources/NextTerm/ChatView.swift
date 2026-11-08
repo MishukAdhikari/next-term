@@ -29,10 +29,14 @@ protocol ChatViewSource: AnyObject {
     func restart()
     /// The end card's Show Tab, once the conversation went on in another tab.
     func showContinuedTab()
+    /// An agent opened the tab and the user hasn't chosen it yet: a click only chooses it, and a hint says so.
+    var awaitsChoice: Bool { get }
 }
 
 extension ChatViewSource {
     func showContinuedTab() {}
+
+    var awaitsChoice: Bool { false }
 
     /// The card the open permission or question docks as, or nil.
     var decision: ChatDecision? { session.pending.map { ChatDecision.from($0, agent: agentName) } }
@@ -48,6 +52,8 @@ final class ChatView: NSView {
     let card = ChatDecisionCard()
     let endCard = ChatEndCard()
     let input = ChatInputView()
+    /// "An agent opened this tab. Click to type here.", as a terminal tab an agent opened shows it.
+    let choiceHint = NSTextField(labelWithString: "An agent opened this tab. Click to type here.")
     private let dock = NSStackView()
     private var sizes: ChatTextSizes
     private var pendingRefresh = false
@@ -107,6 +113,7 @@ final class ChatView: NSView {
             constraints.append(fill)
         }
         NSLayoutConstraint.activate(constraints)
+        addChoiceHint()
 
         header.onStop = { [weak self] in self?.source?.stop() }
         header.onOpenInTerminal = { [weak self] in self?.openInTerminal() }
@@ -209,7 +216,33 @@ final class ChatView: NSView {
             endCard.isHidden = true
         }
         input.show(source.inputState, draft: source.draft, sizes: sizes)
+        updateChoiceHint()
         announceTurnEnd(session)
+    }
+
+    /// The hint over the transcript's top, in the terminal's hint style, hidden until an agent opens the tab.
+    private func addChoiceHint() {
+        choiceHint.font = .systemFont(ofSize: NSFont.smallSystemFontSize, weight: .medium)
+        choiceHint.textColor = .white
+        choiceHint.drawsBackground = true
+        choiceHint.backgroundColor = NSColor.black.withAlphaComponent(0.72)
+        choiceHint.alignment = .center
+        choiceHint.wantsLayer = true
+        choiceHint.layer?.cornerRadius = 5
+        choiceHint.layer?.masksToBounds = true
+        choiceHint.isHidden = true
+        choiceHint.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(choiceHint)
+        NSLayoutConstraint.activate([
+            choiceHint.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 6),
+            choiceHint.centerXAnchor.constraint(equalTo: centerXAnchor),
+            choiceHint.widthAnchor.constraint(lessThanOrEqualTo: widthAnchor, constant: -16),
+        ])
+    }
+
+    /// Shows the choice hint while the tab waits for the user to choose it, and hides it once they have.
+    func updateChoiceHint() {
+        choiceHint.isHidden = !(source?.awaitsChoice ?? false)
     }
 
     /// A finished turn is said once to VoiceOver, when the tab is in front.
@@ -332,7 +365,7 @@ extension ChatTabHost: ChatViewSource {
     var agentName: String { agent?.name ?? start.agentID }
 
     var endState: ChatEndState? {
-        if state == .ended, let note = continuedNote { return .continued(note, tabOpen: continuedTab != nil) }
+        if state == .ended || state == .idle, let note = continuedNote { return .continued(note, tabOpen: continuedTab != nil) }
         switch state {
         case .idle: return .idle
         case .ended: return .ended(ending ?? .closed)
@@ -343,4 +376,6 @@ extension ChatTabHost: ChatViewSource {
     var resumable: Bool { sessionID.map(AgentSessionVersion.isSessionID) ?? false }
 
     var offersTerminal: Bool { ConversationHandoff.Agent(rawValue: start.agentID) != nil }
+
+    var awaitsChoice: Bool { tab?.view.awaitsChoice ?? false }
 }

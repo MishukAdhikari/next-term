@@ -474,6 +474,9 @@ final class AgentSessionProcess {
     // `.ownGroup`: posix_spawn, and the descriptors' ends kept here.
     private(set) var pid: pid_t = 0
     private var input: Int32 = -1
+    /// What the input's pipe couldn't take yet, in order, and the source that writes it once the pipe has room.
+    private var unsent = AgentInputQueue()
+    private var writeSource: DispatchSourceWrite?
     private var sources: [DispatchSourceRead] = []
     private var exitSource: DispatchSourceProcess?
     private var exitStatus: Int32?
@@ -535,8 +538,10 @@ final class AgentSessionProcess {
             throw SpawnError(code: errno)
         }
         // The app's own ends: never inherited by anything else it starts, and a write to an agent that quit is no SIGPIPE.
+        // The input never blocks: what a full pipe can't take waits in `unsent`, so the main thread never waits on it.
         for fd in [stdin[1], stdout[0], stderr[0]] { _ = fcntl(fd, F_SETFD, FD_CLOEXEC) }
         _ = fcntl(stdin[1], F_SETNOSIGPIPE, 1)
+        _ = fcntl(stdin[1], F_SETFL, fcntl(stdin[1], F_GETFL) | O_NONBLOCK)
         let spawned = Self.spawn(program, arguments, environment: environment, folder: folder,
                                  stdin: stdin[0], stdout: stdout[1], stderr: stderr[1])
         // The child's ends are the child's alone now.
@@ -619,23 +624,40 @@ final class AgentSessionProcess {
         onExit?(status)
     }
 
-    /// A line to the agent; one that has quit takes nothing (its pipe's end is gone, and that is no crash).
+    /// A line to the agent; one that has quit takes nothing (its pipe's end is gone, and that is no crash). A chat's
+    /// line never blocks: what the pipe can't take now goes once it has room, after anything still waiting.
     func write(_ data: Data) {
         switch mode {
         case .inherit:
             try? toAgent.fileHandleForWriting.write(contentsOf: data)
         case .ownGroup:
             guard input >= 0 else { return }
-            data.withUnsafeBytes { raw in
-                guard let base = raw.baseAddress else { return }
-                var offset = 0
-                while offset < raw.count {
-                    let written = Darwin.write(input, base + offset, raw.count - offset)
-                    if written < 0, errno == EINTR { continue }
-                    if written <= 0 { return }
-                    offset += written
-                }
+            unsent.append(data)
+            if writeSource == nil { writeUnsent() }
+        }
+    }
+
+    /// Writes what waits, as much as the pipe takes; a full pipe leaves the rest to a write source, which calls back
+    /// here once it has room. Main queue.
+    private func writeUnsent() {
+        guard input >= 0 else { return }
+        let fd = input
+        switch unsent.drain({ raw in
+            let written = Darwin.write(fd, raw.baseAddress, raw.count)
+            return AgentInputQueue.Written(count: written, error: written < 0 ? errno : 0)
+        }) {
+        case .wouldBlock:
+            guard writeSource == nil else { return }
+            let source = DispatchSource.makeWriteSource(fileDescriptor: fd, queue: .main)
+            source.setEventHandler { [weak self, weak source] in
+                guard let self else { source?.cancel(); return } // nobody to write for: a writable pipe would fire on
+                self.writeUnsent()
             }
+            writeSource = source
+            source.resume()
+        case .drained, .failed:
+            writeSource?.cancel()
+            writeSource = nil
         }
     }
 
@@ -654,10 +676,19 @@ final class AgentSessionProcess {
         }
     }
 
+    /// The input closes, and what still waits for it is dropped. A write source watching it closes it once cancelled.
     private func closeInput() {
         guard input >= 0 else { return }
-        close(input)
+        let fd = input
         input = -1
+        unsent.drop()
+        if let source = writeSource {
+            writeSource = nil
+            source.setCancelHandler { close(fd) }
+            source.cancel()
+        } else {
+            close(fd)
+        }
     }
 
     /// The process group's end, for Next Term's own quit: the same order as `stop`, waited for here.

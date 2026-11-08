@@ -357,7 +357,7 @@ enum RestoreBuild {
             if let chat = plan.chat {
                 let owner = chat.resumes ? chat.start.resumeID.flatMap { ConversationOwners.owner(agent: chat.start.agentID, sessionID: $0) } : nil
                 let note = owner.map { ConversationHandoff.Refusal.openElsewhere($0.title).text(agent: nil) } ?? plan.note.text()
-                ChatTabs.register(chat.start, idle: !chat.resumes || owner != nil, note: note, draft: chat.draft, for: id)
+                ChatTabs.register(chat.start, idle: !chat.resumes || owner != nil, note: note, draft: chat.draft, for: tab)
             }
             tab.lastSelected = pane.lastSelected
             var record = pane

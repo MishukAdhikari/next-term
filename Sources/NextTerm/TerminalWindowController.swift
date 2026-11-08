@@ -70,7 +70,10 @@ final class TerminalWindow: NSWindow {
     func awaitingTerminal(at point: NSPoint) -> NextTermView? {
         var view = contentView?.superview?.hitTest(point) ?? contentView?.hitTest(point)
         while let current = view {
-            if let terminal = current as? NextTermView { return terminal.awaitsChoice ? terminal : nil }
+            // A chat's view stands for its tab's terminal, which is never shown (plan 037).
+            if let terminal = (current as? NextTermView) ?? ChatTabs.terminal(of: current) {
+                return terminal.awaitsChoice ? terminal : nil
+            }
             view = current.superview
         }
         return nil
@@ -670,7 +673,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         for (i, other) in groups.enumerated() { other.view.isHidden = i != index }
         if group.focused.view.awaitsChoice {
             // No keyboard for it, and none left with a terminal now hidden: keys go nowhere until a click.
-            if window?.firstResponder is NextTermView { window?.makeFirstResponder(nil) }
+            if ChatTabs.paneResponder(for: window?.firstResponder) is NextTermView { window?.makeFirstResponder(nil) }
         } else if unfold || !terminalCollapsed {
             // A terminal taking the keyboard unfolds it (see onFirstResponderChange).
             window?.makeFirstResponder(group.focused.view)
@@ -759,7 +762,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         // A rename in progress refers to tabs by position: finish it while positions still hold.
         if window?.firstResponder is NSTextView, tabBar.isEditing || tabList.isEditing { window?.makeFirstResponder(nil) }
         let group = groups[index]
-        let hadKeyboard = window?.firstResponder === tab.view
+        let hadKeyboard = tab.holdsKeyboard(in: window)
         ClosedTabs.remember(tab, in: self) // for Reopen Closed Tab
         tab.terminate()
         if group.remove(tab) {

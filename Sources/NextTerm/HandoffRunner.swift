@@ -209,7 +209,12 @@ final class HandoffRunner {
         running[tab.id] = runner
         tab.delegate?.tabDidChange(tab)
         if let host = tab.chatHost {
-            host.endForHandoff(note: target.note) { runner.openTarget() }
+            host.endForHandoff(note: target.note) { quit in
+                if quit { return runner.openTarget() }
+                // As the terminal path gives up: the chat's agent is still running, so nothing may open beside it.
+                let text = target.agent.name + " didn\u{2019}t quit, so nothing was opened."
+                runner.finish(.failure(Failure(text: text)), note: text)
+            }
         } else {
             runner.run(target.quit) { runner.waitForPrompt(since: Self.now, fallbackSent: false) }
         }

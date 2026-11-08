@@ -63,7 +63,8 @@ final class ChatEndCard: ChatCardView {
         var actions: [Action] = [state == .idle ? .resume : .restart]
         if offersTerminal { actions.append(.openInTerminal) }
         // Gone on elsewhere: the tab it went to is the one thing to do here (a restart would refuse while it holds it).
-        if case .continued(_, let open) = state { actions = open ? [.showTab] : [] }
+        // Once that tab closed, Restart goes on with the conversation here; it still refuses if it is live elsewhere.
+        if case .continued(_, let open) = state { actions = open ? [.showTab] : [.restart] }
         self.actions = actions
         buttons.show(actions.enumerated().map { index, action in
             let title: String

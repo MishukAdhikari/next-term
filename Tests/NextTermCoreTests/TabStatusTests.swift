@@ -1013,6 +1013,7 @@ import Testing
         #expect(RecentProjects.abbreviate("/Users/me/Code/x", home: "/Users/me") == "~/Code/x")
         #expect(RecentProjects.abbreviate("/Users/meow", home: "/Users/me") == "/Users/meow")
     }
+}
 
 // MARK: a chat tab (plan 037 U1)
 
@@ -1055,5 +1056,4 @@ import Testing
         #expect(status.commandsStarted == started)
         #expect(status.runningSince == 0)
     }
-}
 }

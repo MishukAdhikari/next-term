@@ -19,6 +19,8 @@ enum ChatTabs {
         var idle: Bool
         var note: String?
         var draft: String?
+        /// The restored tab, until it starts: a chat that resumes holds its conversation from here (KTD11).
+        weak var tab: TerminalTab?
     }
 
     /// Starts registered by a restored tab's id, claimed by its `start()`.
@@ -39,6 +41,13 @@ enum ChatTabs {
         hosts.values.first { view.isDescendant(of: $0.view) }
     }
 
+    /// The tab's terminal when `view` is a chat's own view, else nil: a click there is a click on that tab, which waits
+    /// for the user to choose it as a terminal tab does (AgentArrival).
+    static func terminal(of view: NSView) -> NextTermView? {
+        guard let chat = view as? ChatView else { return nil }
+        return hosts.values.first { $0.view === chat }?.tab?.view
+    }
+
     /// The kind mark the tab strips show at rest (plan 037 U5): a chat bubble for a chat tab, none for a terminal tab.
     /// The tab strips ask on every refresh, so a chat tab renamed back to automatic takes its agent's name here too.
     static func glyph(for tab: TerminalTab) -> TabKindGlyph? {
@@ -50,8 +59,17 @@ enum ChatTabs {
     /// A restored tab's chat, claimed when that tab starts. `idle` brings it back with Resume instead of running it
     /// (a crash restore, safe mode, or a conversation open elsewhere); `note` says why, in the transcript. `draft` goes
     /// back in the input box.
-    static func register(_ start: ChatStart, idle: Bool, note: String? = nil, draft: String? = nil, for id: UUID) {
-        registered[id] = Registered(start: start, idle: idle, note: note, draft: draft)
+    static func register(_ start: ChatStart, idle: Bool, note: String? = nil, draft: String? = nil, for tab: TerminalTab) {
+        registered[tab.id] = Registered(start: start, idle: idle, note: note, draft: draft, tab: tab)
+    }
+
+    /// The restored chats that will resume their conversation once their tabs start: they hold it already, so a second
+    /// restored tab of the same conversation, or a Resume meanwhile, waits instead (KTD11).
+    static var registeredResuming: [(tab: TerminalTab, start: ChatStart)] {
+        registered.values.compactMap { (spec: Registered) -> (tab: TerminalTab, start: ChatStart)? in
+            guard !spec.idle, spec.start.resumeID != nil, let tab = spec.tab else { return nil }
+            return (tab, spec.start)
+        }
     }
 
     /// `TerminalTab.start()`'s hook: true when `tab` is a chat, which its host now runs; no shell starts then.
@@ -120,12 +138,18 @@ enum ChatTabs {
     /// What takes the keyboard when something gives it to a chat tab's terminal, which is never shown (plan 037 U6):
     /// the chat's view instead (its card or its input box). Anything else is given as it is. `TerminalWindow` asks,
     /// so every place that hands a tab the keyboard by its terminal reaches the chat.
+    /// The chat taking the keyboard was chosen, so its choice hint goes too.
     static func keyboardTarget(for responder: NSResponder?) -> NSResponder? {
-        if let chat = responder as? ChatView { return chat.preferredResponder }
-        guard let terminal = responder as? NextTermView, let host = hosts.values.first(where: { $0.tab?.view === terminal }) else {
+        let chat: ChatView
+        if let view = responder as? ChatView {
+            chat = view
+        } else if let terminal = responder as? NextTermView, let host = hosts.values.first(where: { $0.tab?.view === terminal }) {
+            chat = host.view
+        } else {
             return responder
         }
-        return host.view.preferredResponder
+        chat.updateChoiceHint()
+        return chat.preferredResponder
     }
 
     /// The chat tab's terminal, for a responder inside a chat's view: the window focuses that pane as it does for a click
@@ -140,21 +164,31 @@ enum ChatTabs {
 
     // MARK: the agents' processes (KTD8)
 
+    /// A chat's agent process: its pid and when it started, so a pid the system gave to another process after the agent
+    /// ended is never taken for it (as HandoffRunner's leader is matched).
+    private struct AgentProcess: Equatable {
+        let pid: pid_t
+        let startedAt: Date?
+    }
+
     private static let pidsLock = NSLock()
-    nonisolated(unsafe) private static var agentPids: [UUID: pid_t] = [:]
+    nonisolated(unsafe) private static var agentPids: [UUID: AgentProcess] = [:]
 
     /// The agent `tab` runs now, or none.
     static func setAgentPid(_ pid: pid_t?, for tab: UUID) {
+        let process = pid.map { AgentProcess(pid: $0, startedAt: ProcessInspector.startTime(of: $0)) }
         pidsLock.lock()
         defer { pidsLock.unlock() }
-        agentPids[tab] = pid
+        agentPids[tab] = process
     }
 
-    /// The chat tab whose agent is process `pid`, on any thread.
+    /// The chat tab whose agent is process `pid`, on any thread: the same pid, started at the same time.
     static func tabID(agentPid pid: pid_t) -> UUID? {
         pidsLock.lock()
-        defer { pidsLock.unlock() }
-        return agentPids.first { $0.value == pid }?.key
+        let found = agentPids.first { $0.value.pid == pid }
+        pidsLock.unlock()
+        guard let found, let startedAt = found.value.startedAt, ProcessInspector.startTime(of: pid) == startedAt else { return nil }
+        return found.key
     }
 
     // MARK: Next Term's quit

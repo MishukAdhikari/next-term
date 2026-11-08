@@ -72,8 +72,6 @@ struct ChatBlockRenderer {
     /// The handoff exists for this chat (Claude Code or Codex): a terminal-only note links to it.
     var offersTerminal = false
 
-    /// A tool's output drawn before "Show all".
-    static let outputCap = 400
 
     private var body: CGFloat { CGFloat(sizes.body) }
     private var secondary: CGFloat { CGFloat(sizes.secondary) }
@@ -230,11 +228,11 @@ struct ChatBlockRenderer {
         row.addAttribute(.paragraphStyle, value: rowParagraph(), range: NSRange(location: 0, length: row.length))
         out.append(row)
         guard tool.expanded, opens else { return }
-        var lines = tool.output.components(separatedBy: "\n")
-        while lines.count > 1, lines.last?.isEmpty == true { lines.removeLast() }
-        let total = lines.count
-        let capped = !showAll.contains(id) && total > Self.outputCap
-        if capped { lines = Array(lines.prefix(Self.outputCap)) }
+        // Lines, line length and characters are all capped before Show all (ChatTool.shownOutput).
+        let shown = tool.shownOutput(all: showAll.contains(id))
+        let lines = shown.lines
+        let total = shown.totalLines
+        let capped = shown.capped
         let panel = ChatPanel(.detail)
         let detail = NSFont.monospacedSystemFont(ofSize: mono, weight: .regular)
         for (index, line) in lines.enumerated() {
@@ -250,7 +248,8 @@ struct ChatBlockRenderer {
             let style = paragraph(before: 4, after: 10)
             style.firstLineHeadIndent = rowIndent + 10
             style.headIndent = style.firstLineHeadIndent
-            out.append(NSAttributedString(string: "Show all \(total) lines\n", attributes: [
+            let words = shown.linesLeftOut ? "Show all \(total) lines" : "Show the whole output"
+            out.append(NSAttributedString(string: words + "\n", attributes: [
                 .font: NSFont.systemFont(ofSize: secondary), .foregroundColor: NSColor.linkColor, .paragraphStyle: style,
                 .link: ChatLink.showAll(id).url, .chatPanel: panel,
             ]))

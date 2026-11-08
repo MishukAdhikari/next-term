@@ -96,3 +96,48 @@ extension RestorePlanner {
         }
     }
 }
+
+/// How a chat tab comes back (plan 037 U5). It never types into a shell: its host starts the agent, going on with the
+/// conversation it had, or waits idle with a Resume button.
+public struct ChatRestore: Equatable, Sendable {
+    /// The chat its host starts: the agent, the folder, and the conversation it goes on with (never a new one in its
+    /// place: `resumeOnly`).
+    public var start: ChatStart
+    /// The agent starts at once: an update restore or a consented quit restore, with the conversation's exact id and
+    /// its folder still there, in the tab selected last of those that held it. Otherwise the tab waits idle.
+    public var resumes: Bool
+    /// The input box's draft, as the save kept it.
+    public var draft: String?
+
+    public init(start: ChatStart, resumes: Bool, draft: String? = nil) {
+        self.start = start
+        self.resumes = resumes
+        self.draft = draft
+    }
+}
+
+/// A chat tab's note wording (plan 037 U5), kept with the chat's decision rather than in the planner's generic note.
+extension RestoreNote {
+    /// A chat tab's note: it resumed its conversation, or waits with a Resume button. Nothing is typed, so whether the
+    /// shell is ready never matters.
+    func chatSentences(_ dates: (Date) -> String) -> [String] {
+        let name = agent?.name ?? "The agent"
+        if outcome == .resume, !safeMode {
+            var said = ["Resumed \(name) session \(session?.id ?? "")."]
+            if interrupted { said.append("Its last turn was cut off by \(afterQuit ? "the quit" : "the update") and did not continue.") }
+            return said
+        }
+        guard let session else {
+            return ["\(name) was running. Next Term can\u{2019}t tell which conversation it was, so Resume starts a new one."]
+        }
+        var said = ["\(name) was running. Resume goes on with session \(session.id)."]
+        if interrupted { said.append("Its last turn was cut off by \(afterQuit ? "the quit" : "the update").") }
+        said += sharedText
+        return said
+    }
+
+    /// The keep-sessions sheet's words for a chat tab: it resumes in its own view, or waits for Resume.
+    func chatListWords(_ name: String) -> String {
+        outcome == .resume ? "\(name) resumes in its chat" : "\(name) waits for Resume"
+    }
+}

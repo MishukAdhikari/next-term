@@ -227,11 +227,17 @@ enum ChatTabMCP {
             (tab, controller) = (pane, owner)
         } else {
             let ownWindow: TerminalWindowController? = arguments["new_window"] as? Bool == true ? nil : caller.flatMap { MCPControl.controller(of: $0) }
-            let owner = MCPControl.window(for: directory, else: ownWindow).controller
+            let (owner, fresh) = MCPControl.window(for: directory, else: ownWindow)
+            // A window opened for it starts with an untouched shell tab: the chat takes its place, as a terminal tab
+            // reuses it (never a restored tab, never the tab of the window the user is in).
+            let untouched: TerminalTab? = owner.tabs.count == 1 ? owner.tabs.first : nil
+            let replaces = fresh && untouched.map { $0.remote == nil && $0.isUntouched && canonicalPath($0.directory) == directory } == true
+                && !owner.hasUsersKeyboard
             guard let opened = ChatTabs.open(start, in: owner, select: false, byAgent: true) else {
                 reply(MCPControl.fail("Could not open a chat tab there."))
                 return true
             }
+            if replaces, let untouched { owner.remove(untouched, saveAsked: true) }
             (tab, controller) = (opened, owner)
         }
         let arrived = controller.presentForAgent(arguments["split_beside"] == nil ? tab : nil)

@@ -252,25 +252,6 @@ public struct PanePlan: Equatable, Sendable {
     }
 }
 
-/// How a chat tab comes back (plan 037 U5). It never types into a shell: its host starts the agent, going on with the
-/// conversation it had, or waits idle with a Resume button.
-public struct ChatRestore: Equatable, Sendable {
-    /// The chat its host starts: the agent, the folder, and the conversation it goes on with (never a new one in its
-    /// place: `resumeOnly`).
-    public var start: ChatStart
-    /// The agent starts at once: an update restore or a consented quit restore, with the conversation's exact id and
-    /// its folder still there, in the tab selected last of those that held it. Otherwise the tab waits idle.
-    public var resumes: Bool
-    /// The input box's draft, as the save kept it.
-    public var draft: String?
-
-    public init(start: ChatStart, resumes: Bool, draft: String? = nil) {
-        self.start = start
-        self.resumes = resumes
-        self.draft = draft
-    }
-}
-
 // MARK: - The planner
 
 public enum RestorePlanner {
@@ -912,24 +893,6 @@ public struct RestoreNote: Equatable, Sendable {
         }
     }
 
-    /// A chat tab's note: it resumed its conversation, or waits with a Resume button. Nothing is typed, so whether the
-    /// shell is ready never matters.
-    private func chatSentences(_ dates: (Date) -> String) -> [String] {
-        let name = agent?.name ?? "The agent"
-        if outcome == .resume, !safeMode {
-            var said = ["Resumed \(name) session \(session?.id ?? "")."]
-            if interrupted { said.append("Its last turn was cut off by \(afterQuit ? "the quit" : "the update") and did not continue.") }
-            return said
-        }
-        guard let session else {
-            return ["\(name) was running. Next Term can\u{2019}t tell which conversation it was, so Resume starts a new one."]
-        }
-        var said = ["\(name) was running. Resume goes on with session \(session.id)."]
-        if interrupted { said.append("Its last turn was cut off by \(afterQuit ? "the quit" : "the update").") }
-        said += sharedText
-        return said
-    }
-
     /// An agent's note when nothing is typed: that it was running, what is known of its session, and the line that
     /// resumes it, last, so nothing runs on after the line.
     private func typeToResume(_ dates: (Date) -> String) -> [String] {
@@ -963,7 +926,7 @@ public struct RestoreNote: Equatable, Sendable {
     }
 
     /// Another tab resumes the session. In safe mode nothing has resumed yet, so it only held it.
-    private var sharedText: [String] {
+    var sharedText: [String] {
         guard sharedSession else { return [] }
         return [safeMode ? "Another tab held this session too." : "Another tab resumed this session."]
     }
@@ -987,12 +950,10 @@ public struct RestoreNote: Equatable, Sendable {
         let name = agent.flatMap { $0 == .unknown ? nil : $0.name } ?? "the agent"
         let words: String
         switch outcome {
-        case .resume where chat:
-            words = "\(name) resumes in its chat"
+        case _ where chat:
+            words = chatListWords(name)
         case .resume:
             words = "\(name) resumes"
-        case _ where chat:
-            words = "\(name) waits for Resume"
         case .agentOnTheLine where session == nil:
             words = "\(line ?? name) goes on the line, with no session named"
         case .agentOnTheLine:

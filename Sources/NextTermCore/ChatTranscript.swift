@@ -67,6 +67,50 @@ public struct ChatTool: Equatable, Sendable {
     /// The title the row shows: the kind when the agent sent no title.
     public var shownTitle: String { title.isEmpty ? kind : title }
 
+    /// What the native view draws of an expanded output before Show all: at most `lineCap` lines, each at most
+    /// `lineCharacters` long, and `characterCap` in all, so one huge line (minified JSON, base64) isn't laid out whole on
+    /// the main thread. MCP still reads `output` whole.
+    public struct ShownOutput: Equatable, Sendable {
+        public var lines: [String]
+        /// The output's lines, trailing empty ones left out.
+        public var totalLines: Int
+        /// Something was left out: Show all draws it whole.
+        public var capped: Bool
+        /// Lines were left out, not only cut short.
+        public var linesLeftOut: Bool { lines.count < totalLines }
+    }
+
+    public static let lineCap = 400
+    public static let lineCharacters = 2_000
+    public static let characterCap = 200_000
+
+    /// The output's lines as the view draws them; `all` (Show all) gives them whole.
+    public func shownOutput(all: Bool) -> ShownOutput {
+        var lines = output.components(separatedBy: "\n")
+        while lines.count > 1, lines.last?.isEmpty == true { lines.removeLast() }
+        let total = lines.count
+        guard !all else { return ShownOutput(lines: lines, totalLines: total, capped: false) }
+        var shown: [String] = []
+        var budget = Self.characterCap
+        var capped = total > Self.lineCap
+        for line in lines.prefix(Self.lineCap) {
+            guard budget > 0 else {
+                capped = true
+                break
+            }
+            let limit = min(Self.lineCharacters, budget)
+            if let end = line.index(line.startIndex, offsetBy: limit, limitedBy: line.endIndex), end < line.endIndex {
+                shown.append(String(line[..<end]) + "\u{2026}")
+                capped = true
+                budget -= limit
+            } else {
+                shown.append(line)
+                budget -= line.count
+            }
+        }
+        return ShownOutput(lines: shown, totalLines: total, capped: capped)
+    }
+
     /// The status in words, as the session tab's transcript and VoiceOver say it.
     public var statusWord: String {
         switch status {
