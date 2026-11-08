@@ -109,8 +109,13 @@ final class ClaudeDriver: AgentSessionDriver {
             guard let self else { return }
             self.runner.waitingLine = nil
             guard answer?["trusted"] as? Bool == true else {
-                let why = answer == nil ? "Next Term didn\u{2019}t answer" : "it wasn\u{2019}t trusted on the Mac"
-                return self.runner.fatal("Claude Code didn\u{2019}t start in \(folder): \(why). Nothing ran.")
+                guard answer != nil else {
+                    return self.runner.fatal("Claude Code didn\u{2019}t start in \(folder): Next Term didn\u{2019}t answer. Nothing ran.")
+                }
+                // Declined on the Mac: Claude Code's own trust question, in its terminal view, is the other way in (plan 036).
+                return self.runner.endOffering("trust_declined", notes: [
+                    "Claude Code didn\u{2019}t start in \(folder): it wasn\u{2019}t trusted on the Mac. Nothing ran.",
+                ])
             }
             self.runner.draw()
             go()
@@ -230,7 +235,8 @@ final class ClaudeDriver: AgentSessionDriver {
             runner.session.note("Claude Code asked for \(what), which this session doesn\u{2019}t handle; it was declined.")
             runner.draw()
         case .authFailure:
-            runner.fatal(ClaudeStream.signInLine + ".")
+            // Only the terminal view signs in: the session's last report offers it (plan 036 R13).
+            runner.endOffering("sign_in", notes: [ClaudeStream.signInLine + "."])
         case .unknownLine, .ignore:
             // Counted by the drift watch.
             break
@@ -469,7 +475,7 @@ final class CodexDriver: AgentSessionDriver {
             runner.freeze()
             runner.report()
         case .authFailure:
-            runner.fatal(CodexAppServer.signInLine + ".")
+            runner.endOffering("sign_in", notes: [CodexAppServer.signInLine + "."])
         case .drift(let note):
             runner.fatal(note)
         case .requestFailed(let method, let message):

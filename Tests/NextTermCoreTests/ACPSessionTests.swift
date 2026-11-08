@@ -314,4 +314,24 @@ import Testing
         #expect(claude.resumesSessions && ACPAgent.named("codex")!.resumesSessions)
         #expect(!ACPAgent.named("gemini")!.resumesSessions)
     }
+
+    @Test func aTerminalOnlyCommandIsKnownByItsFirstWord() {
+        let claude = ACPAgent.named("claude")!
+        let codex = ACPAgent.named("codex")!
+        #expect(claude.terminalOnly("/login") == "/login")
+        #expect(claude.terminalOnly("/login extra") == "/login")
+        #expect(claude.terminalOnly(" /mcp") == "/mcp")
+        #expect(codex.terminalOnly("/approvals\n") == "/approvals")
+        // A command the session runs itself, a word without its slash, or a slash later in a prompt: sent as typed.
+        for prompt in ["/model", "/compact", "login", "please /login", "/loginx", "/", ""] {
+            #expect(claude.terminalOnly(prompt) == nil, "\(prompt)")
+        }
+        // Codex's own screens are its own.
+        #expect(codex.terminalOnly("/status") == "/status")
+        #expect(claude.terminalOnly("/status") == nil)
+        #expect(codex.terminalOnly("/rewind") == nil)
+        // An ACP agent has no terminal view here.
+        #expect(ACPAgent.named("gemini")!.terminalOnlyCommands.isEmpty)
+        #expect(ACPAgent.named("gemini")!.terminalOnly("/login") == nil)
+    }
 }

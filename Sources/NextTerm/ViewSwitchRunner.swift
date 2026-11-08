@@ -60,6 +60,13 @@ final class ViewSwitchRunner {
                                 herdr: tab.followsHerdr || status.hostsAgents)
     }
 
+    /// The switch ⇧⌘J, View's item and MCP act on: the tab's own offer, or, while the chat view's "Open in Terminal" bar
+    /// is open (plan 036 U5), its offer, even once the session has ended.
+    static func switchOffer(for tab: TerminalTab) -> ViewSwitch.Offer? {
+        if let offer = offer(for: tab) { return offer }
+        return ViewSwitchOfferBar.open(for: tab).map { ViewSwitch.Offer(agent: $0.agent, view: .chat) }
+    }
+
     /// Switches `tab` to `wanted` (nil: the other view). `done` gets the view the tab then shows, once the resume line is
     /// typed, or the words that say why not; a refusal comes before any key reaches the tab, and is shown in the tab
     /// unless `showsRefusal` is false (MCP answers with it instead). `showsAlready` answers with the view as it is.
@@ -77,6 +84,8 @@ final class ViewSwitchRunner {
         case .success(let planned):
             plan = planned
         }
+        // The switch is the bar's answer: it goes as the switch begins.
+        ViewSwitchOfferBar.close(tab)
         let runner = ViewSwitchRunner(tab: tab, plan: plan, evidence: facts.evidence, done: done)
         running[tab.id] = runner
         tab.delegate?.tabDidChange(tab)
@@ -84,10 +93,10 @@ final class ViewSwitchRunner {
     }
 
     /// What the plan is made from, read now: the terminal view's agent evidence (and Claude Code's transcript), or the
-    /// chat view's last report.
-    private static func facts(of tab: TerminalTab, wanted: ViewSwitch.View?) -> ViewSwitch.Facts {
+    /// chat view's last report, with its open offer of the terminal view.
+    static func facts(of tab: TerminalTab, wanted: ViewSwitch.View?) -> ViewSwitch.Facts {
         let status = tab.status
-        let offer = self.offer(for: tab)
+        let offer = switchOffer(for: tab)
         var facts = ViewSwitch.Facts(offer: offer, launcher: ACPSessionTabs.launcher, wanted: wanted, state: status.state,
                                      question: status.question, integrated: status.integrated, switching: running[tab.id] != nil,
                                      shellFolder: tab.currentDirectory())
@@ -103,7 +112,15 @@ final class ViewSwitchRunner {
                 facts.transcriptExists = FileManager.default.fileExists(atPath: path)
             }
         case .chat:
-            if let report = AgentSessionSocket.reports[tab.id], AgentSessionSocket.record(of: tab) != nil {
+            if let bar = ViewSwitchOfferBar.open(for: tab) {
+                // The offer's switch: the session may have ended, so its last report counts as it is.
+                facts.terminalOffer = bar.offer
+                facts.sessionRunning = status.running && status.program == CommandClassifier.agentSessionProgram
+                if let report = AgentSessionSocket.reports[tab.id] {
+                    facts.report = ViewSwitch.ChatReport(sessionID: report.sessionID, turns: report.turns, state: chatState(report.state),
+                                                         folder: report.folder, resumed: report.resumed)
+                }
+            } else if let report = AgentSessionSocket.reports[tab.id], AgentSessionSocket.record(of: tab) != nil {
                 facts.report = ViewSwitch.ChatReport(sessionID: report.sessionID, turns: report.turns, state: chatState(report.state),
                                                      folder: report.folder, resumed: report.resumed)
             }

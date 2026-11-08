@@ -56,7 +56,7 @@ import Testing
         // name: (destructive, idempotent)
         let expected: [String: (Bool, Bool)] = [
             "propose_edit": (false, false), "write_file": (true, true), "create_file": (false, true), "stage": (true, true),
-            "commit": (true, false), "run_command": (true, false), "focus_tab": (false, true), "split_pane": (false, false), "close_pane": (true, true),
+            "commit": (true, false), "run_command": (true, false), "focus_tab": (false, true), "switch_view": (true, false), "split_pane": (false, false), "close_pane": (true, true),
             "zoom_pane": (false, true), "set_layout": (false, true), "settings_set": (false, true), "reopen_before_update": (false, true),
         ]
         #expect(Set(expected.keys).union(["settings_get"]) == Set(MCPServer.controlTools.map(\.name)))
@@ -77,6 +77,16 @@ import Testing
         #expect(propose.description.contains("never writes the file") && propose.description.contains("Accept or Reject"))
         #expect(MCPServer.tool(named: "commit")?.description.contains("Never pushes") == true)
         #expect(MCPServer.instructions.contains("write_file") && MCPServer.instructions.contains("ask the user"))
+        // switch_view (plan 036 U6): a tab's id it requires, and the two views only.
+        let switchView = try #require(MCPServer.tool(named: "switch_view"))
+        #expect(switchView.scope == .write && MCPServer.isControlTool("switch_view"))
+        let schema = try #require((try? JSONSerialization.jsonObject(with: Data(switchView.inputSchema.utf8))) as? [String: Any])
+        #expect(schema["required"] as? [String] == ["tab_id"])
+        #expect(schema["additionalProperties"] as? Bool == false)
+        let properties = try #require(schema["properties"] as? [String: Any])
+        #expect(Set(properties.keys) == ["tab_id", "view", "reason"])
+        #expect((properties["view"] as? [String: Any])?["enum"] as? [String] == ["chat", "terminal"])
+        #expect(switchView.description.contains("before anything is typed") && switchView.description.contains("wait_for_tab"))
         // Long enough for the user to answer, and for hooks.
         for tool in MCPServer.controlTools where tool.scope == .write { #expect(tool.timeout >= 60, "\(tool.name)") }
     }

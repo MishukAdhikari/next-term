@@ -4,18 +4,19 @@ import NextTermCore
 /// The terminal and chat switch's ways in, in a window (plan 036 U3, U4): ⇧⌘J and View › Switch to Chat or Switch to
 /// Terminal act on the tab (or pane) with the keyboard; the icon before a tab's × and the tab's right-click menu act on
 /// that tab's pane with the keyboard, in front or not. All of them run ViewSwitchRunner, which says in the tab why a
-/// switch is refused.
+/// switch is refused. While a chat view's "Open in Terminal" bar is open, its offer counts, even after its session ended
+/// (U5).
 extension TerminalWindowController {
     /// ⇧⌘J, View › Switch to Chat or Terminal.
     @objc func switchView(_ sender: Any?) {
-        guard let tab = activeTab, ViewSwitchRunner.offer(for: tab) != nil else { return NSSound.beep() }
+        guard let tab = activeTab, ViewSwitchRunner.switchOffer(for: tab) != nil else { return NSSound.beep() }
         ViewSwitchRunner.start(tab: tab)
     }
 
     /// The icon or the right-click menu of tab `group`: its pane with the keyboard, as its title and icon follow.
     func switchView(of group: PaneGroup) {
         let tab = group.focused
-        guard ViewSwitchRunner.offer(for: tab) != nil else { return }
+        guard ViewSwitchRunner.switchOffer(for: tab) != nil else { return }
         ViewSwitchRunner.start(tab: tab)
     }
 
@@ -23,7 +24,7 @@ extension TerminalWindowController {
     /// Terminal" in front of a chat view), and off where no switch is offered or one runs already. A tab that offers
     /// the switch but would refuse it keeps the item on: its use says why in the tab (KTD2).
     func validateViewSwitch(_ item: NSMenuItem) -> Bool {
-        let offer: ViewSwitch.Offer? = activeTab.flatMap { ViewSwitchRunner.offer(for: $0) }
+        let offer: ViewSwitch.Offer? = activeTab.flatMap { ViewSwitchRunner.switchOffer(for: $0) }
         let title = Self.viewSwitchTitle(offer)
         if item.title != title { item.title = title }
         guard let offer else { return false }
@@ -37,7 +38,7 @@ extension TerminalWindowController {
 
     /// The tab's right-click menu's item, after Rename…, while its pane with the keyboard offers the switch.
     func addViewSwitch(to menu: NSMenu, for group: PaneGroup) {
-        guard let offer = ViewSwitchRunner.offer(for: group.focused) else { return }
+        guard let offer = ViewSwitchRunner.switchOffer(for: group.focused) else { return }
         menu.addCommand(Self.viewSwitchTitle(offer), "switchView:", enabled: !offer.switching) { [weak self, weak group] in
             guard let self, let group else { return }
             self.switchView(of: group)

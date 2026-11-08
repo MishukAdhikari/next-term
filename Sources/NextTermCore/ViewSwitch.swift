@@ -198,11 +198,16 @@ public enum ViewSwitch {
         public var remembered: SessionSnapshot.Evidence?
         /// The shell's folder now.
         public var shellFolder: String?
+        /// What the chat view's session offered the terminal view for (R13), while its bar is open: the switch then goes
+        /// by `offerPlan`.
+        public var terminalOffer: TerminalOffer?
+        /// The chat view's session still runs. One that offered the terminal view as it ended has nothing to quit.
+        public var sessionRunning: Bool
 
         public init(offer: Offer?, launcher: String, wanted: View? = nil, state: TabState = .idle, question: String? = nil,
                     integrated: Bool = true, switching: Bool = false, evidence: SessionSnapshot.Evidence? = nil,
                     transcriptExists: Bool = false, report: ChatReport? = nil, remembered: SessionSnapshot.Evidence? = nil,
-                    shellFolder: String? = nil) {
+                    shellFolder: String? = nil, terminalOffer: TerminalOffer? = nil, sessionRunning: Bool = true) {
             self.offer = offer
             self.launcher = launcher
             self.wanted = wanted
@@ -215,6 +220,8 @@ public enum ViewSwitch {
             self.report = report
             self.remembered = remembered
             self.shellFolder = shellFolder
+            self.terminalOffer = terminalOffer
+            self.sessionRunning = sessionRunning
         }
     }
 
@@ -268,6 +275,7 @@ public enum ViewSwitch {
         public var from: View
         public var to: View
         public var agent: Agent
+        /// The conversation carried over; empty when an offer's terminal view starts the agent plain.
         public var sessionID: String
         /// The agent's own quit (KTD4).
         public var quit: [Step]
@@ -291,6 +299,7 @@ public enum ViewSwitch {
     /// said first, as what the agent it quits shows meanwhile is no reason. Only an exact id moves a conversation
     /// (KTD3): a guess would resume another one in the user's tab.
     public static func plan(_ facts: Facts) -> Result<Plan, Refusal> {
+        if let terminalOffer = facts.terminalOffer { return offerPlan(facts, terminalOffer) }
         guard let offer = facts.offer else { return .failure(.notOffered) }
         let agent = offer.agent
         let to = offer.view.other
@@ -322,6 +331,37 @@ public enum ViewSwitch {
             return .success(Plan(from: .chat, to: to, agent: agent, sessionID: id, quit: fallback, fallback: fallback, line: line,
                                  separator: separator(to: to, agent: agent, id: id, dropped: [])))
         }
+    }
+
+    /// The switch a chat view's offer runs (R13): to the terminal view, with the conversation when the session has one,
+    /// else the agent started plain, as the offer's reason (signing in, a command, the trust question) needs the
+    /// terminal view whether or not there is a conversation yet. A resume that couldn't go on names its id, which is the
+    /// conversation to try there. A session that has ended has nothing to quit; one that runs is refused while it works or
+    /// asks, as any switch is.
+    static func offerPlan(_ facts: Facts, _ terminalOffer: TerminalOffer) -> Result<Plan, Refusal> {
+        guard let offer = facts.offer, offer.view == .chat else { return .failure(.notOffered) }
+        let agent = offer.agent
+        if let wanted = facts.wanted, wanted == offer.view { return .failure(.showsAlready(wanted)) }
+        if facts.switching || offer.switching { return .failure(.alreadySwitching) }
+        if facts.sessionRunning {
+            if facts.state == .working || facts.report?.state == .working { return .failure(.working) }
+            if facts.question != nil || facts.report?.state == .attention { return .failure(.asking) }
+        }
+        guard facts.integrated else { return .failure(.noIntegration) }
+        let report = facts.report
+        var id = ""
+        if let reported = report?.sessionID, agent.restoreAgent.isSessionID(reported),
+           terminalOffer == .resumeFailed || report?.resumed == true || (report?.turns ?? 0) > 0 {
+            id = reported
+        }
+        let start = id.isEmpty ? agent.rawValue
+            : terminalLine(agent: agent, id: id, folder: report?.folder, remembered: facts.remembered)
+        let line = inFolder(report?.folder, shell: facts.shellFolder, start)
+        let quit = facts.sessionRunning ? fallback : []
+        let separator = id.isEmpty ? "Switched to Terminal: " + agent.name
+            : self.separator(to: .terminal, agent: agent, id: id, dropped: [])
+        return .success(Plan(from: .chat, to: .terminal, agent: agent, sessionID: id, quit: quit, fallback: quit, line: line,
+                             separator: separator))
     }
 
     /// The terminal view's quit: ⌃C, then the agent's quit word as keys, then Return, a moment apart.
@@ -371,6 +411,62 @@ public enum ViewSwitch {
     static func separator(to view: View, agent: Agent, id: String, dropped: [String]) -> String {
         let text = "Switched to " + view.title + ": " + agent.name + " conversation " + String(id.prefix(8))
         return dropped.isEmpty ? text : text + ". Not carried: " + dropped.joined(separator: ", ")
+    }
+
+    // MARK: the chat view's offers
+
+    /// What a chat view's session offers the terminal view for (R13, KTD13), as its report's `terminal_offer` says it:
+    /// `sign_in`, `command:/login`, `trust_declined` or `resume_failed`. Nothing else is read.
+    public enum TerminalOffer: Equatable, Sendable {
+        /// The agent isn't signed in: only its terminal interface signs in.
+        case signIn
+        /// A terminal-only command the session didn't send (`/login`).
+        case command(String)
+        /// Claude Code's folder trust was declined on the Mac.
+        case trustDeclined
+        /// A switch's resume couldn't go on (`--resume-only`).
+        case resumeFailed
+
+        /// The offer a report's field names, or nil. A command must be one some agent's terminal view runs.
+        public init?(raw: String) {
+            switch raw {
+            case "sign_in": self = .signIn
+            case "trust_declined": self = .trustDeclined
+            case "resume_failed": self = .resumeFailed
+            default:
+                guard raw.hasPrefix("command:") else { return nil }
+                let word = String(raw.dropFirst("command:".count))
+                guard ACPAgent.known.contains(where: { $0.terminalOnlyCommands.contains(word) }) else { return nil }
+                self = .command(word)
+            }
+        }
+
+        /// The field's value, as `init(raw:)` reads it.
+        public var raw: String {
+            switch self {
+            case .signIn: return "sign_in"
+            case .command(let word): return "command:" + word
+            case .trustDeclined: return "trust_declined"
+            case .resumeFailed: return "resume_failed"
+            }
+        }
+
+        /// The words on the bar over the tab, beside its Open in Terminal button.
+        public func text(agent: Agent) -> String {
+            switch self {
+            case .signIn: return agent.name + " needs you to sign in, in the terminal view."
+            case .command(let word): return word + " works in the terminal view."
+            case .trustDeclined: return agent.name + "\u{2019}s own trust question is in the terminal view."
+            case .resumeFailed: return "This conversation couldn\u{2019}t go on in Chat. Open it in Terminal."
+            }
+        }
+    }
+
+    /// The session's own line when it drops a terminal-only command (R13): where the command works, and what the bar's
+    /// button carries there.
+    public static func terminalOnlyLine(_ word: String, agent: Agent, hasConversation: Bool) -> String {
+        let carries = hasConversation ? "carries this conversation there" : "starts " + agent.name + " there"
+        return word + " works in the terminal view: Open in Terminal (\u{21E7}\u{2318}J) " + carries + "."
     }
 
     /// Where Claude Code keeps session `sessionID`'s transcript in `folder`, under its store: it exists once the session

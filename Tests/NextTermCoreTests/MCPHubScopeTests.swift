@@ -186,6 +186,7 @@ import Testing
     /// The bytes of `next-term`'s initialize (outside a tab, and in one), tools/list and prompts/list. The hub's catalog
     /// adds nothing to them until a server exists; Next Term's own add_mcp_server and list_mcp_servers are always in
     /// them (the owner's decision). Change this digest only for a change to Next Term's own tools or instructions.
+    /// Last changed for switch_view (plan 036 U6) and new_tab's sentence on the view a bare claude or codex opens in.
     @Test func nextTermsAnswersAreUnchangedWithNoServer() throws {
         func answer(_ method: String, instructions: String = MCPServer.instructions) -> [String: Any] {
             MCPServer.respond(to: ["jsonrpc": "2.0", "id": 1, "method": method, "params": ["protocolVersion": "2025-06-18"]],
@@ -199,7 +200,7 @@ import Testing
             answer("prompts/list"),
         ]
         let data = try JSONSerialization.data(withJSONObject: answers, options: [.sortedKeys, .withoutEscapingSlashes])
-        #expect(SecretRun.digest(data) == "0ac8c29580198d10bed89d21f1a79f566e42a8d3aa4be866b8b8ed053e040017")
+        #expect(SecretRun.digest(data) == "15099623ffea4e588708d766e69595d143ec3360a524b3786724cb35ea12b7b6")
         // And no hub file was read into them: with none, there is nothing.
         #expect(resolved(repo).isEmpty && !FileManager.default.fileExists(atPath: userFile))
     }

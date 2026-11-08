@@ -89,6 +89,25 @@ public struct ACPAgent: Equatable, Sendable {
         launcher + " agent " + id + " --resume " + ShellQuote.quote(sessionID)
     }
 
+    /// The slash commands only the agent's own terminal interface runs (plan 036 R13): a session drops them and offers
+    /// the terminal view instead. None for an ACP agent, which has no other view here.
+    public var terminalOnlyCommands: [String] {
+        switch id {
+        case "claude": return ["/login", "/logout", "/mcp", "/plugin", "/usage", "/rewind"]
+        case "codex": return ["/login", "/logout", "/mcp", "/status", "/approvals"]
+        default: return []
+        }
+    }
+
+    /// The terminal-only command a typed prompt is (`/login`, `/login extra`, ` /mcp`), by its first word; nil for any
+    /// other prompt, a slash command the session runs itself, or a word that isn't at the start.
+    public func terminalOnly(_ typed: String) -> String? {
+        let trimmed = typed.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix("/") else { return nil }
+        let word = String(trimmed.prefix { !$0.isWhitespace })
+        return terminalOnlyCommands.contains(word) ? word : nil
+    }
+
     /// The ids, for a refusal that says which would run.
     public static func listed(_ agents: [ACPAgent]) -> String {
         agents.isEmpty ? "none of them is installed here" : agents.map(\.id).joined(separator: ", ")

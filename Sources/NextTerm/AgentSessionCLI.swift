@@ -152,8 +152,12 @@ final class AgentSessionRunner {
     var resumeOnly = false
     /// The session went on with `resumeID`'s conversation: its report says so, as its turns began before this session's.
     var resumed = false
-    /// The session is ending after a resume that couldn't go on: nothing else ends it meanwhile.
-    private var endingResume = false
+    /// The session is ending with an offer of the terminal view (`endOffering`): nothing else ends it meanwhile.
+    private var endingWithOffer = false
+    /// What the next report offers the terminal view for (plan 036 R13, `ViewSwitch.TerminalOffer`'s raw value), sent
+    /// once; and how many were sent, so the same offer twice is two reports.
+    private var terminalOffer: String?
+    private var offersSent = 0
 
     /// How long a session's handshake may take before it ends with the drift note (plan 035 U7). The self-test's
     /// stand-ins shorten it, in a debug build only.
@@ -398,7 +402,8 @@ final class AgentSessionRunner {
             fields = (session.lastStop == nil ? "state=idle:" : "state=done:") + fields
         }
         // A new version, model or session id is reported too, though the tab's state stays the same.
-        let key = [fields, agentVersion ?? "", model ?? "", sessionID ?? "", resumed ? "resumed" : ""].joined(separator: "\n")
+        let key = [fields, agentVersion ?? "", model ?? "", sessionID ?? "", resumed ? "resumed" : "",
+                   terminalOffer.map { "\(offersSent):" + $0 } ?? ""].joined(separator: "\n")
         guard key != lastReport else { return }
         let stateChanged = !lastReport.hasPrefix(fields + "\n")
         lastReport = key
@@ -415,6 +420,10 @@ final class AgentSessionRunner {
         if let model { update["model"] = model }
         if let sessionID { update["session_id"] = sessionID }
         if resumed { update["resumed"] = true }
+        if let offer = terminalOffer {
+            update["terminal_offer"] = offer
+            terminalOffer = nil
+        }
         callApp(update, timeout: 2) { [weak self] answer in
             guard let self else { return }
             if stateChanged { self.write(osc) }
@@ -458,7 +467,7 @@ final class AgentSessionRunner {
         keepWords(buffer) // a last line with no newline
         buffer.removeAll()
         let tail = errorTail.split(whereSeparator: \.isNewline).suffix(3).joined(separator: " / ")
-        if endingResume { return }
+        if endingWithOffer { return }
         if !driver.isReady, agent.protocolKind == .claudeStream, resumeID != nil, resumeOnly {
             return resumeCannotGoOn(why: ACPSession.oneLine(tail, limit: 300))
         }
@@ -483,19 +492,40 @@ final class AgentSessionRunner {
     /// conversation, and its last report offers the agent's terminal view (`terminal_offer`), where the conversation may
     /// still open. `why` is the agent's own words, when it said any.
     func resumeCannotGoOn(why: String) {
-        guard !endingResume else { return }
-        endingResume = true
         let id = resumeID ?? ""
         let noun = agent.protocolKind == .codexAppServer ? "thread" : "session"
         let words = why.isEmpty ? "" : " (" + why + ")"
-        session.note("\(agent.name) couldn\u{2019}t go on with \(noun) \(id)\(words), so no new one was started.")
-        session.note("Open it in Terminal to go on with it there.")
+        endOffering("resume_failed", sessionID: id,
+                    notes: ["\(agent.name) couldn\u{2019}t go on with \(noun) \(id)\(words), so no new one was started.",
+                            "Open it in Terminal to go on with it there."])
+    }
+
+    /// The session ends with `notes`, as `fatal` ends it, once its last report has offered the agent's terminal view for
+    /// `offer` (plan 036 R13: signing in, the trust question, a resume that couldn't go on), so the app draws the bar
+    /// that opens it. Outside a Next Term tab there is no bar: the notes alone say it.
+    func endOffering(_ offer: String, sessionID id: String? = nil, notes: [String]) {
+        guard !endingWithOffer else { return }
+        endingWithOffer = true
+        for note in notes { session.note(note) }
         draw()
         var update: [String: Any] = ["op": "report", "agent": agent.name, "state": "idle", "turns": turnsEnded, "last_message": "",
                                      "agent_id": agent.id, "folder": FileManager.default.currentDirectoryPath,
-                                     "terminal_offer": "resume_failed"]
-        if AgentSessionVersion.isSessionID(id) { update["session_id"] = id }
+                                     "terminal_offer": offer]
+        if let id = id ?? sessionID, AgentSessionVersion.isSessionID(id) { update["session_id"] = id }
+        if resumed { update["resumed"] = true }
         callApp(update, timeout: 2) { [weak self] _ in self?.finish(1) }
+    }
+
+    /// A terminal-only command typed as a prompt (plan 036 R13): it isn't sent; one line says where it works, and the
+    /// next report offers the terminal view, whose bar carries the conversation there.
+    private func dropTerminalOnly(_ word: String) {
+        guard let agent = ViewSwitch.Agent(rawValue: agent.id) else { return }
+        let hasConversation = sessionID != nil && (turnsEnded > 0 || resumed)
+        session.note(ViewSwitch.terminalOnlyLine(word, agent: agent, hasConversation: hasConversation))
+        draw()
+        offersSent += 1
+        terminalOffer = "command:" + word
+        report()
     }
 
     /// The same `nxtrm agent`, run again in this process without `--resume`: every part of the session starts fresh, and
@@ -697,6 +727,7 @@ final class AgentSessionRunner {
             let text = typed.trimmingCharacters(in: .whitespacesAndNewlines)
             typed = ""
             if text.isEmpty { return draw() }
+            if let word = agent.terminalOnly(text) { return dropTerminalOnly(word) }
             send(text)
         case 0x7F, 0x08:
             if !typed.isEmpty { typed.removeLast() }

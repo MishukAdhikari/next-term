@@ -448,6 +448,8 @@ enum MCPControl {
         info.merge(restoredFields(tab)) { $1 } // what a restart did to it (U13)
         // An agent session (plan 030): its agent, CLI version and model (plan 035); read_tab gives its last message.
         info.merge(MainActor.assumeIsolated { AgentSessionSocket.listFields(tab) }) { $1 }
+        // A Claude Code or Codex tab's view, terminal or chat (plan 036 R12).
+        if let offer = MainActor.assumeIsolated({ ViewSwitchRunner.offer(for: tab) }) { info["view"] = offer.view.rawValue }
         if let code = tab.status.exitCode, tab.status.state == .failed { info["exit_code"] = Int(code) }
         if MCPRegistration.needsRestart(tab) { info["needs_restart"] = true } // its agent started before Next Term's tools reached it
         if tab === caller { info["you"] = true }

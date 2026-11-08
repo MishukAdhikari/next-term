@@ -40,6 +40,8 @@ enum AgentSessionSocket {
         var folder: String? = nil
         /// The session went on with a conversation it was given (`--resume`): it holds turns from before its own.
         var resumed = false
+        /// What this report offers the agent's terminal view for (plan 036 R13): one of the four known values only.
+        var terminalOffer: ViewSwitch.TerminalOffer? = nil
     }
 
     /// Each session tab's last report, by tab id. Main thread.
@@ -171,7 +173,12 @@ enum AgentSessionSocket {
         report.sessionID = (arguments["session_id"] as? String).flatMap { AgentSessionVersion.isSessionID($0) ? $0 : nil }
         report.folder = (arguments["folder"] as? String).flatMap { $0.hasPrefix("/") ? $0 : nil }
         report.resumed = arguments["resumed"] as? Bool ?? false
+        report.terminalOffer = (arguments["terminal_offer"] as? String).flatMap { ViewSwitch.TerminalOffer(raw: $0) }
         reports[tab.id] = report
+        // The bar over the tab offers the terminal view in one click (plan 036 U5).
+        if let offer = report.terminalOffer, let agent = ViewSwitch.Agent(sessionAgentID: agentID) {
+            ViewSwitchOfferBar.show(offer, agent: agent, in: tab)
+        }
         guard let agentID, let version = report.version else { return nil }
         let stored = versionStore.dictionary(forKey: versionsKey) as? [String: String] ?? [:]
         let seen = AgentSessionVersion.remember(version, for: agentID, in: stored)

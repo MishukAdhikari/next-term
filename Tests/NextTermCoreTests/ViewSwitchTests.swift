@@ -317,4 +317,94 @@ import Testing
         #expect(ViewSwitch.claudeTranscript(store: "/Users/x/.claude", folder: "/Users/x/my app", sessionID: claudeID)
                 == "/Users/x/.claude/projects/-Users-x-my-app/" + claudeID + ".jsonl")
     }
+
+    // MARK: the chat view's offers (U5)
+
+    /// A chat-view tab whose session offered the terminal view: ended (nothing to quit) or still running.
+    private func offerFacts(_ offer: ViewSwitch.TerminalOffer, _ agent: ViewSwitch.Agent = .claude, id: String? = nil, turns: Int = 0,
+                            running: Bool = false) -> ViewSwitch.Facts {
+        var facts = ViewSwitch.Facts(offer: chat(agent), launcher: launcher, shellFolder: "/Users/x/app", terminalOffer: offer,
+                                     sessionRunning: running)
+        facts.report = ViewSwitch.ChatReport(sessionID: id, turns: turns, state: .idle, folder: "/Users/x/app")
+        return facts
+    }
+
+    @Test func anOfferReadsOnlyItsFourKnownValues() {
+        #expect(ViewSwitch.TerminalOffer(raw: "sign_in") == .signIn)
+        #expect(ViewSwitch.TerminalOffer(raw: "trust_declined") == .trustDeclined)
+        #expect(ViewSwitch.TerminalOffer(raw: "resume_failed") == .resumeFailed)
+        #expect(ViewSwitch.TerminalOffer(raw: "command:/login") == .command("/login"))
+        #expect(ViewSwitch.TerminalOffer(raw: "command:/status") == .command("/status"))
+        for raw in ["", "command:", "command:/model", "command:rm -rf", "sign-in", "SIGN_IN"] {
+            #expect(ViewSwitch.TerminalOffer(raw: raw) == nil, "\(raw)")
+        }
+        for offer in [ViewSwitch.TerminalOffer.signIn, .trustDeclined, .resumeFailed, .command("/mcp")] {
+            #expect(ViewSwitch.TerminalOffer(raw: offer.raw) == offer)
+        }
+        #expect(ViewSwitch.TerminalOffer.signIn.text(agent: .claude) == "Claude Code needs you to sign in, in the terminal view.")
+        #expect(ViewSwitch.TerminalOffer.trustDeclined.text(agent: .claude) == "Claude Code\u{2019}s own trust question is in the terminal view.")
+        #expect(ViewSwitch.TerminalOffer.resumeFailed.text(agent: .codex) == "This conversation couldn\u{2019}t go on in Chat. Open it in Terminal.")
+        #expect(ViewSwitch.TerminalOffer.command("/login").text(agent: .codex) == "/login works in the terminal view.")
+        #expect(ViewSwitch.terminalOnlyLine("/login", agent: .claude, hasConversation: true)
+                == "/login works in the terminal view: Open in Terminal (\u{21E7}\u{2318}J) carries this conversation there.")
+        #expect(ViewSwitch.terminalOnlyLine("/mcp", agent: .codex, hasConversation: false).hasSuffix("starts Codex there."))
+    }
+
+    @Test func anEndedSessionWithoutAConversationStartsTheAgentPlain() throws {
+        let plan = try #require(planned(offerFacts(.signIn)))
+        #expect(plan.from == .chat && plan.to == .terminal)
+        #expect(plan.line == "claude")
+        #expect(plan.quit.isEmpty && plan.fallback.isEmpty)
+        #expect(plan.sessionID.isEmpty)
+        #expect(plan.separator == "Switched to Terminal: Claude Code")
+        #expect(try #require(planned(offerFacts(.trustDeclined, .codex))).line == "codex")
+        // An id with no turn and no resume is no conversation yet: plain too.
+        #expect(try #require(planned(offerFacts(.signIn, id: claudeID))).line == "claude")
+    }
+
+    @Test func aRunningSessionWithACommandOfferQuitsAndResumes() throws {
+        let plan = try #require(planned(offerFacts(.command("/login"), id: claudeID, turns: 1, running: true)))
+        #expect(plan.line == "claude --resume " + claudeID)
+        #expect(plan.quit == ViewSwitch.fallback)
+        #expect(plan.sessionID == claudeID)
+        #expect(plan.separator == "Switched to Terminal: Claude Code conversation 8f3a1c2e")
+        // Before its first turn, the agent starts plain, the session quit all the same.
+        let fresh = try #require(planned(offerFacts(.command("/mcp"), .codex, id: codexID, turns: 0, running: true)))
+        #expect(fresh.line == "codex")
+        #expect(fresh.quit == ViewSwitch.fallback)
+    }
+
+    @Test func aResumeThatFailedOffersItsOwnConversation() throws {
+        let plan = try #require(planned(offerFacts(.resumeFailed, id: claudeID)))
+        #expect(plan.line == "claude --resume " + claudeID)
+        #expect(plan.quit.isEmpty)
+        #expect(try #require(planned(offerFacts(.resumeFailed, .codex, id: codexID))).line == "codex resume " + codexID + " -C /Users/x/app")
+        // An id that isn't one word is never typed.
+        #expect(try #require(planned(offerFacts(.resumeFailed, id: "x; rm -rf /"))).line == "claude")
+    }
+
+    @Test func anOfferGoesToTheSessionsFolderAndIsRefusedLikeAnySwitch() throws {
+        var elsewhere = offerFacts(.resumeFailed, id: claudeID)
+        elsewhere.shellFolder = "/tmp"
+        #expect(try #require(planned(elsewhere)).line == "cd -- /Users/x/app && claude --resume " + claudeID)
+        var working = offerFacts(.command("/login"), id: claudeID, turns: 1, running: true)
+        working.state = .working
+        #expect(refusal(working) == .working)
+        var asking = offerFacts(.command("/login"), id: claudeID, turns: 1, running: true)
+        asking.report?.state = .attention
+        #expect(refusal(asking) == .asking)
+        var noShell = offerFacts(.signIn)
+        noShell.integrated = false
+        #expect(refusal(noShell) == .noIntegration)
+        var twice = offerFacts(.signIn)
+        twice.switching = true
+        #expect(refusal(twice) == .alreadySwitching)
+        var asked = offerFacts(.signIn)
+        asked.wanted = .chat
+        #expect(refusal(asked) == .showsAlready(.chat))
+        // An ended session's last state is no reason: nothing is working.
+        var ended = offerFacts(.signIn)
+        ended.report?.state = .working
+        #expect(planned(ended) != nil)
+    }
 }
