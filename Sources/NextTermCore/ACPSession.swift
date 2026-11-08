@@ -73,6 +73,9 @@ public struct ACPSession: Sendable {
         public let options: [Option]
         /// The option the menu's cursor is on.
         public var highlighted: Int
+        /// A question the agent asks (Claude's AskUserQuestion), not a permission: its menu has no "Do you want to
+        /// allow" lead, and its options are the answers.
+        public var isQuestion = false
     }
 
     public enum Item: Equatable, Sendable {
@@ -188,9 +191,9 @@ public struct ACPSession: Sendable {
     }
 
     /// `session/request_permission`: the menu opens. Nil, with nothing changed, when the agent offers no option the
-    /// tab can give.
+    /// tab can give. A `question` is the agent asking the user one (its title is the question, its options the answers).
     @discardableResult
-    public mutating func requested(permission id: ACPWire.Value, params: ACPWire.Value) -> Permission? {
+    public mutating func requested(permission id: ACPWire.Value, params: ACPWire.Value, question: Bool = false) -> Permission? {
         let call = params["toolCall"]
         if let call, let callID = call["toolCallId"]?.string {
             if var known = tools[callID] {
@@ -205,8 +208,9 @@ public struct ACPSession: Sendable {
             return Permission.Option(id: optionID, name: Self.oneLine(name, limit: 60), kind: kind)
         }
         guard !options.isEmpty else { return nil }
-        let action = Self.oneLine(title.isEmpty ? "act" : title, limit: 140).replacingOccurrences(of: "?", with: "")
-        let permission = Permission(requestID: id, action: action, options: options, highlighted: 0)
+        // Whole (R5, plan 035): the menu wraps it and the tab's question carries it; only a runaway input is cut.
+        let action = Self.oneLine(title.isEmpty ? "act" : title, limit: Self.wholeLimit).replacingOccurrences(of: "?", with: "")
+        let permission = Permission(requestID: id, action: action, options: options, highlighted: 0, isQuestion: question)
         pending = permission
         items.append(.permission(action: action, answer: nil))
         return permission
@@ -277,7 +281,7 @@ public struct ACPSession: Sendable {
     }
 
     private func merge(_ update: ACPWire.Value, into call: inout ToolCall) {
-        if let title = update["title"]?.string { call.title = Self.oneLine(title, limit: 200) }
+        if let title = update["title"]?.string { call.title = Self.oneLine(title, limit: Self.wholeLimit) }
         if let kind = update["kind"]?.string { call.kind = kind }
         if let status = update["status"]?.string.flatMap(ToolCall.Status.init(rawValue:)) { call.status = status }
         guard let content = update["content"]?.array else { return }
@@ -346,6 +350,10 @@ public struct ACPSession: Sendable {
     static func compact(_ count: Int) -> String {
         count >= 1000 ? String(format: count >= 10_000 ? "%.0fk" : "%.1fk", Double(count) / 1000) : String(count)
     }
+
+    /// The longest tool title or permission action kept: a whole command or path (R5, plan 035), cut only when it is
+    /// past anything a screen could show.
+    public static let wholeLimit = 16_384
 
     /// One line, control characters out, at most `limit` characters.
     public static func oneLine(_ text: String, limit: Int) -> String {

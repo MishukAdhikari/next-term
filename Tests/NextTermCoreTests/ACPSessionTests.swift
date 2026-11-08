@@ -170,8 +170,58 @@ import Testing
         #expect(found.map(\.id) == ["gemini", "cursor"])
         #expect(ACPAgent.named("cursor-agent")?.arguments == ["acp"])
         #expect(ACPAgent.named("Gemini")?.arguments == ["--acp"])
-        #expect(ACPAgent.named("claude") == nil)
+        #expect(ACPAgent.named("claude")?.protocolKind == .claudeStream)
         #expect(ACPAgent.listed([]) == "none of them is installed here")
+    }
+
+    /// Claude Code and Codex join the catalog with their own protocols (plan 035 U1); the ACP agents stay as they were.
+    @Test func claudeAndCodexAreInTheCatalogWithTheirOwnProtocols() {
+        let present: Set<String> = ["/usr/local/bin/gemini", "/opt/bin/codex", "/opt/bin/claude"]
+        let found = ACPAgent.installed(path: "/usr/local/bin:/opt/bin") { present.contains($0) }
+        #expect(found.map(\.id) == ["claude", "codex", "gemini"])
+        let claude = ACPAgent.named("claude")
+        #expect(claude?.name == "Claude Code")
+        #expect(claude?.program == "claude")
+        #expect(claude?.protocolKind == .claudeStream)
+        #expect(claude?.arguments == [])
+        #expect(claude?.terminalNote?.contains("/usage") == true)
+        let codex = ACPAgent.named("Codex")
+        #expect(codex?.name == "Codex")
+        #expect(codex?.program == "codex")
+        #expect(codex?.protocolKind == .codexAppServer)
+        #expect(codex?.terminalNote?.isEmpty == false)
+        // The ACP agents keep their ids, order, arguments and protocol, and have no note.
+        let acp = ACPAgent.known.filter { $0.protocolKind == .acp }
+        #expect(acp.map(\.id) == ["gemini", "qwen", "opencode", "cursor", "copilot", "goose", "kimi", "auggie", "kiro", "cline",
+                                   "junie", "droid", "devin", "vibe"])
+        #expect(acp.allSatisfy { $0.terminalNote == nil })
+        #expect(ACPAgent.named("droid")?.arguments == ["exec", "--output-format", "acp-daemon"])
+        #expect(ACPAgent(id: "x", name: "X", program: "x", arguments: []).protocolKind == .acp)
+    }
+
+    /// A question (Claude's AskUserQuestion) is a permission flagged as one: its menu has no "Do you want to allow" lead,
+    /// in the transcript or in the words the tab reports, and still reads as an agent's question (plan 035 KTD8).
+    @Test func aQuestionDropsTheAllowLeadAndStillReadsAsAQuestion() {
+        var session = ACPSession()
+        session.prompted("set up the database")
+        let params = value(#"{"toolCall":{"toolCallId":"toolu_q","title":"Which database should we use?"},"options":[{"optionId":"Postgres","name":"Postgres","kind":"allow_once"},{"optionId":"SQLite","name":"SQLite","kind":"allow_once"}]}"#)
+        let asked = session.requested(permission: .string("c1"), params: params, question: true)
+        #expect(asked?.isQuestion == true)
+        #expect(asked.map(ACPTranscript.question) == "Which database should we use?")
+        let screen = ACPTranscript.lines(session, from: 0, width: 100).map(\.text)
+            + [ACPTranscript.inputLine(session, typed: "", width: 100).text]
+        #expect(screen.contains("Which database should we use?"))
+        #expect(!screen.contains { $0.contains(ACPTranscript.questionLead) })
+        #expect(AgentScreen.activity(screenLines: screen, mask: .empty) == .asking("Which database should we use?"))
+        let menu = AgentScreen.menu(screenLines: screen, mask: .empty)
+        #expect(menu?.choices == ["Postgres", "SQLite"])
+        #expect(menu?.keys(toPick: 1) == ["down", "enter"])
+        // A permission keeps its lead.
+        var other = ACPSession()
+        other.prompted("clean up")
+        let permission = other.requested(permission: .string("p1"), params: value(self.permission))
+        #expect(permission?.isQuestion == false)
+        #expect(permission.map(ACPTranscript.question) == "Do you want to allow: Run `rm -rf build`?")
     }
 
     @Test func anAgentSessionIsAnAgentTabThatIsNoOtherAgent() {
@@ -198,5 +248,70 @@ import Testing
         #expect(gemini.sessionLine(launcher: "nxtrm", prompt: nil) == "nxtrm agent gemini")
         #expect(gemini.sessionLine(launcher: "nxtrm", prompt: "  ") == "nxtrm agent gemini")
         #expect(gemini.sessionLine(launcher: "'/A B/nxtrm'", prompt: "fix Bob's test") == "'/A B/nxtrm' agent gemini --prompt 'fix Bob'\\''s test'")
+    }
+
+    /// The menu shows the tool's whole input (plan 035 R5): a 300-character command is kept whole in the request, wrapped
+    /// in the menu rather than cut, and read back whole as the tab's question, which answer_agent matches.
+    @Test func aLongCommandShowsWholeInTheMenuAndTheQuestion() {
+        let steps: [String] = (1...40).map { "step\($0)" }
+        let long = "Run `" + steps.joined(separator: " && ") + "`"
+        #expect(long.count >= 300)
+        var session = ACPSession()
+        session.prompted("build it")
+        session.apply(update: update(#"{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Would you like to see the plan? Here it is."}}"#))
+        let params = value(#"{"toolCall":{"toolCallId":"t1","title":""# + long + #"","kind":"execute"},"options":[{"optionId":"a","name":"Allow once","kind":"allow_once"},{"optionId":"r","name":"Reject","kind":"reject_once"}]}"#)
+        let permission = session.requested(permission: .string("p1"), params: params)
+        #expect(permission?.action == long)
+        let screen = ACPTranscript.lines(session, from: 0, width: 80).map(\.text)
+            + [ACPTranscript.inputLine(session, typed: "", width: 80).text]
+        #expect(screen.allSatisfy { $0.count <= 80 })
+        #expect(!screen.contains { $0.hasSuffix("\u{2026}") })
+        let asked = ACPTranscript.questionLead + long + "?"
+        #expect(AgentScreen.activity(screenLines: screen, mask: .empty) == .asking(asked))
+        let menu = AgentScreen.menu(screenLines: screen, mask: .empty)
+        #expect(menu?.question == asked)
+        #expect(menu?.choices == ["Allow once", "Reject"])
+        #expect(menu?.keys(toPick: 1) == ["down", "enter"])
+        #expect(AgentScreen.menu(asking: asked, screenLines: screen, shown: screen, mask: .empty)?.choices.count == 2)
+        // A tool call's long title is kept whole too; the transcript's line still fits the width.
+        session.apply(update: update(#"{"sessionUpdate":"tool_call","toolCallId":"t2","title":""# + long + #"","kind":"execute","status":"in_progress"}"#))
+        #expect(session.tools["t2"]?.title == long)
+    }
+
+    /// The app keeps the last version each agent ran: a new one gives one line, the same one none, the first none
+    /// (plan 035 U7). A session's resume line names the agent and the id, and only an id of plain characters is taken.
+    @Test func aChangedVersionGivesOneLineAndAResumeLineNamesTheSession() {
+        var stored: [String: String] = [:]
+        var seen = AgentSessionVersion.remember("2.1.4", for: "claude", in: stored)
+        #expect(seen.previous == nil)
+        stored = seen.stored
+        seen = AgentSessionVersion.remember("2.1.4", for: "claude", in: stored)
+        #expect(seen.previous == nil)
+        seen = AgentSessionVersion.remember("2.2.0", for: "claude", in: stored)
+        #expect(seen.previous == "2.1.4")
+        #expect(seen.stored == ["claude": "2.2.0"])
+        stored = seen.stored
+        #expect(AgentSessionVersion.remember("2.2.0", for: "claude", in: stored).previous == nil)
+        // Another agent's version is its own.
+        #expect(AgentSessionVersion.remember("0.154.0", for: "codex", in: stored).stored == ["claude": "2.2.0", "codex": "0.154.0"])
+        #expect(AgentSessionVersion.updatedLine(agent: "Claude Code", from: "2.1.4", to: "2.2.0") == "Claude Code updated 2.1.4 \u{2192} 2.2.0")
+
+        let claude = ACPAgent.named("claude")!
+        #expect(claude.resumeLine(launcher: "nxtrm", sessionID: "5e4d3c2b-1a09-4f8e-9d7c-6b5a4f3e2d1c")
+                == "nxtrm agent claude --resume 5e4d3c2b-1a09-4f8e-9d7c-6b5a4f3e2d1c")
+        #expect(ACPAgent.named("codex")!.resumeLine(launcher: "'/A B/nxtrm'", sessionID: "thr_1") == "'/A B/nxtrm' agent codex --resume thr_1")
+        #expect(AgentSessionVersion.isSessionID("thr_1.a-B"))
+        #expect(!AgentSessionVersion.isSessionID(""))
+        #expect(!AgentSessionVersion.isSessionID("a b"))
+        #expect(!AgentSessionVersion.isSessionID("x;rm -rf /"))
+        #expect(!AgentSessionVersion.isSessionID(String(repeating: "a", count: 129)))
+        // A leading letter or digit: an id that starts like a flag would read as one after --resume.
+        for flagLike in ["-p", "--dangerously-skip-permissions", "_x", ".x", "-"] {
+            #expect(!AgentSessionVersion.isSessionID(flagLike), "\(flagLike)")
+        }
+        #expect(AgentSessionVersion.isSessionID("9a-b") && AgentSessionVersion.isSessionID("Z"))
+        // Only Claude Code and Codex sessions resume.
+        #expect(claude.resumesSessions && ACPAgent.named("codex")!.resumesSessions)
+        #expect(!ACPAgent.named("gemini")!.resumesSessions)
     }
 }

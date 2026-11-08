@@ -90,6 +90,9 @@ public enum AgentScreen {
     /// of `lines`: the question and the row it is on.
     static func prompt(in lines: [String], mask: SecretMask = .current) -> (row: Int, question: String)? {
         let start = max(0, lines.count - promptLines)
+        // An agent session's menu (`nxtrm agent`) is read by its own hint first: its question wraps whole, and a line of
+        // the transcript above it can hold words a question starts with.
+        if let asked = sessionQuestion(in: lines, from: start, mask: mask) { return asked }
         let text = lines[start...].joined(separator: "\n")
         guard choices.contains(where: { matches($0, text) }) else { return nil }
         for row in start..<lines.count {
@@ -101,6 +104,36 @@ public enum AgentScreen {
             return (row, String(mask.mask(asked).prefix(200)))
         }
         return nil
+    }
+
+    /// The menu an agent session (`nxtrm agent`) draws, a permission's ("Do you want to allow: …?") or a question in the
+    /// agent's own words (Claude's AskUserQuestion, plan 035): known by the session's own hint under the menu. Its question
+    /// ends in "?" just over option 1 and is whole, not cut (R5): a long one wraps, its later rows indented
+    /// (`ACPTranscript.questionIndent`), and its rows are joined with spaces. The row is the question's last, just over
+    /// the choices. When its first row is above `lines`, what shows is the question, after "…".
+    private static func sessionQuestion(in lines: [String], from start: Int, mask: SecretMask) -> (row: Int, question: String)? {
+        guard let hint = lines[start...].lastIndex(where: { $0.contains(ACPTranscript.menuHint) }) else { return nil }
+        var row = hint - 1
+        while row > start {
+            let line = inner(lines[row])
+            if let (number, _) = numberedLabel(splitCursor(line).rest), number == 1 {
+                let last = row - 1
+                guard inner(lines[last]).hasSuffix("?") else { return nil }
+                var first = last
+                while first > 0, isQuestionContinuation(lines[first]) { first -= 1 }
+                let seen = !(first == 0 && isQuestionContinuation(lines[0]))
+                let rows = lines[first...last].map(inner)
+                let asked = maskedQuestion(rows, mask: mask)
+                return (last, seen ? asked : "\u{2026}" + asked)
+            }
+            row -= 1
+        }
+        return nil
+    }
+
+    /// A wrapped session question's later row: indented, with words.
+    private static func isQuestionContinuation(_ line: String) -> Bool {
+        line.hasPrefix(ACPTranscript.questionIndent) && !line.trimmingCharacters(in: .whitespaces).isEmpty
     }
 
     /// Claude Code's question form, its own rows in the last `promptLines` of `lines`: the question

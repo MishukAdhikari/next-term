@@ -110,7 +110,11 @@ enum SessionCapture {
         } else {
             pane.folder = tab.liveDirectory
             pane.systemZsh = tab.shellPath == "/bin/zsh"
-            if status.running && !tab.exited {
+            if status.running && !tab.exited, let record = AgentSessionSocket.record(of: tab) {
+                // An agent session (`nxtrm agent NAME`, plan 035 U7): its own record, not the agent process under it, which
+                // runs in the session's protocol and resumes through it.
+                pane.agentSession = record
+            } else if status.running && !tab.exited {
                 pane.agent = ProcessInspector.agentEvidence(ptyFileDescriptor: tab.view.process.childfd,
                                                             shellPid: tab.view.process.shellPid, status: status,
                                                             home: RestorePlanning.agentHome, shownSession: tab.shownSessionID)

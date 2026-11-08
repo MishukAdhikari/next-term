@@ -264,15 +264,18 @@ public enum RestorePlanner {
         public var sessions: SessionLookup
         /// The names the user gave hosts, by host id.
         public var hostNames: [String: String]
+        /// How a tab's shell starts `nxtrm` now, for an agent session's resume line (plan 035 U7).
+        public var agentLauncher: String
 
         public init(home: String = NSHomeDirectory(), checkFolder: @escaping (String) -> FolderCheck = World.check,
                     resumeFacts: @escaping (SessionSnapshot.Evidence, String?, [String]) -> ResumeFacts, sessions: SessionLookup? = nil,
-                    hostNames: [String: String] = [:]) {
+                    hostNames: [String: String] = [:], agentLauncher: String = "nxtrm") {
             self.home = home
             self.checkFolder = checkFolder
             self.resumeFacts = resumeFacts
             self.sessions = sessions ?? .live(home: home)
             self.hostNames = hostNames
+            self.agentLauncher = agentLauncher
         }
 
         /// A folder is found when it is a directory now. The time budget is the caller's to set.
@@ -305,6 +308,8 @@ public enum RestorePlanner {
         var sharedSession: Bool
         /// A remote tab's host, by name.
         var host: String?
+        /// How a tab's shell starts `nxtrm`, for an agent session's resume line.
+        var agentLauncher = "nxtrm"
 
         init(pane: SessionSnapshot.Pane, kind: SessionSnapshot.RestoreKind, safeMode: Bool = false, folder: FolderChoice? = nil,
              session: NamedSession? = nil, sessionFolder: String? = nil, verdict: ResumeVerdict? = nil, selectedEarlier: Bool = false,
@@ -360,7 +365,7 @@ public enum RestorePlanner {
         let decision = decide(input)
         let folder = decision.folder ?? input.folder?.path
         var note = RestoreNote(outcome: decision.outcome)
-        if pane.remote == nil { note.agent = pane.agent?.agent }
+        if pane.remote == nil { note.agent = pane.agent?.agent ?? decision.sessionAgent }
         note.line = decision.noteLine
         note.session = decision.session
         note.leftOff = decision.noteLine == nil ? [] : decision.leftOff
@@ -438,7 +443,7 @@ public enum RestorePlanner {
 
     // MARK: deciding
 
-    private struct Decision {
+    struct Decision {
         var outcome: RestoreOutcome
         /// What is typed once the shell is ready.
         var line: String?
@@ -452,6 +457,8 @@ public enum RestorePlanner {
         var leftOff: [String] = []
         /// The permission options an automatic resume carries, or that Aider's note names, each as its words.
         var permissions: [String] = []
+        /// The agent of an agent session's resume (plan 035 U7), for its note.
+        var sessionAgent: RestoreAgent?
     }
 
     private static func decide(_ input: PaneInput) -> Decision {
@@ -462,51 +469,13 @@ public enum RestorePlanner {
         }
         if pane.command?.check == .secret { return Decision(outcome: .notKept) }
         let integrated = pane.command?.source == .integration
+        if let decision = decide(agentSession: input, integrated: integrated) { return decision }
         if let evidence = pane.agent { return decide(agent: evidence, input, integrated: integrated) }
         guard let command = pane.command, command.running else { return Decision(outcome: .idle) }
         if let reason = NotPutBack.reason(command, systemZsh: pane.systemZsh) {
             return Decision(outcome: .commandNote, notPutBack: reason)
         }
         return Decision(outcome: .commandOnTheLine, line: command.line)
-    }
-
-    private static func decide(agent evidence: SessionSnapshot.Evidence, _ input: PaneInput, integrated: Bool) -> Decision {
-        // The user's launch with the resume form (KTD7): the launcher replayed, or the program and argv's options.
-        guard let putBack = evidence.putBack(id: input.session?.id, folder: evidence.sessionFolder) else {
-            // Aider's note names the permission options it ran with (R7): argv's, or the typed line's without them.
-            let cli = evidence.agent.cli
-            let named = (evidence.options ?? evidence.confirmed)
-                .filter { cli.options[$0.name]?.kind == .permission }
-                .map { $0.words.joined(separator: " ") }
-            return Decision(outcome: .agentHint, permissions: named)
-        }
-        let line = putBack.line
-        // The note names the session the line names, and none when the line has no id.
-        let session = putBack.namesSession ? input.session : nil
-        // Most agents find a session by the folder they run in, so the line waits in the session's own.
-        guard integrated else {
-            return Decision(outcome: .agentNote, noteLine: line, session: session, folder: input.sessionFolder, leftOff: putBack.leftOff)
-        }
-        if let command = resumeCommand(input, evidence: evidence, session: session) {
-            // Its note names each permission option it carries, so a bypass is never silent (R5).
-            let permissions = evidence.launch.permissions.map { (words: [String]) -> String in words.joined(separator: " ") }
-            return Decision(outcome: .resume, line: command, noteLine: line, session: session, folder: evidence.sessionFolder,
-                            leftOff: putBack.leftOff, permissions: permissions)
-        }
-        return Decision(outcome: .agentOnTheLine, line: line, noteLine: line, session: session, folder: input.sessionFolder,
-                        leftOff: putBack.leftOff)
-    }
-
-    /// The command an automatic resume runs, when it may run: an update restore or a consented quit restore, the gate
-    /// passed, the pane selected last of those on its session, in its own folder, with the exact id its evidence holds.
-    /// Only the command the gate builds from this pane's own evidence runs.
-    private static func resumeCommand(_ input: PaneInput, evidence: SessionSnapshot.Evidence, session: NamedSession?) -> String? {
-        guard case .resume(let command)? = input.verdict, mayResume(input.kind, consent: input.quitConsent, safeMode: input.safeMode),
-              !input.selectedEarlier else {
-            return nil
-        }
-        guard input.folder?.movedFrom == nil, let session, session.naming == .exact, session.id == evidence.sessionID else { return nil }
-        return command == evidence.resumeCommand ? command : nil
     }
 
     /// Where a pane is: its window's project, and every project the snapshot opens.
@@ -534,9 +503,11 @@ public enum RestorePlanner {
         }
         input.folder = folder(for: pane.folder, project: place.project, home: world.home, check: world.checkFolder)
         input.session = session
-        if let recorded = pane.agent?.sessionFolder, let sessionFolder = lexical(recorded), world.checkFolder(sessionFolder) == .found {
+        let recordedFolder: String? = pane.agent?.sessionFolder ?? pane.agentSession?.folder
+        if let recorded = recordedFolder, let sessionFolder = lexical(recorded), world.checkFolder(sessionFolder) == .found {
             input.sessionFolder = sessionFolder
         }
+        input.agentLauncher = world.agentLauncher
         input.verdict = verdict(for: pane, kind: kind, consent: consent, safeMode: safeMode, projects: place.projects, world: world)
         return input
     }

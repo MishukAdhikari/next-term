@@ -146,6 +146,79 @@ import Testing
         plan([pane], kind: kind, safeMode: safeMode, quitConsent: quitConsent, world: world)[0]
     }
 
+    // MARK: agent sessions (plan 035 U7)
+
+    /// A tab running `nxtrm agent NAME`, whose session reported its id: Claude Code's session, Codex's thread.
+    func sessionTab(_ n: Int, agent: String = "claude", id: String = s, line: String? = nil, running: Bool = true) -> Pane {
+        var tab = pane(n, typed(line ?? "nxtrm agent \(agent)", running: running))
+        tab.agentSession = SessionSnapshot.AgentSessionRecord(agent: agent, sessionID: id, folder: folder)
+        return tab
+    }
+
+    /// An update restore runs `nxtrm agent NAME --resume ID` in the session's folder, as plain agent tabs resume; a crash
+    /// restore, safe mode and a quit without its consent put that line back unrun, and never resume (R12).
+    @Test func anAgentSessionTabResumesAfterAnUpdateAndNeverAfterACrash() {
+        let world = self.world()
+        let claude = plan(sessionTab(1), world: world)
+        #expect(claude.outcome == .resume)
+        #expect(claude.line == "nxtrm agent claude --resume \(s)")
+        #expect(claude.folder == folder)
+        #expect(claude.pending == PendingAction(action: .resume, reason: .update))
+        #expect(claude.session == NamedSession(agent: .claude, id: s, naming: .exact))
+        #expect(claude.listLine == "Claude Code resumes")
+        #expect(text(claude) == "Resumed Claude Code session \(s).")
+        let codex = plan(sessionTab(2, agent: "codex", id: "thr_1"), world: world)
+        #expect(codex.outcome == .resume && codex.line == "nxtrm agent codex --resume thr_1")
+        #expect(codex.session == NamedSession(agent: .codex, id: "thr_1", naming: .exact))
+        // The launcher the app has now.
+        var launched = world
+        launched.agentLauncher = "'/A B/nxtrm'"
+        #expect(plan(sessionTab(1), world: launched).line == "'/A B/nxtrm' agent claude --resume \(s)")
+        // A quit with its consent resumes as an update does.
+        #expect(plan(sessionTab(1), kind: .quit, quitConsent: true, world: world).outcome == .resume)
+
+        let held: [(SessionSnapshot.RestoreKind, Bool, Bool)] = [(.crash, false, false), (.unknown, false, false), (.quit, false, false),
+                                                                  (.update, true, false), (.crash, true, true), (.safeMode, false, true)]
+        for (kind, safeMode, consent) in held {
+            let result = plan(sessionTab(1), kind: kind, safeMode: safeMode, quitConsent: consent, world: world)
+            #expect(result.outcome == .agentOnTheLine, "\(kind), \(safeMode)")
+            #expect(result.line == "nxtrm agent claude --resume \(s)")
+            #expect(result.pending.action == .onTheLine)
+        }
+    }
+
+    /// Only a session still running, with a plain id and its folder there, in a shell with the integration, resumes; an
+    /// ACP agent's session is a command like any other.
+    @Test func anAgentSessionResumesOnlyFromWhatItsRecordHolds() {
+        // Ended before the save: nothing to resume.
+        #expect(plan(sessionTab(1, running: false), world: world()).outcome == .idle)
+        // Its folder gone: the line waits, unrun.
+        let gone = plan(sessionTab(1), world: world(exists: { $0 != self.folder }))
+        #expect(gone.outcome != .resume)
+        // An id with a shell character is not taken.
+        #expect(plan(sessionTab(1, id: "x;rm -rf ~"), world: world()).outcome != .resume)
+        // An agent that doesn't resume, or one Next Term doesn't know.
+        #expect(plan(sessionTab(1, agent: "gemini", id: "g1"), world: world()).outcome == .commandOnTheLine)
+        #expect(plan(sessionTab(1, agent: "nope", id: "g1"), world: world()).outcome == .commandOnTheLine)
+        // A line the shell didn't report typed: a note naming the line, as for a plain agent.
+        var polled = sessionTab(1)
+        polled.command = typed("nxtrm agent claude", source: .polled)
+        #expect(plan(polled, world: world()).outcome == .agentNote)
+    }
+
+    /// The record is saved with the tab and read back; the typed line keeps no prompt words.
+    @Test func anAgentSessionsRecordIsSavedWithoutItsPrompt() throws {
+        let tab = sessionTab(1, line: "nxtrm agent claude --prompt 'the staging db password is Tr0ub4dor'")
+        let groups = [SessionSnapshot.Group(root: .pane(tab), focused: tab.id)]
+        let header = SessionSnapshot.Header(launchID: id(900), generation: 1, clean: false, savedAt: start)
+        let data = try SessionSnapshot(header: header, windows: [SessionSnapshot.Window(project: folder, groups: groups)]).encoded()
+        #expect(!String(decoding: data, as: UTF8.self).contains("Tr0ub4dor"))
+        let read = try #require(try SessionSnapshot.decode(data).panes.first)
+        #expect(read.agentSession == SessionSnapshot.AgentSessionRecord(agent: "claude", sessionID: s, folder: folder))
+        #expect(read.command?.line == "nxtrm agent claude")
+        #expect(plan(read, world: world()).line == "nxtrm agent claude --resume \(s)")
+    }
+
     // MARK: agents that resume by themselves
 
     @Test func anExactClaudeIDWithAPassingGateResumes() {
