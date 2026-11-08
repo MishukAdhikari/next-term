@@ -14,10 +14,7 @@ extension TerminalWindowController {
 
     /// The tab a handoff acts on: the chat whose view sent it, else the pane with the keyboard.
     private func handoffTab(_ sender: Any?) -> TerminalTab? {
-        if let view = sender as? NSView,
-           let host = ChatTabs.hosts.values.first(where: { view.isDescendant(of: $0.view) }), let tab = host.tab {
-            return tab
-        }
+        if let view = sender as? NSView, let tab = ChatTabs.host(containing: view)?.tab { return tab }
         return activeTab
     }
 

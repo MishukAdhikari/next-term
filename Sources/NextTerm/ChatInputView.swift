@@ -12,6 +12,16 @@ final class ChatInputView: NSView, NSTextViewDelegate {
     private var heightConstraint: NSLayoutConstraint?
     private var sizes = ChatTextSizes(base: ChatTextSizes.standard)
     private(set) var canSend = false
+    /// What the box was last shown with, and the text it held then: a refresh that brings nothing new (a streamed
+    /// chunk) sets nothing.
+    private var shown: Shown?
+
+    private struct Shown: Equatable {
+        let state: ChatInputState
+        let draft: String
+        let sizes: ChatTextSizes
+        let text: String
+    }
 
     /// Return pressed with `text` in the box.
     var onSend: ((String) -> Void)?
@@ -90,6 +100,8 @@ final class ChatInputView: NSView, NSTextViewDelegate {
     /// What the box shows: `state`'s placeholder and whether Return sends; `draft` when the box differs from it and
     /// isn't mid-composition (a draft set over MCP, or restored).
     func show(_ state: ChatInputState, draft: String, sizes: ChatTextSizes) {
+        guard Shown(state: state, draft: draft, sizes: sizes, text: textView.string) != shown else { return }
+        defer { shown = Shown(state: state, draft: draft, sizes: sizes, text: textView.string) }
         canSend = state.canSend
         if self.sizes != sizes || textView.font == nil {
             self.sizes = sizes

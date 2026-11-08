@@ -33,6 +33,9 @@ protocol ChatViewSource: AnyObject {
 
 extension ChatViewSource {
     func showContinuedTab() {}
+
+    /// The card the open permission or question docks as, or nil.
+    var decision: ChatDecision? { session.pending.map { ChatDecision.from($0, agent: agentName) } }
 }
 
 /// A chat tab's view (plan 037 U6): the header, the transcript, the docked decision or end card, and the input box,
@@ -188,8 +191,7 @@ final class ChatView: NSView {
         transcript.show(blocks, sizes: sizes, offersTerminal: terminal)
 
         let hadCardKeyboard = window?.firstResponder === card
-        if let pending = session.pending {
-            let decision = ChatDecision.from(pending, agent: source.agentName)
+        if let decision = source.decision {
             let appearing = card.isHidden
             card.show(decision, agent: source.agentName, sizes: sizes, draftWaits: !source.draft.isEmpty)
             card.isHidden = false
@@ -294,7 +296,7 @@ final class ChatView: NSView {
         }
     }
 
-    static let handoffAction = Selector(("handOffConversation:"))
+    static let handoffAction = #selector(TerminalWindowController.handOffConversation(_:))
 
     /// Open in Terminal is offered for Claude Code and Codex once the window answers the handoff (plan 037 U8).
     private var canOpenInTerminal: Bool {

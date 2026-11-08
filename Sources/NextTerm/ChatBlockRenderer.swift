@@ -82,32 +82,44 @@ struct ChatBlockRenderer {
     /// The space a block keeps above itself, by what comes before it.
     func gap(_ block: ChatBlock, after previous: ChatBlock?) -> CGFloat {
         guard let previous else { return 2 }
-        let isRow = Self.isRow(block)
+        let before = Spacing(previous)
         switch block.content {
         case .prompt: return 26
-        case .message: return Self.kind(of: previous) == 0 ? 20 : (Self.isRow(previous) ? 10 : 8)
+        case .message: return before == .prompt ? 20 : (before == .row ? 10 : 8)
         case .turnEnded: return 12
         case .plan: return 12
-        case .note: return Self.isRow(previous) || Self.kind(of: previous) == 5 ? 4 : 10
+        case .note: return before == .row || before == .note ? 4 : 10
         default:
-            if isRow { return Self.isRow(previous) ? 4 : (Self.kind(of: previous) == 0 ? 18 : 10) }
+            if Spacing(block) == .row { return before == .row ? 4 : (before == .prompt ? 18 : 10) }
             return 8
         }
     }
 
-    /// A rough kind number for spacing: 0 prompt, 1 message, 2 row, 3 plan, 4 turn end, 5 note.
-    private static func kind(of block: ChatBlock) -> Int {
-        switch block.content {
-        case .prompt: return 0
-        case .message: return 1
-        case .thought, .tool, .change, .answered: return 2
-        case .plan: return 3
-        case .turnEnded: return 4
-        case .note: return 5
+    /// A block's kind, for spacing: thoughts, tools, file changes and answers are all compact rows.
+    private enum Spacing {
+        case prompt, message, row, plan, turnEnd, note
+
+        init(_ block: ChatBlock) {
+            switch block.content {
+            case .prompt: self = .prompt
+            case .message: self = .message
+            case .thought, .tool, .change, .answered: self = .row
+            case .plan: self = .plan
+            case .turnEnded: self = .turnEnd
+            case .note: self = .note
+            }
         }
     }
 
-    private static func isRow(_ block: ChatBlock) -> Bool { kind(of: block) == 2 }
+    /// Where a row's text starts after its status symbol, and where its wrapped lines line up.
+    private var rowIndent: CGFloat { secondary + 8 }
+
+    /// A row's paragraph: no space of its own, wrapped lines under the text after the symbol.
+    private func rowParagraph(after: CGFloat = 0) -> NSMutableParagraphStyle {
+        let style = paragraph(before: 0, after: after, lineSpacing: 2)
+        style.headIndent = rowIndent
+        return style
+    }
 
     func render(_ block: ChatBlock, after previous: ChatBlock?) -> NSAttributedString {
         let out = NSMutableAttributedString()
@@ -215,9 +227,7 @@ struct ChatBlockRenderer {
             row.addAttribute(.toolTip, value: tool.expanded ? "Hide the output" : "Show the output", range: NSRange(location: 0, length: row.length))
         }
         row.append(NSAttributedString(string: "\n", attributes: [.font: font]))
-        let style = paragraph(before: 0, after: 0, lineSpacing: 2)
-        style.headIndent = secondary + 8
-        row.addAttribute(.paragraphStyle, value: style, range: NSRange(location: 0, length: row.length))
+        row.addAttribute(.paragraphStyle, value: rowParagraph(), range: NSRange(location: 0, length: row.length))
         out.append(row)
         guard tool.expanded, opens else { return }
         var lines = tool.output.components(separatedBy: "\n")
@@ -230,7 +240,7 @@ struct ChatBlockRenderer {
         for (index, line) in lines.enumerated() {
             let last = index == lines.count - 1 && !capped
             let style = paragraph(before: index == 0 ? 10 : 0, after: last ? 10 : 0, lineSpacing: 1)
-            style.firstLineHeadIndent = secondary + 8 + 10
+            style.firstLineHeadIndent = rowIndent + 10
             style.headIndent = style.firstLineHeadIndent
             style.tailIndent = -10
             out.append(NSAttributedString(string: line + "\n", attributes: [.font: detail, .foregroundColor: NSColor.labelColor,
@@ -238,7 +248,7 @@ struct ChatBlockRenderer {
         }
         if capped {
             let style = paragraph(before: 4, after: 10)
-            style.firstLineHeadIndent = secondary + 8 + 10
+            style.firstLineHeadIndent = rowIndent + 10
             style.headIndent = style.firstLineHeadIndent
             out.append(NSAttributedString(string: "Show all \(total) lines\n", attributes: [
                 .font: NSFont.systemFont(ofSize: secondary), .foregroundColor: NSColor.linkColor, .paragraphStyle: style,
@@ -262,8 +272,8 @@ struct ChatBlockRenderer {
                                                                        .toolTip: "Show this file\u{2019}s changes in the editor"]))
         row.append(NSAttributedString(string: "\n", attributes: [.font: font]))
         let style = paragraph(before: 0, after: 0, lineSpacing: 2)
-        style.firstLineHeadIndent = secondary + 8
-        style.headIndent = secondary * 2 + 16
+        style.firstLineHeadIndent = rowIndent
+        style.headIndent = rowIndent * 2
         row.addAttribute(.paragraphStyle, value: style, range: NSRange(location: 0, length: row.length))
         out.append(row)
     }
@@ -293,9 +303,8 @@ struct ChatBlockRenderer {
             row.append(NSAttributedString(string: "  ", attributes: [.font: font]))
             row.append(NSAttributedString(string: entry.content, attributes: attributes))
             row.append(NSAttributedString(string: "\n", attributes: [.font: font]))
-            let style = paragraph(before: 0, after: index == entries.count - 1 ? 0 : 3, lineSpacing: 2)
-            style.headIndent = secondary + 8
-            row.addAttribute(.paragraphStyle, value: style, range: NSRange(location: 0, length: row.length))
+            row.addAttribute(.paragraphStyle, value: rowParagraph(after: index == entries.count - 1 ? 0 : 3),
+                             range: NSRange(location: 0, length: row.length))
             out.append(row)
         }
     }
@@ -313,9 +322,7 @@ struct ChatBlockRenderer {
         row.append(symbol(name, size: secondary, color: color, label: nil))
         row.append(NSAttributedString(string: "  " + ChatTranscript.answerLine(action: action, answer: answer) + "\n",
                                       attributes: [.font: NSFont.systemFont(ofSize: secondary), .foregroundColor: NSColor.secondaryLabelColor]))
-        let style = paragraph(before: 0, after: 0, lineSpacing: 2)
-        style.headIndent = secondary + 8
-        row.addAttribute(.paragraphStyle, value: style, range: NSRange(location: 0, length: row.length))
+        row.addAttribute(.paragraphStyle, value: rowParagraph(), range: NSRange(location: 0, length: row.length))
         out.append(row)
     }
 
@@ -337,9 +344,7 @@ struct ChatBlockRenderer {
             words.addAttributes([.link: ChatLink.openInTerminal.url, .foregroundColor: NSColor.linkColor], range: offer)
         }
         row.append(words)
-        let style = paragraph(before: 0, after: 0, lineSpacing: 2)
-        style.headIndent = secondary + 8
-        row.addAttribute(.paragraphStyle, value: style, range: NSRange(location: 0, length: row.length))
+        row.addAttribute(.paragraphStyle, value: rowParagraph(), range: NSRange(location: 0, length: row.length))
         out.append(row)
     }
 

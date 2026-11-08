@@ -77,6 +77,7 @@ enum AgentSessionSocket {
                     done.signal()
                     return
                 }
+                let requester = "The session in \u{201C}\(tab.title)\u{201D}"
                 switch arguments["op"] as? String {
                 case "report":
                     reply = ["ok": true]
@@ -86,14 +87,14 @@ enum AgentSessionSocket {
                     AgentApprovals.confirmAlways(agent: arguments["agent"] as? String ?? "The agent",
                                                  action: arguments["action"] as? String ?? "act",
                                                  option: arguments["option"] as? String ?? "Allow always",
-                                                 requester: "The session in “\(tab.title)”", gate: gate) { approved in
+                                                 requester: requester, gate: gate) { approved in
                         reply = ["approved": approved]
                         done.signal()
                     }
                 case "trust_folder":
                     AgentApprovals.trustFolder(agent: arguments["agent"] as? String ?? "Claude Code",
                                                folder: arguments["folder"] as? String ?? "",
-                                               requester: "The session in \u{201C}\(tab.title)\u{201D}", gate: gate) { trusted in
+                                               requester: requester, gate: gate) { trusted in
                         reply = ["trusted": trusted]
                         done.signal()
                     }

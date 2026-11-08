@@ -34,6 +34,11 @@ enum ChatTabs {
 
     static func host(for tab: TerminalTab) -> ChatTabHost? { hosts[tab.id] }
 
+    /// The chat whose view holds `view`, or nil.
+    static func host(containing view: NSView) -> ChatTabHost? {
+        hosts.values.first { view.isDescendant(of: $0.view) }
+    }
+
     /// The kind mark the tab strips show at rest (plan 037 U5): a chat bubble for a chat tab, none for a terminal tab.
     /// The tab strips ask on every refresh, so a chat tab renamed back to automatic takes its agent's name here too.
     static func glyph(for tab: TerminalTab) -> TabKindGlyph? {
@@ -127,7 +132,7 @@ enum ChatTabs {
     /// in a terminal. Anything else is told as it is.
     static func paneResponder(for responder: NSResponder?) -> NSResponder? {
         guard let view = responder as? NSView, !(view is NextTermView), !hosts.isEmpty,
-              let host = hosts.values.first(where: { view.isDescendant(of: $0.view) }), let terminal = host.tab?.view else {
+              let terminal = host(containing: view)?.tab?.view else {
             return responder
         }
         return terminal

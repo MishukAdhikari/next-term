@@ -151,35 +151,36 @@ enum MarkdownBlocksRenderer {
     }
 
     static func parts(_ markdown: String) -> [Part] {
+        enum Kind { case markdown, quote, table }
         var parts: [Part] = []
         var lines: [String] = []
-        var kind = 0 // 0 Markdown, 1 quote, 2 table
+        var kind = Kind.markdown
         var fenced = false
 
         func flush() {
             guard !lines.isEmpty else { return }
             switch kind {
-            case 1: parts.append(.quote(lines.joined(separator: "\n")))
-            case 2: parts.append(.table(lines))
-            default: parts.append(.markdown(lines.joined(separator: "\n")))
+            case .quote: parts.append(.quote(lines.joined(separator: "\n")))
+            case .table: parts.append(.table(lines))
+            case .markdown: parts.append(.markdown(lines.joined(separator: "\n")))
             }
             lines = []
         }
 
         for raw in markdown.replacingOccurrences(of: "\r\n", with: "\n").components(separatedBy: "\n") {
             let trimmed = raw.trimmingCharacters(in: .whitespaces)
-            var lineKind = 0
+            var lineKind = Kind.markdown
             var line = raw
             if fenced {
                 if trimmed.hasPrefix("```") || trimmed.hasPrefix("~~~") { fenced = false }
             } else if trimmed.hasPrefix("```") || trimmed.hasPrefix("~~~") {
                 fenced = true
             } else if trimmed.hasPrefix(">") {
-                lineKind = 1
+                lineKind = .quote
                 line = String(trimmed.dropFirst())
                 if line.hasPrefix(" ") { line.removeFirst() }
             } else if trimmed.hasPrefix("|"), trimmed.count > 1 {
-                lineKind = 2
+                lineKind = .table
                 line = trimmed
             }
             if lineKind != kind {

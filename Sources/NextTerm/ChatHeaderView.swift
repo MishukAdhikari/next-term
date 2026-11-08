@@ -14,6 +14,16 @@ final class ChatHeaderView: NSView {
     let terminalButton = NSButton()
     private var terminalTip: ShortcutToolTip?
     private var height: NSLayoutConstraint?
+    /// What the header was last shown with: a refresh that brings nothing new (a streamed chunk) sets nothing.
+    private var shown: Shown?
+
+    private struct Shown: Equatable {
+        let header: ChatHeader
+        let sizes: ChatTextSizes
+        let offersTerminal: Bool
+        /// The dot's colour is resolved for the appearance it was set in.
+        let appearance: NSAppearance.Name
+    }
 
     var onStop: (() -> Void)?
     var onOpenInTerminal: (() -> Void)?
@@ -102,6 +112,9 @@ final class ChatHeaderView: NSView {
 
     /// The header as `header` has it, at `sizes`. `offersTerminal`: the Open in Terminal button shows.
     func show(_ header: ChatHeader, sizes: ChatTextSizes, offersTerminal: Bool) {
+        let asked = Shown(header: header, sizes: sizes, offersTerminal: offersTerminal, appearance: effectiveAppearance.name)
+        guard asked != shown else { return }
+        shown = asked
         name.font = .systemFont(ofSize: CGFloat(sizes.body), weight: .semibold)
         name.textColor = .labelColor
         name.stringValue = header.name
@@ -126,7 +139,7 @@ final class ChatHeaderView: NSView {
         terminalButton.isHidden = !offersTerminal
         if offersTerminal, terminalTip == nil {
             terminalTip = ShortcutToolTip(terminalButton, "Continue this conversation in a terminal tab",
-                                          Selector(("handOffConversation:")))
+                                          ChatView.handoffAction)
         }
         setAccessibilityLabel(([header.line, header.usage, header.stateWords] as [String?]).compactMap { $0 }.joined(separator: ", "))
     }

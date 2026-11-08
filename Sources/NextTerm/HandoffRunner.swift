@@ -358,7 +358,10 @@ final class HandoffRunner {
         case .chat:
             guard let start = target.chat else { return finish(.failure(Failure(text: "Nothing to open.")), note: nil) }
             opened = ChatTabs.open(start, in: controller, after: tab, select: !byAgent, byAgent: byAgent)
-            if let opened, let evidence { Self.remembered[opened.id] = Remembered(tab: opened, evidence: evidence) }
+            if let opened, let evidence {
+                Self.prune()
+                Self.remembered[opened.id] = Remembered(tab: opened, evidence: evidence)
+            }
         case .terminal:
             let folder = target.folder ?? tab.directory
             let line = target.terminalLine(openedIn: folder) ?? target.agent.rawValue

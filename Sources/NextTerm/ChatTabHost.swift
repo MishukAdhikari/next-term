@@ -199,9 +199,7 @@ final class ChatTabHost: AgentSessionPresenter {
         // One place per conversation (KTD11): one live in another tab stays there, said so here.
         if let id = engine?.sessionID ?? start.resumeID, let tab,
            let owner = MainActor.assumeIsolated({ ConversationOwners.owner(agent: start.agentID, sessionID: id, excluding: tab) }) {
-            let words = ConversationHandoff.Refusal.openElsewhere(owner.title).text(agent: nil)
-            if let engine { engine.session.note(words) } else { carried.note(words) }
-            return notify()
+            return showNote(ConversationHandoff.Refusal.openElsewhere(owner.title).text(agent: nil))
         }
         if let engine {
             guard engine.isEnded else { return }
@@ -424,25 +422,28 @@ final class ChatAppBridge: AgentSessionBridge {
     }
 
     func confirmAlways(agent: String, action: String, option: String, then: @escaping (Bool) -> Void) {
-        guard let host else { return then(false) }
-        let gate = AgentApprovals.Gate()
-        host.opened(gate)
-        MainActor.assumeIsolated {
-            AgentApprovals.confirmAlways(agent: agent, action: action, option: option, requester: host.requester, gate: gate) { [weak host] approved in
-                host?.answered(gate)
-                then(approved)
-            }
+        ask(else: false, then: then) { requester, gate, answered in
+            AgentApprovals.confirmAlways(agent: agent, action: action, option: option, requester: requester, gate: gate, then: answered)
         }
     }
 
     func trustFolder(agent: String, folder: String, then: @escaping (Bool?) -> Void) {
-        guard let host else { return then(nil) }
+        ask(else: nil, then: then) { requester, gate, answered in
+            AgentApprovals.trustFolder(agent: agent, folder: folder, requester: requester, gate: gate) { answered($0) }
+        }
+    }
+
+    /// One question on the Mac, under a gate the chat closes unanswered when it ends; `fallback` once the chat is gone.
+    private func ask<Answer>(else fallback: Answer, then: @escaping (Answer) -> Void,
+                             _ question: @MainActor (_ requester: String, _ gate: AgentApprovals.Gate,
+                                                     _ answered: @escaping (Answer) -> Void) -> Void) {
+        guard let host else { return then(fallback) }
         let gate = AgentApprovals.Gate()
         host.opened(gate)
         MainActor.assumeIsolated {
-            AgentApprovals.trustFolder(agent: agent, folder: folder, requester: host.requester, gate: gate) { [weak host] trusted in
+            question(host.requester, gate) { [weak host] answer in
                 host?.answered(gate)
-                then(trusted)
+                then(answer)
             }
         }
     }

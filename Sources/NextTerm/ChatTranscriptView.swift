@@ -8,6 +8,8 @@ import NextTermCore
 final class ChatTranscriptView: NSView, NSTextViewDelegate {
     static let columnWidth: CGFloat = 760
     static let sideMargin: CGFloat = 20
+    /// The room above the first block and below the last.
+    private static let endMargin: CGFloat = 16
 
     let scrollView = NSScrollView()
     let textView: ChatTextView
@@ -46,7 +48,7 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
         textView.isHorizontallyResizable = false
         textView.minSize = NSSize(width: 0, height: 0)
         textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
-        textView.textContainerInset = NSSize(width: Self.sideMargin, height: 16)
+        textView.textContainerInset = NSSize(width: Self.sideMargin, height: Self.endMargin)
         // Next Term's rows colour themselves; links only get the hand.
         textView.linkTextAttributes = [.cursor: NSCursor.pointingHand]
         textView.delegate = self
@@ -97,7 +99,7 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
         super.layout()
         // The column: at most 760 points, centred, with a margin either side.
         let side = max(Self.sideMargin, ((bounds.width - Self.columnWidth) / 2).rounded(.down))
-        if textView.textContainerInset.width != side { textView.textContainerInset = NSSize(width: side, height: 16) }
+        if textView.textContainerInset.width != side { textView.textContainerInset = NSSize(width: side, height: Self.endMargin) }
     }
 
     // MARK: updating

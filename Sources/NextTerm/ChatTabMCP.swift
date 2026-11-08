@@ -21,14 +21,8 @@ enum ChatTabMCP {
     /// The menu under a chat tab's question: its card's choices, while the card is the question the tab reports. This
     /// is what list_tabs and read_tab list as `choices`, what a notice's buttons offer, and what answer_agent picks from.
     static func fieldMenu(_ tab: TerminalTab, question: String) -> AgentMenu? {
-        guard let decision = decision(tab), decision.question == question else { return nil }
+        guard let decision = tab.chatHost?.decision, decision.question == question else { return nil }
         return decision.menu(question: question)
-    }
-
-    /// The card open in a chat tab now, or nil.
-    private static func decision(_ tab: TerminalTab) -> ChatDecision? {
-        guard let host = tab.chatHost, let pending = host.session.pending else { return nil }
-        return ChatDecision.from(pending, agent: host.agentName)
     }
 
     // MARK: typing
@@ -120,7 +114,7 @@ enum ChatTabMCP {
 
     /// One key in a chat tab; why it did nothing, or nil.
     private static func press(_ key: String, in host: ChatTabHost) -> String? {
-        let card = host.session.pending.map { ChatDecision.from($0, agent: host.agentName) }
+        let card = host.decision
         switch key {
         case "enter":
             if let card { host.choose(card.highlighted); return nil }
@@ -160,7 +154,7 @@ enum ChatTabMCP {
         if choice != nil && answer != nil { reply(MCPControl.fail("Give choice or answer, not both.")); return true }
         if let choice, MCPServer.isBoolean(choice) || !(choice is Int) { reply(MCPControl.fail("choice must be a whole number.")); return true }
         if let answer, !(answer is String) { reply(MCPControl.fail("answer must be text.")); return true }
-        guard let question = tab.status.question, let current = MCPControl.questionID(tab), let card = decision(tab) else {
+        guard let question = tab.status.question, let current = MCPControl.questionID(tab), let card = host.decision else {
             reply(MCPControl.fail("That tab is not asking anything now (state: \(tab.status.state.rawValue)); nothing was picked. read_tab shows its transcript."))
             return true
         }

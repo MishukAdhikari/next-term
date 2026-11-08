@@ -41,24 +41,9 @@ final class ChatDecisionCard: ChatCardView {
         title.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         buttons.translatesAutoresizingMaskIntoConstraints = false
 
-        let top = NSStackView(views: [icon, lead, hint])
-        top.orientation = .horizontal
-        top.alignment = .centerY
-        top.spacing = 6
-        top.translatesAutoresizingMaskIntoConstraints = false
-        let column = NSStackView(views: [top, title, buttons, keysLine])
-        column.orientation = .vertical
-        column.alignment = .leading
-        column.spacing = 8
-        column.setCustomSpacing(12, after: title)
-        column.detachesHiddenViews = true
-        column.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(column)
+        let top = Self.headRow([icon, lead, hint])
+        let column = addColumn([top, title, buttons, keysLine], spacedAfter: title)
         NSLayoutConstraint.activate([
-            column.topAnchor.constraint(equalTo: topAnchor, constant: 12),
-            column.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
-            column.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -14),
-            column.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -12),
             top.widthAnchor.constraint(equalTo: column.widthAnchor),
             title.widthAnchor.constraint(equalTo: column.widthAnchor),
             buttons.widthAnchor.constraint(equalTo: column.widthAnchor),
@@ -121,11 +106,7 @@ final class ChatDecisionCard: ChatCardView {
 
     override func layout() {
         super.layout()
-        let width = bounds.width - 28
-        if width > 0, title.preferredMaxLayoutWidth != width {
-            title.preferredMaxLayoutWidth = width
-            title.invalidateIntrinsicContentSize()
-        }
+        fitWidth(of: title)
     }
 
     // MARK: keys
@@ -185,6 +166,48 @@ class ChatCardView: NSView {
     override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { true }
     override var canBecomeKeyView: Bool { !isHiddenOrHasHiddenAncestor }
+
+    /// The card's padding: 12 points above and below, 14 either side.
+    private static let padding = NSEdgeInsets(top: 12, left: 14, bottom: 12, right: 14)
+
+    /// The row along a card's top: its symbol and words, centred on one line.
+    static func headRow(_ views: [NSView]) -> NSStackView {
+        let row = NSStackView(views: views)
+        row.orientation = .horizontal
+        row.alignment = .centerY
+        row.spacing = 6
+        row.translatesAutoresizingMaskIntoConstraints = false
+        return row
+    }
+
+    /// `views` top to bottom inside the card's padding, 8 points apart and 12 after `spaced`; hidden ones take no room.
+    func addColumn(_ views: [NSView], spacedAfter spaced: NSView) -> NSStackView {
+        let column = NSStackView(views: views)
+        column.orientation = .vertical
+        column.alignment = .leading
+        column.spacing = 8
+        column.setCustomSpacing(12, after: spaced)
+        column.detachesHiddenViews = true
+        column.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(column)
+        let padding = Self.padding
+        NSLayoutConstraint.activate([
+            column.topAnchor.constraint(equalTo: topAnchor, constant: padding.top),
+            column.leadingAnchor.constraint(equalTo: leadingAnchor, constant: padding.left),
+            column.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -padding.right),
+            column.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -padding.bottom),
+        ])
+        return column
+    }
+
+    /// A wrapping label wraps at the width inside the card's padding.
+    func fitWidth(of label: NSTextField) {
+        let width = bounds.width - Self.padding.left - Self.padding.right
+        if width > 0, label.preferredMaxLayoutWidth != width {
+            label.preferredMaxLayoutWidth = width
+            label.invalidateIntrinsicContentSize()
+        }
+    }
 
     override func becomeFirstResponder() -> Bool {
         hasKeyboard = true

@@ -36,23 +36,8 @@ final class ChatEndCard: ChatCardView {
         detail.translatesAutoresizingMaskIntoConstraints = false
         detail.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         buttons.translatesAutoresizingMaskIntoConstraints = false
-        let top = NSStackView(views: [icon, headline])
-        top.orientation = .horizontal
-        top.alignment = .centerY
-        top.spacing = 6
-        let column = NSStackView(views: [top, detail, buttons])
-        column.orientation = .vertical
-        column.alignment = .leading
-        column.spacing = 8
-        column.setCustomSpacing(12, after: detail)
-        column.detachesHiddenViews = true
-        column.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(column)
+        let column = addColumn([Self.headRow([icon, headline]), detail, buttons], spacedAfter: detail)
         NSLayoutConstraint.activate([
-            column.topAnchor.constraint(equalTo: topAnchor, constant: 12),
-            column.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
-            column.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -14),
-            column.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -12),
             detail.widthAnchor.constraint(equalTo: column.widthAnchor),
             buttons.widthAnchor.constraint(equalTo: column.widthAnchor),
         ])
@@ -99,11 +84,7 @@ final class ChatEndCard: ChatCardView {
 
     override func layout() {
         super.layout()
-        let width = bounds.width - 28
-        if width > 0, detail.preferredMaxLayoutWidth != width {
-            detail.preferredMaxLayoutWidth = width
-            detail.invalidateIntrinsicContentSize()
-        }
+        fitWidth(of: detail)
     }
 
     /// Return picks the first button (Resume or Restart).
