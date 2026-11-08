@@ -320,7 +320,7 @@ extension SelfTest {
         let keys = rig.tuiKeys("claude", since: mark)
         let typed = "agent claude --resume \(id) --resume-only"
         check(keys == ["ctrl-c", "line /exit", "exit 0"], "view switch: the stand-in gets ⌃C, then /exit and Return, and quits", "\(keys)")
-        check(inChat && rig.flat(tab).contains("Switched to Chat: Claude Code conversation \(id.prefix(8))") && rig.flat(tab).contains(typed),
+        check(inChat && rig.shows(tab, "Switched to Chat: Claude Code conversation \(id.prefix(8))") && rig.shows(tab, typed),
               "view switch: at the prompt, the separator line shows and nxtrm agent claude --resume ID --resume-only runs",
               rig.flat(tab).suffix(400).description)
         let resumed = rig.chatLog("claude").last { $0.hasPrefix("session ") } ?? ""
@@ -341,7 +341,7 @@ extension SelfTest {
         let inTerminal = await wait(20) { rig.tuiStarted("claude", since: back, resuming: id) && rig.view(of: tab) == .terminal }
         let started = rig.tuiLog("claude").dropFirst(back).first { $0.hasPrefix("start ") } ?? ""
         check(menuItem != nil && inTerminal && started.contains("[\"--resume\", \"\(id)\"]")
-                  && rig.flat(tab).contains("Switched to Terminal: Claude Code conversation \(id.prefix(8))"),
+                  && rig.shows(tab, "Switched to Terminal: Claude Code conversation \(id.prefix(8))"),
               "view switch: the tab's right-click Switch to Terminal, in the background, resumes it with claude --resume ID",
               "\(started): \(rig.flat(tab).suffix(300))")
         rig.type(tab, "/exit")
@@ -363,7 +363,11 @@ extension SelfTest {
         check(asks && rig.refusal(asking) == "Claude Code is asking you something. Answer it first.",
               "view switch: a session asking for permission refuses the switch", rig.refusal(asking) ?? "it ran")
         _ = await answerTab(tab, "Reject")
-        _ = await wait(10) { tab.status.state != .attention && AgentSessionSocket.reports[tab.id]?.state != "attention" }
+        // The turn ends as Reject's reply is drawn: the tab, its mark timed by that output, settles before the next switch.
+        _ = await wait(10) {
+            let reported = AgentSessionSocket.reports[tab.id]?.state
+            return tab.status.state != .attention && tab.status.state != .working && reported != "attention" && reported != "working"
+        }
     }
 
     // MARK: AE2: a launcher alias
@@ -377,14 +381,14 @@ extension SelfTest {
         let toChat = await rig.switchView(tab)
         let inChat = await wait(20) { rig.chatReady(tab, id) }
         let separator = rig.flat(tab)
-        check(rig.reached(toChat) == .chat && inChat && separator.contains("Not carried: --model") && !separator.contains("opus"),
+        check(rig.reached(toChat) == .chat && inChat && rig.shows(tab, "Not carried: --model") && !rig.shows(tab, "opus"),
               "view switch: from a launcher's claude --model opus, the separator names --model as not carried, never its value",
               separator.suffix(300).description)
         let back = rig.tuiLog("claude").count
         let toTerminal = await rig.switchView(tab)
         let inTerminal = await wait(20) { rig.tuiStarted("claude", since: back, resuming: id) }
         let started = rig.tuiLog("claude").dropFirst(back).first { $0.hasPrefix("start ") } ?? ""
-        check(rig.reached(toTerminal) == .terminal && inTerminal && rig.flat(tab).contains("cw --resume \(id)")
+        check(rig.reached(toTerminal) == .terminal && inTerminal && rig.shows(tab, "cw --resume \(id)")
                   && started.contains("[\"--model\", \"opus\", \"--resume\", \"\(id)\"]"),
               "view switch: back in the terminal, the launcher is replayed: cw --resume ID", "\(started): \(rig.flat(tab).suffix(300))")
         rig.type(tab, "/exit")
@@ -404,15 +408,15 @@ extension SelfTest {
         let inChat = await wait(20) { rig.chatReady(tab, id) }
         let keys = rig.tuiKeys("codex", since: mark)
         check(rig.reached(toChat) == .chat && inChat && keys == ["ctrl-c", "line /quit", "exit 0"]
-                  && rig.flat(tab).contains("agent codex --resume \(id) --resume-only")
+                  && rig.shows(tab, "agent codex --resume \(id) --resume-only")
                   && rig.chatLog("codex").contains("thread resumed \(id)"),
               "view switch: codex quits with ⌃C and /quit, and the chat view goes on with its thread",
-              "\(keys): \(rig.flat(tab).suffix(300))")
+              "\(rig.refusal(toChat) ?? "switched"), \(keys): \(rig.flat(tab).suffix(300))")
         let back = rig.tuiLog("codex").count
         let toTerminal = await rig.switchView(tab)
         let inTerminal = await wait(20) { rig.tuiStarted("codex", since: back, resuming: id) }
-        check(rig.reached(toTerminal) == .terminal && inTerminal && rig.flat(tab).contains("codex resume"),
-              "view switch: back in the terminal, codex resume ID", rig.flat(tab).suffix(300).description)
+        check(rig.reached(toTerminal) == .terminal && inTerminal && rig.shows(tab, "codex resume \(id)"),
+              "view switch: back in the terminal, codex resume ID", "\(rig.refusal(toTerminal) ?? "switched"): \(rig.flat(tab).suffix(300))")
         rig.type(tab, "/quit")
         _ = await wait(6) { !tab.status.running }
     }
@@ -474,7 +478,7 @@ extension SelfTest {
         _ = await wait(8) { outcome != nil }
         let left = rig.refusal(outcome) ?? ""
         check(left.hasPrefix("You typed in the tab, so Next Term left the line to you: ") && left.contains("--resume \(id) --resume-only")
-                  && !rig.flat(tab).contains("Switched to Chat"),
+                  && !rig.shows(tab, "Switched to Chat"),
               "view switch: keys the user types meanwhile leave the resume line to them, named, untyped", left)
         tab.view.send(txt: "\u{03}") // the stand-in clears the line typed
         try? await Task.sleep(nanoseconds: 300_000_000)
@@ -497,7 +501,7 @@ extension SelfTest {
         let gaveUp = await rig.switchView(stubborn, within: 15)
         let took = Date().timeIntervalSince(began)
         check(rig.refusal(gaveUp) == "Claude Code didn\u{2019}t quit, so nothing more was typed." && took > 7 && took < 11
-                  && stubborn.status.running && !rig.flat(stubborn).contains("--resume-only"),
+                  && stubborn.status.running && !rig.shows(stubborn, "--resume-only"),
               "view switch: a claude that ignores every ⌃C gets the give-up note after about 8 seconds, with nothing typed",
               String(format: "%.1f s: ", took) + (rig.refusal(gaveUp) ?? "it ran"))
         rig.close(stubborn)
@@ -550,13 +554,13 @@ extension SelfTest {
         let barShown = await wait(8) { ViewSwitchOfferBar.open(for: tab) != nil }
         let bar = ViewSwitchOfferBar.open(for: tab)
         check(ready && turned && barShown && bar?.shownText == "/login works in the terminal view."
-                  && rig.flat(tab).contains("/login works in the terminal view: Open in Terminal")
+                  && rig.shows(tab, "/login works in the terminal view: Open in Terminal")
                   && rig.chatLog("claude").filter { $0.hasPrefix("turn ") }.count == turnsBefore,
               "view switch: /login in a session isn't sent, and the bar offers the terminal view", rig.flat(tab).suffix(300).description)
         let back = rig.tuiLog("claude").count
         bar?.pressOpen()
         let opened = await wait(20) { rig.tuiStarted("claude", since: back, resuming: id) }
-        check(opened && rig.flat(tab).contains("claude --resume \(id)") && ViewSwitchOfferBar.open(for: tab) == nil,
+        check(opened && rig.shows(tab, "claude --resume \(id)") && ViewSwitchOfferBar.open(for: tab) == nil,
               "view switch: the bar's Open in Terminal switches to the terminal view with claude --resume ID", rig.flat(tab).suffix(300).description)
         rig.type(tab, "/exit")
         _ = await wait(6) { !tab.status.running }
@@ -581,7 +585,7 @@ extension SelfTest {
         let leftNote = "The prompt has text on it, so Next Term left the line to you: claude"
         check(drafted && rig.tuiLog("claude").count == draftMark && !unsigned.status.running
                   && unsigned.lastBuffer?.report.buffer == draft && rig.showsNote(unsigned, leftNote)
-                  && ViewSwitchOfferBar.open(for: unsigned) != nil && !rig.flat(unsigned).contains("Switched to Terminal"),
+                  && ViewSwitchOfferBar.open(for: unsigned) != nil && !rig.shows(unsigned, "Switched to Terminal"),
               "view switch: a draft on the prompt while the bar is open: Open in Terminal types nothing, leaves the draft and says why",
               "drafted \(drafted), line \(unsigned.lastBuffer?.report.buffer ?? "unknown"): \(rig.flat(unsigned).suffix(200))")
         unsigned.view.send(txt: String(repeating: "\u{7f}", count: draft.count))
@@ -643,7 +647,7 @@ extension SelfTest {
         let bareJSON = (try? JSONSerialization.jsonObject(with: Data(bare.text.utf8))) as? [String: Any] ?? [:]
         let bareTab = rig.adopt(bareJSON["id"] as? String)
         let ran = await wait(15) { rig.chatLog("claude").contains { $0.hasPrefix("turn ") && $0.hasSuffix(" fix it") } }
-        check(!bare.isError && bareJSON["view"] as? String == "chat" && ran && bareTab.map { rig.flat($0).contains("agent claude --prompt") } == true,
+        check(!bare.isError && bareJSON["view"] as? String == "chat" && ran && bareTab.map { rig.shows($0, "agent claude --prompt") } == true,
               "view switch: with Chat, new_tab's bare claude with a prompt starts nxtrm agent claude --prompt and answers the chat view",
               "\(bare.text): \(bareTab.map { rig.flat($0).suffix(200).description } ?? "no tab")")
 
@@ -751,13 +755,18 @@ final class ViewSwitchRig {
         return tab
     }
 
-    /// A tab running the terminal interface's stand-in of `agent` with session `id` (`line` starts it), `env` exported.
+    /// A tab running the terminal interface's stand-in of `agent` with session `id` (`line` starts it), `env` exported,
+    /// once its tab has settled. An agent whose screen hasn't shown its working hint yet is timed by its output: its
+    /// first frame, drawn later than a keystroke's echo (a cold start of Python takes over half a second), marks it
+    /// working until it has been quiet for `TabStatus.quietAfter`, as a real Claude Code's or Codex's start does, and
+    /// a switch then is refused as working. A person sees that mark and waits; so does the part.
     func tui(_ agent: String, id: String, env: String = "", line: String? = nil) async -> TerminalTab? {
         guard let tab = await shell() else { return nil }
         type(tab, "export STANDIN_ID=\(id)" + (env.isEmpty ? "" : " " + env))
         type(tab, line ?? agent)
         let ready = await SelfTest.wait(15) {
             tab.status.running && tab.status.kind == .agent && flat(tab).contains("stand-in, new session \(id)")
+                && tab.status.state != .working
         }
         return ready ? tab : nil
     }
@@ -771,6 +780,14 @@ final class ViewSwitchRig {
     func type(_ tab: TerminalTab, _ line: String) { tab.view.send(txt: line + "\r") }
 
     func flat(_ tab: TerminalTab) -> String { SelfTest.flatScreen(tab) }
+
+    /// The tab's screen shows `text`, read across the screen's soft wraps: a long line (the debug build's path to
+    /// `nxtrm`, in a worktree) wraps mid-word, so `flat` reads "agent claud e --resume". Whitespace is dropped on both
+    /// sides.
+    func shows(_ tab: TerminalTab, _ text: String) -> Bool {
+        func squeezed(_ words: String) -> String { words.filter { !$0.isWhitespace } }
+        return squeezed(flat(tab)).contains(squeezed(text))
+    }
 
     /// The tab's window's tab with the keyboard, as a click on it makes it.
     func front(_ tab: TerminalTab) {
