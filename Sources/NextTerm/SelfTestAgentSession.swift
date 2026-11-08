@@ -134,6 +134,7 @@ extension SelfTest {
     /// questions, "wait" starts a turn that only an interrupt ends; anything else streams a reply and runs a tool.
     /// STANDIN_MODE=auth answers the first prompt as an account that isn't signed in, STANDIN_MODE=initerror answers
     /// initialize with an error, and STANDIN_MODE=stale quits at once when given --resume, as for a session that is gone.
+    /// STANDIN_SESSION_ID names a new session (the view switch's checks give it an id Claude Code's pattern takes).
     static let claudeStandIn = #"""
     #!/usr/bin/python3
     # A stand-in for Claude Code's claude -p, for testing nxtrm agent claude. Never a real model or account.
@@ -147,7 +148,7 @@ extension SelfTest {
     args = sys.argv[1:]
     note("session", os.getpid(), json.dumps(args))
     mode = os.environ.get("STANDIN_MODE", "")
-    sid = args[args.index("--resume") + 1] if "--resume" in args else "sess-standin-1"
+    sid = args[args.index("--resume") + 1] if "--resume" in args else os.environ.get("STANDIN_SESSION_ID", "sess-standin-1")
     if mode == "stale" and "--resume" in args:
         sys.stderr.write("No conversation found with session ID: " + sid + "\n")
         sys.exit(1)
@@ -237,7 +238,8 @@ extension SelfTest {
     """#
 
     /// A stand-in for `codex app-server` (JSON-RPC over stdio). It has no thread/resume, so a resume falls back to a new
-    /// thread. By prompt: "run" asks command approval, "other" makes a request Next Term doesn't take, "wait" starts a turn
+    /// thread, unless STANDIN_CODEX_RESUMES is set (the view switch's checks), when it goes on with the thread it is
+    /// given. By prompt: "run" asks command approval, "other" makes a request Next Term doesn't take, "wait" starts a turn
     /// that only turn/interrupt ends; anything else answers and runs a command. STANDIN_MODE=drift answers initialize in a
     /// shape Next Term doesn't know, STANDIN_MODE=nologin reports no account, STANDIN_MODE=noinit never answers initialize.
     static let codexStandIn = #"""
@@ -290,6 +292,10 @@ extension SelfTest {
             else: answer(i, {"userAgent": "codex_cli_rs/0.154.0 (Mac OS; arm64) stand-in"})
         elif method == "account/read":
             answer(i, {"account": None if mode == "nologin" else {"type": "chatgpt"}, "requiresOpenaiAuth": True})
+        elif method == "thread/resume" and os.environ.get("STANDIN_CODEX_RESUMES"):
+            thread = m.get("params", {}).get("threadId", thread)
+            note("thread resumed", thread)
+            answer(i, {"thread": {"id": thread}, "model": "stand-in-codex"})
         elif method == "thread/resume":
             error(i, -32601, "method not found: thread/resume")
         elif method == "thread/start":

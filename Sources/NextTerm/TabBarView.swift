@@ -201,6 +201,15 @@ final class TabBarView: NSView, ProjectGlowing {
     func titleColor(at index: Int) -> NSColor? { tabViews[safe: index]?.titleColor }
     /// A tab's view, to click (for the self-test).
     func tabView(at index: Int) -> NSView? { tabViews[safe: index] }
+    #if DEBUG
+    /// For the self-test: tab `index`'s switch icon as drawn (plan 036 AE8): what it shows (nil while hidden), its frame
+    /// in the tab, its alpha, the tab's width and where its title ends.
+    func viewSwitchForTest(at index: Int) -> (mark: ViewSwitch.Mark?, frame: NSRect, alpha: CGFloat, tabWidth: CGFloat, titleEnd: CGFloat)? {
+        tabViews[safe: index]?.viewSwitchForTest
+    }
+    /// For the self-test: the pointer rests on tab `index`, or leaves the bar (nil), as the bar's own pointer watch says.
+    func pointForTest(at index: Int?) { point(at: index.flatMap { tabViews[safe: $0] }) }
+    #endif
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -947,6 +956,11 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
 
     /// For the self-test: the switch's icon as it shows, nil while it shows none.
     var shownViewSwitch: ViewSwitch.Mark? { switchButton.shown }
+    #if DEBUG
+    var viewSwitchForTest: (mark: ViewSwitch.Mark?, frame: NSRect, alpha: CGFloat, tabWidth: CGFloat, titleEnd: CGFloat) {
+        (switchButton.isHidden ? nil : switchButton.shown, switchButton.frame, switchButton.alphaValue, bounds.width, label.frame.maxX)
+    }
+    #endif
 
     override func accessibilityPerformPress() -> Bool {
         if let bar, let index = bar.index(of: self) {

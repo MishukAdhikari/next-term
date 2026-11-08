@@ -402,6 +402,22 @@ starts one with `new_tab`'s `agent_session` and answers its requests with `answe
 terminal interface in a tab stays the default: a session is an addition, and what only that interface has
 (Claude Code's `/usage`, `/rewind`, `/login` and plugin panels, Codex's own screens) works in a tab running it.
 
+A tab running Claude Code or Codex switches between the agent's own terminal interface and its agent session,
+with the same conversation, in the same tab: the icon just before the tab's × (a chat bubble under the pointer, or
+a dimmed one at rest on a tab in the chat view), ⇧⌘J, View › Switch to Chat or Switch to Terminal, or the tab's
+right-click menu. Next Term quits the agent with its own keys (⌃C, then `/exit` or `/quit`), waits for the
+shell's prompt, and types the other view's resume line; the tab keeps its name, its folder and its scrollback,
+and a dim line marks the switch. Switching back puts back the line you started it with (`cw --resume …` for a
+launcher alias), and the line says which options the chat view doesn't carry, such as `--model`. A switch is
+refused, before anything is typed, while the agent is working or asking you something, before its first turn, or
+when Next Term can't tell which conversation it is; if you type in the tab while the agent quits, the resume line
+is left to you. In the chat view, what only the terminal does (signing in, `/login`, `/mcp` and the like, Claude
+Code's own trust question, a resume that couldn't go on) shows an Open in Terminal bar that switches in one
+click. Settings › Editor's Open Claude Code in and Open Codex in (Terminal by default) choose the view for the
+starts Next Term makes itself: `new_tab` with the bare `claude` or `codex`, Set up with your agent, and Resume
+in Agent Sessions; what you type in a shell is never changed. Agents switch a tab with `switch_view`, asked on
+the Mac first, and `list_tabs` says each such tab's view.
+
 Interactive programs (`vim`, `ssh`, `less`, REPLs) are never reported as "done". Closing a tab or quitting
 asks first if a program is running or a job is suspended (Ctrl-Z) or in the background, and names it.
 
@@ -447,6 +463,7 @@ One window per project, and a few keys to move between them:
 | Rename tab | ⌥⌘R, or double-click the tab |
 | Project sidebar (in a Markdown file, ⌘B is Bold) | ⌘B |
 | Fold the terminal away (and back) | ⌘J |
+| Switch a Claude Code or Codex tab between its terminal and chat views | ⇧⌘J |
 | Unfold the window column in every window (and fold it) | ⌃⌘S |
 | Hide the window column in every window (and show it) | ⌃⇧⌘S |
 | Find / next / previous | ⌘F / ⌘G / ⌘⇧G |
