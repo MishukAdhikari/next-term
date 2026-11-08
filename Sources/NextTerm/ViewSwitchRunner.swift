@@ -112,15 +112,13 @@ final class ViewSwitchRunner {
                 facts.transcriptExists = FileManager.default.fileExists(atPath: path)
             }
         case .chat:
-            if let bar = ViewSwitchOfferBar.open(for: tab) {
+            let bar = ViewSwitchOfferBar.open(for: tab)
+            if let bar {
                 // The offer's switch: the session may have ended, so its last report counts as it is.
                 facts.terminalOffer = bar.offer
                 facts.sessionRunning = status.running && status.program == CommandClassifier.agentSessionProgram
-                if let report = AgentSessionSocket.reports[tab.id] {
-                    facts.report = ViewSwitch.ChatReport(sessionID: report.sessionID, turns: report.turns, state: chatState(report.state),
-                                                         folder: report.folder, resumed: report.resumed)
-                }
-            } else if let report = AgentSessionSocket.reports[tab.id], AgentSessionSocket.record(of: tab) != nil {
+            }
+            if let report = AgentSessionSocket.reports[tab.id], bar != nil || AgentSessionSocket.record(of: tab) != nil {
                 facts.report = ViewSwitch.ChatReport(sessionID: report.sessionID, turns: report.turns, state: chatState(report.state),
                                                      folder: report.folder, resumed: report.resumed)
             }

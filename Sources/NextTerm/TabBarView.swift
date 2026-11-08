@@ -954,8 +954,6 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
         bar?.itemSwitchView(self)
     }
 
-    /// For the self-test: the switch's icon as it shows, nil while it shows none.
-    var shownViewSwitch: ViewSwitch.Mark? { switchButton.shown }
     #if DEBUG
     var viewSwitchForTest: (mark: ViewSwitch.Mark?, frame: NSRect, alpha: CGFloat, tabWidth: CGFloat, titleEnd: CGFloat) {
         (switchButton.isHidden ? nil : switchButton.shown, switchButton.frame, switchButton.alphaValue, bounds.width, label.frame.maxX)

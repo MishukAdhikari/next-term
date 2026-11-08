@@ -385,14 +385,8 @@ public enum ViewSwitch {
     /// `line`, run in the session's folder when the shell is elsewhere: both agents find a conversation by its folder.
     static func inFolder(_ folder: String?, shell: String?, _ line: String) -> String {
         guard let folder, folder.hasPrefix("/") else { return line }
-        if let shell, standard(shell) == standard(folder) { return line }
+        if let shell, ProtectedPlaces.trimmed(shell) == ProtectedPlaces.trimmed(folder) { return line }
         return "cd -- " + ShellQuote.quote(folder) + " && " + line
-    }
-
-    private static func standard(_ path: String) -> String {
-        var trimmed = path
-        while trimmed.count > 1, trimmed.hasSuffix("/") { trimmed.removeLast() }
-        return trimmed
     }
 
     /// The names of the options the terminal view ran with, which the chat line doesn't carry: names only, never a

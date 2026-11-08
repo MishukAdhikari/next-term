@@ -231,8 +231,6 @@ final class TabListRowView: NSView, NSTextFieldDelegate {
         switchButton.isHidden || !switchButton.frame.contains(point) ? nil : switchButton.shown
     }
 
-    /// For the self-test: the switch's icon as it shows, nil while it shows none.
-    var shownViewSwitch: ViewSwitch.Mark? { switchButton.shown }
     #if DEBUG
     /// For the self-test (plan 036 AE8): the switch's icon as drawn, nil while hidden, with its frame, its alpha and where
     /// the title ends; and the pointer put on the row or taken off it.
