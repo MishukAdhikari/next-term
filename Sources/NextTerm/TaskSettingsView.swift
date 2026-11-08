@@ -62,7 +62,7 @@ final class TaskSettingsView: NSView, NSTextFieldDelegate {
             return stack
         }
         let format = NSButton(title: "Format…", target: self, action: #selector(openFormat))
-        format.bezelStyle = .inline
+        format.bezelStyle = .rounded
         format.toolTip = Self.docsURL.absoluteString
         let connect = NSButton(title: "Connect a Tracker…", target: self, action: #selector(connectTracker))
         connect.bezelStyle = .rounded
