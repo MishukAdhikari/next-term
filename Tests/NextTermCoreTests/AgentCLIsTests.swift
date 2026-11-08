@@ -372,4 +372,107 @@ import Testing
             if !agent.ownMarkers.isEmpty { #expect(agent.ownUpdate != nil || agent.updatesByInstaller, "\(agent.id)") }
         }
     }
+
+    // MARK: Review: what a shell line, root, Homebrew taps, Volta, pnpm, logs and timeouts get
+
+    @Test func aPackageNameFromAFolderNeverInjectsIntoTheLine() throws {
+        let home = try Home()
+        // A folder under node_modules named as a shell would read more: no line at all.
+        try home.npmInstall(prefix: "node", package: "x$(touch pwned);y", version: "1.0.0", program: "claude")
+        let copy = try #require(only("claude", home, ["node/bin"]).first)
+        #expect(copy.method == .npm && copy.package == "x$(touch pwned);y")
+        #expect(AgentCLIs.updateCommand(Self.agent("claude"), copy, home: home.path) == nil)
+        #expect(AgentCLIs.refusal(Self.agent("claude"), copy) != nil)
+        // An option in a token's place, or a Cellar token with a space: none either.
+        var brew = AgentCLIs.Copy(path: "/opt/homebrew/bin/gemini", resolved: "/opt/homebrew/Cellar/x/1/bin/gemini", method: .homebrew)
+        for token in ["--force", "a b", "a;b", "`x`", ".hidden", "a'b"] {
+            brew.package = token
+            #expect(AgentCLIs.updateCommand(Self.agent("gemini"), brew) == nil, "\(token)")
+        }
+        for word in ["@anthropic-ai/claude-code", "gemini-cli", "sst/tap/opencode", "aider-chat", "c++"] {
+            #expect(AgentCLIs.isSafeWord(word), "\(word)")
+        }
+    }
+
+    @Test func runAsRootNothingIsTheUsersToUpdate() {
+        #expect(!AgentCLIs.userCanWrite("/tmp", euid: 0, writable: { _ in true }))
+        #expect(AgentCLIs.userCanWrite("/tmp", euid: 501, writable: { _ in true }))
+        #expect(!AgentCLIs.userCanWrite("/usr/local/lib/node_modules", euid: 501, writable: { _ in false }))
+    }
+
+    @Test func aTapFormulaIsUpgradedByItsFullNameAndReadsItsLatestElsewhere() throws {
+        let home = try Home()
+        try home.program("brew/bin/brew")
+        try home.program("brew/Cellar/opencode/1.4.0/bin/opencode")
+        try home.file("brew/Cellar/opencode/1.4.0/INSTALL_RECEIPT.json", #"{"source": {"tap": "sst/tap"}}"#)
+        try home.link("brew/bin/opencode", to: "../Cellar/opencode/1.4.0/bin/opencode")
+        let tapped = try #require(only("opencode", home, ["brew/bin"]).first)
+        #expect(tapped.package == "sst/tap/opencode")
+        #expect(AgentCLIs.updateCommand(Self.agent("opencode"), tapped, home: home.path) == "~/brew/bin/brew upgrade sst/tap/opencode")
+        // core's "opencode" formula is not this copy's latest.
+        #expect(Self.agent("opencode").latest(method: .homebrew, package: tapped.package, cask: false) != .formula("opencode"))
+        try home.program("brew/Cellar/gemini-cli/0.67.0/bin/gemini")
+        try home.file("brew/Cellar/gemini-cli/0.67.0/INSTALL_RECEIPT.json", #"{"source": {"tap": "homebrew/core"}}"#)
+        try home.link("brew/bin/gemini", to: "../Cellar/gemini-cli/0.67.0/bin/gemini")
+        #expect(only("gemini", home, ["brew/bin"]).first?.package == "gemini-cli")
+    }
+
+    @Test func voltasShimIsVoltas() throws {
+        let home = try Home()
+        try home.program(".volta/bin/volta-shim", "binary")
+        try home.link(".volta/bin/gemini", to: "volta-shim")
+        let copy = try #require(only("gemini", home, [".volta/bin"]).first)
+        #expect(copy.method == .volta && copy.package == "@google/gemini-cli")
+        #expect(AgentCLIs.updateCommand(Self.agent("gemini"), copy) == "volta install @google/gemini-cli@latest")
+    }
+
+    @Test func aBackgroundUpdateGetsItsManagerFirstAndPnpmItsHome() {
+        let npm = AgentCLIs.Copy(path: "/u/.nvm/versions/node/v22/bin/claude", resolved: "/u/.nvm/versions/node/v22/lib/node_modules/@anthropic-ai/claude-code/cli.js",
+                                 method: .npm, package: "@anthropic-ai/claude-code", manager: "/u/.nvm/versions/node/v22/bin/npm")
+        let environment = AgentCLIs.backgroundEnvironment(["HOME": "/u"], path: ["/usr/bin", "/bin"], copy: npm)
+        #expect(environment["PATH"] == "/u/.nvm/versions/node/v22/bin:/usr/bin:/bin")
+        #expect(environment["NONINTERACTIVE"] == "1" && environment["PNPM_HOME"] == nil && environment["HOME"] == "/u")
+        let pnpm = AgentCLIs.Copy(path: "/u/Library/pnpm/gemini", resolved: "/u/Library/pnpm/gemini", method: .pnpm, package: "@google/gemini-cli")
+        #expect(AgentCLIs.backgroundEnvironment([:], path: [], copy: pnpm)["PNPM_HOME"] == "/u/Library/pnpm")
+        let linux = AgentCLIs.Copy(path: "/u/.local/share/pnpm/gemini", resolved: "/u/.local/share/pnpm/global/5/node_modules/@google/gemini-cli/dist/index.js",
+                                   method: .pnpm)
+        #expect(AgentCLIs.backgroundEnvironment([:], path: [], copy: linux)["PNPM_HOME"] == "/u/.local/share/pnpm")
+        // The user's own wins.
+        #expect(AgentCLIs.backgroundEnvironment(["PNPM_HOME": "/x"], path: [], copy: pnpm)["PNPM_HOME"] == "/x")
+    }
+
+    @Test func anUpdatesLogKeepsOnlyItsLatestPart() throws {
+        let home = try Home()
+        let log = URL(fileURLWithPath: home.folder("a.log"))
+        let line = String(repeating: "x", count: 99) + "\n"
+        try String(repeating: line, count: 100).write(to: log, atomically: true, encoding: .utf8) // 10,000 bytes
+        AgentCLIs.trimLog(at: log, limit: 20_000, keep: 1_000)
+        #expect((try Data(contentsOf: log)).count == 10_000) // under the limit: untouched
+        AgentCLIs.trimLog(at: log, limit: 5_000, keep: 1_050)
+        let kept = try String(contentsOf: log, encoding: .utf8)
+        #expect(kept.count == 1_000 && kept.hasPrefix("x") && kept.hasSuffix("\n")) // whole lines only
+        AgentCLIs.trimLog(at: URL(fileURLWithPath: home.folder("none.log")))
+    }
+
+    @Test func aTimedOutUpdatesChildrenAreFound() {
+        func record(_ pid: Int32, _ parent: Int32) -> ProcessRecord {
+            ProcessRecord(pid: pid, parent: parent, group: pid, terminal: ProcessRecord.noTerminal, started: 0, name: "sh")
+        }
+        let snapshot = [record(10, 1), record(11, 10), record(12, 11), record(13, 10), record(20, 1)]
+        let found = AgentCLIs.descendants(of: 10, in: snapshot)
+        #expect(Set(found) == [11, 12, 13] && found.firstIndex(of: 12)! < found.firstIndex(of: 11)!)
+        #expect(AgentCLIs.descendants(of: 20, in: snapshot).isEmpty)
+    }
+
+    @Test func aSourceThatAnswersNoneIsKeptTheDayButOfflineIsNot() {
+        var cache = AgentCLIs.LatestCache()
+        let now = Date()
+        cache.record(nil, answered: false, for: .npm("gone"), now: now)
+        #expect(cache.fresh(.npm("gone"), now: now) == nil) // offline: ask again
+        cache.record(nil, answered: true, for: .npm("gone"), now: now)
+        #expect(cache.fresh(.npm("gone"), now: now) != nil && cache.fresh(.npm("gone"), now: now)?.version == nil)
+        cache.record("1.0.0", answered: true, for: .npm("a"), now: now)
+        cache.record(nil, answered: false, for: .npm("a"), now: now.addingTimeInterval(60))
+        #expect(cache.fresh(.npm("a"), now: now)?.version == "1.0.0")
+    }
 }

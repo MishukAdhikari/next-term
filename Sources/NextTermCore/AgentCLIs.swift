@@ -244,7 +244,7 @@ public enum AgentCLIs {
     /// over (links to the same file) is one copy. `exists` says a file is executable there (FileManager's by default).
     public static func copies(of agent: Agent, path: [String], home: String = NSHomeDirectory(),
                               executable: (String) -> Bool = { FileManager.default.isExecutableFile(atPath: $0) },
-                              writable: (String) -> Bool = { FileManager.default.isWritableFile(atPath: $0) }) -> [Copy] {
+                              writable: (String) -> Bool = { userCanWrite($0) }) -> [Copy] {
         var found: [Copy] = []
         var seen = Set<String>()
         for folder in path where !folder.isEmpty {
@@ -260,6 +260,12 @@ public enum AgentCLIs {
             }
         }
         return found
+    }
+
+    /// The user (never root: an app run as root would update into any folder, as sudo would) can write `folder`.
+    public static func userCanWrite(_ folder: String, euid: uid_t = geteuid(),
+                                    writable: (String) -> Bool = { FileManager.default.isWritableFile(atPath: $0) }) -> Bool {
+        euid != 0 && writable(folder)
     }
 
     /// A strict name's copy is the tool's only when its resolved path lies in the tool's own install.
@@ -284,6 +290,11 @@ public enum AgentCLIs {
             copy.cask = parts[index] == "Caskroom"
             copy.package = token
             if index + 2 < parts.count { copy.version = version(in: parts[index + 2].split(separator: ",").first.map(String.init) ?? "") }
+            // A formula from a tap other than core is upgraded, and its latest read, by its full name (sst/tap/opencode):
+            // core's formula of the same name is another tool's version.
+            if !copy.cask, index + 2 < parts.count, let tap = formulaTap(keg: prefix(upTo: index + 3)), tap != "homebrew/core" {
+                copy.package = tap + "/" + token
+            }
             let brewPrefix = prefix(upTo: index)
             copy.manager = brewPrefix + "/bin/brew"
             copy.folder = prefix(upTo: index + 1)
@@ -316,6 +327,13 @@ public enum AgentCLIs {
                 // node_modules in a folder of its own (an old ~/.claude/local): no global npm updates it.
                 copy.method = .unknown
             }
+            return copy
+        }
+        // Volta's bin folder links every tool to one shim, which runs the package Volta installed for that name.
+        if resolved.hasSuffix("/.volta/bin/volta-shim") {
+            copy.method = .volta
+            copy.package = agent.npm
+            copy.folder = (resolved as NSString).deletingLastPathComponent
             return copy
         }
         // pnpm's own bin folder holds shims, not links: the package is the tool's own.
@@ -354,6 +372,14 @@ public enum AgentCLIs {
         }
         copy.folder = (resolved as NSString).deletingLastPathComponent
         return copy
+    }
+
+    /// The tap a Homebrew keg's formula came from, as its INSTALL_RECEIPT.json says ("homebrew/core"), or nil.
+    static func formulaTap(keg: String) -> String? {
+        guard let data = FileManager.default.contents(atPath: keg + "/INSTALL_RECEIPT.json"),
+              let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let tap = (object["source"] as? [String: Any])?["tap"] as? String, isSafeWord(tap) else { return nil }
+        return tap
     }
 
     /// Cursor's versions are dated, "2026.11.05-86047df"; an older install's folder is a hash, which says none.
@@ -429,6 +455,9 @@ public enum AgentCLIs {
     /// (npx's temporary copies, an unknown install, one needing an administrator).
     public static func updateCommand(_ agent: Agent, _ copy: Copy, home: String = NSHomeDirectory()) -> String? {
         guard copy.writable else { return nil }
+        // A package name read from a folder's name goes into a shell line: only a plain name does (no option, no
+        // quoting, nothing a shell reads as more), else nothing updates it from here.
+        guard [copy.package, agent.npm, agent.pypi, agent.goModule].allSatisfy({ $0.map(isSafeWord) ?? true }) else { return nil }
         let package = copy.package ?? agent.npm
         func tool(_ name: String) -> String {
             guard let manager = copy.manager, FileManager.default.isExecutableFile(atPath: manager) else { return name }
@@ -459,6 +488,13 @@ public enum AgentCLIs {
         }
     }
 
+    /// A package name, Homebrew token or tap a shell line can take as it is: letters, digits and `@/._+-`, never
+    /// starting with `-` (an option) or `.`.
+    public static func isSafeWord(_ word: String) -> Bool {
+        guard let first = word.first, first != "-", first != "." else { return false }
+        return word.allSatisfy { ($0.isASCII && ($0.isLetter || $0.isNumber)) || "@/._+-".contains($0) }
+    }
+
     /// A path as a shell word: `~/…` for the home folder when nothing in it needs quoting, else single-quoted.
     static func shellWord(_ path: String, home: String) -> String {
         let safe = path.allSatisfy { $0.isLetter || $0.isNumber || "/._-+@".contains($0) }
@@ -478,6 +514,54 @@ public enum AgentCLIs {
         case .unknown: return "Next Term can\u{2019}t tell how this copy was installed, so it doesn\u{2019}t update it."
         default: return updateCommand(agent, copy) == nil ? "Next Term has no update command for this copy." : nil
         }
+    }
+
+    // MARK: Running in the background
+
+    /// The environment a scheduled update runs with: the app's (cleaned), the login shell's PATH with the copy's own npm
+    /// or brew first, nothing asked (Homebrew's NONINTERACTIVE), and for pnpm its home (PNPM_HOME, set by the user's
+    /// shell profile, which a Finder-launched app never read): without it `pnpm add -g` has no global folder.
+    public static func backgroundEnvironment(_ base: [String: String], path: [String], copy: Copy) -> [String: String] {
+        var environment = base
+        var folders = path
+        if let manager = copy.manager { folders.insert((manager as NSString).deletingLastPathComponent, at: 0) }
+        environment["PATH"] = folders.joined(separator: ":")
+        environment["NONINTERACTIVE"] = "1"
+        if copy.method == .pnpm, environment["PNPM_HOME"] == nil, let home = pnpmHome(copy.resolved) {
+            environment["PNPM_HOME"] = home
+        }
+        return environment
+    }
+
+    /// pnpm's home folder (`~/Library/pnpm`, `~/.local/share/pnpm`) from a path inside it.
+    static func pnpmHome(_ resolved: String) -> String? {
+        for marker in ["/Library/pnpm/", "/share/pnpm/"] {
+            if let range = resolved.range(of: marker) { return String(resolved[..<range.upperBound].dropLast()) }
+        }
+        return nil
+    }
+
+    /// The most an update's log keeps: when it is over `limit` bytes, only its last `keep` stay (cut at a line).
+    public static func trimLog(at url: URL, limit: Int = 512 * 1024, keep: Int = 128 * 1024) {
+        guard let size = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? Int, size > limit,
+              let handle = try? FileHandle(forReadingFrom: url) else { return }
+        defer { try? handle.close() }
+        try? handle.seek(toOffset: UInt64(size - keep))
+        guard var tail = try? handle.readToEnd() else { return }
+        if let newline = tail.firstIndex(of: UInt8(ascii: "\n")) { tail = tail[(newline + 1)...] }
+        try? Data(tail).write(to: url, options: .atomic)
+    }
+
+    /// Every process `pid` started, and theirs (a timed-out update's npm under its shell), deepest first.
+    public static func descendants(of pid: Int32, in snapshot: [ProcessRecord]) -> [Int32] {
+        var found: [Int32] = []
+        var frontier = [pid]
+        while let parent = frontier.popLast() {
+            let children = snapshot.filter { $0.parent == parent && $0.pid != parent && !found.contains($0.pid) }.map(\.pid)
+            found.append(contentsOf: children)
+            frontier.append(contentsOf: children)
+        }
+        return found.reversed()
     }
 
     // MARK: Schedules
@@ -597,6 +681,13 @@ public enum AgentCLIs {
         public init() {}
 
         public static let lifetime: TimeInterval = 24 * 60 * 60
+
+        /// Keeps what asking `source` gave: a version, or the server's answer that it names none (kept a day too, so a
+        /// source that is gone isn't asked every hour). No answer at all (offline) keeps what was known, to ask again.
+        public mutating func record(_ version: String?, answered: Bool, for source: Latest, now: Date) {
+            guard answered else { return }
+            entries[source.key] = Entry(version: version, checked: now)
+        }
 
         /// A fresh answer for `source`, if there is one (the version may be nil: it was asked and said none).
         public func fresh(_ source: Latest, now: Date) -> Entry? {
