@@ -45,7 +45,7 @@ import Testing
         #expect(!FileManager.default.fileExists(atPath: userFile))
         #expect(MCPHubScope.save(.approve(file: projectFile, digest: source.digest), to: userFile, place: .user) == .success(.written))
         #expect(text(userFile).contains("\"approvedLists\"") && text(userFile).contains(source.digest))
-        #expect(states(project(repo)) == ["team Ready"])
+        #expect(states(project(repo)) == ["team Not checked yet"])
         let resolution = MCPHubScope.servers(folder: repo, home: home, userFile: userFile)
         #expect(MCPHubPlan.make(resolution, folder: repo, path: [], approved: resolution.approved).servers.map(\.state) == [.ready])
         // Approving it again as it is changes nothing.
@@ -125,7 +125,7 @@ import Testing
         let user = MCPHubScope.sources(folder: nil, home: home, userFile: userFile).user
         let failed = [MCPHubOverview.runKey(list: userFile, server: "github"): MCPHubOverview.Run(failure: "npx was not found", tools: 0)]
         let rows = MCPHubOverview.personal(user, runs: failed)
-        #expect(states(rows) == ["github Didn\u{2019}t start", "quiet Off", "linear Ready", "older Not reached (SSE)", "broken Can\u{2019}t be used"])
+        #expect(states(rows) == ["github Didn\u{2019}t start", "quiet Off", "linear Not checked yet", "older Not reached (SSE)", "broken Can\u{2019}t be used"])
         // A server at a URL is reached, not started: its state says so, and its last need's failure is its own.
         #expect(rows[2].isRemote && !rows[0].isRemote)
         #expect(MCPHubOverview.stateTip(rows[2].state, remote: true).contains("the agent never gets them"))
@@ -138,14 +138,47 @@ import Testing
         #expect(MCPHubOverview.runsText(try #require(rows[0].server)) == "nxtrm secret run GH -- npx -y gh-mcp")
         #expect(MCPHubOverview.appliesText(rows[0], home: home) == "All projects")
         let ran = [MCPHubOverview.runKey(list: userFile, server: "github"): MCPHubOverview.Run(failure: nil, tools: 3)]
-        #expect(MCPHubOverview.stateText(MCPHubOverview.personal(user, runs: ran)[0].state) == "Ready \u{00B7} 3 tools")
+        #expect(MCPHubOverview.stateText(MCPHubOverview.personal(user, runs: ran)[0].state) == "Connected \u{00B7} 3 tools")
+    }
+
+    @Test func eachStateHasOneMarkAndWordsThatSayItToo() {
+        typealias O = MCPHubOverview
+        let marks: [(O.State, O.Indicator, String)] = [
+            (.ready(tools: 3), .working, "Connected \u{00B7} 3 tools"),
+            (.ready(tools: 1), .working, "Connected \u{00B7} 1 tool"),
+            (.signedIn(tools: 12), .working, "Signed in \u{00B7} 12 tools"),
+            (.ready(tools: nil), .unchecked, "Not checked yet"),
+            (.signedIn(tools: nil), .unchecked, "Not checked yet"),
+            (.needsSignIn, .needsYou, "Needs sign-in"),
+            (.signedOut, .needsYou, "Needs reconnect"),
+            (.needsMoreAccess(["a"]), .needsYou, "Needs more access"),
+            (.needsApproval, .needsYou, "Needs your approval"),
+            (.failed("x"), .failing, "Didn\u{2019}t start"),
+            (.broken(["x"]), .failing, "Can\u{2019}t be used"),
+            (.off, .off, "Off"),
+            (.offHere, .off, "Off in this project"),
+            (.shadowed, .off, "Replaced by another"),
+            (.remote, .off, "Not reached (SSE)"),
+        ]
+        for (state, mark, words) in marks {
+            #expect(O.indicator(state) == mark, "\(state)")
+            #expect(O.stateText(state) == words, "\(state)")
+        }
+        #expect(O.stateText(.failed("x"), remote: true) == "Couldn\u{2019}t reach")
+        // Only what needs the user, or fails, goes first.
+        #expect([O.Indicator.working, .unchecked, .needsYou, .failing, .off].map(\.needsAttention) == [false, false, true, true, false])
+        // Not checked yet says when it will be, and how to check it sooner where Settings can.
+        #expect(O.stateTip(.ready(tools: nil), remote: true).hasPrefix("Not checked yet.") && O.stateTip(.ready(tools: nil), remote: true).contains("Check Now"))
+        #expect(O.stateTip(.ready(tools: nil)).hasPrefix("Not checked yet.") && !O.stateTip(.ready(tools: nil)).contains("Check Now"))
+        #expect(O.stateTip(.signedIn(tools: nil)).contains("Not checked yet") && O.stateTip(.signedIn(tools: nil)).contains("Check Now"))
+        #expect(O.stateTip(.signedOut).contains("Reconnect"))
     }
 
     @Test func projectListsShadowedAndBrokenServersAfterTheOnesThatApply() throws {
         try write(#"{"mcpServers": {"team": {"command": "mine"}, "solo": {"command": "a"}}}"#, to: userFile)
         try write(#"{"mcpServers": {"team": {"command": "theirs"}, "bad": {"command": ""}}}"#, to: projectFile)
         let rows = project(repo)
-        #expect(states(rows) == ["solo Ready", "team Needs your approval", "team Replaced by another", "bad Can\u{2019}t be used"])
+        #expect(states(rows) == ["solo Not checked yet", "team Needs your approval", "team Replaced by another", "bad Can\u{2019}t be used"])
         #expect(MCPHubOverview.appliesText(rows[1], home: home) == "app\u{2019}s list")
     }
 
