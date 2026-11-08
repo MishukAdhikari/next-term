@@ -1232,6 +1232,8 @@ final class EditorSettingsView: NSView {
             row("Git:", [NSTextField(labelWithString: "Fetch in the background:"), backgroundFetch]),
             row("", [NSTextField(labelWithString: "New worktrees:"), worktreeLocation]),
             row("Agents:", [claude]),
+            row("", [AgentOpenViewControls.control(.claude)]),
+            row("", [AgentOpenViewControls.control(.codex)]),
             row("", [copilot]),
             row("", [control]),
             row("", [offerTabs]),
@@ -1243,7 +1245,7 @@ final class EditorSettingsView: NSView {
         stack.alignment = .leading
         stack.spacing = 14
         // The agents' options sit closer together, as one group.
-        let agents = stack.arrangedSubviews.suffix(7).dropLast(2)
+        let agents = stack.arrangedSubviews.suffix(9).dropLast(2)
         for view in agents { stack.setCustomSpacing(8, after: view) }
         stack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stack)

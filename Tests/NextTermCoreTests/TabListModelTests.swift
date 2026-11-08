@@ -226,6 +226,24 @@ import Testing
         #expect(TabListRows.moving(made, tab: 1, to: 1).map(\.key) == made.map(\.key))
         #expect(TabListRows.moving(made, tab: 5, to: 0).map(\.key) == made.map(\.key))
     }
+
+    @Test func aTabsViewSwitchReachesItsRowAndNeverAPanesRow() {
+        let offer = ViewSwitch.Offer(agent: .claude, view: .terminal)
+        let plain = TabListRows.Source(key: "a", panes: [pane("a1", "claude", focused: true)], viewSwitch: offer)
+        let split = TabListRows.Source(key: "g", panes: [pane("p1", "claude", focused: true), pane("p2", "zsh")],
+                                       viewSwitch: ViewSwitch.Offer(agent: .codex, view: .chat))
+        let made = rows([plain, split, tab("c", [pane("c1", "zsh")])])
+        #expect(made.map(\.kind) == [.tab, .tab, .pane(index: 0, count: 2), .pane(index: 1, count: 2), .tab])
+        #expect(made[0].viewSwitch == offer)
+        #expect(made[1].viewSwitch == ViewSwitch.Offer(agent: .codex, view: .chat))
+        #expect(made[2].viewSwitch == nil && made[3].viewSwitch == nil)
+        #expect(made[4].viewSwitch == nil)
+        // The same offer made again is the same row, so nothing redraws; another offer is a change.
+        #expect(rows([plain]) == rows([plain]))
+        var switching = plain
+        switching.viewSwitch?.switching = true
+        #expect(rows([switching]) != rows([plain]))
+    }
 }
 
 /// herdr's agents as rows under the tab or pane that shows herdr: herdr's order, its names and titles, the time in

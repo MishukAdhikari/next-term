@@ -53,6 +53,8 @@ final class TabListRowView: NSView, NSTextFieldDelegate {
     /// The place mark, right after the title.
     private let placeMark = NSImageView()
     private let closeButton = NSButton()
+    /// The terminal and chat switch, just before the × (plan 036 KTD9). Its tooltip is the list's, as the ×'s is.
+    private let switchButton = ViewSwitchButton(ownsToolTip: false)
     /// "⌘1": how to get to this tab from the keyboard, in the ×'s place on the rows that show none.
     private let hint = TabListText(labelWithString: "")
     private var renameField: NSTextField?
@@ -140,6 +142,9 @@ final class TabListRowView: NSView, NSTextFieldDelegate {
         closeButton.refusesFirstResponder = true // the list never takes the keyboard from the terminal
         closeButton.isHidden = true
         addSubview(closeButton)
+        switchButton.target = self
+        switchButton.action = #selector(switchClicked)
+        addSubview(switchButton)
         KeyHint.style(hint) // said in the row's own help, as the buttons' keys are in theirs
         hint.font = Self.hintFont
         hint.isHidden = true
@@ -190,6 +195,7 @@ final class TabListRowView: NSView, NSTextFieldDelegate {
         setAccessibilityHelp(newRow.shortcut.map { "\($0) switches to this tab" })
         dot.state = newRow.state
         if (newRow.remote == nil) != (old?.remote == nil) { needsLayout = true } // the title moves over, or back
+        if (newRow.viewSwitch == nil) != (old?.viewSwitch == nil) { needsLayout = true } // the title makes room for the icon
         remoteMark.link = newRow.remote?.link
         // The title makes room for the place mark, or takes it back; the mark follows the title's end.
         let placeMoved: Bool = (newRow.place == nil) != (old?.place == nil) || (newRow.place != nil && newRow.title != old?.title)
@@ -219,6 +225,14 @@ final class TabListRowView: NSView, NSTextFieldDelegate {
 
     /// Whether `point`, in the row's coordinates, is on the × it shows.
     func closeContains(_ point: NSPoint) -> Bool { !closeButton.isHidden && closeButton.frame.contains(point) }
+
+    /// The switch's icon at `point`, in the row's coordinates, when it shows there: for the list's tooltip.
+    func viewSwitch(at point: NSPoint) -> ViewSwitch.Mark? {
+        switchButton.isHidden || !switchButton.frame.contains(point) ? nil : switchButton.shown
+    }
+
+    /// For the self-test: the switch's icon as it shows, nil while it shows none.
+    var shownViewSwitch: ViewSwitch.Mark? { switchButton.shown }
 
     private func refresh() {
         let pane = isPane
@@ -254,12 +268,15 @@ final class TabListRowView: NSView, NSTextFieldDelegate {
     }
 
     /// The × and "⌘N" share one place at the row's end: the × on the selected or hovered row, the key on the
-    /// others. So the title is as wide in every state, and never re-truncates as the pointer passes.
+    /// others. So the title is as wide in every state, and never re-truncates as the pointer passes. The switch's
+    /// icon sits before the ×, in room a Claude Code or Codex row keeps for it, and the key gives way while it shows.
     private func updateCloseAndHint() {
         let tabRow = !isPane && !collapsed && !isEditing
         let closeShown = tabRow && (selected || hovering)
         if closeButton.isHidden == closeShown { closeButton.isHidden = !closeShown }
-        let hintShown = tabRow && !closeShown && hintFits
+        let mark: ViewSwitch.Mark? = tabRow ? ViewSwitch.mark(offer: row?.viewSwitch, hovering: hovering, selected: selected) : nil
+        switchButton.show(mark)
+        let hintShown = tabRow && !closeShown && hintFits && switchButton.isHidden
         if hint.isHidden == hintShown { hint.isHidden = !hintShown }
     }
 
@@ -325,13 +342,18 @@ final class TabListRowView: NSView, NSTextFieldDelegate {
         } else {
             titleEnd = w - 28
         }
+        // A row that offers the switch keeps its icon's room at rest too, so the title doesn't re-truncate under it.
+        let iconRoom: Bool = !pane && row.viewSwitch != nil
+        let endBeforeIcon: CGFloat = iconRoom ? min(titleEnd, ViewSwitch.Slot.titleEnd(width: w)) : titleEnd
         let placeRoom: CGFloat = row.place == nil ? 0 : 15
-        let titleWidth: CGFloat = max(0, titleEnd - labelX - placeRoom)
+        let titleWidth: CGFloat = max(0, endBeforeIcon - labelX - placeRoom)
         let words = fittedTitle(within: titleWidth)
         if let words, label.stringValue != words { label.stringValue = words }
         label.frame = NSRect(x: labelX, y: titleY, width: titleWidth, height: titleHeight)
         label.isHidden = isEditing
         closeButton.frame = NSRect(x: closeX, y: lineMid - 9, width: 18, height: 18)
+        let slot: CGFloat = ViewSwitch.Slot.size
+        switchButton.frame = NSRect(x: ViewSwitch.Slot.x(width: w), y: lineMid - slot / 2, width: slot, height: slot)
         let hintHeight: CGFloat = Self.hintHeight
         hint.frame = NSRect(x: hintEnd - hintWidth, y: lineMid - hintHeight / 2, width: hintWidth, height: hintHeight)
 
@@ -407,6 +429,10 @@ final class TabListRowView: NSView, NSTextFieldDelegate {
 
     @objc private func closeClicked() {
         list?.rowClose(self)
+    }
+
+    @objc private func switchClicked() {
+        list?.rowSwitchView(self)
     }
 
     override func accessibilityPerformPress() -> Bool {

@@ -111,7 +111,8 @@ extension TerminalWindowController {
             let fork = action == .fork
             if !fork, let open = sidebar.sessionsGroup.tabs.tab(of: session) { return AppDelegate.shared.goTo(open.tab, in: open.controller) }
             let directory = FileManager.default.fileExists(atPath: session.cwd) ? session.cwd : folder
-            runInNewTab(directory: directory, command: SessionStore.commandPrefix + session.resumeCommand(fork: fork), title: nil)
+            // In the view Settings › Editor gives Claude Code and Codex (plan 036); a fork in the agent's own.
+            runInNewTab(directory: directory, command: AgentOpenView.resumeCommand(session, fork: fork), title: nil)
         case .continueLatest(let agent):
             runInNewTab(directory: folder, command: SessionStore.commandPrefix + agent.continueCommand, title: nil)
         case .showAll:

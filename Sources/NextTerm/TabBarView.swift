@@ -25,6 +25,9 @@ struct TabBarItem: Equatable {
     /// Agent tabs: what the place mark after the title says (its agent works in another checkout than the
     /// window shows, or its branch was switched under it); nil without one.
     var place: String? = nil
+    /// Claude Code and Codex tabs: the terminal and chat switch the tab's pane with the keyboard offers (plan 036), for
+    /// the icon before the ×.
+    var viewSwitch: ViewSwitch.Offer? = nil
 }
 
 protocol TabBarViewDelegate: AnyObject {
@@ -40,6 +43,13 @@ protocol TabBarViewDelegate: AnyObject {
     func tabBar(_ bar: TabBarView, didDoubleClick index: Int)
     /// A tab's right-click menu: what it says acts on that tab, selected or not.
     func tabBar(_ bar: TabBarView, menuFor index: Int) -> NSMenu?
+    /// The icon before a tab's × was clicked: the tab switches between the terminal and the chat view (plan 036).
+    func tabBar(_ bar: TabBarView, didSwitchViewAt index: Int)
+}
+
+extension TabBarViewDelegate {
+    /// The editor's tabs offer no switch.
+    func tabBar(_ bar: TabBarView, didSwitchViewAt index: Int) {}
 }
 
 /// The tab strip along the top of the window, drawn in the title bar area.
@@ -541,6 +551,11 @@ final class TabBarView: NSView, ProjectGlowing {
         delegate?.tabBar(self, didClose: index)
     }
 
+    fileprivate func itemSwitchView(_ view: TabItemView) {
+        guard let index = index(of: view) else { return }
+        delegate?.tabBar(self, didSwitchViewAt: index)
+    }
+
     fileprivate func itemRenamed(_ view: TabItemView, to title: String?) {
         guard let index = index(of: view) else { return }
         delegate?.tabBar(self, didRename: index, to: title)
@@ -629,6 +644,8 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
     private let placeMark = NSImageView()
     private let closeButton = NSButton()
     private var closeTip: ShortcutToolTip?
+    /// The terminal and chat switch, just before the × (plan 036 KTD9).
+    private let switchButton = ViewSwitchButton()
     /// "⌘1": how to get to this tab from the keyboard.
     private let hint = NSTextField(labelWithString: "")
     private var renameField: NSTextField?
@@ -675,6 +692,9 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
         closeButton.action = #selector(closeClicked)
         closeTip = ShortcutToolTip(closeButton, "Close tab", #selector(TerminalWindowController.closeTab(_:)))
         addSubview(closeButton)
+        switchButton.target = self
+        switchButton.action = #selector(switchClicked)
+        addSubview(switchButton)
         KeyHint.style(hint) // said in the tab's own help, as the buttons' keys are in theirs
         hint.isHidden = true
         addSubview(hint)
@@ -745,6 +765,9 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
             closeButton.isHidden = closeHidden
             needsLayout = true // the shortcut moves into its place, or out of it
         }
+        // The switch's icon follows the pointer and the selection, so hovering never waits for a tick.
+        let mark = ViewSwitch.mark(offer: item?.viewSwitch, hovering: hovering, selected: selected)
+        if switchButton.show(mark) { needsLayout = true } // the title ends before it, and the shortcut gives way, or back
         let symbol = modified && !hovering ? "circle.fill" : "xmark"
         if closeButton.image?.accessibilityDescription != (symbol == "xmark" ? "Close Tab" : "Unsaved changes") {
             closeButton.image = NSImage(systemSymbolName: symbol, accessibilityDescription: symbol == "xmark" ? "Close Tab" : "Unsaved changes")?
@@ -759,6 +782,8 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
         dot.frame = NSRect(x: 12, y: (h - 10) / 2, width: 10, height: 10)
         iconView.frame = NSRect(x: 10, y: (h - 16) / 2, width: 16, height: 16)
         closeButton.frame = NSRect(x: bounds.width - 24, y: (h - 18) / 2, width: 18, height: 18)
+        let slot: CGFloat = ViewSwitch.Slot.size
+        switchButton.frame = NSRect(x: ViewSwitch.Slot.x(width: bounds.width), y: (h - slot) / 2, width: slot, height: slot)
         // A remote tab: the status mark keeps its column (the same place on every tab), and the server
         // mark goes before the title, like an icon of the title.
         // Its server sits on the title's centre line; the dot hangs a point lower.
@@ -776,17 +801,23 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
             return hintWidth == 0 || end - hintRoom - 6 - titleStart < (closeShown ? 56 : 40) ? nil : end
         }
         let placeRoom: CGFloat = placeMark.isHidden ? 0 : 15
-        func titleWidth(hintEnd: CGFloat?) -> CGFloat {
-            max(0, min(bounds.width - 28, hintEnd.map { $0 - hintWidth - 6 } ?? .infinity) - labelX - placeRoom)
+        // While the switch's icon shows, the title ends before it and the shortcut gives way (KTD9).
+        let iconShown = !switchButton.isHidden
+        let iconAtRest = ViewSwitch.mark(offer: item?.viewSwitch, hovering: false, selected: false) != nil
+        func titleWidth(hintEnd: CGFloat?, icon: Bool) -> CGFloat {
+            let iconEnd: CGFloat = icon ? ViewSwitch.Slot.titleEnd(width: bounds.width) : .infinity
+            let end: CGFloat = min(bounds.width - 28, iconEnd, hintEnd.map { $0 - hintWidth - 6 } ?? .infinity)
+            return max(0, end - labelX - placeRoom)
         }
         // A remote tab's words are picked for the tab without its × (as most tabs are) and stay when the ×
         // shows, selected or under the pointer: its ⌘N gives way to them. Else the tab you are looking at
-        // would say less, and a pointer passing over it would drop and add "web-1: " or "(connecting)".
-        let restWidth = titleWidth(hintEnd: hintEnd(closeShown: false))
+        // would say less, and a pointer passing over it would drop and add "web-1: " or "(connecting)". The
+        // switch's icon is the same: picked for the tab as it is at rest, so the words never change under it.
+        let restWidth = titleWidth(hintEnd: iconAtRest ? nil : hintEnd(closeShown: false), icon: iconAtRest)
         let words = fittedTitle(within: restWidth)
-        var shownHintEnd = hintEnd(closeShown: !closeButton.isHidden)
+        var shownHintEnd = iconShown ? nil : hintEnd(closeShown: !closeButton.isHidden)
         if item?.shorterTitles.isEmpty == false, let words, fits(words, within: restWidth),
-           !fits(words, within: titleWidth(hintEnd: shownHintEnd)) {
+           !fits(words, within: titleWidth(hintEnd: shownHintEnd, icon: iconShown)) {
             shownHintEnd = nil
         }
         hint.isHidden = shownHintEnd == nil
@@ -794,7 +825,8 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
             let hintHeight = hint.intrinsicContentSize.height
             hint.frame = NSRect(x: shownHintEnd - hintWidth, y: (h - hintHeight) / 2, width: hintWidth, height: hintHeight)
         }
-        label.frame = NSRect(x: labelX, y: (h - labelHeight) / 2, width: titleWidth(hintEnd: shownHintEnd), height: labelHeight)
+        label.frame = NSRect(x: labelX, y: (h - labelHeight) / 2, width: titleWidth(hintEnd: shownHintEnd, icon: iconShown),
+                             height: labelHeight)
         if let words, label.stringValue != words { label.stringValue = words }
         // The place mark right after the title's last letter.
         let text = (label.stringValue as NSString).size(withAttributes: [.font: label.font as Any]).width + 4
@@ -908,6 +940,13 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
     @objc private func closeClicked() {
         bar?.itemClose(self)
     }
+
+    @objc private func switchClicked() {
+        bar?.itemSwitchView(self)
+    }
+
+    /// For the self-test: the switch's icon as it shows, nil while it shows none.
+    var shownViewSwitch: ViewSwitch.Mark? { switchButton.shown }
 
     override func accessibilityPerformPress() -> Bool {
         if let bar, let index = bar.index(of: self) {

@@ -55,8 +55,9 @@ final class ViewSwitchRunner {
         }
         let status = tab.status
         let report = AgentSessionSocket.reports[tab.id]
-        return ViewSwitch.offer(program: status.program, kind: status.kind, running: status.running, sessionAgentID: report?.agentID,
-                                remote: tab.remote != nil, herdr: tab.followsHerdr || status.hostsAgents)
+        return ViewSwitch.offer(program: status.program, expandedCommand: status.expandedCommand, kind: status.kind,
+                                running: status.running, sessionAgentID: report?.agentID, remote: tab.remote != nil,
+                                herdr: tab.followsHerdr || status.hostsAgents)
     }
 
     /// Switches `tab` to `wanted` (nil: the other view). `done` gets the view the tab then shows, once the resume line is

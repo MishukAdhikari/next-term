@@ -400,4 +400,15 @@ import Testing
         #expect(TabListSide.allCases == [.left, .right])
         #expect(TabListSide(rawValue: "right") == .right)
     }
+
+    @Test func theViewSwitchIconSitsBeforeTheCloseButtonAndTheTitleEndsBeforeIt() {
+        // At the narrowest tab, 104 points: the icon 2 points before the × (at width − 24), the title 4 points before
+        // the icon. A title starting where a tab's does (29) keeps 27 points.
+        let width: CGFloat = 104
+        #expect(ViewSwitch.Slot.x(width: width) == 60)
+        #expect(ViewSwitch.Slot.x(width: width) + ViewSwitch.Slot.size == width - 24 - 2)
+        #expect(ViewSwitch.Slot.titleEnd(width: width) == width - 48)
+        #expect(ViewSwitch.Slot.titleEnd(width: width) - 29 == 27)
+        #expect(ViewSwitch.Slot.titleEnd(width: 220) - 29 == 143)
+    }
 }

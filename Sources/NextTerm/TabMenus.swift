@@ -159,12 +159,20 @@ extension TerminalWindowController {
         bar === tabBar ? terminalTabMenu(at: index) : nil
     }
 
+    /// The icon before a tab's ×: that tab's pane with the keyboard switches between the terminal and the chat view, in
+    /// front or not (plan 036).
+    func tabBar(_ bar: TabBarView, didSwitchViewAt index: Int) {
+        guard bar === tabBar, let group = groups[safe: index] else { return }
+        switchView(of: group)
+    }
+
     /// A terminal tab's right-click menu. It acts on that tab, in front or not.
     func terminalTabMenu(at index: Int) -> NSMenu? {
         guard let group = groups[safe: index] else { return nil }
         let menu = NSMenu()
         addPlaceChoices(to: menu, for: group) // Keep Going, for a branch switched under its chat
         menu.addCommand("Rename…", "renameTab:") { [weak self] in self?.rename(group) }
+        addViewSwitch(to: menu, for: group) // Switch to Chat or Terminal, for a Claude Code or Codex tab
         menu.addItem(.separator())
         menu.addCommand("Split Right", "splitRight:") { [weak self] in self?.split(group, vertical: true) }
         menu.addCommand("Split Down", "splitDown:") { [weak self] in self?.split(group, vertical: false) }
@@ -376,6 +384,8 @@ extension TerminalWindowController {
             return activeIndex + 1 < groups.count && !terminalRailed
         case #selector(revealInFinder(_:)), #selector(copyFilePath(_:)), #selector(copyRelativeFilePath(_:)):
             return editorArea.activePath != nil
+        case #selector(switchView(_:)):
+            return validateViewSwitch(item) // TerminalWindowViewSwitch.swift
         default:
             return nil
         }

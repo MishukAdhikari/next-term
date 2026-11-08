@@ -64,6 +64,21 @@ import Testing
         #expect(ViewSwitch.offer(program: "", kind: .command, running: false, sessionAgentID: nil, remote: false, herdr: false) == nil)
     }
 
+    @Test func aLauncherAliasOffersTheSwitchByItsExpandedLine() {
+        // `cw` is an alias for `claude --model opus`: zsh's preexec gives the expanded line, which names the agent.
+        #expect(ViewSwitch.offer(program: "cw", expandedCommand: "claude --model opus --resume x", kind: .agent, running: true,
+                                 sessionAgentID: nil, remote: false, herdr: false) == terminal(.claude))
+        #expect(ViewSwitch.offer(program: "cx", expandedCommand: "codex resume x", kind: .agent, running: true,
+                                 sessionAgentID: nil, remote: false, herdr: false) == terminal(.codex))
+        // An alias for another agent, or a command that isn't an agent, still offers none.
+        #expect(ViewSwitch.offer(program: "gw", expandedCommand: "gemini", kind: .agent, running: true,
+                                 sessionAgentID: nil, remote: false, herdr: false) == nil)
+        #expect(ViewSwitch.offer(program: "cw", expandedCommand: "claude", kind: .command, running: true,
+                                 sessionAgentID: nil, remote: false, herdr: false) == nil)
+        #expect(ViewSwitch.offer(program: "cw", expandedCommand: "claude", kind: .agent, running: true,
+                                 sessionAgentID: nil, remote: true, herdr: false) == nil)
+    }
+
     // MARK: mark
 
     @Test func aTerminalViewShowsTheBubbleOnlyUnderThePointerOrSelected() {

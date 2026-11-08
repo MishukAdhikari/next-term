@@ -73,13 +73,18 @@ public enum ViewSwitch {
     /// The cheap tier (KTD2): the switch a tab offers from what its status holds, or nil. A local tab running `claude` or
     /// `codex` as an agent shows the terminal view; `nxtrm agent` whose session reported Claude Code or Codex shows the
     /// chat view. A remote tab, a tab that shows herdr, a stopped program and anything else offer none (R1).
-    public static func offer(program: String, kind: CommandKind, running: Bool, sessionAgentID: String?, remote: Bool,
-                             herdr: Bool) -> Offer? {
+    ///
+    /// A launcher alias (`cw` for `claude --model opus`, as a switch back puts it back) names itself as the program, so
+    /// `expandedCommand`, the line with aliases expanded (TabStatus.expandedCommand), names the agent then.
+    public static func offer(program: String, expandedCommand: String = "", kind: CommandKind, running: Bool,
+                             sessionAgentID: String?, remote: Bool, herdr: Bool) -> Offer? {
         guard running, !remote, !herdr else { return nil }
         if program == CommandClassifier.agentSessionProgram {
             return Agent(sessionAgentID: sessionAgentID).map { Offer(agent: $0, view: .chat) }
         }
-        guard kind == .agent, let agent = Agent(program: program) else { return nil }
+        guard kind == .agent else { return nil }
+        let expanded = expandedCommand.isEmpty ? "" : CommandClassifier.programName(expandedCommand)
+        guard let agent = Agent(program: program) ?? Agent(program: expanded) else { return nil }
         return Offer(agent: agent, view: .terminal)
     }
 
@@ -134,6 +139,14 @@ public enum ViewSwitch {
             if shown { return Mark(glyph: .terminal, dimmed: false, enabled: true, tooltip: words, spoken: words) }
             return Mark(glyph: .chat, dimmed: true, enabled: true, tooltip: words, spoken: "Chat view, " + words)
         }
+    }
+
+    /// Where the icon sits in a tab of the top bar and a row of the tab list (KTD9): the ×'s size, 2 points before it (the
+    /// × is at `width − 24`). While it shows, the title ends 4 points before it and the "⌘N" hint gives way, in both.
+    public enum Slot {
+        public static let size: CGFloat = 18
+        public static func x(width: CGFloat) -> CGFloat { width - 44 }
+        public static func titleEnd(width: CGFloat) -> CGFloat { width - 48 }
     }
 
     // MARK: the plan

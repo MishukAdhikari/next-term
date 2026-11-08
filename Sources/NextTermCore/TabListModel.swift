@@ -50,11 +50,14 @@ public struct TabListRow: Equatable, Sendable {
     /// What VoiceOver says for the title when it is not the title as shown (an agent's row says its time with its
     /// state, in full words); nil: the title.
     public var spokenTitle: String?
+    /// A tab row whose tab runs Claude Code or Codex: the terminal and chat switch it offers (plan 036), for the icon
+    /// before its ×. Never on a pane's row: the tab's row follows its pane with the keyboard, as its title does.
+    public var viewSwitch: ViewSwitch.Offer?
 
     public init(key: String, kind: Kind = .tab, title: String, truncatesTail: Bool = false, shorterTitles: [String] = [],
                 editableTitle: String? = nil, state: TabState = .idle, tooltip: String = "", spokenStatus: String = "",
                 shortcut: String? = nil, remote: RemoteMark? = nil, place: String? = nil, detail: String? = nil,
-                detailIsQuestion: Bool = false, focused: Bool = false, herdrPane: String? = nil) {
+                detailIsQuestion: Bool = false, focused: Bool = false, herdrPane: String? = nil, viewSwitch: ViewSwitch.Offer? = nil) {
         self.key = key
         self.kind = kind
         self.title = title
@@ -71,6 +74,7 @@ public struct TabListRow: Equatable, Sendable {
         self.detailIsQuestion = detailIsQuestion
         self.focused = focused
         self.herdrPane = herdrPane
+        self.viewSwitch = viewSwitch
     }
 
     /// A row under its tab's: a pane's, a herdr agent's, or the folded idle agents'.
@@ -163,15 +167,18 @@ public enum TabListRows {
         /// pane with the keyboard's own.
         public var tooltip: String?
         public var spokenStatus: String?
+        /// The switch the tab's pane with the keyboard offers, as the top bar's tab has it.
+        public var viewSwitch: ViewSwitch.Offer?
 
         public init(key: String, panes: [Pane], shortcut: String? = nil, place: String? = nil, tooltip: String? = nil,
-                    spokenStatus: String? = nil) {
+                    spokenStatus: String? = nil, viewSwitch: ViewSwitch.Offer? = nil) {
             self.key = key
             self.panes = panes
             self.shortcut = shortcut
             self.place = place
             self.tooltip = tooltip
             self.spokenStatus = spokenStatus
+            self.viewSwitch = viewSwitch
         }
     }
 
@@ -244,7 +251,7 @@ public enum TabListRows {
 
     private static func tabRow(_ source: Source, showsFolders: Bool, home: String, workingShown: Bool) -> TabListRow {
         guard let focused = source.panes.first(where: \.focused) ?? source.panes.first else {
-            return TabListRow(key: source.key, title: "", shortcut: source.shortcut, place: source.place)
+            return TabListRow(key: source.key, title: "", shortcut: source.shortcut, place: source.place, viewSwitch: source.viewSwitch)
         }
         let split = source.panes.count > 1
         let state: TabState = mostUrgent(source.panes.map(\.state), workingShown: workingShown)
@@ -252,7 +259,7 @@ public enum TabListRows {
         var row = TabListRow(key: source.key, title: focused.title, truncatesTail: focused.truncatesTail, shorterTitles: focused.shorterTitles,
                              editableTitle: focused.editableTitle, state: state, tooltip: source.tooltip ?? focused.tooltip,
                              spokenStatus: source.spokenStatus ?? focused.spokenStatus, shortcut: source.shortcut, remote: remote,
-                             place: source.place)
+                             place: source.place, viewSwitch: source.viewSwitch)
         guard showsFolders else { return row }
         // The pane that asks says so on the tab's line, the keyboard's first; else the keyboard pane's folder.
         let asking: Pane? = ([focused] + source.panes).first { hasQuestion($0.question) }

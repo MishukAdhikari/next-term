@@ -1006,7 +1006,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             guard group.isSplit else {
                 return TabBarItem(title: AgentSpinner.shown(tab.title), truncation: tab.titleTruncation, state: tab.status.state, tooltip: tab.tooltip,
                                   accessibilityStatus: tab.ownStateDescription ?? "", shortcut: shortcuts[index], remote: tab.remoteMark,
-                                  shorterTitles: tab.shorterTitles.map(AgentSpinner.shown), editableTitle: tab.editableTitle)
+                                  shorterTitles: tab.shorterTitles.map(AgentSpinner.shown), editableTitle: tab.editableTitle,
+                                  viewSwitch: ViewSwitchRunner.offer(for: tab))
             }
             // A split tab: named by the pane with the keyboard, marked by the pane that most needs you.
             let lines = group.panes.map(\.paneSummary)
@@ -1019,7 +1020,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
                               state: Self.mostUrgent(group.panes.map(\.status.state)),
                               tooltip: ([mark?.summary].compactMap { $0 } + lines).joined(separator: "\n"),
                               accessibilityStatus: spoken.joined(separator: "; "), shortcut: shortcuts[index], remote: mark,
-                              shorterTitles: tab.shorterTitles.map { AgentSpinner.shown($0) + others }, editableTitle: tab.editableTitle)
+                              shorterTitles: tab.shorterTitles.map { AgentSpinner.shown($0) + others }, editableTitle: tab.editableTitle,
+                              viewSwitch: ViewSwitchRunner.offer(for: tab))
         }
         feedTabStrips(placeMarked(items))
         // An agent started or stopped, or another one is the one Send to Agent types into: the Ask hints follow.

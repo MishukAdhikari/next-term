@@ -152,14 +152,14 @@ extension TerminalWindowController: TabListViewDelegate {
                                         tooltip: item.tooltip, spokenStatus: item.accessibilityStatus, folder: folders ? tab.directory : "",
                                         question: folders ? tab.status.question : nil, remote: item.remote, focused: true,
                                         herdrAgents: tab.herdrRows, herdrIdleOpen: tab.herdrIdleOpen)
-            return TabListRows.Source(key: key, panes: [pane], shortcut: item.shortcut, place: item.place)
+            return TabListRows.Source(key: key, panes: [pane], shortcut: item.shortcut, place: item.place, viewSwitch: item.viewSwitch)
         }
         let focused: TerminalTab = group.focused
         let panes: [TabListRows.Pane] = group.panes.map { (tab: TerminalTab) -> TabListRows.Pane in
             tabListPane(tab, focused: tab === focused, folders: folders)
         }
         return TabListRows.Source(key: key, panes: panes, shortcut: item.shortcut, place: item.place, tooltip: item.tooltip,
-                                  spokenStatus: item.accessibilityStatus)
+                                  spokenStatus: item.accessibilityStatus, viewSwitch: item.viewSwitch)
     }
 
     /// One pane of a split tab: its own title, mark, tooltip and words, as its pane header has them.
@@ -279,6 +279,8 @@ extension TerminalWindowController: TabListViewDelegate {
     // MARK: TabListViewDelegate: the bar's own calls, so every rule they keep holds for the list
 
     func tabList(_ list: TabListView, didSelect index: Int) { tabBar(tabBar, didSelect: index) }
+
+    func tabList(_ list: TabListView, didSwitchViewAt index: Int) { tabBar(tabBar, didSwitchViewAt: index) }
 
     /// A pane's row: its tab comes forward with that pane in front (a zoomed tab shows its panes again) and the pane
     /// takes the keyboard, as a click in it does; for a tab an agent opened, the click chooses it.

@@ -23,7 +23,8 @@ enum SetupWithAgent {
         // A tab in the window in front, if there is one: a new window only on a first launch with none open.
         let front: TerminalWindowController? = TerminalWindow.front?.windowController as? TerminalWindowController
         let controller: TerminalWindowController = front ?? AppDelegate.shared.openWindow(directory: home)
-        controller.runInNewTab(directory: home, command: agent.commandLine, title: nil)
+        // Claude Code and Codex open in the view Settings › Editor gives them (plan 036).
+        controller.runInNewTab(directory: home, command: AgentOpenView.setupLine(agent), title: nil)
         controller.window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }

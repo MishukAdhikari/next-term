@@ -2466,6 +2466,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // ⌃⇧⌘S hides it and brings it back, ⌃⌘S folds it.
         view.addItem(LayoutItems.windowColumn()) // title follows the setting
         view.addItem(LayoutItems.windowColumnFold()) // and the fold
+        item(view, "Switch to Chat", #selector(TerminalWindowController.switchView(_:)), "j", [.command, .shift]) // title follows the tab
         view.addItem(.separator())
         let sidebarSides = NSMenu(title: "Project Sidebar Position")
         let columnSides = NSMenu(title: "Window Column Position")

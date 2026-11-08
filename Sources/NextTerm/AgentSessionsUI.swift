@@ -194,7 +194,7 @@ extension AppDelegate {
         if !fork, let open = tabs.tab(of: session) { return goTo(open.tab, in: open.controller) }
         let controller = openFolder(project, newWindow: false)
         let exists = FileManager.default.fileExists(atPath: session.cwd)
-        let command = SessionStore.commandPrefix + session.resumeCommand(fork: fork)
+        let command = AgentOpenView.resumeCommand(session, fork: fork) // the view Settings › Editor gives it (plan 036)
         controller.runInNewTab(directory: exists ? session.cwd : project, command: command, title: nil)
         controller.window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)

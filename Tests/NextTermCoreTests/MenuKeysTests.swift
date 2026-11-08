@@ -70,6 +70,20 @@ struct MenuKeysTests {
         #expect(key.display == "⇧⌘U")
     }
 
+    @Test func switchViewIsShiftCommandJInEverySet() {
+        // ⇧⌘J (plan 036): View's Switch to Chat or Terminal, beside ⌘J's Collapse Terminal; no set gives it to anything else.
+        let key = KeyChord(key: "j", command: true, shift: true)
+        let bindings = KeyBindings()
+        #expect(MenuKeys.defaults["switchView:"] == key)
+        for preset in KeymapPreset.allCases {
+            let keys = Self.defaults(under: preset)
+            #expect((keys["switchView:"] ?? nil) == key, "\(preset.name)")
+            let others: [String] = bindings.owners(of: key, defaults: keys, except: "switchView:")
+            #expect(others.isEmpty, "\(preset.name): \(others)")
+        }
+        #expect(key.display == "⇧⌘J")
+    }
+
     /// Tasks sits right after Agents, and Add Task… has ⌃⌘T in every set: no set gives that key to anything else.
     @Test func tasksComesAfterAgentsAndAddTaskIsControlCommandT() {
         #expect(MenuBar.titles == ["File", "Edit", "View", "Agents", "Tasks", "Secrets", "Git", "Notifications", "Window", "Help"])

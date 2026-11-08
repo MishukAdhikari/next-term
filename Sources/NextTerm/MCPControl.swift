@@ -646,6 +646,10 @@ enum MCPControl {
                 sessionName = agent.name
             }
         }
+        // A bare claude or codex opens in the view Settings › Editor gives it, said in the answer (plan 036 R11).
+        let given: String? = sessionLine == nil ? arguments["command"] as? String : nil
+        let start = given.flatMap { AgentOpenView.newTabStart(command: $0, prompt: arguments["prompt"] as? String) }
+        if let line = start?.line { (sessionLine, sessionName) = (line, start?.agent.name) }
         let tab: TerminalTab
         let controller: TerminalWindowController
         if let besideID = arguments["split_beside"] {
@@ -689,6 +693,7 @@ enum MCPControl {
             var info: [String: Any] = ["id": tab.id.uuidString.lowercased(), "directory": tab.directory,
                                        "project": (controller.project as Any?) ?? NSNull(), "selected": arrived.selected]
             if let note = arrived.note { info["note"] = note }
+            if let view = start?.view { info["view"] = view.rawValue }
             reply(ok(info))
         }
         guard let command = sessionLine ?? arguments["command"] as? String, !command.trimmingCharacters(in: .whitespaces).isEmpty else { return answer() }

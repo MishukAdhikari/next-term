@@ -29,6 +29,8 @@ protocol TabListViewDelegate: AnyObject {
     func tabListDidRequestNewTab(_ list: TabListView)
     /// A tab's right-click menu: what it says acts on that tab, selected or not.
     func tabList(_ list: TabListView, menuFor index: Int) -> NSMenu?
+    /// The icon before a tab row's × was clicked: the tab switches between the terminal and the chat view (plan 036).
+    func tabList(_ list: TabListView, didSwitchViewAt index: Int)
     /// The list's width is about to change (its edge pressed, or it collapses or opens): the terminals keep their
     /// width until it is let go, so they change size once.
     func tabListWillResize(_ list: TabListView)
@@ -444,9 +446,11 @@ final class TabListView: NSView {
     func rowToolTip(at point: NSPoint) -> String {
         guard document.visibleRect.contains(point),
               let view = rowViews.first(where: { !$0.isHidden && $0.frame.contains(point) }) else { return "" }
-        if view.closeContains(view.convert(point, from: document)) {
+        let inRow: NSPoint = view.convert(point, from: document)
+        if view.closeContains(inRow) {
             return KeyboardShortcuts.shared.hint("Close tab", #selector(TerminalWindowController.closeTab(_:)))
         }
+        if let mark = view.viewSwitch(at: inRow) { return ViewSwitchButton.toolTip(for: mark) }
         return view.toolTipText
     }
 
@@ -546,6 +550,11 @@ final class TabListView: NSView {
     func rowClose(_ view: TabListRowView) {
         guard let place = place(of: view) else { return }
         delegate?.tabList(self, didClose: place.tab)
+    }
+
+    func rowSwitchView(_ view: TabListRowView) {
+        guard let place = place(of: view) else { return }
+        delegate?.tabList(self, didSwitchViewAt: place.tab)
     }
 
     /// A pane's row has its tab's menu; an agent's row, its agent's.
