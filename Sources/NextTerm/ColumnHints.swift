@@ -12,6 +12,9 @@ import NextTermCore
 ///   it has stayed open a second (when H1 is done), or at the pinned column's foot when a worktree's row joins it. A
 ///   button that folds them, which is the fold itself and retires the hint (WindowColumns.toggleFold, by any route).
 ///   Never beside the rail: the fold lives in the unfolded rows.
+/// - H5, switch back: the second switch to another window by a click on its row in one session. At the window come
+///   forward's column foot, Open Project…'s key as the user has it, then ↩; no key, no hint. Going to an open
+///   project's window from the Welcome list retires it (⌘O then ↩ among them), and so does open_project on one.
 /// Each is put up on HintStage, which holds one hint up across the app and lets a trigger whose moment is not right
 /// wait: H2 while the mark is there, H3 while the column shows. H1's moment is the list's: it is not kept. H2 and H3 go
 /// after a few seconds (longer while the pointer is on them), H1 with its list, and any hint when its place goes.
@@ -23,6 +26,9 @@ final class ColumnHints {
     static var listDwell: TimeInterval = 1
     /// How long the keys must have been left alone before H3 shows.
     static var basicsIdle: TimeInterval = 3
+
+    /// Switches by a click on another window's row since launch: H5 waits for the second.
+    private var switches = 0
 
     private init() {}
 
@@ -60,6 +66,22 @@ final class ColumnHints {
         guard let row = rows.first(where: { (row: WindowColumnRow) -> Bool in front.map { !WindowColumnView.shows($0, in: row) } ?? true })
         else { return }
         wait(for: .nextAgent, window: row.id)
+    }
+
+    /// H5's trigger: a click on window `id`'s row in `from`'s column brings it forward; the second such switch waits for
+    /// that window's moment.
+    func columnSwitched(to id: Int, from: TerminalWindowController) {
+        guard id != from.indexID else { return }
+        switches += 1
+        guard switches >= 2 else { return }
+        let left: String? = from.project.map { URL(fileURLWithPath: $0).lastPathComponent }
+        HintStage.shared.wait(for: .switchBack, holds: { AppDelegate.shared.windowColumns.visible }, show: { [weak self] controller in
+            guard let self, controller.indexID == id, self.ready(.switchBack, window: nil, in: controller),
+                  HintCenter.shared.eligible(.switchBack, in: controller) else { return false }
+            let key: String? = KeyboardShortcuts.shared.chord(for: "openProjectPanel:")?.display
+            guard let words = HintWords.switchBack(key: key) else { return false }
+            return HintStage.shared.put(HintLine(.switchBack, words: words, help: HintWords.switchBackHelp(project: left)), in: controller.columnHost)
+        })
     }
 
     /// H8's trigger in the pinned column: the rows went from `old` to `new`, and a repository's row has a worktree
@@ -114,6 +136,8 @@ final class ColumnHints {
             return host.shown.form == .folded && HintCenter.sinceKey() >= Self.basicsIdle
         case .foldWorktrees:
             return host.shown.form == .expanded
+        case .switchBack:
+            return true
         default:
             return false
         }

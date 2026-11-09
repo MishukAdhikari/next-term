@@ -619,6 +619,11 @@ enum MCPControl {
 
     private static func openProject(_ raw: String) -> MCPServer.CallResult {
         guard let path = absolute(raw), isFolder(path) else { return fail("Not a folder (give an absolute path): \(raw)") }
+        // A project open already: the agent switched to it, and the hint on switching back has nothing left to teach.
+        let wanted: String = canonicalPath(path)
+        if app.controllers.contains(where: { !$0.hasClosed && $0.project.map(canonicalPath) == wanted }) {
+            MainActor.assumeIsolated { HintCenter.shared.retire(.switchBack, reason: .actionPerformed) }
+        }
         let controller = app.openFolder(path, newWindow: false, forAgent: true)
         let shown = controller.presentForAgent(nil, explicit: true)
         var answer: [String: Any] = ["project": path, "tabs": controller.tabs.map { describe($0, in: controller, caller: nil) }]

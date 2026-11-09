@@ -44,6 +44,20 @@ public enum HintWords {
         ("Fold worktrees", "Folds \(repository)’s worktrees into its row. Its arrow shows them again.")
     }
 
+    /// H5, at the front window's column foot after the second switch by a click there: Open Project…'s key, as the user
+    /// has it, then Return, which picks the window just left. No key, no hint: the key is the point. ↩ is the Welcome
+    /// list's default button, not a shortcut, so it is fixed.
+    public static func switchBack(key: String?) -> String? {
+        guard let key, !key.isEmpty else { return nil }
+        return "Press \(key) then ↩ to go back"
+    }
+
+    /// H5's help: the agent's way, naming the project to go back to when the window left has one.
+    public static func switchBackHelp(project: String?) -> String {
+        guard let project, !project.isEmpty else { return "Or ask your agent to switch to another project." }
+        return "Or ask your agent: ‘switch to the \(project) project’."
+    }
+
     /// The × on every hint, for VoiceOver and its tooltip: it closes the tip for good.
     public static let close = "Close Tip"
 }

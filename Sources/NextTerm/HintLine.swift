@@ -57,9 +57,9 @@ final class HintLine: NSView {
         return Theme.textDim
     }
 
-    /// A passive hint: `words`, read as they are.
-    convenience init(_ hint: Hint, words: String) {
-        self.init(hint, words: words, help: nil, action: nil)
+    /// A passive hint: `words`, read as they are, and `help` as its tooltip and VoiceOver help when it has more to say.
+    convenience init(_ hint: Hint, words: String, help: String? = nil) {
+        self.init(hint, words: words, help: help, action: nil)
     }
 
     /// A hint with `action`: a real button saying `words`, its tooltip and VoiceOver help `help`.
@@ -86,7 +86,8 @@ final class HintLine: NSView {
             made.lineBreakMode = .byTruncatingTail
             made.refusesFirstResponder = true
             made.setAccessibilityRole(.staticText)
-            made.setAccessibilityHelp(words)
+            made.setAccessibilityHelp(help ?? words)
+            made.toolTip = help
             addSubview(made)
             label = made
         }

@@ -31,13 +31,27 @@ struct HintWordsTests {
         #expect(HintWords.nextAgent(key: "") == nil)
     }
 
+    @Test func theSwitchBackHintReadsOpenProjectsLiveKeyAndHasNoneWithout() {
+        #expect(HintWords.switchBack(key: "⌘O") == "Press ⌘O then ↩ to go back")
+        #expect(HintWords.switchBack(key: "⌃⌘P") == "Press ⌃⌘P then ↩ to go back")
+        #expect(HintWords.switchBack(key: nil) == nil && HintWords.switchBack(key: "") == nil)
+        #expect(HintWords.switchBackHelp(project: "shop") == "Or ask your agent: ‘switch to the shop project’.")
+        #expect(HintWords.switchBackHelp(project: nil) == "Or ask your agent to switch to another project.")
+    }
+
     @Test func theWordsAreCalm() {
-        let all: [String] = [HintWords.columnSide(onRight: false).words, HintWords.columnSide(onRight: false).help,
-                             HintWords.nextAgent(key: "⇧⌘U") ?? "", HintWords.columnBasics, HintWords.close]
-        for words in all {
-            #expect(!words.contains("!") && !words.contains("Did you know") && !words.contains("\"") && !words.contains("..."))
-            #expect(words.count <= 60)
+        let shown: [String] = [HintWords.columnSide(onRight: false).words, HintWords.nextAgent(key: "⇧⌘U") ?? "", HintWords.columnBasics,
+                               HintWords.close, HintWords.terminalBeside.words, HintWords.sendSelection(agent: "Claude Code", key: "⌥⌘K").words,
+                               HintWords.foldWorktrees(repository: "xCloud").words, HintWords.switchBack(key: "⌘O") ?? ""]
+        let help: [String] = [HintWords.columnSide(onRight: false).help, HintWords.terminalBeside.help,
+                              HintWords.sendSelection(agent: "Claude Code", key: "⌥⌘K").help, HintWords.foldWorktrees(repository: "xCloud").help,
+                              HintWords.switchBackHelp(project: "shop")]
+        for words in shown + help {
+            #expect(!words.contains("!") && !words.contains("Did you know") && !words.contains("\"") && !words.contains("...")
+                && !words.contains("'"))
         }
+        // One short line each, in the chrome.
+        for words in shown { #expect(!words.isEmpty && words.count <= 40) }
     }
 
     @Test func aMarkIsNewOnlyWhereThereWasNone() {

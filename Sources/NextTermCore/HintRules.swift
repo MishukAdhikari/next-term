@@ -16,6 +16,8 @@ public enum Hint: String, CaseIterable, Sendable {
     case sendSelection
     /// A repository's row with its worktrees' windows under it: its arrow folds them into it.
     case foldWorktrees
+    /// A second switch to another window by a click in the window column: Open Project's key, then Return, goes back.
+    case switchBack
 
     /// How the hint asks: a passive line, or a notice with a button that does it.
     public enum Kind: Sendable {
@@ -35,6 +37,7 @@ public enum Hint: String, CaseIterable, Sendable {
         switch self {
         case .nextAgent: return "goToNextAgentNeedingYou:"
         case .sendSelection: return "sendToAgent:"
+        case .switchBack: return "openProjectPanel:"
         case .columnSide, .columnBasics, .terminalBeside, .foldWorktrees: return nil
         }
     }
@@ -46,7 +49,7 @@ public enum Hint: String, CaseIterable, Sendable {
     /// (HintRules.watch) in place of a fact: use in those days retires the hint before it ever shows.
     public var traceless: Bool {
         switch self {
-        case .nextAgent, .sendSelection: return true
+        case .nextAgent, .sendSelection, .switchBack: return true
         case .columnSide, .columnBasics, .terminalBeside, .foldWorktrees: return false
         }
     }
@@ -331,7 +334,7 @@ public enum HintRules {
         case .columnBasics: return inUse.columnExpandedEver ? .retire : .due
         case .terminalBeside: return inUse.terminalPositionChosen ? .retire : .due
         case .foldWorktrees: return inUse.worktreesFoldedEver ? .retire : .due
-        case .nextAgent, .sendSelection: break
+        case .nextAgent, .sendSelection, .switchBack: break
         }
         return hint.traceless && inUse.existingInstall ? .watch : .due
     }

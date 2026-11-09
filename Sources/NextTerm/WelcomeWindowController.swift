@@ -867,12 +867,15 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
             } else if let own {
                 own.makeKeyAndOrderFront(nil)
                 close()
+                // An open project's window from the list, ⌘O then ↩ among the ways: the hint on it is done.
+                HintCenter.shared.retire(.switchBack, reason: .actionPerformed)
             } else if !project.hasProject {
                 // A window with no project, closed since the list was read: nothing to go to, and the list follows.
                 return
             } else if project.isOpen, let window = frontWindow(of: project.path) {
                 // Its window in front last: Open Project would bring the first one made.
                 window.makeKeyAndOrderFront(nil)
+                HintCenter.shared.retire(.switchBack, reason: .actionPerformed)
                 close()
             } else if WorktreeWindow.repository(ofLinkedWorktree: project.path) != nil {
                 // A linked worktree opens in a window of its own, as the Git menu opens it, and stays out of

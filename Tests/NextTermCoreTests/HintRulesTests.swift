@@ -12,7 +12,7 @@ struct HintRulesTests {
     }
 
     @Test func everyHintIsPassiveWithThreeShowings() {
-        #expect(Hint.allCases == [.columnSide, .nextAgent, .columnBasics, .terminalBeside, .sendSelection, .foldWorktrees])
+        #expect(Hint.allCases == [.columnSide, .nextAgent, .columnBasics, .terminalBeside, .sendSelection, .foldWorktrees, .switchBack])
         for hint in Hint.allCases { #expect(hint.kind == .passive && hint.limit == 3) }
     }
 
@@ -174,6 +174,13 @@ struct HintRulesTests {
         #expect(HintRules.seed(.foldWorktrees, .init(existingInstall: true)) == .due)
         #expect(HintRules.seed(.foldWorktrees, .init(worktreesFoldedEver: true)) == .retire)
         #expect(!Hint.foldWorktrees.inTabBar && !Hint.foldWorktrees.traceless)
+    }
+
+    @Test func switchingBackLeavesNoTraceSoAnInstallUsedBeforeWatchesIt() {
+        #expect(Hint.switchBack.command == "openProjectPanel:" && Hint.switchBack.traceless && !Hint.switchBack.inTabBar)
+        #expect(HintRules.seed(.switchBack, .init()) == .due)
+        #expect(HintRules.seed(.switchBack, .init(existingInstall: true)) == .watch)
+        #expect(HintRules.seed(.switchBack, .init(existingInstall: true, overrides: ["openProjectPanel:"])) == .retire)
     }
 
     @Test func aKeyTheUserReboundCountsAsUsed() {

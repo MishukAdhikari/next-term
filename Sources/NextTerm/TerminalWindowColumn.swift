@@ -31,8 +31,9 @@ extension TerminalWindowController {
         }
         host.onShownChange = { [weak self] (shown: WindowColumnShown) in self?.windowColumnShownChanged(shown) }
         let column: WindowColumnView = host.column
-        column.onSelect = { [weak host] (id: Int) in
+        column.onSelect = { [weak self, weak host] (id: Int) in
             host?.chose() // no list slides out in the window just left
+            if let self { ColumnHints.shared.columnSwitched(to: id, from: self) }
             AppDelegate.shared.bringForward(id)
         }
         column.onToggle = { AppDelegate.shared.toggleWindowColumnExpanded(nil) }
