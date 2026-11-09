@@ -108,7 +108,9 @@ extension SelfTest {
         NSApp.hide(nil)
         await pause(1)
         NSApp.unhide(nil)
-        second.makeKeyAndOrderFront(nil)
+        // Unhidden, the app need not be active again (another took the front while it was hidden): with no key window
+        // the keys below reach no tab and nothing takes the keyboard, so it is brought back as the user would.
+        if !(await bringToFront(second)) { note("merged windows: the app did not come back in front after being unhidden") }
         await pause(1)
         await screenshot(other, suffix: "-merged-back")
         let ids: Set<Int> = [c.indexID, other.indexID]
@@ -199,6 +201,27 @@ extension SelfTest {
               "window tabs: Move Project to New Window splits them, each laid out as before",
               "covers \(c.columnHost.topCover) and \(other.columnHost.topCover)")
 
+        // Merge All Windows, as the user merges them: the window merged in lays out under the tab bar as the one it joined
+        // does, whichever is in front, and both come back beside the traffic lights once split again.
+        host.makeKeyAndOrderFront(nil)
+        _ = await wait(3) { NSApp.keyWindow === host }
+        host.mergeAllWindows(nil)
+        let mergedAll: Bool = await wait(3) { host.tabGroup?.windows.contains(second) == true && c.columnHost.topCover > 0 }
+        let hostBelow: String? = topRowAboveTabBar(c)
+        host.tabGroup?.selectedWindow = second
+        second.makeKeyAndOrderFront(nil)
+        let secondCovered: Bool = await wait(3) { host.tabGroup?.selectedWindow === second && other.columnHost.topCover > 0 }
+        let secondBelow: String? = topRowAboveTabBar(other)
+        await screenshot(other, suffix: "-merged-all")
+        check(mergedAll && secondCovered && hostBelow == nil && secondBelow == nil,
+              "window tabs: after Merge All Windows, each window's top row (the window merged in too) starts below the tab bar",
+              "merged \(mergedAll), second covered \(secondCovered), covers \(c.columnHost.topCover) and \(other.columnHost.topCover); "
+                  + "first: \(hostBelow ?? "below"), second: \(secondBelow ?? "below")")
+        second.moveTabToNewWindow(nil)
+        let splitAgain: Bool = await wait(3) { c.columnHost.topCover == 0 && other.columnHost.topCover == 0 }
+        check(splitAgain, "window tabs: split again after Merge All Windows, both top rows are back beside the traffic lights",
+              "covers \(c.columnHost.topCover) and \(other.columnHost.topCover)")
+
         // Close Window on a merged window closes every project in it, and nothing else.
         let last = app.openWindow(directory: third.path, project: third.path)
         made.append(last)
@@ -211,6 +234,22 @@ extension SelfTest {
         let closed: Bool = await wait(5) { other.hasClosed && last.hasClosed }
         check(closed && !c.hasClosed && host.isVisible, "window tabs: Close Window closes every project merged into the window, and no other window",
               "second closed \(other.hasClosed), third closed \(last.hasClosed), sheet \(lastWindow.attachedSheet != nil)")
+    }
+
+    /// The first of a window's top-row views (the terminal's and the editor's tab bars, the sidebar header, the window
+    /// column) that reaches above the unobscured area under a system tab bar, with where it sits; nil when all are below.
+    private static func topRowAboveTabBar(_ c: TerminalWindowController) -> String? {
+        guard let window = c.window else { return "no window" }
+        window.layoutIfNeeded()
+        let layoutTop: CGFloat = window.contentLayoutRect.maxY
+        let views: [(String, NSRect)] = [
+            ("terminal bar", frameInWindow(c.tabBar)),
+            ("editor bar", c.editorArea.isHidden ? .zero : frameInWindow(c.editorArea.tabBar)),
+            ("sidebar header", c.isSidebarVisible ? frameInWindow(c.sidebar.header) : .zero),
+            ("window column", c.windowColumn.isHidden ? .zero : frameInWindow(c.windowColumn)),
+        ]
+        guard let above = views.first(where: { $0.1 != .zero && $0.1.maxY > layoutTop + 0.5 }) else { return nil }
+        return "\(above.0) \(above.1) above the layout top \(layoutTop)"
     }
 
     private static func allItems(_ menu: NSMenu?) -> [NSMenuItem] {
