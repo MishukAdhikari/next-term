@@ -195,6 +195,12 @@ final class HintLine: NSView {
     /// The pointer came onto it: a tab bar, whose title-bar band may send no exit, watches it from then on.
     var onPointerCame: (() -> Void)?
 
+    /// A press on the line around its words is the line's: in a tab bar it never drags or zooms the window under it.
+    override func mouseDown(with event: NSEvent) {
+        guard place != .bar else { return }
+        super.mouseDown(with: event)
+    }
+
     override func mouseEntered(with event: NSEvent) {
         hovering = true
         onPointerCame?()

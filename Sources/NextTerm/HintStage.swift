@@ -73,13 +73,6 @@ final class HintStage {
         looking = timer
     }
 
-    /// `hint`'s trigger no longer holds (its selection went, its moment passed): it stops waiting.
-    func stopWaiting(for hint: Hint) {
-        waits.remove(hint)
-        triggers[hint] = nil
-        stopLookingIfDone()
-    }
-
     /// Each waiting trigger: dropped once it no longer holds or has waited too long, put up once its moment is right.
     func look() {
         waits.drop(now: ProcessInfo.processInfo.systemUptime, atMost: Self.waitsAtMost) { [triggers] (hint: Hint) -> Bool in
