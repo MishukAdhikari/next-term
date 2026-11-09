@@ -139,10 +139,11 @@ public enum MCPHubOAuthFlow {
     /// The token endpoint's answer to a code or a refresh.
     public static func tokens(_ response: MCPHubOAuth.Response, now: Date = Date()) -> Result<Tokens, TokenError> {
         let json = response.json
-        guard response.status == 200 else {
+        // GitHub answers a refused code or client with 200 and an `error`, never a token: an error is one at any status.
+        guard response.status == 200, json?["error"] == nil else {
             switch json?["error"] as? String {
-            case "invalid_grant"?: return .failure(.invalidGrant)
-            case "invalid_client"?, "unauthorized_client"?: return .failure(.invalidClient)
+            case "invalid_grant"?, "bad_verification_code"?: return .failure(.invalidGrant)
+            case "invalid_client"?, "unauthorized_client"?, "incorrect_client_credentials"?: return .failure(.invalidClient)
             case let code?: return .failure(.other(code))
             case nil: return .failure(.other("HTTP \(response.status)"))
             }

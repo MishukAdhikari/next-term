@@ -9,6 +9,9 @@ public final class MCPHubSignIn: @unchecked Sendable {
     public let server: URL
     let challenge: MCPHubOAuthChallenge?
     let own: MCPHubOAuthRegistration.Own?
+    /// The user's own app's secret, read from Secrets when the code is exchanged and not before (`own.secretName`): the
+    /// value, or why not. Never asked for the authorization request, which carries no secret.
+    let readSecret: (@Sendable (_ host: String) -> Result<String, MCPHubOAuth.Failure>)?
     let store: SignInStore
     let fetch: MCPHubOAuth.Fetch
     let metadataDocument: String?
@@ -22,11 +25,13 @@ public final class MCPHubSignIn: @unchecked Sendable {
     public private(set) var metadata: MCPHubOAuthDiscovery.Metadata?
 
     public init(name: String, server: URL, challenge: MCPHubOAuthChallenge?, own: MCPHubOAuthRegistration.Own? = nil,
+                readSecret: (@Sendable (_ host: String) -> Result<String, MCPHubOAuth.Failure>)? = nil,
                 store: SignInStore, fetch: @escaping MCPHubOAuth.Fetch, metadataDocument: String? = nil, scopes: [String]? = nil) {
         self.name = name
         self.server = server
         self.challenge = challenge
         self.own = own
+        self.readSecret = readSecret
         self.store = store
         self.fetch = fetch
         self.metadataDocument = metadataDocument
@@ -43,6 +48,16 @@ public final class MCPHubSignIn: @unchecked Sendable {
     }
 
     public static let cancelledText = "Sign-in was cancelled."
+
+    /// The token endpoint refused the user's own app (GitHub's `incorrect_client_credentials`).
+    public static func ownAppRefused(_ name: String) -> String {
+        "\(name) refused the client ID or secret. Check them in Settings \u{203A} MCP Servers \u{203A} Edit\u{2026}"
+    }
+
+    /// The server refused the loopback address as the app's callback (GitHub's `redirect_uri_mismatch`).
+    public static func callbackRefused(_ name: String) -> String {
+        "\(name) refused Next Term\u{2019}s sign-in address. Set your OAuth app\u{2019}s callback URL to \(MCPHubOAuthRegistration.redirect)."
+    }
 
     /// The sign-in, waiting for the browser until `deadline` (10 minutes at most). `open` opens the authorization URL
     /// and says whether it did. The record kept, or why not, as a sentence.
@@ -115,10 +130,23 @@ public final class MCPHubSignIn: @unchecked Sendable {
         case .code(let found): code = found
         case .denied: return .failure(MCPHubOAuth.Failure("Signing in to \(name) was cancelled in the browser."))
         case .wrongIssuer: return .failure(MCPHubOAuth.Failure("The sign-in came back from another server than \(metadata.issuerHost), so Next Term didn\u{2019}t use it."))
+        case .error("redirect_uri_mismatch"): return .failure(MCPHubOAuth.Failure(Self.callbackRefused(name)))
         case .error(let error): return .failure(MCPHubOAuth.Failure("\(name) didn\u{2019}t sign you in (\(error))."))
         case .notOurs: return .failure(MCPHubOAuth.Failure("The sign-in\u{2019}s answer wasn\u{2019}t this sign-in\u{2019}s."))
         }
-        guard let request = pending.tokenRequest(code: code) else {
+        // The user's own app's secret, read now, for this one request: the pending sign-in never held it.
+        var exchange = pending
+        if client.kind == .preRegistered, client.secret == nil, own?.secretName != nil {
+            guard let readSecret else { return .failure(MCPHubOAuth.Failure("Next Term couldn\u{2019}t read your OAuth app\u{2019}s secret for \(name).")) }
+            switch readSecret(metadata.issuerHost) {
+            case .failure(let failure): return .failure(failure)
+            case .success(let secret):
+                client.secret = secret
+                exchange = MCPHubOAuthFlow.Pending(state: pending.state, pkce: pending.pkce, metadata: metadata, client: client,
+                                                   redirect: pending.redirect, scopes: pending.scopes)
+            }
+        }
+        guard let request = exchange.tokenRequest(code: code) else {
             return .failure(MCPHubOAuth.Failure("\(name)\u{2019}s token address isn\u{2019}t one Next Term uses."))
         }
         let tokens: MCPHubOAuthFlow.Tokens
@@ -127,6 +155,10 @@ public final class MCPHubSignIn: @unchecked Sendable {
         case .success(let response):
             switch MCPHubOAuthFlow.tokens(response) {
             case .success(let got): tokens = got
+            case .failure(.invalidClient) where client.kind == .preRegistered:
+                return .failure(MCPHubOAuth.Failure(Self.ownAppRefused(name)))
+            case .failure(.other("redirect_uri_mismatch")):
+                return .failure(MCPHubOAuth.Failure(Self.callbackRefused(name)))
             case .failure(.invalidClient):
                 if client.kind == .registered { _ = try? store.update { body in body.forgetClient(issuer: metadata.issuer); return (true, ()) } }
                 return .failure(MCPHubOAuth.Failure("\(name) no longer knows Next Term\u{2019}s registration. Sign in again."))

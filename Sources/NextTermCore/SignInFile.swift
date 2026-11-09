@@ -137,7 +137,10 @@ public enum SignInFile {
             if let secret = client.secret {
                 stored.secretBox = try SignInFile.sealText(secret, key: SignInFile.clientKey(key, issuer: client.issuer), data: SignInFile.clientData(client))
             }
-            clients.removeAll { $0.client.issuer == client.issuer && $0.client.kind == client.kind }
+            // One registration per issuer; the user's own apps one per client ID, so two servers signing in at one issuer
+            // with two apps (two GitHub servers) each keep their own.
+            clients.removeAll { $0.client.issuer == client.issuer && $0.client.kind == client.kind
+                && (client.kind != .preRegistered || $0.client.clientID == client.clientID) }
             clients.append(stored)
         }
 

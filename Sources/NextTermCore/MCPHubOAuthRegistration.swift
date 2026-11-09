@@ -45,9 +45,13 @@ public enum MCPHubOAuthRegistration {
 
         /// `request` with the client named as its auth method says: `client_id` in the form, and the secret in it
         /// (`client_secret_post`) or as Basic (`client_secret_basic`, RFC 6749 §2.3.1's form-encoding first).
+        ///
+        /// The user's own app's secret goes only to its issuer's own origin (scheme, host and port), where its token
+        /// endpoint is: a server whose metadata names a token or revocation endpoint elsewhere gets the client ID alone.
         public func authenticated(_ request: MCPHubOAuth.Request) -> MCPHubOAuth.Request {
             var out = request
             var form = out.form ?? []
+            let secret = kind == .preRegistered && !Self.sameOrigin(request.url, issuer) ? nil : secret
             if authMethod == "client_secret_basic", let secret {
                 let pair = MCPHubOAuth.encode(clientID) + ":" + MCPHubOAuth.encode(secret)
                 out.headers["Authorization"] = "Basic " + Data(pair.utf8).base64EncodedString()
@@ -60,19 +64,32 @@ public enum MCPHubOAuthRegistration {
         }
 
         public func hasExpired(now: Date = Date()) -> Bool { secretExpires.map { $0 <= now } ?? false }
+
+        /// Whether `url` is at `issuer`'s origin: the same scheme, host and port, compared lowercased.
+        public static func sameOrigin(_ url: URL, _ issuer: String) -> Bool {
+            guard let other = URL(string: issuer), let a = url.scheme?.lowercased(), let b = other.scheme?.lowercased(), a == b,
+                  let host = url.host?.lowercased(), host == other.host?.lowercased() else { return false }
+            let defaultPort = a == "https" ? 443 : 80
+            return (url.port ?? defaultPort) == (other.port ?? defaultPort)
+        }
     }
 
-    /// The user's own OAuth app, from the server's entry: its client ID, the secret's value when it names one, and the
-    /// issuer it was first used with.
+    /// The user's own OAuth app, from the server's entry: its client ID, the secret's value or the name of the key in
+    /// Secrets that holds it (read at token time only, MCPHubSignIn's `readSecret`), and the issuer it was first used
+    /// with.
     public struct Own: Equatable, Sendable {
         public var clientID: String
         public var secret: String?
+        public var secretName: String?
         public var issuer: String?
-        public init(clientID: String, secret: String? = nil, issuer: String? = nil) {
+        public init(clientID: String, secret: String? = nil, secretName: String? = nil, issuer: String? = nil) {
             self.clientID = clientID
             self.secret = secret
+            self.secretName = secretName
             self.issuer = issuer
         }
+
+        public var hasSecret: Bool { secret != nil || secretName != nil }
     }
 
     public enum Choice: Equatable, Sendable {
@@ -86,11 +103,16 @@ public enum MCPHubOAuthRegistration {
     public static func choose(name: String, metadata: MCPHubOAuthDiscovery.Metadata, own: Own?, registered: [Client],
                               metadataDocument: String? = nil, now: Date = Date()) -> Choice {
         if let own {
-            if let bound = own.issuer, bound != metadata.issuer {
+            // Bound by the entry's issuer, or else by where this client ID was signed in with before (kept sealed).
+            let bound = own.issuer ?? registered.first { $0.kind == .preRegistered && $0.clientID == own.clientID }?.issuer
+            if let bound, bound != metadata.issuer {
                 return .none("\(name) now signs in at \(metadata.issuerHost), and the OAuth app you gave is for \(URL(string: bound)?.host ?? bound). "
                     + "Give \(name) an OAuth app made at \(metadata.issuerHost), or remove yours to let Next Term register itself.")
             }
-            let method = own.secret == nil ? "none"
+            if own.hasSecret, URL(string: metadata.tokenEndpoint).map({ Client.sameOrigin($0, metadata.issuer) }) != true {
+                return .none("\(name)\u{2019}s token address isn\u{2019}t at \(metadata.issuerHost), so Next Term doesn\u{2019}t send your OAuth app\u{2019}s secret there.")
+            }
+            let method = !own.hasSecret ? "none"
                 : metadata.tokenAuthMethods.contains("client_secret_post") || metadata.tokenAuthMethods.isEmpty ? "client_secret_post"
                 : "client_secret_basic"
             return .use(Client(issuer: metadata.issuer, clientID: own.clientID, kind: .preRegistered, authMethod: method, secret: own.secret))

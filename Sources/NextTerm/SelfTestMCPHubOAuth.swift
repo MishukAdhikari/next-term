@@ -11,8 +11,9 @@ import NextTermCore
 /// Add by URL offers Sign In… as its one primary; the sign-in completes; a Claude Code tab and a Codex tab each get one
 /// consent panel, then call `echo`; with tokens living two seconds, two tabs calling at once make one refresh; revoked
 /// at the server, the row reads Signed out, with Reconnect…, one notice is recorded, and the agent's text says to
-/// reconnect; Remove revokes once. Screenshots: the Add sheet's Sign In…, the consent panel, each state in Settings,
-/// and Settings opened from the Reconnect notice.
+/// reconnect; Remove revokes once. Then the user's own OAuth app at a server set up as GitHub's (ownAppChecks).
+/// Screenshots: the Add sheet's Sign In…, the consent panel, each state in Settings, Settings opened from the Reconnect
+/// notice, and the Add sheet's own-app rows.
 extension SelfTest {
     static func mcpHubOAuthChecks(_ c: TerminalWindowController) async {
         let manager = FileManager.default
@@ -155,6 +156,68 @@ extension SelfTest {
         }
         check((SecretsStore.shared.index?.names ?? []).allSatisfy { $0 != SecretVault.signInsName },
               "MCP OAuth: the sign-ins\u{2019} key is never listed in Secrets")
+
+        await ownAppChecks(view: view, window: window, userFile: userFile)
+    }
+
+    /// The user's own OAuth app, for a server set up as GitHub's is: no registration, no client metadata documents, and
+    /// a token endpoint that refuses a code without the app's secret. The Add sheet opens the own-app rows by itself;
+    /// the secret given there goes into Secrets, the list names it, and Sign In… reads it once, when the code is
+    /// exchanged, sending it to the token endpoint alone. Screenshot: the sheet's own-app rows.
+    @MainActor
+    static func ownAppChecks(view: MCPServersSettingsView, window: NSWindow, userFile: String) async {
+        let secretValue = "selftest-client-secret-\(UUID().uuidString.prefix(8))"
+        guard let auth = try? MCPHubFakeAuth(), let remote = try? MCPHubFakeRemote() else {
+            return check(false, "MCP OAuth, own app: the fake servers listen on this Mac")
+        }
+        defer {
+            auth.stop()
+            remote.stop()
+        }
+        auth.dcr = false
+        auth.cimd = false
+        auth.pathIssuer = true
+        auth.ownApp = ("Ov23liSELFTEST", secretValue)
+        remote.auth = auth
+        auth.resource = remote.url.absoluteString
+        func state() -> MCPHubOverview.State? { view.rows.first { $0.name == "github" }?.state }
+
+        view.add()
+        guard let add = view.sheet as? MCPServerSheet, let addWindow = add.window else { return check(false, "MCP OAuth, own app: Add opens its sheet") }
+        add.nameField.stringValue = "github"
+        add.kind.selectedSegment = 1
+        add.runsField.stringValue = remote.url.absoluteString
+        add.refresh()
+        _ = await wait(15) { add.cantRegister }
+        check(add.cantRegister && add.usesOwnApp && add.offersSignIn && !add.clientIDField.isHidden && !add.addButton.isEnabled,
+              "MCP OAuth, own app: a server that can\u{2019}t register Next Term opens the own-app rows, and Sign In\u{2026} waits for a client ID",
+              add.signInLine.stringValue)
+        add.clientIDField.stringValue = "Ov23liSELFTEST"
+        add.secretPopUp.selectItem(withTitle: MCPServerSheet.newKey)
+        add.newSecretName.stringValue = "SELFTEST_OAUTH_CLIENT_SECRET"
+        add.newSecretValue.stringValue = secretValue
+        add.refresh()
+        check(add.addButton.isEnabled && add.addButton.title == "Sign In\u{2026}" && add.ownAppHelp.stringValue.contains(MCPHubOAuthRegistration.redirect),
+              "MCP OAuth, own app: with a client ID and a secret, Sign In\u{2026} is the one primary, and the callback URL is said",
+              add.ownAppHelp.stringValue)
+        await screenshot(addWindow, suffix: "-mcp-oauth-own-app")
+        add.confirm()
+        _ = await wait(30) { view.sheet == nil && view.rows.contains { $0.name == "github" } }
+        view.reload()
+        let list = (try? String(contentsOfFile: userFile, encoding: .utf8)) ?? ""
+        check(state() == .signedIn(tools: nil) && auth.count("/register") == 0 && auth.secretSeen == ["/token"],
+              "MCP OAuth, own app: the sign-in completes as the user\u{2019}s app, the secret sent to the token endpoint alone",
+              "\(String(describing: state())) | \(auth.secretSeen)")
+        check(list.contains("\"clientID\": \"Ov23liSELFTEST\"") && list.contains("${secret:SELFTEST_OAUTH_CLIENT_SECRET}") && !list.contains(secretValue),
+              "MCP OAuth, own app: the list keeps the client ID and names the secret, never its value")
+        let sealed = (try? MCPHubSignIns.folder.read(SignInFile.name, cap: SignInFile.maxSize)).map { String(decoding: $0 ?? Data(), as: UTF8.self) } ?? ""
+        check(!sealed.contains(secretValue), "MCP OAuth, own app: the sign-ins file holds the secret sealed, never in the clear")
+        if let row = view.rows.firstIndex(where: { $0.name == "github" }) {
+            view.table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+            await screenshot(window, suffix: "-mcp-oauth-own-app-signed-in")
+            view.remove()
+            _ = await wait(15) { MCPHubSignIns.record(for: remote.url.absoluteString) == nil }
+        }
     }
 }
 #endif

@@ -17,6 +17,9 @@ import Darwin
 ///   the old one works until the new one is first used; `.none`: no new one), `accessLife`, `reuseKillsGrant` (a spent
 ///   refresh token sent again ends the whole grant), `registrationLife` (a client is forgotten after it), and
 ///   `loseNextRefresh` (the next refresh is taken and its answer never sent, as a dropped connection).
+/// - **The user's own app** (`ownApp`): a client made at the server, as a GitHub OAuth app is, whose token requests
+///   (codes and refreshes) must carry its secret, in the form or as Basic; a wrong or missing one is answered as GitHub
+///   answers, HTTP 200 with `incorrect_client_credentials`. `secretSeen` lists the paths whose requests had it in them.
 /// - `revokeAll()` ends every grant at the server, as the user revoking access there.
 ///
 /// `counts` keeps how many requests each path got, for the tests.
@@ -36,6 +39,7 @@ public final class MCPHubFakeAuth: @unchecked Sendable {
     public var registrationLife: TimeInterval?
     public var loseNextRefresh = false
     public var scopes = ["read", "write"]
+    public var ownApp: (id: String, secret: String)?
     /// The resource its tokens are for: the fake remote's URL.
     public var resource = ""
 
@@ -52,6 +56,7 @@ public final class MCPHubFakeAuth: @unchecked Sendable {
     private var deadGrants = Set<String>()
     public private(set) var lastAuthorize: [(String, String)] = []
     public private(set) var lastToken: [(String, String)] = []
+    public private(set) var secretSeen: [String] = []
 
     public init() throws {
         listener = socket(AF_INET, SOCK_STREAM, 0)
@@ -213,6 +218,11 @@ public final class MCPHubFakeAuth: @unchecked Sendable {
         let path = parts?.path ?? target
         lock.lock()
         countsByPath[path, default: 0] += 1
+        if let own = ownApp {
+            let raw = String(decoding: data, as: UTF8.self)
+            let basic = Data((MCPHubOAuth.encode(own.id) + ":" + MCPHubOAuth.encode(own.secret)).utf8).base64EncodedString()
+            if raw.contains(own.secret) || raw.contains(MCPHubOAuth.encode(own.secret)) || raw.contains(basic) { secretSeen.append(path) }
+        }
         lock.unlock()
         let form = MCPHubOAuth.decodeForm(String(decoding: body, as: UTF8.self))
         func value(_ name: String) -> String? { form.first { $0.0 == name }?.1 }
@@ -225,7 +235,8 @@ public final class MCPHubFakeAuth: @unchecked Sendable {
             var metadata: [String: Any] = [
                 "issuer": issuer, "authorization_endpoint": origin + "/authorize", "token_endpoint": origin + "/token",
                 "revocation_endpoint": origin + "/revoke", "response_types_supported": ["code"],
-                "grant_types_supported": ["authorization_code", "refresh_token"], "token_endpoint_auth_methods_supported": ["none"],
+                "grant_types_supported": ["authorization_code", "refresh_token"],
+                "token_endpoint_auth_methods_supported": ownApp == nil ? ["none"] : ["client_secret_basic", "client_secret_post"],
                 "scopes_supported": scopes,
             ]
             if s256 { metadata["code_challenge_methods_supported"] = ["S256"] }
@@ -269,12 +280,25 @@ public final class MCPHubFakeAuth: @unchecked Sendable {
             lock.lock()
             lastToken = form
             lock.unlock()
-            let client = value("client_id") ?? ""
+            var client = value("client_id") ?? ""
+            var secret = value("client_secret")
+            if let basic = headers["authorization"], basic.hasPrefix("Basic "),
+               let pair = Data(base64Encoded: String(basic.dropFirst(6))).map({ String(decoding: $0, as: UTF8.self) }),
+               let colon = pair.firstIndex(of: ":") {
+                client = String(pair[..<colon]).removingPercentEncoding ?? ""
+                secret = String(pair[pair.index(after: colon)...]).removingPercentEncoding
+            }
             lock.lock()
             let known = clients[client]
+            let own = ownApp
             lock.unlock()
-            if let known, known <= Date() { return json(fd, 401, ["error": "invalid_client"]) }
-            if known == nil, !client.hasPrefix("https://") { return json(fd, 401, ["error": "invalid_client"]) }
+            if let own, client == own.id {
+                guard secret == own.secret else {
+                    return json(fd, 200, ["error": "incorrect_client_credentials",
+                                          "error_description": "The client_id and/or client_secret passed are incorrect."])
+                }
+            } else if let known, known <= Date() { return json(fd, 401, ["error": "invalid_client"]) }
+            if own?.id != client, known == nil, !client.hasPrefix("https://") { return json(fd, 401, ["error": "invalid_client"]) }
             switch value("grant_type") {
             case "authorization_code":
                 lock.lock()

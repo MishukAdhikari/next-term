@@ -42,6 +42,8 @@ enum MCPHubSignIns {
     /// The self-test's: the agent a caller is, and the browser.
     static var agentForTest: ((TerminalTab?) -> String?)?
     static var openForTest: ((URL) -> Bool)?
+    /// The self-test's: a key's value from its stand-in Secrets, in place of the vault's presence check.
+    nonisolated(unsafe) static var secretForTest: ((String) -> String?)?
     /// The self-test's: sign-ins' states for Settings, in place of the file's.
     static var statesForTest: [String: MCPHubOverview.SignIn]?
     #endif
@@ -179,8 +181,11 @@ enum MCPHubSignIns {
         withKey(reason: "keep your sign-in to \(name) in Secrets", makes: true) { key in
             guard let key else { return done("Not approved, so Next Term didn\u{2019}t sign in to \(name).") }
             let challenge = MCPHubOAuthChallenge.bearer(challenges[at])
-            let flow = MCPHubSignIn(name: name, server: url, challenge: challenge, store: store(key),
-                                    fetch: MCPHubOAuthHTTP(server: url).asFetch, scopes: more)
+            let own = server.oauth.map { MCPHubOAuthRegistration.Own(clientID: $0.clientID, secretName: $0.secretName, issuer: $0.issuer) }
+            let secretName = server.oauth?.secretName
+            let flow = MCPHubSignIn(name: name, server: url, challenge: challenge, own: own,
+                                    readSecret: secretName.map { secretName in { host in readSecret(secretName, server: name, host: host) } },
+                                    store: store(key), fetch: MCPHubOAuthHTTP(server: url).asFetch, scopes: more)
             running[at] = flow
             DispatchQueue.global(qos: .userInitiated).async {
                 let result = flow.run(open: { authorization in
@@ -214,6 +219,57 @@ enum MCPHubSignIns {
                 }
             }
         }
+    }
+
+    /// The user's own OAuth app's secret, read from Secrets for the one token request that needs it (MCPHubSignIn, off
+    /// the main thread, after the browser came back): one presence check whose reason names the key and the host it goes
+    /// to, so a list changed behind the user's back can't send another key somewhere unnoticed. Nothing keeps it here;
+    /// the sign-in seals it beside its tokens (SignInFile) so that refreshes ask nothing.
+    nonisolated static func readSecret(_ secretName: String, server: String, host: String) -> Result<String, MCPHubOAuth.Failure> {
+        final class Box: @unchecked Sendable {
+            var result: Result<String, MCPHubOAuth.Failure> = .failure(MCPHubOAuth.Failure("Next Term couldn\u{2019}t read your OAuth app\u{2019}s secret."))
+        }
+        let box = Box()
+        let read = DispatchSemaphore(value: 0)
+        DispatchQueue.main.async {
+            Task { @MainActor in
+                defer { read.signal() }
+                #if DEBUG
+                if let secretForTest {
+                    box.result = secretForTest(secretName).map { .success($0) } ?? .failure(MCPHubOAuth.Failure("No key named \(secretName) in Secrets."))
+                    return
+                }
+                #endif
+                let store = SecretsStore.shared
+                store.reloadIfChanged()
+                guard store.index?.entry(named: secretName) != nil else {
+                    box.result = .failure(MCPHubOAuth.Failure("\(secretName) isn\u{2019}t in Secrets, so Next Term can\u{2019}t finish signing in to \(server). "
+                        + "Add it in Settings \u{203A} MCP Servers \u{203A} Edit\u{2026}"))
+                    return
+                }
+                let value = ValueBox()
+                do {
+                    try await store.run(makes: false, names: [secretName], reason: "send \(secretName) to \(host) to finish signing in to \(server)",
+                                        change: { vault, _ in
+                        value.text = try vault.value(of: secretName).utf8String()
+                        return nil
+                    }, line: { SecretAudit.Line(event: .use, names: [secretName], who: "Next Term", command: "sign in to \(server) at \(host)", outcome: "done") })
+                    box.result = value.text.map { .success($0) } ?? .failure(MCPHubOAuth.Failure("\(secretName) in Secrets isn\u{2019}t text."))
+                    value.text = nil
+                } catch SecretsStore.Failure.cancelled {
+                    box.result = .failure(MCPHubOAuth.Failure("Not approved, so Next Term didn\u{2019}t sign in to \(server)."))
+                } catch {
+                    box.result = .failure(MCPHubOAuth.Failure("Next Term couldn\u{2019}t read \(secretName) from Secrets: "
+                        + ((error as? LocalizedError)?.errorDescription ?? "\(error)")))
+                }
+            }
+        }
+        read.wait()
+        return box.result
+    }
+
+    private final class ValueBox: @unchecked Sendable {
+        var text: String?
     }
 
     /// Cancel while the browser is out.

@@ -13,6 +13,12 @@ import NextTermCore
 /// for a sign-in, the Key row becomes one line saying so, and the primary becomes Sign In… (Add is gone, so there is
 /// still one primary). Sign In… opens the browser (MCPHubSignIns) and adds the server once signed in. "Use a key
 /// instead" brings the Key row back. With no answer, or no network, Add stays the primary.
+///
+/// **The user's own OAuth app**, for a server that can't register Next Term (GitHub's: discovery finds no registration
+/// endpoint and no client metadata documents, so the rows open by themselves), or by "Use your own OAuth app": a Client
+/// ID, kept in the entry (`nextTerm.oauth`, not a secret), and a Client secret, a key picked from Secrets or given here,
+/// which goes into Secrets; the entry names it, and Sign In… reads it at token time only. One line says which callback
+/// URL to register at the provider.
 final class MCPServerSheet: NSWindowController, NSWindowDelegate, NSTextFieldDelegate {
     /// Where a server goes, as the Applies to menu lists them.
     enum Target: Equatable {
@@ -45,6 +51,23 @@ final class MCPServerSheet: NSWindowController, NSWindowDelegate, NSTextFieldDel
     let pasteButton = NSButton(title: "Paste a Config\u{2026}", target: nil, action: nil)
     let signInLine = NSTextField(wrappingLabelWithString: "")
     let keyInsteadButton = NSButton(title: "Use a key instead", target: nil, action: nil)
+    let ownAppButton = NSButton(title: "Use your own OAuth app", target: nil, action: nil)
+    let clientIDField = NSTextField()
+    let secretPopUp = NSPopUpButton()
+    let newSecretName = NSTextField()
+    let newSecretValue = NSSecureTextField()
+    let ownAppHelp = NSTextField(wrappingLabelWithString: "")
+    /// The own-app rows are open: by the user, or because the server can't register Next Term.
+    private(set) var ownApp = false
+    /// Discovery found no way for Next Term to register (no registration endpoint, no client metadata documents).
+    private(set) var cantRegister = false
+    /// The authorization server discovery found, kept with the app so its secret is never sent to another.
+    private var discoveredIssuer: String?
+    private var ownLinkRow = NSStackView()
+    private var clientIDRow = NSStackView()
+    private var secretRow = NSStackView()
+    private var newSecretRow = NSStackView()
+    private var ownHelpRow = NSStackView()
     /// The server answered the unsigned probe with a Bearer challenge: the sheet offers Sign In….
     private(set) var asksSignIn = false
     private(set) var keyInstead = false
@@ -96,6 +119,23 @@ final class MCPServerSheet: NSWindowController, NSWindowDelegate, NSTextFieldDel
             field.lineBreakMode = .byTruncatingMiddle
         }
         newKeyValue.delegate = self
+        clientIDField.placeholderString = "Ov23li\u{2026}"
+        newSecretName.placeholderString = "GITHUB_OAUTH_CLIENT_SECRET"
+        newSecretValue.placeholderString = "Paste the client secret"
+        for field in [clientIDField, newSecretName] {
+            field.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+            field.delegate = self
+            field.usesSingleLineMode = true
+            field.cell?.wraps = false
+            field.lineBreakMode = .byTruncatingMiddle
+        }
+        newSecretValue.delegate = self
+        clientIDField.setAccessibilityLabel("Client ID")
+        secretPopUp.setAccessibilityLabel("Client secret")
+        newSecretName.setAccessibilityLabel("The client secret\u{2019}s name in Secrets")
+        newSecretValue.setAccessibilityLabel("The client secret, hidden")
+        secretPopUp.target = self
+        secretPopUp.action = #selector(changed)
         nameField.setAccessibilityLabel("Name")
         runsField.setAccessibilityLabel("Command or URL")
         newKeyName.setAccessibilityLabel("The new key's name")
@@ -155,9 +195,26 @@ final class MCPServerSheet: NSWindowController, NSWindowDelegate, NSTextFieldDel
         signInRow.addArrangedSubview(keyInsteadButton)
         signInRow.alignment = .firstBaseline
         signInRow.isHidden = true
+        ownAppButton.isBordered = false
+        ownAppButton.contentTintColor = .linkColor
+        ownAppButton.font = .systemFont(ofSize: 11)
+        ownAppButton.target = self
+        ownAppButton.action = #selector(toggleOwnApp)
+        ownLinkRow = row("", ownAppButton)
+        clientIDRow = row("Client ID", clientIDField)
+        secretRow = row("Secret", secretPopUp)
+        newSecretRow = NSStackView(views: [NSView(), newSecretName, newSecretValue])
+        newSecretRow.spacing = 8
+        newSecretRow.views.first?.widthAnchor.constraint(equalToConstant: 80).isActive = true
+        ownAppHelp.font = .systemFont(ofSize: 11)
+        ownAppHelp.textColor = .secondaryLabelColor
+        ownAppHelp.preferredMaxLayoutWidth = 392
+        ownAppHelp.isSelectable = true // the callback URL, to copy
+        ownHelpRow = row("", ownAppHelp)
         let stack = form
         stack.setViews([heading, row("Name", nameField), row("Runs", kind), row("", runsField), keyRow, signInRow,
-                                        newKeyRow, variableRow, row("Applies to", appliesPopUp), reasonLabel, buttons], in: .top)
+                        ownLinkRow, clientIDRow, secretRow, newSecretRow, ownHelpRow,
+                        newKeyRow, variableRow, row("Applies to", appliesPopUp), reasonLabel, buttons], in: .top)
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 10
@@ -176,6 +233,9 @@ final class MCPServerSheet: NSWindowController, NSWindowDelegate, NSTextFieldDel
             runsField.widthAnchor.constraint(equalToConstant: 392),
             newKeyName.widthAnchor.constraint(equalToConstant: 180),
             newKeyValue.widthAnchor.constraint(equalToConstant: 204),
+            clientIDField.widthAnchor.constraint(equalToConstant: 260),
+            newSecretName.widthAnchor.constraint(equalToConstant: 180),
+            newSecretValue.widthAnchor.constraint(equalToConstant: 204),
             variableField.widthAnchor.constraint(equalToConstant: 260),
         ])
     }
@@ -209,6 +269,19 @@ final class MCPServerSheet: NSWindowController, NSWindowDelegate, NSTextFieldDel
         keyPopUp.menu?.addItem(.separator())
         keyPopUp.addItem(withTitle: Self.newKey)
         keyPopUp.selectItem(withTitle: keyName ?? Self.noKey)
+
+        let app = server?.oauth
+        clientIDField.stringValue = app?.clientID ?? ""
+        ownApp = app != nil
+        discoveredIssuer = app?.issuer
+        secretPopUp.removeAllItems()
+        secretPopUp.addItem(withTitle: Self.noKey)
+        if !stored.isEmpty { secretPopUp.menu?.addItem(.separator()) }
+        for name in stored { secretPopUp.addItem(withTitle: name) }
+        if let named = app?.secretName, !stored.contains(named) { secretPopUp.addItem(withTitle: named) }
+        secretPopUp.menu?.addItem(.separator())
+        secretPopUp.addItem(withTitle: Self.newKey)
+        secretPopUp.selectItem(withTitle: app?.secretName ?? Self.noKey)
 
         appliesPopUp.removeAllItems()
         func item(_ title: String, _ target: Target) {
@@ -257,6 +330,22 @@ final class MCPServerSheet: NSWindowController, NSWindowDelegate, NSTextFieldDel
 
     var isURL: Bool { kind.selectedSegment == 1 }
     var isNewKey: Bool { keyPopUp.titleOfSelectedItem == Self.newKey }
+    var isNewSecret: Bool { usesOwnApp && secretPopUp.titleOfSelectedItem == Self.newKey }
+
+    /// The own-app rows can be offered: a server at a URL that gets no key in a header.
+    var offersOwnApp: Bool { isURL && keyName == nil && !keyInstead && (asksSignIn || editing != nil || ownApp) }
+    /// The own-app rows are open, so what they hold is saved.
+    var usesOwnApp: Bool { offersOwnApp && ownApp }
+
+    /// The client secret picked or given, by name; nil for none.
+    var secretName: String? {
+        guard usesOwnApp else { return nil }
+        if isNewSecret { return newSecretName.stringValue.isEmpty ? nil : newSecretName.stringValue }
+        let title = secretPopUp.titleOfSelectedItem ?? Self.noKey
+        return title == Self.noKey ? nil : title
+    }
+
+    var clientID: String { clientIDField.stringValue.trimmingCharacters(in: .whitespaces) }
 
     /// The key picked or given, by name; nil for none.
     var keyName: String? {
@@ -293,6 +382,14 @@ final class MCPServerSheet: NSWindowController, NSWindowDelegate, NSTextFieldDel
             } else if let old = server.headers["Authorization"], !MCPHubRules.secretNames(in: old).isEmpty {
                 server.headers["Authorization"] = nil // the key picked in the sheet was taken away
             }
+            if usesOwnApp, !clientID.isEmpty {
+                // The issuer stays bound to the same client ID (or comes from discovery); a new client ID starts unbound.
+                let old = editing?.server?.oauth
+                let issuer = discoveredIssuer ?? (old?.clientID == clientID ? old?.issuer : nil)
+                server.oauth = MCPHubServer.OAuthApp(clientID: clientID, secretName: secretName, issuer: issuer)
+            } else {
+                server.oauth = nil
+            }
         } else {
             let old = editing?.server.map(MCPHubOverview.keys(of:))?.keys ?? []
             var keys = Array(old.dropFirst())
@@ -306,6 +403,7 @@ final class MCPServerSheet: NSWindowController, NSWindowDelegate, NSTextFieldDel
             server.args = made.args
             server.url = ""
             server.headers = [:]
+            server.oauth = nil
         }
         switch target {
         case .all: server.projects = .all
@@ -329,6 +427,22 @@ final class MCPServerSheet: NSWindowController, NSWindowDelegate, NSTextFieldDel
             guard StoredSecretName.isValid(newKeyName.stringValue) else { return StoredSecretName.rule }
             if Self.storedKeys.contains(newKeyName.stringValue) { return "\(newKeyName.stringValue) is in Secrets already: pick it from the menu." }
             if newKeyValue.stringValue.isEmpty { return "" }
+        }
+        if usesOwnApp {
+            if clientID.isEmpty { return "" }
+            if clientID.count > 256 || clientID.unicodeScalars.contains(where: { $0.properties.isWhitespace || $0.properties.generalCategory == .control }) {
+                return "A client ID is one word, as the provider shows it."
+            }
+            if isNewSecret {
+                guard StoredSecretName.isValid(newSecretName.stringValue) else { return StoredSecretName.rule }
+                if Self.storedKeys.contains(newSecretName.stringValue) { return "\(newSecretName.stringValue) is in Secrets already: pick it from the menu." }
+                if newSecretValue.stringValue.isEmpty { return "" }
+            }
+            if cantRegister, secretName == nil, discoveredIssuer.flatMap({ URL(string: $0)?.host }) == "github.com" {
+                return "GitHub needs the app\u{2019}s client secret too."
+            }
+        } else if cantRegister, offersSignIn {
+            return "" // nothing to sign in as until the app is given
         }
         if keyName != nil, !AppDelegate.shared.agentControl { return SecretImportSheet.refusal }
         let reasons = MCPHubRules.reasons(server, place: list.place)
@@ -355,7 +469,15 @@ final class MCPServerSheet: NSWindowController, NSWindowDelegate, NSTextFieldDel
         keyRow.isHidden = offersSignIn
         signInRow.isHidden = !offersSignIn
         let named = nameField.stringValue.trimmingCharacters(in: .whitespaces)
-        signInLine.stringValue = "\(named.isEmpty ? "This server" : named) asks you to sign in. Next Term keeps you signed in for every agent."
+        let who = named.isEmpty ? "This server" : named
+        signInLine.stringValue = cantRegister
+            ? "\(who) asks you to sign in, and doesn\u{2019}t let apps register themselves: sign in with your own OAuth app."
+            : "\(who) asks you to sign in. Next Term keeps you signed in for every agent."
+        ownLinkRow.isHidden = !offersOwnApp || cantRegister
+        ownAppButton.title = ownApp ? "Don\u{2019}t use your own OAuth app" : "Use your own OAuth app"
+        for each in [clientIDRow, secretRow, ownHelpRow] { each.isHidden = !usesOwnApp }
+        newSecretRow.isHidden = !isNewSecret
+        ownAppHelp.stringValue = Self.callbackHelp(issuer: discoveredIssuer)
         addButton.title = offersSignIn ? "Sign In\u{2026}" : editing == nil ? "Add" : "Save"
         newKeyRow.isHidden = !isNewKey
         variableField.isHidden = isURL || keyName == nil
@@ -394,6 +516,7 @@ final class MCPServerSheet: NSWindowController, NSWindowDelegate, NSTextFieldDel
         guard typed != probed else { return }
         probeWork?.cancel()
         if asksSignIn { asksSignIn = false }
+        if cantRegister { cantRegister = false }
         var candidate = MCPHubServer(name: "probe", transport: .http)
         candidate.url = typed
         guard let url = URL(string: typed), MCPHubRules.reasons(candidate, place: .user).isEmpty else { return }
@@ -405,11 +528,22 @@ final class MCPServerSheet: NSWindowController, NSWindowDelegate, NSTextFieldDel
                 var challenge: String?
                 if case .failure(let failure) = answer, case .unauthorized(401, let header) = failure.kind,
                    MCPHubOAuthChallenge.bearer(header) != nil { challenge = header }
+                // Where it signs in, and whether Next Term can register there: GitHub's can't, so the own-app rows open.
+                var metadata: MCPHubOAuthDiscovery.Metadata?
+                if let challenge, case .success(let found) = MCPHubOAuthDiscovery.discover(server: url, name: "probe",
+                                                                                          challenge: MCPHubOAuthChallenge.bearer(challenge),
+                                                                                          fetch: MCPHubOAuthHTTP(server: url).asFetch) {
+                    metadata = found
+                }
                 DispatchQueue.main.async {
                     MainActor.assumeIsolated {
                         guard self.runsField.stringValue.trimmingCharacters(in: .whitespaces) == typed else { return }
                         self.asksSignIn = challenge != nil
                         self.probeChallenge = challenge
+                        self.discoveredIssuer = metadata?.issuer
+                        // CIMD isn't Next Term's yet (no metadata document published): only registration counts.
+                        self.cantRegister = metadata.map { $0.registrationEndpoint == nil } ?? false
+                        if self.cantRegister { self.ownApp = true }
                         self.refresh()
                     }
                 }
@@ -417,6 +551,24 @@ final class MCPServerSheet: NSWindowController, NSWindowDelegate, NSTextFieldDel
         }
         probeWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: work)
+    }
+
+    /// The line under the own-app rows: which callback URL to register at the provider. GitHub's OAuth apps take
+    /// `http://127.0.0.1/callback` and send the browser back to it on any port ("Loopback redirect urls", GitHub's
+    /// Authorizing OAuth apps); RFC 8252 §7.3 asks the same of every server.
+    static func callbackHelp(issuer: String?) -> String {
+        let callback = MCPHubOAuthRegistration.redirect
+        if issuer.flatMap({ URL(string: $0)?.host?.lowercased() }) == "github.com" {
+            return "In GitHub \u{203A} Settings \u{203A} Developer settings \u{203A} OAuth Apps, set the app\u{2019}s Authorization callback URL to \(callback). "
+                + "GitHub takes it on any port, so it works as written."
+        }
+        return "Register \(callback) as the app\u{2019}s callback URL. Next Term listens on a port of its own each time, which loopback addresses allow."
+    }
+
+    @objc private func toggleOwnApp() {
+        ownApp.toggle()
+        refresh()
+        if ownApp { window?.makeFirstResponder(clientIDField) }
     }
 
     @objc private func useKeyInstead() {
@@ -445,14 +597,22 @@ final class MCPServerSheet: NSWindowController, NSWindowDelegate, NSTextFieldDel
         if let editing, editing.name != server.name { steps.append(.init(change: .remove(editing.name), file: editing.list, place: editing.place)) }
         steps.append(.init(change: .set(server), file: list.file, place: list.place))
         let title = editing == nil ? "Add \(server.name)" : "Edit \(server.name)"
-        if offersSignIn { return signIn(server, title: title, steps: steps) }
-        guard isNewKey else { return end(MCPHubEdits.apply(title, steps)) }
-        let planned = SecretCopyIn.Planned(name: newKeyName.stringValue, value: SecretBytes(utf8: newKeyValue.stringValue),
-                                           purpose: Self.purpose(server.name), replaces: false)
+        var planned: [SecretCopyIn.Planned] = []
+        if isNewKey {
+            planned.append(SecretCopyIn.Planned(name: newKeyName.stringValue, value: SecretBytes(utf8: newKeyValue.stringValue),
+                                                purpose: Self.purpose(server.name), replaces: false))
+        }
+        if isNewSecret {
+            planned.append(SecretCopyIn.Planned(name: newSecretName.stringValue, value: SecretBytes(utf8: newSecretValue.stringValue),
+                                                purpose: Self.secretPurpose(server.name), replaces: false))
+        }
+        let signsIn = offersSignIn
+        guard !planned.isEmpty else { return signsIn ? signIn(server, title: title, steps: steps) : end(MCPHubEdits.apply(title, steps)) }
         isBusy = true
         refresh()
         Task { @MainActor in
-            if let failure = await Self.copyIn([planned], reason: SecretReason.save(planned.name)) {
+            let reason = planned.count == 1 ? SecretReason.save(planned[0].name) : SecretReason.copyIn(planned.count, from: "Settings \u{203A} MCP Servers")
+            if let failure = await Self.copyIn(planned, reason: reason) {
                 isBusy = false
                 refresh()
                 reasonLabel.stringValue = failure
@@ -461,6 +621,13 @@ final class MCPServerSheet: NSWindowController, NSWindowDelegate, NSTextFieldDel
                 return
             }
             newKeyValue.stringValue = ""
+            newSecretValue.stringValue = ""
+            if signsIn {
+                // Saved: the sheet now names it from Secrets, so a failed sign-in doesn't ask to save it twice.
+                if let name = planned.last?.name, isNewSecret { refillSecrets(selecting: name) }
+                isBusy = false
+                return signIn(server, title: title, steps: steps)
+            }
             end(MCPHubEdits.apply(title, steps))
         }
     }
@@ -503,6 +670,23 @@ final class MCPServerSheet: NSWindowController, NSWindowDelegate, NSTextFieldDel
     // MARK: keys
 
     static func purpose(_ server: String) -> String { "The \(server) MCP server\u{2019}s key, from Settings \u{203A} MCP Servers" }
+
+    static func secretPurpose(_ server: String) -> String {
+        "Your OAuth app\u{2019}s client secret for the \(server) MCP server, from Settings \u{203A} MCP Servers"
+    }
+
+    /// The Secret menu again, from Secrets as it is now, with `name` picked.
+    private func refillSecrets(selecting name: String) {
+        secretPopUp.removeAllItems()
+        secretPopUp.addItem(withTitle: Self.noKey)
+        let stored = Self.storedKeys
+        if !stored.isEmpty { secretPopUp.menu?.addItem(.separator()) }
+        for each in stored { secretPopUp.addItem(withTitle: each) }
+        if !stored.contains(name) { secretPopUp.addItem(withTitle: name) }
+        secretPopUp.menu?.addItem(.separator())
+        secretPopUp.addItem(withTitle: Self.newKey)
+        secretPopUp.selectItem(withTitle: name)
+    }
 
     /// The keys saved in Secrets under one Touch ID, as Secrets' own import saves them (with its Undo, in Recent
     /// imports). Nil when saved, else why not, in a sentence.

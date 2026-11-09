@@ -27,9 +27,69 @@ public struct MCPHubServer: Equatable, Sendable {
     /// Off: listed, never used.
     public var enabled: Bool
     public var projects: Projects
+    /// The user's own OAuth app for a server at a URL that can't register Next Term (GitHub's): `nextTerm.oauth`.
+    public var oauth: OAuthApp?
+
+    /// The user's own OAuth app, as the entry keeps it: `"nextTerm": {"oauth": {"clientID": "Ov23li…", "clientSecret":
+    /// "${secret:GITHUB_OAUTH_CLIENT_SECRET}", "issuer": "https://github.com/login/oauth"}}`. The client ID isn't a
+    /// secret; the secret is a key in Secrets, named here, never written here; the issuer is the authorization server
+    /// the app was made at, once Next Term has seen it, so the secret is never sent to another.
+    public struct OAuthApp: Equatable, Sendable {
+        public var clientID: String
+        /// The key in Secrets that holds the app's client secret; nil for an app with none (a public client).
+        public var secretName: String?
+        public var issuer: String?
+
+        public init(clientID: String, secretName: String? = nil, issuer: String? = nil) {
+            self.clientID = clientID
+            self.secretName = secretName
+            self.issuer = issuer
+        }
+
+        /// As the entry keeps it.
+        var value: MCPHubFile.Value {
+            var members = [MCPHubFile.Member("clientID", .string(clientID))]
+            if let secretName { members.append(MCPHubFile.Member("clientSecret", .string("${secret:\(secretName)}"))) }
+            if let issuer { members.append(MCPHubFile.Member("issuer", .string(issuer))) }
+            return .object(members)
+        }
+
+        /// The app an entry's `nextTerm.oauth` describes, or why not, each reason a sentence.
+        static func decode(_ value: MCPHubFile.Value, _ reasons: inout [String]) -> OAuthApp? {
+            guard value.members != nil else { reasons.append("Its nextTerm.oauth is not an object."); return nil }
+            let before = reasons.count
+            let id = value.member("clientID")?.string?.trimmingCharacters(in: .whitespaces) ?? ""
+            if id.isEmpty || id.count > 256 || id.unicodeScalars.contains(where: { $0.properties.isWhitespace || $0.properties.generalCategory == .control }) {
+                reasons.append("Its nextTerm.oauth.clientID is not a client ID: one word of text, as the provider shows it.")
+            }
+            var secret: String?
+            if let found = value.member("clientSecret") {
+                let text = found.string ?? ""
+                let names = MCPHubRules.secretNames(in: text)
+                if names.count == 1, text == "${secret:\(names[0])}", StoredSecretName.isValid(names[0]) {
+                    secret = names[0]
+                } else if found.string == nil || text.contains("${secret:") {
+                    reasons.append(MCPHubRules.badPlaceholder("Its nextTerm.oauth.clientSecret"))
+                } else {
+                    reasons.append("Its nextTerm.oauth.clientSecret is the secret itself. Move it to Secrets, and use ${secret:NAME} in its place.")
+                }
+            }
+            var issuer: String?
+            if let found = value.member("issuer") {
+                if let text = found.string, let url = URL(string: text), let host = url.host, !host.isEmpty, url.user == nil,
+                   url.scheme == "https" || (url.scheme == "http" && MCPHubRules.isThisMac(host)) {
+                    issuer = text
+                } else {
+                    reasons.append("Its nextTerm.oauth.issuer is not an https address.")
+                }
+            }
+            return reasons.count == before ? OAuthApp(clientID: id, secretName: secret, issuer: issuer) : nil
+        }
+    }
 
     public init(name: String, transport: Transport, command: String = "", args: [String] = [], env: [String: String] = [:],
-                url: String = "", headers: [String: String] = [:], enabled: Bool = true, projects: Projects = .all) {
+                url: String = "", headers: [String: String] = [:], enabled: Bool = true, projects: Projects = .all,
+                oauth: OAuthApp? = nil) {
         self.name = name
         self.transport = transport
         self.command = command
@@ -39,6 +99,7 @@ public struct MCPHubServer: Equatable, Sendable {
         self.headers = headers
         self.enabled = enabled
         self.projects = projects
+        self.oauth = oauth
     }
 
     /// A local server: a command Next Term starts for each agent session.
@@ -74,7 +135,7 @@ public struct MCPHubServer: Equatable, Sendable {
         let env = value.member("env").map { table($0, "env", &reasons) } ?? [:]
         let headers = value.member("headers").map { table($0, "headers", &reasons) } ?? [:]
 
-        var enabled = true, projects = Projects.all
+        var enabled = true, projects = Projects.all, oauth: OAuthApp?
         if let own = value.member("nextTerm") {
             var keys = Set<String>()
             if own.members == nil {
@@ -94,6 +155,7 @@ public struct MCPHubServer: Equatable, Sendable {
                         reasons.append("Its nextTerm.projects is neither \"all\" nor a list of folders.")
                     }
                 }
+                if let app = own.member("oauth") { oauth = OAuthApp.decode(app, &reasons) }
             }
         }
 
@@ -113,13 +175,14 @@ public struct MCPHubServer: Equatable, Sendable {
             reasons.append("It has no command to run and no url to reach.")
         }
         if transport == .stdio, !hasCommand { reasons.append("Its type is stdio, and it has no command.") }
+        if transport == .stdio, oauth != nil { reasons.append("Its nextTerm.oauth is for a server at a URL; a command signs in by itself.") }
         if let transport, transport != .stdio, !hasURL { reasons.append("Its type is \(transport.rawValue), and it has no url.") }
         guard reasons.isEmpty, let transport else { return .failure(Broken(reasons: reasons)) }
 
         let server = MCPHubServer(name: name, transport: transport, command: transport == .stdio ? command ?? "" : "",
                                   args: transport == .stdio ? args : [], env: transport == .stdio ? env : [:],
                                   url: transport == .stdio ? "" : url ?? "", headers: transport == .stdio ? [:] : headers,
-                                  enabled: enabled, projects: projects)
+                                  enabled: enabled, projects: projects, oauth: transport == .stdio ? nil : oauth)
         let broken = MCPHubRules.reasons(server, place: place)
         return broken.isEmpty ? .success(server) : .failure(Broken(reasons: broken))
     }
@@ -176,6 +239,8 @@ public struct MCPHubServer: Equatable, Sendable {
             }
             Self.put("projects", scope, in: &own) { $0 == scope }
         }
+        let app = local ? nil : oauth?.value
+        Self.put("oauth", app, in: &own) { $0 == app }
         Self.put("nextTerm", .object(own), in: &members) { $0 == .object(own) }
         return .object(members)
     }
