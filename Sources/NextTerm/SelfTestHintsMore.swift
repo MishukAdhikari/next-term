@@ -398,17 +398,20 @@ extension SelfTest {
         app.welcomeController?.close()
         if let window = c.window { _ = await bringToFront(window) }
 
-        // open_project on a project already open retires it: the other window's, or the first's when the other has none.
+        // open_project on a project already open retires it. The hints part's two windows have none (New Window), so a
+        // folder of its own is opened as a project first, behind, and closed after.
+        let folder = canonicalPath(NSTemporaryDirectory()) + "/nt-hint-switch-\(getpid())"
+        try? FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: true)
+        let project: TerminalWindowController = app.openFolder(folder, newWindow: true)
+        if let window = c.window { _ = await bringToFront(window) }
         only(.switchBack)
-        if let project = other.project ?? c.project {
-            var reply = ""
-            MCPControl.call("open_project", ["path": project], caller: nil) { reply = $0.text }
-            _ = await wait(5) { !reply.isEmpty }
-            check(HintCenter.shared.record(.switchBack).retired == .actionPerformed, "hints H5: open_project on an open project retires it",
-                  String(reply.prefix(200)))
-        } else {
-            check(false, "hints H5: one of the two windows has a project, for open_project")
-        }
+        var reply = ""
+        MCPControl.call("open_project", ["path": folder], caller: nil) { reply = $0.text }
+        _ = await wait(5) { !reply.isEmpty }
+        check(project.project == folder && HintCenter.shared.record(.switchBack).retired == .actionPerformed,
+              "hints H5: open_project on an open project retires it", String(reply.prefix(200)))
+        if !project.hasClosed { project.window?.close() }
+        try? FileManager.default.removeItem(atPath: folder)
         if let window = c.window { _ = await bringToFront(window) }
         HintStage.shared.resetForTest()
     }
