@@ -4,9 +4,13 @@ import NextTermCore
 /// Project windows merged as macOS's own window tabs (plan 032): which tab is in front, what each tab shows, and closing
 /// a merged window.
 extension TerminalWindowController {
-    /// Watches the system tab group the window is in, for which tab is in front and who is in it. A window moved to
-    /// another group gets that group, so this is asked again whenever the title bar changes (a merge or a split moves the
-    /// tab bar) and when the window becomes key.
+    /// Watches the system tab group the window is in, for which tab is in front, who is in it and whether its tab bar
+    /// shows. A window moved to another group gets that group, so this is asked again whenever the title bar changes (a
+    /// merge or a split moves the tab bar) and when the window becomes key.
+    ///
+    /// A window that joins another's group (Merge All Windows) can have its unobscured area change while it still
+    /// reports its old group of one, with no tab bar: measured then, its top row stayed beside the traffic lights, under
+    /// the tab bar it went on to show. So the top is measured again once the window is in its new group.
     func watchTabGroup() {
         guard let window else { return }
         let group: NSWindowTabGroup? = window.tabGroup
@@ -19,15 +23,27 @@ extension TerminalWindowController {
             group?.observe(\.windows, options: [.new]) { [weak self] (_, _) in
                 DispatchQueue.main.async { self?.tabGroupChanged() }
             },
+            group?.observe(\.isTabBarVisible, options: [.new]) { [weak self] (_, _) in
+                DispatchQueue.main.async { self?.tabGroupChanged() }
+            },
         ].compactMap { $0 }
         tabSelectionChanged()
+        DispatchQueue.main.async { [weak self] in self?.measureTitleBar() }
     }
 
     /// The watched group changed: the window may have left it for another (a merge of windows that each had a tab bar
-    /// moves no title bar), so the watch follows it, else what changed is passed on.
+    /// moves no title bar), so the watch follows it, else what changed is passed on. Either way the top is measured
+    /// again: a window merged in, or brought to the front of its group, may not have been laid out under the tab bar yet.
     private func tabGroupChanged() {
-        if window?.tabGroup !== watchedTabGroup { return watchTabGroup() }
-        tabSelectionChanged()
+        if window?.tabGroup !== watchedTabGroup { watchTabGroup() } else { tabSelectionChanged() }
+        measureTitleBar()
+    }
+
+    /// The top row below the system tab bar, or back beside the traffic lights, as the window is now; nothing for a
+    /// closed window.
+    private func measureTitleBar() {
+        guard !hasClosed else { return }
+        titleBarChanged()
     }
 
     /// Its tab came to the front, went behind another, or the tabs beside it changed: what is seen follows at once (its
