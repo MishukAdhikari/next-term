@@ -117,7 +117,8 @@ final class WindowColumns: NSObject {
         hintTriggers(from: old, wasVisible: was)
     }
 
-    /// The column's hints' triggers (ColumnHints): it has just come (H3), or a mark has appeared in a window (H2).
+    /// The column's hints' triggers (ColumnHints): it has just come (H3), a mark has appeared in a window (H2), or a
+    /// repository's row has a worktree more under it (H8).
     /// Never while a restore builds its windows: the column coming back with them at launch, or after an update, is not
     /// the user reaching it, and the marks they bring back are not new.
     private func hintTriggers(from old: WindowColumnList, wasVisible: Bool) {
@@ -146,6 +147,8 @@ final class WindowColumns: NSObject {
     /// A repository's fold arrow, in any window's column: its worktrees fold into its row, or come out again, everywhere.
     func toggleFold(_ key: String) {
         if folded.remove(key) == nil { folded.insert(key) }
+        // Used, by the arrow, VoiceOver's action or the hint's button: the hint on it is done.
+        MainActor.assumeIsolated { HintCenter.shared.retire(.foldWorktrees, reason: .actionPerformed) }
         UserDefaults.standard.set(folded.sorted(), forKey: WindowColumnSettings.foldedKey)
         rebuild()
     }

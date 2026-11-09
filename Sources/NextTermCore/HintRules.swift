@@ -14,6 +14,8 @@ public enum Hint: String, CaseIterable, Sendable {
     case terminalBeside
     /// Lines selected in the editor with an agent waiting for a prompt: Send to Agent types them into it.
     case sendSelection
+    /// A repository's row with its worktrees' windows under it: its arrow folds them into it.
+    case foldWorktrees
 
     /// How the hint asks: a passive line, or a notice with a button that does it.
     public enum Kind: Sendable {
@@ -33,7 +35,7 @@ public enum Hint: String, CaseIterable, Sendable {
         switch self {
         case .nextAgent: return "goToNextAgentNeedingYou:"
         case .sendSelection: return "sendToAgent:"
-        case .columnSide, .columnBasics, .terminalBeside: return nil
+        case .columnSide, .columnBasics, .terminalBeside, .foldWorktrees: return nil
         }
     }
 
@@ -45,7 +47,7 @@ public enum Hint: String, CaseIterable, Sendable {
     public var traceless: Bool {
         switch self {
         case .nextAgent, .sendSelection: return true
-        case .columnSide, .columnBasics, .terminalBeside: return false
+        case .columnSide, .columnBasics, .terminalBeside, .foldWorktrees: return false
         }
     }
 }
@@ -328,6 +330,7 @@ public enum HintRules {
         case .columnSide: return inUse.columnSideChosen ? .retire : .due
         case .columnBasics: return inUse.columnExpandedEver ? .retire : .due
         case .terminalBeside: return inUse.terminalPositionChosen ? .retire : .due
+        case .foldWorktrees: return inUse.worktreesFoldedEver ? .retire : .due
         case .nextAgent, .sendSelection: break
         }
         return hint.traceless && inUse.existingInstall ? .watch : .due

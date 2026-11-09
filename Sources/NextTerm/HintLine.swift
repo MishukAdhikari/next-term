@@ -32,6 +32,9 @@ final class HintLine: NSView {
         didSet { if place != oldValue { restyle() } }
     }
     var beside: Bool { place == .beside }
+    /// It may go beside the rail when the pinned column's foot is too narrow: not a hint whose feature lives in the
+    /// unfolded rows (H8).
+    var mayGoBeside = true
     /// In a column at the window's right edge: the grid's names start from its inner edge.
     var onRight = false {
         didSet { if onRight != oldValue { needsLayout = true } }

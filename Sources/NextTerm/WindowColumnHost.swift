@@ -309,7 +309,7 @@ final class WindowColumnHost: NSView {
                 column.hint = line
             } else {
                 // Beside the column only over chrome (the project sidebar on that edge), never the editor's or terminal's text.
-                guard line.ownWidth + 8 <= roomBeside() else { return false }
+                guard line.mayGoBeside, line.ownWidth + 8 <= roomBeside() else { return false }
                 line.place = .beside
                 addSubview(line) // over the split view, as the list is
             }

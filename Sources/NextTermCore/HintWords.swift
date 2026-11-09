@@ -38,11 +38,35 @@ public enum HintWords {
         (ask(agent: agent, key: key), "Types the selected lines into \(agent)’s prompt. Or ask your agent: ‘look at my selection’.")
     }
 
+    /// H8, at the window column's foot: a button that folds the first repository's worktrees into its row, and help
+    /// that names it and says how they come back. No agent tool folds them, so there is no "ask your agent".
+    public static func foldWorktrees(repository: String) -> (words: String, help: String) {
+        ("Fold worktrees", "Folds \(repository)’s worktrees into its row. Its arrow shows them again.")
+    }
+
     /// The × on every hint, for VoiceOver and its tooltip: it closes the tip for good.
     public static let close = "Close Tip"
 }
 
 extension WindowColumnList {
+    /// H8: the repositories' rows whose worktrees' windows could fold into them now, in the column's order: not folded,
+    /// with `atLeast` worktree rows under them, each with how many.
+    public func foldable(atLeast: Int = 2) -> [(row: WindowColumnRow, worktrees: Int)] {
+        var found: [(row: WindowColumnRow, worktrees: Int)] = []
+        for (index, row) in rows.enumerated() where row.foldKey != nil && !row.isFolded {
+            let under: Int = rows[(index + 1)...].prefix { $0.depth > 0 }.count
+            if under >= atLeast { found.append((row, under)) }
+        }
+        return found
+    }
+
+    /// H8's trigger in the pinned column: a repository's row that is foldable now with more worktree rows under it than
+    /// `old` showed (its second one opened, or a third). Nil when none grew.
+    public func newlyFoldable(since old: WindowColumnList) -> WindowColumnRow? {
+        let before: [Int: Int] = Dictionary(old.foldable(atLeast: 0).map { ($0.row.id, $0.worktrees) }, uniquingKeysWith: { first, _ in first })
+        return foldable().first { $0.worktrees > before[$0.row.id] ?? 0 }?.row
+    }
+
     /// The rows that now show a window needing you or failed where `old` did not: a mark has just appeared in them
     /// (H2's trigger). A row already marked, or one whose mark only changed between the two, is not new.
     public func newlyUrgent(since old: WindowColumnList) -> [WindowColumnRow] {

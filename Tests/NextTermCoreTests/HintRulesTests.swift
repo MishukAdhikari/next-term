@@ -12,7 +12,7 @@ struct HintRulesTests {
     }
 
     @Test func everyHintIsPassiveWithThreeShowings() {
-        #expect(Hint.allCases == [.columnSide, .nextAgent, .columnBasics, .terminalBeside, .sendSelection])
+        #expect(Hint.allCases == [.columnSide, .nextAgent, .columnBasics, .terminalBeside, .sendSelection, .foldWorktrees])
         for hint in Hint.allCases { #expect(hint.kind == .passive && hint.limit == 3) }
     }
 
@@ -168,6 +168,12 @@ struct HintRulesTests {
         #expect(HintRules.seed(.sendSelection, .init()) == .due)
         #expect(HintRules.seed(.sendSelection, .init(existingInstall: true)) == .watch)
         #expect(HintRules.seed(.sendSelection, .init(existingInstall: true, overrides: ["sendToAgent:"])) == .retire)
+    }
+
+    @Test func worktreesEverFoldedRetireTheFoldHint() {
+        #expect(HintRules.seed(.foldWorktrees, .init(existingInstall: true)) == .due)
+        #expect(HintRules.seed(.foldWorktrees, .init(worktreesFoldedEver: true)) == .retire)
+        #expect(!Hint.foldWorktrees.inTabBar && !Hint.foldWorktrees.traceless)
     }
 
     @Test func aKeyTheUserReboundCountsAsUsed() {
