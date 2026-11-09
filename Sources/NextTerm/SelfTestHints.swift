@@ -20,23 +20,23 @@ extension SelfTest {
                      expanded: defaults.object(forKey: WindowColumnSettings.expandedKey), side: defaults.object(forKey: "windowColumnSide"),
                      sidebar: app.sidebarSide)
         let clocks = (sinceKey: HintCenter.sinceKey, age: HintCenter.windowAge, exposure: HintCenter.exposureDelay)
-        let timing = (dwell: ColumnHints.listDwell, stays: ColumnHints.stays, looks: ColumnHints.looksEvery, front: ColumnHints.front)
+        let timing = (dwell: ColumnHints.listDwell, stays: HintStage.stays, looks: HintStage.looksEvery, front: HintStage.front)
         let host: WindowColumnHost = first.columnHost
         let pointer: () -> NSPoint = WindowColumnHost.pointerLocation
         let motion: () -> Bool = WindowColumnHost.reducesMotion
         let contrast: Bool? = DisplayOptions.increasesContrastOverride
         var second: TerminalWindowController?
         defer {
-            ColumnHints.shared.resetForTest()
+            HintStage.shared.resetForTest()
             host.hideList(animated: false)
             if let second, !second.hasClosed { second.window?.close() }
             HintCenter.sinceKey = clocks.sinceKey
             HintCenter.windowAge = clocks.age
             HintCenter.exposureDelay = clocks.exposure
             ColumnHints.listDwell = timing.dwell
-            ColumnHints.stays = timing.stays
-            ColumnHints.looksEvery = timing.looks
-            ColumnHints.front = timing.front
+            HintStage.stays = timing.stays
+            HintStage.looksEvery = timing.looks
+            HintStage.front = timing.front
             WindowColumnHost.pointerLocation = pointer
             WindowColumnHost.reducesMotion = motion
             DisplayOptions.increasesContrastOverride = contrast
@@ -48,7 +48,7 @@ extension SelfTest {
             restoreDefault(saved.expanded, WindowColumnSettings.expandedKey)
             restoreDefault(saved.side, "windowColumnSide")
             WindowColumns.suppressed = true
-            ColumnHints.suppressed = true
+            HintStage.suppressed = true
             app.windowColumns.rebuild()
         }
         // The user is never typing, every window has been open long enough, and the window in front is the first; a
@@ -57,21 +57,21 @@ extension SelfTest {
         HintCenter.windowAge = { _ in 600 }
         HintCenter.exposureDelay = 0.2
         ColumnHints.listDwell = 0.2
-        ColumnHints.stays = 0.6
-        ColumnHints.looksEvery = 0.1
-        ColumnHints.front = { first }
+        HintStage.stays = 0.6
+        HintStage.looksEvery = 0.1
+        HintStage.front = { first }
         // The real pointer is on no list, and the hints come in at once.
         WindowColumnHost.pointerLocation = { NSPoint(x: -100_000, y: -100_000) }
         WindowColumnHost.reducesMotion = { true }
         WindowColumns.suppressed = false
-        ColumnHints.suppressed = false
+        HintStage.suppressed = false
         app.showsWindowColumn = true
         app.windowColumnExpanded = false
         if app.sidebarSide != .left { app.toggleSidebarSide(nil) }
         app.setWindowColumnSide(.left)
         /// As a fresh install has them: nothing seen, retired or due, tips on, and the upgrade seeding done.
         func freshTips() {
-            ColumnHints.shared.resetForTest()
+            HintStage.shared.resetForTest()
             host.hideList(animated: false)
             HintRules.reset(defaults)
             defaults.removeObject(forKey: HintRules.tipsKey)
@@ -87,7 +87,7 @@ extension SelfTest {
             return check(false, "hints: a second window opens, its shell started")
         }
         second = made
-        ColumnHints.front = { first } // the second came in front: the checks' front window is still the first
+        HintStage.front = { first } // the second came in front: the checks' front window is still the first
         firstWindow.layoutIfNeeded()
         guard await wait(3, { host.shown.form == .folded }) else {
             return check(false, "hints: with two windows the first shows its rail", "\(host.shown)")
@@ -129,7 +129,7 @@ extension SelfTest {
         HintCenter.sinceKey = { 0.5 }
         ColumnHints.shared.columnAppeared()
         await pause(0.4)
-        let heldForKeys: Bool = host.hint == nil && ColumnHints.shared.waiting[.columnBasics] != nil
+        let heldForKeys: Bool = host.hint == nil && HintStage.shared.isWaiting(.columnBasics)
         HintCenter.sinceKey = { 60 }
         let cameLater: Bool = await wait(2) { host.hint?.hint == .columnBasics }
         check(heldForKeys && cameLater, "hints: never while the user is typing; the trigger waits, and once the keys are left alone it shows",
@@ -287,7 +287,7 @@ extension SelfTest {
         ColumnHints.shared.columnAppeared()
         let back: Bool = await wait(2) { host.hint?.hint == .columnBasics }
         check(fresh && back, "hints: Reset Tips brings back the tips closed", "fresh \(fresh), back \(back)")
-        ColumnHints.shared.resetForTest()
+        HintStage.shared.resetForTest()
         for hint in Hint.allCases { HintCenter.shared.retire(hint, reason: .closed) }
         app.showTipsAgain(nil)
         check(Hint.allCases.allSatisfy { HintCenter.shared.record($0).retired == nil }, "hints: Help › Show Tips Again does the same")
@@ -299,7 +299,7 @@ extension SelfTest {
         check(host.hint?.label?.textColor == Theme.text, "hints: with Increase Contrast the words are in the label colour",
               String(describing: host.hint?.label?.textColor))
         DisplayOptions.increasesContrastOverride = nil
-        ColumnHints.shared.resetForTest()
+        HintStage.shared.resetForTest()
     }
 }
 #endif

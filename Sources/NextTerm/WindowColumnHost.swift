@@ -321,7 +321,7 @@ final class WindowColumnHost: NSView {
         return true
     }
 
-    /// Takes the hint down, wherever it is (ColumnHints, which counts its showing).
+    /// Takes the hint down, wherever it is (HintStage, which counts its showing).
     func removeHint() {
         guard let line = hint else { return }
         hint = nil
@@ -345,7 +345,7 @@ final class WindowColumnHost: NSView {
     /// goes, and its showing counts as long as it was up.
     private func hintPlaceWent() {
         guard hint != nil else { return }
-        ColumnHints.shared.placeWent(in: self)
+        HintStage.shared.placeWent(in: self)
     }
 
     // MARK: the list on hover
@@ -690,4 +690,11 @@ final class WindowColumnHost: NSView {
         let contentFrame = NSRect(x: columnOnRight ? 0 : width, y: 0, width: max(0, bounds.width - width), height: height)
         return (width > 0 ? columnFrame : nil, contentFrame)
     }
+}
+
+extension WindowColumnHost: HintPlace {
+    /// At the open list's foot while the list is open, else at the column's foot or beside it.
+    func showHint(_ line: HintLine) -> Bool { showHint(line, inList: listShowing) }
+    /// A line in the hover list goes with the list.
+    var hintGoesWithPlace: Bool { hintInList }
 }
