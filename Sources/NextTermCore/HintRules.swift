@@ -12,6 +12,8 @@ public enum Hint: String, CaseIterable, Sendable {
     case columnBasics
     /// The divider between the editor and the terminal dragged to an extreme: the terminal can sit beside the editor.
     case terminalBeside
+    /// Lines selected in the editor with an agent waiting for a prompt: Send to Agent types them into it.
+    case sendSelection
 
     /// How the hint asks: a passive line, or a notice with a button that does it.
     public enum Kind: Sendable {
@@ -30,18 +32,19 @@ public enum Hint: String, CaseIterable, Sendable {
     public var command: String? {
         switch self {
         case .nextAgent: return "goToNextAgentNeedingYou:"
+        case .sendSelection: return "sendToAgent:"
         case .columnSide, .columnBasics, .terminalBeside: return nil
         }
     }
 
     /// It sits in a tab bar, beside where the Update button would be: that button holds it back.
-    public var inTabBar: Bool { self == .terminalBeside }
+    public var inTabBar: Bool { self == .terminalBeside || self == .sendSelection }
 
     /// Its feature leaves nothing behind that says it was used, so an install that had it before the hint gets a watch
     /// (HintRules.watch) in place of a fact: use in those days retires the hint before it ever shows.
     public var traceless: Bool {
         switch self {
-        case .nextAgent: return true
+        case .nextAgent, .sendSelection: return true
         case .columnSide, .columnBasics, .terminalBeside: return false
         }
     }
@@ -325,7 +328,7 @@ public enum HintRules {
         case .columnSide: return inUse.columnSideChosen ? .retire : .due
         case .columnBasics: return inUse.columnExpandedEver ? .retire : .due
         case .terminalBeside: return inUse.terminalPositionChosen ? .retire : .due
-        case .nextAgent: break
+        case .nextAgent, .sendSelection: break
         }
         return hint.traceless && inUse.existingInstall ? .watch : .due
     }

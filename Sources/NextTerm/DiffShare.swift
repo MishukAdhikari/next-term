@@ -115,7 +115,7 @@ final class AskAgentHint: NSButton {
 
     func set(agent: String, tab: String, key: String?) {
         let words = "Ask \(agent)"
-        let text = [key, words].compactMap { $0?.isEmpty == false ? $0 : nil }.joined(separator: " ")
+        let text = HintWords.ask(agent: agent, key: key) // the editor's hint says the same (H4)
         let tip = "Types the selected lines into \(agent)’s prompt in tab “\(tab)”. Nothing is sent until you press Return there."
         guard text != title || tip != toolTip else { return }
         attributedTitle = NSAttributedString(string: text, attributes: [.font: NSFont.systemFont(ofSize: 11.5), .foregroundColor: Theme.textDim])

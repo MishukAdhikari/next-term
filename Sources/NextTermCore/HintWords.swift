@@ -26,6 +26,18 @@ public enum HintWords {
     public static let terminalBeside = (words: "Move terminal to the right",
                                         help: "Or ⋯ › Move Terminal To. Or ask your agent: ‘put the terminal on the right’.")
 
+    /// What Send to Agent's quiet button says, in a diff's toolbar and in H4: its key as the user has it, then the verb
+    /// and the agent ("⌥⌘K Ask Claude Code"); without a key, the words alone. One feature, one phrase.
+    public static func ask(agent: String, key: String?) -> String {
+        [key, "Ask \(agent)"].compactMap { $0?.isEmpty == false ? $0 : nil }.joined(separator: " ")
+    }
+
+    /// H4, in the editor's tab bar while lines are selected and an agent waits for a prompt: the diff's own words, and
+    /// help that says what a click does and how an agent can ask for the selection itself.
+    public static func sendSelection(agent: String, key: String?) -> (words: String, help: String) {
+        (ask(agent: agent, key: key), "Types the selected lines into \(agent)’s prompt. Or ask your agent: ‘look at my selection’.")
+    }
+
     /// The × on every hint, for VoiceOver and its tooltip: it closes the tip for good.
     public static let close = "Close Tip"
 }

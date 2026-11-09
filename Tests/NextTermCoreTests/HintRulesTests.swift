@@ -12,7 +12,7 @@ struct HintRulesTests {
     }
 
     @Test func everyHintIsPassiveWithThreeShowings() {
-        #expect(Hint.allCases == [.columnSide, .nextAgent, .columnBasics, .terminalBeside])
+        #expect(Hint.allCases == [.columnSide, .nextAgent, .columnBasics, .terminalBeside, .sendSelection])
         for hint in Hint.allCases { #expect(hint.kind == .passive && hint.limit == 3) }
     }
 
@@ -161,6 +161,13 @@ struct HintRulesTests {
         #expect(HintRules.seed(.terminalBeside, .init(existingInstall: true)) == .due)
         #expect(HintRules.seed(.terminalBeside, .init(terminalPositionChosen: true)) == .retire)
         #expect(Hint.terminalBeside.inTabBar && !Hint.columnSide.inTabBar)
+    }
+
+    @Test func sendToAgentLeavesNoTraceSoAnInstallUsedBeforeWatchesIt() {
+        #expect(Hint.sendSelection.command == "sendToAgent:" && Hint.sendSelection.traceless && Hint.sendSelection.inTabBar)
+        #expect(HintRules.seed(.sendSelection, .init()) == .due)
+        #expect(HintRules.seed(.sendSelection, .init(existingInstall: true)) == .watch)
+        #expect(HintRules.seed(.sendSelection, .init(existingInstall: true, overrides: ["sendToAgent:"])) == .retire)
     }
 
     @Test func aKeyTheUserReboundCountsAsUsed() {

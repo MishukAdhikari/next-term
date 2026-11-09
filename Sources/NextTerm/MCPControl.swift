@@ -581,6 +581,8 @@ enum MCPControl {
         if secret != nil || document.holdsSecrets {
             if range.length > 0 { info["withheld"] = "The selection is in a file that usually holds secrets, so its text isn't shared." }
         } else if range.length > 0 {
+            // An agent reads the selection itself: the hint on sending it has nothing left to teach.
+            MainActor.assumeIsolated { HintCenter.shared.retire(.sendSelection, reason: .actionPerformed) }
             let selected = field(text.substring(with: range))
             info["text"] = selected.count > 200_000 ? String(selected.prefix(200_000)) + "\n… (cut at 200,000 characters)" : selected
         }

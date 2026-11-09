@@ -2110,6 +2110,18 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     func editorAreaSelectionChanged(_ area: EditorArea) {
         followActiveFile()
         scheduleSelectionShare()
+        BarHints.shared.editorSelectionChanged(in: self)
+    }
+
+    /// The lines selected in the editor in front, while it has the keyboard: the editor, its range and the first and
+    /// last line the selection spans (zero-based; one ending at a line's start leaves that line out, as Send to Agent
+    /// counts). Nil with nothing selected, or the keyboard elsewhere.
+    var editorLines: (editor: CodeEditorView, range: NSRange, first: Int, last: Int)? {
+        guard isEditorFocused, let editor = editorArea.activeEditor else { return nil }
+        let range: NSRange = editor.textView.selectedRange()
+        guard range.length > 0 else { return nil }
+        let lines = editor.document.lines
+        return (editor, range, lines.line(at: range.location), lines.line(at: max(range.location, NSMaxRange(range) - 1)))
     }
 
     /// Lines were selected in a diff in this window, or its selection went: the agents hear it, as they hear
@@ -2328,6 +2340,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             if let window { alert.beginSheetModal(for: window) } else { alert.runModal() }
             return
         }
+        // Sent, from the editor, the sidebar, the terminal, a diff's Ask or the hint itself: the hint on it is done.
+        HintCenter.shared.retire(.sendSelection, reason: .actionPerformed)
         let base = canonicalPath(tab.directory)
         let relative = items.map { item -> ContextItem in
             var item = item
