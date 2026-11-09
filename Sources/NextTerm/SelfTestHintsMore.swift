@@ -381,27 +381,33 @@ extension SelfTest {
         }
         HintStage.shared.hide()
 
-        // ⌘O, then Return on the other window's row, brings it forward and retires it.
+        // ⌘O, then Return on the other window's row, brings it forward and retires it. The other window may have no
+        // project (the hints part opens it with New Window): then its row is the window's own.
         app.openProjectPanel(nil)
-        if await wait(3, { app.welcomeController?.window?.isVisible == true }), let welcome = app.welcomeController, let project = other.project {
-            welcome.select(project: project)
+        let row: SwitcherEntry.ID = other.project.map { SwitcherEntry.ID.project($0) } ?? .window(other.indexID)
+        let listed: Bool = await wait(3) { app.welcomeController?.window?.isVisible == true }
+        app.welcomeController?.select(row)
+        if listed, let welcome = app.welcomeController, welcome.selectedEntry?.id == row {
             welcome.openSelectedProject()
             check(await wait(3) { other.window?.isKeyWindow == true } && HintCenter.shared.record(.switchBack).retired == .actionPerformed,
                   "hints H5: ⌘O then ↩ on the other window goes back to it and retires the hint", "\(HintCenter.shared.record(.switchBack))")
         } else {
-            check(false, "hints H5: ⌘O shows the Welcome list, the other window's project in it")
+            check(false, "hints H5: ⌘O shows the Welcome list, the other window's row in it",
+                  "shown \(listed), row \(row), selected \(String(describing: app.welcomeController?.selectedEntry?.id))")
         }
         app.welcomeController?.close()
         if let window = c.window { _ = await bringToFront(window) }
 
-        // open_project on a project already open retires it.
+        // open_project on a project already open retires it: the other window's, or the first's when the other has none.
         only(.switchBack)
-        if let project = other.project {
+        if let project = other.project ?? c.project {
             var reply = ""
             MCPControl.call("open_project", ["path": project], caller: nil) { reply = $0.text }
             _ = await wait(5) { !reply.isEmpty }
             check(HintCenter.shared.record(.switchBack).retired == .actionPerformed, "hints H5: open_project on an open project retires it",
                   String(reply.prefix(200)))
+        } else {
+            check(false, "hints H5: one of the two windows has a project, for open_project")
         }
         if let window = c.window { _ = await bringToFront(window) }
         HintStage.shared.resetForTest()

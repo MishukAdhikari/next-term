@@ -717,8 +717,11 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
     private var current: String?
     var selectedProject: String? { current }
 
-    func select(project: String) {
-        guard let index = switcher.shown.index(of: .project(project)) else { return }
+    func select(project: String) { select(.project(project)) }
+
+    /// The row `id` stands for selected: a project's, a window's own or a server's.
+    func select(_ id: SwitcherEntry.ID) {
+        guard let index = switcher.shown.index(of: id) else { return }
         switcher.select(index)
         showSelection()
     }

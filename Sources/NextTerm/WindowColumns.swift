@@ -104,12 +104,14 @@ final class WindowColumns: NSObject {
     }
 
     /// A window opened or closed, or a setting changed: the whole list made again and every window told.
-    func rebuild() {
+    /// `previous`: the list as it was before, when the caller has already moved `list` on (windowChanged's structure
+    /// change), so the hints' triggers compare against what the column showed.
+    func rebuild(from previous: WindowColumnList? = nil) {
         #if DEBUG
         rebuildCount += 1
         #endif
         let entries: [WindowIndex.Window] = app.windowIndex.windows
-        let old: WindowColumnList = list
+        let old: WindowColumnList = previous ?? list
         let was: Bool = visible
         list = WindowColumnList.build(windows: entries, colors: colors(), showsWorking: showsWorking, folded: folded)
         visible = decideVisible(count: entries.count)
@@ -177,7 +179,9 @@ final class WindowColumns: NSObject {
         case .none:
             return
         case .structure:
-            rebuild()
+            // A window more, or one regrouped: made again whole, its triggers against the list before the change (H8's
+            // worktree joining its repository's row, H2's mark in a regrouped row).
+            rebuild(from: old)
         case .rows:
             tell(change)
             hintTriggers(from: old, wasVisible: visible)
