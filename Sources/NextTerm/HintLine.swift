@@ -5,7 +5,7 @@ import NextTermCore
 /// something a real borderless button with those words, and a small × that closes it for good, there while the pointer
 /// is on the line. In the window column (its open list, or the pinned column) it sits on the column's grid, its words at
 /// the names' x; beside the rail it lies over the content's edge on a plate of the column's own colour, so it reads as
-/// part of the column. It never takes the keyboard and posts no announcement: VoiceOver finds it where it is, its words
+/// part of the column; in a tab bar's free room it has no plate, the bar being chrome already. It never takes the keyboard and posts no announcement: VoiceOver finds it where it is, its words
 /// as static text and as help. It comes in over 150 ms, at once with Reduce Motion; with Increase Contrast its words are
 /// in the label colour.
 final class HintLine: NSView {
@@ -18,10 +18,20 @@ final class HintLine: NSView {
     let closeButton = HoverButton()
     /// Its × was clicked.
     var onClose: (() -> Void)?
-    /// Beside the rail, over the content, on its plate; else on the column's grid.
-    var beside = false {
-        didSet { if beside != oldValue { restyle() } }
+    /// Where a line sits, which decides its plate and where its words start.
+    enum Place {
+        /// On the window column's grid (its list's foot, or the pinned column's): the words at the names' x.
+        case grid
+        /// Beside the rail, over the content's edge, on a plate of the column's colour.
+        case beside
+        /// In a tab bar's free room: no plate, the words at the inset.
+        case bar
     }
+
+    var place: Place = .grid {
+        didSet { if place != oldValue { restyle() } }
+    }
+    var beside: Bool { place == .beside }
     /// In a column at the window's right edge: the grid's names start from its inner edge.
     var onRight = false {
         didSet { if onRight != oldValue { needsLayout = true } }
@@ -35,7 +45,7 @@ final class HintLine: NSView {
     /// A row of the column's grid would be 32: the line is quieter, and the rows give up less room for it.
     static let height: CGFloat = 24
     private static let closeSize: CGFloat = 16
-    /// Beside the rail: the words' inset from the plate's edges.
+    /// Beside the rail and in a bar: the words' inset from the line's edges.
     private static let inset: CGFloat = 10
 
     /// The words' colour: the secondary one, the label colour with Increase Contrast, and a button's under the pointer.
@@ -110,8 +120,8 @@ final class HintLine: NSView {
     /// Whether its words show whole in the room layout gave them (the self-test's check).
     var wordsWhole: Bool { ((button ?? label)?.frame.width ?? 0) >= wordsWidth }
 
-    /// Beside the rail: as wide as its words, its × and their insets.
-    var besideWidth: CGFloat { Self.inset + wordsWidth + 4 + Self.closeSize + 6 }
+    /// Beside the rail or in a bar: as wide as its words, its × and their insets.
+    var ownWidth: CGFloat { Self.inset + wordsWidth + 4 + Self.closeSize + 6 }
 
     /// Whether its words fit whole on one line of the column's grid in a strip `width` across.
     func fits(width: CGFloat) -> Bool {
@@ -123,7 +133,7 @@ final class HintLine: NSView {
     override func layout() {
         super.layout()
         let start: CGFloat, end: CGFloat
-        if beside {
+        if place != .grid {
             start = Self.inset
             end = bounds.width - 6
         } else {
@@ -178,7 +188,16 @@ final class HintLine: NSView {
         addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self))
     }
 
-    override func mouseEntered(with event: NSEvent) { hovering = true }
+    /// The pointer came onto it: a tab bar, whose title-bar band may send no exit, watches it from then on.
+    var onPointerCame: (() -> Void)?
+
+    override func mouseEntered(with event: NSEvent) {
+        hovering = true
+        onPointerCame?()
+    }
+
+    /// Where the pointer is, as a tab bar watching it sees it.
+    func pointer(on: Bool) { hovering = on }
     override func mouseExited(with event: NSEvent) { hovering = false }
     override func viewDidHide() {
         super.viewDidHide()

@@ -309,8 +309,8 @@ final class WindowColumnHost: NSView {
                 column.hint = line
             } else {
                 // Beside the column only over chrome (the project sidebar on that edge), never the editor's or terminal's text.
-                guard line.besideWidth + 8 <= roomBeside() else { return false }
-                line.beside = true
+                guard line.ownWidth + 8 <= roomBeside() else { return false }
+                line.place = .beside
                 addSubview(line) // over the split view, as the list is
             }
         }
@@ -335,7 +335,7 @@ final class WindowColumnHost: NSView {
     /// the content leaves room for.
     private func placeHintBeside() {
         guard let line = hint, line.beside, !column.isHidden else { return }
-        let width: CGFloat = min(line.besideWidth, max(0, content.frame.width - 16))
+        let width: CGFloat = min(line.ownWidth, max(0, content.frame.width - 16))
         let x: CGFloat = columnOnRight ? column.frame.minX - width : column.frame.maxX
         let frame = NSRect(x: x, y: ((WindowColumnGrid.foot - HintLine.height) / 2).rounded(), width: width, height: HintLine.height)
         if line.frame != frame { line.frame = frame }

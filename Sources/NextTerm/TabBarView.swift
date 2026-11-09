@@ -143,6 +143,77 @@ final class TabBarView: NSView, ProjectGlowing {
     let updateButton = UpdatePill()
     private var updateWidth: CGFloat { updateButton.isHidden ? 0 : updateButton.width + 8 }
 
+    // MARK: a hint
+
+    /// The hint up in this bar (HintStage puts it there), in `hintRoom`: the free strip between the last control after
+    /// the tabs and the buttons at the end. It takes no room of its own, so the tabs and the keys are laid out as if it
+    /// were not there; when what is left can't hold its words whole it goes (`onHintRoomWent`), before a key or a tab
+    /// would give way.
+    private(set) var hint: HintLine?
+    /// The hint's room went (the bar narrowed, a tab or a button came): whoever put it takes it down.
+    var onHintRoomWent: (() -> Void)?
+
+    /// The free strip, in the bar's coordinates, as the last layout left it.
+    var hintRoom: (start: CGFloat, end: CGFloat) {
+        layoutSubtreeIfNeeded()
+        return freeStrip()
+    }
+
+    /// Puts `line` up in the free strip, at its trailing end, without a plate. False, and nothing put up, when the bar
+    /// is not on screen, shows the Update button (a notice of its own), or has no room for the words whole.
+    func showHint(_ line: HintLine) -> Bool {
+        guard hint == nil, window != nil, !isHiddenOrHasHiddenAncestor, updateButton.isHidden else { return false }
+        layoutSubtreeIfNeeded()
+        let strip = freeStrip()
+        guard HintRoom.place(width: line.ownWidth, start: strip.start, end: strip.end) != nil else { return false }
+        line.place = .bar
+        line.onPointerCame = { [weak self] in self?.watchPointer() }
+        addSubview(line)
+        hint = line
+        placeHint()
+        line.appear()
+        return true
+    }
+
+    /// Takes the hint down (HintStage, which counts its showing).
+    func removeHint() {
+        guard let line = hint else { return }
+        hint = nil
+        line.onPointerCame = nil
+        line.removeFromSuperview()
+    }
+
+    /// From the end of what follows the tabs (the +, the », or the last tab) to the first button at the bar's end.
+    private func freeStrip() -> (start: CGFloat, end: CGFloat) {
+        let visibleTabs = tabViews.filter { !$0.isHidden && $0 !== dragging?.view }
+        var start: CGFloat = max(tabsStart, visibleTabs.map(\.frame.maxX).max() ?? 0)
+        if !overflowButton.isHidden { start = max(start, overflowButton.frame.maxX) }
+        if allowsNewTab { start = max(start, newTabButton.frame.maxX) }
+        let more: CGFloat = moreButton == nil ? 0 : Self.moreButtonWidth
+        let end: CGFloat = bounds.width - more - 4 - collapseWidth - revealWidth - updateWidth
+        return (start, end)
+    }
+
+    /// The hint at the strip's trailing end, its height the line's, in the bar's middle; with too little room left it
+    /// hides at once and its room is told gone.
+    private func placeHint() {
+        guard let line = hint else { return }
+        let strip = freeStrip()
+        guard updateButton.isHidden, let placed = HintRoom.place(width: line.ownWidth, start: strip.start, end: strip.end) else {
+            line.isHidden = true
+            DispatchQueue.main.async { [weak self, weak line] in
+                MainActor.assumeIsolated {
+                    guard let self, let line, self.hint === line else { return }
+                    self.onHintRoomWent?()
+                }
+            }
+            return
+        }
+        line.isHidden = false
+        let frame = NSRect(x: placed.x, y: ((bounds.height - 1 - HintLine.height) / 2).rounded(), width: placed.width, height: HintLine.height)
+        if line.frame != frame { line.frame = frame }
+    }
+
     /// The title for the accessibility tab group and the close button's tooltip.
     var kind = "tab" { didSet { setAccessibilityLabel(kind == "tab" ? "Terminal tabs" : "Editor tabs") } }
 
@@ -381,6 +452,7 @@ final class TabBarView: NSView, ProjectGlowing {
         sidebarHint.keepClear = leadingInset // over the traffic lights' strip, its key would go under them
         for hint in [sidebarHint, newTabHint, collapseHint, revealHint] { hint.place(shown: hintRooms[hint] != nil) }
         updateOverflowButton()
+        placeHint()
     }
 
     /// The hidden tabs' count and their most urgent status (attention > failed > done > working).
@@ -481,6 +553,11 @@ final class TabBarView: NSView, ProjectGlowing {
 
     fileprivate func pointerCame(to view: TabItemView) {
         point(at: view)
+        watchPointer()
+    }
+
+    /// Looks where the pointer is until it leaves the bar: for the tabs, and for a hint's ×.
+    private func watchPointer() {
         guard pointerWatch == nil else { return }
         let timer = Timer(timeInterval: Self.pointerLooks, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.followPointer() }
@@ -497,6 +574,7 @@ final class TabBarView: NSView, ProjectGlowing {
         guard bounds.contains(at), NSWindow.windowNumber(at: NSEvent.mouseLocation, belowWindowWithWindowNumber: 0) == window.windowNumber
         else { return pointerGone() }
         point(at: tabViews.first { !$0.isHidden && $0.convert($0.bounds, to: self).contains(at) })
+        if let hint, !hint.isHidden { hint.pointer(on: hint.frame.contains(at)) }
     }
 
     private func point(at view: TabItemView?) {
@@ -507,6 +585,7 @@ final class TabBarView: NSView, ProjectGlowing {
 
     private func pointerGone() {
         point(at: nil)
+        hint?.pointer(on: false)
         pointerWatch?.invalidate()
         pointerWatch = nil
     }

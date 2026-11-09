@@ -283,7 +283,7 @@ final class WindowColumnView: NSView, ProjectGlowing {
         if let hint, expanded {
             hintRoom = max(0, HintLine.height - (foot - footHeight))
             hint.onRight = onRight
-            hint.beside = false
+            hint.place = .grid
             let frame = NSRect(x: x, y: footFrame.minY - HintLine.height, width: width, height: HintLine.height)
             if hint.frame != frame { hint.frame = frame }
         }
