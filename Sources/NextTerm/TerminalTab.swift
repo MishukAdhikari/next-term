@@ -722,6 +722,8 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     private(set) lazy var completion = CompletionSession(tab: self)
     /// Suggestions while typing in this tab.
     private(set) lazy var ghost = GhostSession(tab: self)
+    /// A notice of the suggestions shows in the terminal (their question about a plugin, or their first-use hint).
+    var ghostNoticeShowing: Bool { ghost.notice != nil || ghost.hint != nil }
     /// Whether this tab's zsh can take history's key now, so a line Next Term submits by itself stays out of its history
     /// (ShellHistory, submitOwnLine).
     private(set) var history = ShellHistory.Readiness()

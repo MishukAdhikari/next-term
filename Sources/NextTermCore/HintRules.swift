@@ -31,6 +31,9 @@ public enum Hint: String, CaseIterable, Sendable {
         }
     }
 
+    /// It sits in a tab bar, beside where the Update button would be: that button holds it back.
+    public var inTabBar: Bool { false }
+
     /// Its feature leaves nothing behind that says it was used, so an install that had it before the hint gets a watch
     /// (HintRules.watch) in place of a fact: use in those days retires the hint before it ever shows.
     public var traceless: Bool {
@@ -39,6 +42,25 @@ public enum Hint: String, CaseIterable, Sendable {
         case .columnSide, .columnBasics: return false
         }
     }
+}
+
+/// What else may be up when a hint's trigger fires: any of them holds every hint back, so one thing speaks at a time.
+public struct HintNotices: OptionSet, Sendable {
+    public let rawValue: Int
+    public init(rawValue: Int) { self.rawValue = rawValue }
+
+    /// Another hint.
+    public static let hint = HintNotices(rawValue: 1 << 0)
+    /// A toast: a git command's, or the window column's offer to show or hide it.
+    public static let toast = HintNotices(rawValue: 1 << 1)
+    /// A sheet on the window or a modal panel: the Add Task sheet and its offer, an alert.
+    public static let sheet = HintNotices(rawValue: 1 << 2)
+    /// The import window, "Coming from another app?" or an agent's request with its banner.
+    public static let importWindow = HintNotices(rawValue: 1 << 3)
+    /// A notice in the focused tab's terminal: the suggestions' question about a plugin, or their first-use hint.
+    public static let ghostNotice = HintNotices(rawValue: 1 << 4)
+    /// The Update button in the window's tab bar, for a hint that would sit in a tab bar beside it.
+    public static let updateButton = HintNotices(rawValue: 1 << 5)
 }
 
 /// The rules every hint follows (plan 033 R2): when one may show, what counts as having seen it, and why it retires,
@@ -99,8 +121,9 @@ public enum HintRules {
         /// When any hint last counted a showing.
         public var lastAnyShownAt: Date?
         public var now: Date
-        /// Another hint or a notice (the window column offer, the import banner, a ghost notice) is up.
-        public var noticeVisible: Bool
+        /// Another hint or a notice is up (HintNotices).
+        public var notices: HintNotices
+        public var noticeVisible: Bool { !notices.isEmpty }
         /// Seconds since the last key in the window (UserKeys.since).
         public var sinceKey: TimeInterval
         /// The focused tab's agent is working, or waiting on a decision.
@@ -108,13 +131,13 @@ public enum HintRules {
         /// Seconds since the window opened.
         public var windowAge: TimeInterval
 
-        public init(tipsOn: Bool = true, record: Record = Record(), lastAnyShownAt: Date? = nil, now: Date, noticeVisible: Bool = false,
+        public init(tipsOn: Bool = true, record: Record = Record(), lastAnyShownAt: Date? = nil, now: Date, notices: HintNotices = [],
                     sinceKey: TimeInterval = .infinity, agentBusy: Bool = false, windowAge: TimeInterval = .infinity) {
             self.tipsOn = tipsOn
             self.record = record
             self.lastAnyShownAt = lastAnyShownAt
             self.now = now
-            self.noticeVisible = noticeVisible
+            self.notices = notices
             self.sinceKey = sinceKey
             self.agentBusy = agentBusy
             self.windowAge = windowAge

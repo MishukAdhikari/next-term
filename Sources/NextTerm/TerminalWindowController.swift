@@ -1669,6 +1669,9 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         }
     }
 
+    /// The Update button shows in one of this window's tab bars.
+    var showsUpdateButton: Bool { !tabBar.updateButton.isHidden || !editorArea.tabBar.updateButton.isHidden }
+
     /// The smallest a pane may get along the work split: room for its tabs and a few lines.
     private var workMinimum: CGFloat { workSplit.isVertical ? 240 : TabBarView.height + 60 }
 

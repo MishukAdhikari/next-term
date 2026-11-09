@@ -402,6 +402,11 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private(set) var agentAsk: AgentAsk?
+    /// Made at all: the window exists only once something opened it.
+    private static var made = false
+    /// The import window is open, the user's or an agent's request (a hint holds back while it is).
+    static var isShowing: Bool { made && shared.window?.isVisible == true }
+
     /// The user's own import window is open (not an agent's request).
     var isOpenForUser: Bool { window?.isVisible == true && agentAsk == nil }
 
@@ -413,6 +418,7 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
         window.isReleasedWhenClosed = false
         super.init(window: window)
         window.delegate = self
+        Self.made = true
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }

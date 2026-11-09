@@ -34,9 +34,11 @@ struct HintRulesTests {
         soon.lastAnyShownAt = now.addingTimeInterval(-day)
         #expect(HintRules.heldBack(.columnSide, soon) == nil)
 
-        var notice = clear()
-        notice.noticeVisible = true
-        #expect(HintRules.heldBack(.columnSide, notice) == .noticeVisible)
+        for each: HintNotices in [.hint, .toast, .sheet, .importWindow, .ghostNotice, .updateButton] {
+            var notice = clear()
+            notice.notices = each
+            #expect(HintRules.heldBack(.columnSide, notice) == .noticeVisible)
+        }
 
         var typing = clear()
         typing.sinceKey = 1.9
@@ -59,7 +61,7 @@ struct HintRulesTests {
         // Retired and typing: retired is the reason, so the caller never waits for a key that changes nothing.
         var both = clear(.init(retired: .countReached))
         both.sinceKey = 0
-        both.noticeVisible = true
+        both.notices = [.hint, .sheet]
         #expect(HintRules.heldBack(.nextAgent, both) == .retired)
     }
 

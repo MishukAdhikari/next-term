@@ -64,8 +64,22 @@ final class HintCenter {
     func situation(_ hint: Hint, in controller: TerminalWindowController) -> HintRules.Situation {
         let state: TabState? = controller.activeTab?.status.state
         return HintRules.Situation(tipsOn: tipsOn, record: record(hint), lastAnyShownAt: HintRules.lastAnyShownAt(defaults), now: Date(),
-                                   noticeVisible: visible != nil || GitToast.isShowing, sinceKey: Self.sinceKey(),
+                                   notices: notices(for: hint, in: controller), sinceKey: Self.sinceKey(),
                                    agentBusy: state == .working || state == .attention, windowAge: Self.windowAge(controller))
+    }
+
+    /// What is up that would speak beside a hint in `controller`: another hint, a toast (the window column's offer
+    /// among them), a sheet or a modal panel (the Add Task sheet and its offer), the import window, a notice in the
+    /// focused terminal, and for a hint in a tab bar the Update button there.
+    func notices(for hint: Hint, in controller: TerminalWindowController) -> HintNotices {
+        var notices: HintNotices = []
+        if visible != nil { notices.insert(.hint) }
+        if GitToast.isShowing { notices.insert(.toast) }
+        if controller.window?.attachedSheet != nil || NSApp.modalWindow != nil { notices.insert(.sheet) }
+        if ImportWindowController.isShowing { notices.insert(.importWindow) }
+        if controller.activeTab?.ghostNoticeShowing == true { notices.insert(.ghostNotice) }
+        if hint.inTabBar, controller.showsUpdateButton { notices.insert(.updateButton) }
+        return notices
     }
 
     /// `hint` came up: nothing else shows until it goes (noteHidden). Still up after a second, its showing counts then,
