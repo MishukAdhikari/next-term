@@ -103,10 +103,11 @@ enum PlaceMenus {
         finished(column(window: window), for: window)
     }
 
-    /// The window column: Collapse or Expand Window Column and Move to the other edge, then Merge All Windows (into
-    /// `window`), then Hide Window Column.
+    /// The window column: Pin or Unpin Window Column (what a double-click on it does), Collapse or Expand Window Column
+    /// and Move to the other edge, then Merge All Windows (into `window`), then Hide Window Column.
     static func column(window: TerminalWindowController?) -> NSMenu {
         let menu = NSMenu(title: "Window Column")
+        menu.addItem(ColumnPin.item())
         menu.addItem(LayoutItems.windowColumnFold())
         let other: AppDelegate.SidebarSide = AppDelegate.shared.windowColumnOnRight ? .left : .right
         menu.addItem(LayoutItems.windowColumnSide(other, title: "Move to the \(other.title) Edge"))
@@ -136,5 +137,24 @@ enum PlaceMenus {
             KeyboardShortcuts.set(KeyboardShortcuts.shared.chord(for: id), on: item)
         }
         return menu
+    }
+}
+
+/// Pin Window Column, or Unpin while it is pinned: what a double-click on the column does (it stays unfolded in every
+/// window, or folds back to the rail), offered in its right-click menu. Its own target, so the title says pin while
+/// Collapse or Expand keeps its words.
+private final class ColumnPin: NSObject {
+    static let shared = ColumnPin()
+
+    static func item() -> NSMenuItem {
+        let pinned: Bool = AppDelegate.shared.windowColumnExpanded
+        let item = NSMenuItem(title: pinned ? "Unpin Window Column" : "Pin Window Column",
+                              action: #selector(ColumnPin.toggle(_:)), keyEquivalent: "")
+        item.target = shared
+        return item
+    }
+
+    @objc func toggle(_ sender: Any?) {
+        AppDelegate.shared.toggleWindowColumnExpanded(sender)
     }
 }
