@@ -894,7 +894,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// Settings › General says so, each with one fresh shell. Written at every quit, so changing the setting later works.
     /// What this install already shows of each hint's feature, read at launch for the hints' seeding: the settings each
     /// feature writes when used, a key the user rebound, and whether it was used before (Recent Projects, as kept).
-    private var hintsInUse: HintRules.InUse {
+    var hintsInUse: HintRules.InUse {
         let defaults = UserDefaults.standard
         return HintRules.InUse(columnSideChosen: windowColumnSide != nil,
                                columnExpandedEver: defaults.object(forKey: WindowColumnSettings.expandedKey) != nil,

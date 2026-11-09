@@ -8,7 +8,7 @@ import NextTermCore
 /// a time; a passive one retires at its third showing; each retires when its feature is used (H1 by its own button and by
 /// View › Window Column Position, H2 by Go to Next Agent Needing You, H3 by the list opening); × retires it; the off switch
 /// takes every hint down and shows none; Reset Tips and Help › Show Tips Again bring them back. H1 is screenshotted in the
-/// hover list. NEXTTERM_SELFTEST_ONLY=hints runs it alone.
+/// hover list. Then the four after them, and the seeding (SelfTestHintsMore). NEXTTERM_SELFTEST_ONLY=hints runs it alone.
 extension SelfTest {
     static func hintsChecks() async {
         guard let app = AppDelegate.shared else { return }
@@ -76,6 +76,7 @@ extension SelfTest {
             HintRules.reset(defaults)
             defaults.removeObject(forKey: HintRules.tipsKey)
             defaults.set(true, forKey: HintRules.seededKey)
+            defaults.set(Hint.allCases.map(\.rawValue), forKey: HintRules.seededHintsKey)
         }
         /// The day between two hints, gone: the next may show at once.
         func nextDay() { defaults.removeObject(forKey: HintRules.lastAnyShownKey) }
@@ -99,6 +100,7 @@ extension SelfTest {
         await sideChecks(app, first, freshTips: freshTips, nextDay: nextDay)
         await nextAgentChecks(app, first, made, freshTips: freshTips)
         await switchChecks(app, first, freshTips: freshTips, nextDay: nextDay)
+        await moreHintsChecks(app, first, made, freshTips: freshTips, nextDay: nextDay)
     }
 
     /// H3: the column's first showing puts "Rest here…" beside the rail's foot, as static text, taking no keyboard; it
