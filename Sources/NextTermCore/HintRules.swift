@@ -21,6 +21,24 @@ public enum Hint: String, CaseIterable, Sendable {
 
     /// How many real exposures it gets: three for a line, one for a notice with an action (asking twice is nagging).
     public var limit: Int { kind == .passive ? 3 : 1 }
+
+    /// The command whose key the hint teaches or whose feature it is, as the shortcut table names it: a key the user
+    /// rebound for it means they know it, and the seeding retires the hint. Nil for a hint with no command of its own.
+    public var command: String? {
+        switch self {
+        case .nextAgent: return "goToNextAgentNeedingYou:"
+        case .columnSide, .columnBasics: return nil
+        }
+    }
+
+    /// Its feature leaves nothing behind that says it was used, so an install that had it before the hint gets a watch
+    /// (HintRules.watch) in place of a fact: use in those days retires the hint before it ever shows.
+    public var traceless: Bool {
+        switch self {
+        case .nextAgent: return true
+        case .columnSide, .columnBasics: return false
+        }
+    }
 }
 
 /// The rules every hint follows (plan 033 R2): when one may show, what counts as having seen it, and why it retires,
@@ -36,6 +54,9 @@ public enum HintRules {
     public static let exposure: TimeInterval = 1
     /// How long after it first could have shown a hint retires quietly, seen or not.
     public static let expiry: TimeInterval = 60 * 24 * 60 * 60
+    /// How long an install that had a traceless feature before its hint waits, watching for its use, before the hint
+    /// may show: two weeks.
+    public static let watch: TimeInterval = 14 * 24 * 60 * 60
 
     /// Why a hint retired. It never shows again until Reset Tips.
     public enum Retirement: String, CaseIterable, Sendable {
@@ -57,12 +78,16 @@ public enum HintRules {
         /// When its trigger first fired with the hint still due.
         public var firstEligibleAt: Date?
         public var retired: Retirement?
+        /// When the seeding started its watch (an install that had the feature before the hint): nothing shows for
+        /// `HintRules.watch` from then, and nothing starts its 60 days.
+        public var watchFrom: Date?
 
-        public init(shown: Int = 0, lastShownAt: Date? = nil, firstEligibleAt: Date? = nil, retired: Retirement? = nil) {
+        public init(shown: Int = 0, lastShownAt: Date? = nil, firstEligibleAt: Date? = nil, retired: Retirement? = nil, watchFrom: Date? = nil) {
             self.shown = shown
             self.lastShownAt = lastShownAt
             self.firstEligibleAt = firstEligibleAt
             self.retired = retired
+            self.watchFrom = watchFrom
         }
     }
 
@@ -98,19 +123,20 @@ public enum HintRules {
 
     /// Why a hint does not show now, the first rule that holds it back; for the self-test and for reading the rules.
     public enum HeldBack: Equatable, Sendable {
-        case tipsOff, retired, limitReached, expired, tooSoon, noticeVisible, typing, agentBusy, windowNew
+        case tipsOff, retired, limitReached, watching, expired, tooSoon, noticeVisible, typing, agentBusy, windowNew
     }
 
     /// Whether `hint` shows now, its trigger having fired.
     public static func eligible(_ hint: Hint, _ situation: Situation) -> Bool { heldBack(hint, situation) == nil }
 
-    /// What holds `hint` back now; nil, it shows. Its own state first (off, retired, used up, expired), then the
+    /// What holds `hint` back now; nil, it shows. Its own state first (off, retired, used up, watched, expired), then the
     /// moment's: a day since any hint, nothing else up, no typing for 2 s, no busy agent, a window open a minute.
     public static func heldBack(_ hint: Hint, _ situation: Situation) -> HeldBack? {
         let record = situation.record
         guard situation.tipsOn else { return .tipsOff }
         guard record.retired == nil else { return .retired }
         guard record.shown < hint.limit else { return .limitReached }
+        if isWatching(record, now: situation.now) { return .watching }
         if isExpired(record, now: situation.now) { return .expired }
         if let last = situation.lastAnyShownAt, situation.now.timeIntervalSince(last) < spacing { return .tooSoon }
         if situation.noticeVisible { return .noticeVisible }
@@ -126,12 +152,18 @@ public enum HintRules {
         return now.timeIntervalSince(first) >= expiry
     }
 
+    /// Within the two weeks of its watch.
+    public static func isWatching(_ record: Record, now: Date) -> Bool {
+        guard let from = record.watchFrom else { return false }
+        return now.timeIntervalSince(from) < watch
+    }
+
     /// Whether a showing that lasted `seconds` counts as seen.
     public static func counts(_ seconds: TimeInterval) -> Bool { seconds >= exposure }
 
-    /// The trigger fired with the hint still due: the 60 days start, once.
+    /// The trigger fired with the hint still due: the 60 days start, once, and not while it is watched.
     public static func noteTriggered(_ record: Record, now: Date) -> Record {
-        guard record.retired == nil, record.firstEligibleAt == nil else { return record }
+        guard record.retired == nil, record.firstEligibleAt == nil, !isWatching(record, now: now) else { return record }
         var record = record
         record.firstEligibleAt = now
         return record
@@ -162,13 +194,16 @@ public enum HintRules {
     public static let tipsKey = "showTips"
     /// When any hint last counted a showing, in seconds since 1970.
     public static let lastAnyShownKey = "hint.lastAnyShownAt"
-    /// The upgrade seeding has run (HintCenter.seed): it runs once, and Reset Tips leaves it, so a reset shows again
-    /// the tips of features already used.
+    /// The first seeding, for the three hints 0.11.38 brought, has run. Kept and still written, so a version from
+    /// before per-hint seeding finds it; read only when `seededHintsKey` is missing.
     public static let seededKey = "hint.seeded"
+    /// The hints the seeding has looked at, each once (`seed`): a hint a later version brings is seeded at the first
+    /// launch that knows it. Reset Tips leaves it, so a reset shows again the tips of features already used.
+    public static let seededHintsKey = "hint.seededHints"
 
-    /// One of a hint's keys: `hint.<id>.shown`, `.lastShownAt`, `.firstEligibleAt` or `.retired`.
+    /// One of a hint's keys: `hint.<id>.shown`, `.lastShownAt`, `.firstEligibleAt`, `.retired` or `.watchFrom`.
     public enum Field: String, CaseIterable, Sendable {
-        case shown, lastShownAt, firstEligibleAt, retired
+        case shown, lastShownAt, firstEligibleAt, retired, watchFrom
     }
 
     public static func key(_ hint: Hint, _ field: Field) -> String { "hint.\(hint.rawValue).\(field.rawValue)" }
@@ -176,7 +211,7 @@ public enum HintRules {
     /// What Reset Tips clears: every hint's keys and the time of the last one.
     public static let resetKeys: [String] = Hint.allCases.flatMap { hint in Field.allCases.map { key(hint, $0) } } + [lastAnyShownKey]
     /// Every key the hints keep, for the self-test to put back.
-    public static let keys: [String] = resetKeys + [seededKey, tipsKey]
+    public static let keys: [String] = resetKeys + [seededKey, seededHintsKey, tipsKey]
 
     /// Whether tips are on in `defaults`.
     public static func tipsOn(_ defaults: UserDefaults) -> Bool { defaults.object(forKey: tipsKey) as? Bool ?? true }
@@ -187,7 +222,7 @@ public enum HintRules {
         }
         return Record(shown: defaults.integer(forKey: key(hint, .shown)), lastShownAt: date(.lastShownAt),
                       firstEligibleAt: date(.firstEligibleAt),
-                      retired: defaults.string(forKey: key(hint, .retired)).flatMap(Retirement.init(rawValue:)))
+                      retired: defaults.string(forKey: key(hint, .retired)).flatMap(Retirement.init(rawValue:)), watchFrom: date(.watchFrom))
     }
 
     /// Saves `record`; a field it doesn't have is removed, so a fresh record leaves no key behind.
@@ -199,6 +234,7 @@ public enum HintRules {
         set(record.lastShownAt?.timeIntervalSince1970, .lastShownAt)
         set(record.firstEligibleAt?.timeIntervalSince1970, .firstEligibleAt)
         set(record.retired?.rawValue, .retired)
+        set(record.watchFrom?.timeIntervalSince1970, .watchFrom)
     }
 
     public static func lastAnyShownAt(_ defaults: UserDefaults) -> Date? {
@@ -209,8 +245,8 @@ public enum HintRules {
         defaults.set(date.timeIntervalSince1970, forKey: lastAnyShownKey)
     }
 
-    /// Reset Tips and Help › Show Tips Again: tips seen or closed show again. The features' own settings, the off
-    /// switch and the seeding mark stay.
+    /// Reset Tips and Help › Show Tips Again: tips seen or closed show again, and a watch ends. The features' own
+    /// settings, the off switch and the seeding marks stay.
     public static func reset(_ defaults: UserDefaults) {
         resetKeys.forEach(defaults.removeObject(forKey:))
     }
@@ -223,24 +259,85 @@ public enum HintRules {
         public var columnSideChosen: Bool
         /// The column was ever pinned unfolded or folded back (its setting was ever written).
         public var columnExpandedEver: Bool
+        /// A terminal position was ever chosen (`terminalPosition` was written, even back to Bottom).
+        public var terminalPositionChosen: Bool
+        /// A repository's worktrees were ever folded into its row (`windowColumnFolded` was written).
+        public var worktreesFoldedEver: Bool
+        /// The install was used before this launch (Recent Projects is not empty): a traceless feature may have been
+        /// used, so its hint is watched rather than due.
+        public var existingInstall: Bool
+        /// The commands the user gave a key of their own, or took the key from (the shortcut table's overrides).
+        public var overrides: Set<String>
 
-        public init(columnSideChosen: Bool = false, columnExpandedEver: Bool = false) {
+        public init(columnSideChosen: Bool = false, columnExpandedEver: Bool = false, terminalPositionChosen: Bool = false,
+                    worktreesFoldedEver: Bool = false, existingInstall: Bool = false, overrides: Set<String> = []) {
             self.columnSideChosen = columnSideChosen
             self.columnExpandedEver = columnExpandedEver
+            self.terminalPositionChosen = terminalPositionChosen
+            self.worktreesFoldedEver = worktreesFoldedEver
+            self.existingInstall = existingInstall
+            self.overrides = overrides
         }
     }
 
-    /// The hints whose feature is in use already, retired as `actionPerformed` by the seeding. Every other hint stays
-    /// due, and waits for its trigger like a new user's: no what's-new popover, ever. Nothing kept tells whether Go to
-    /// Next Agent Needing You was used before hints came in, so `nextAgent` is never seeded; its first use from now on
-    /// retires it (HintCenter.retire).
-    public static func seeded(_ inUse: InUse) -> [Hint] {
-        Hint.allCases.filter { hint in
-            switch hint {
-            case .columnSide: return inUse.columnSideChosen
-            case .columnBasics: return inUse.columnExpandedEver
-            case .nextAgent: return false
-            }
+    /// What the seeding does with one hint.
+    public enum Seed: Equatable, Sendable {
+        /// Its feature is in use: retired as `actionPerformed`, never shown.
+        case retire
+        /// Nothing says whether its feature was used: two weeks of watching first, in which a use retires it.
+        case watch
+        /// Due, waiting for its trigger like a new user's.
+        case due
+    }
+
+    /// What the seeding does with `hint` on an install that has `inUse`. A key of the user's own for its command
+    /// retires any hint; then each hint's own fact; a traceless feature on an install used before is watched. Nothing
+    /// is ever shown by the seeding: no what's-new popover, ever.
+    public static func seed(_ hint: Hint, _ inUse: InUse) -> Seed {
+        if let command = hint.command, inUse.overrides.contains(command) { return .retire }
+        switch hint {
+        case .columnSide: return inUse.columnSideChosen ? .retire : .due
+        case .columnBasics: return inUse.columnExpandedEver ? .retire : .due
+        case .nextAgent: break
         }
+        return hint.traceless && inUse.existingInstall ? .watch : .due
+    }
+
+    /// The hints `defaults` has not seeded yet. Without the per-hint list, an install that ran the first seeding
+    /// (`seededKey`) has seeded the three hints it knew.
+    public static func unseeded(_ defaults: UserDefaults) -> [Hint] {
+        let done: Set<String> = seededNames(defaults)
+        return Hint.allCases.filter { !done.contains($0.rawValue) }
+    }
+
+    private static func seededNames(_ defaults: UserDefaults) -> Set<String> {
+        if let names = defaults.stringArray(forKey: seededHintsKey) { return Set(names) }
+        guard defaults.bool(forKey: seededKey) else { return [] }
+        return Set([Hint.columnSide, .nextAgent, .columnBasics].map(\.rawValue))
+    }
+
+    /// Seeds each hint not seeded yet, once, from `inUse`: retires those in use, starts the watch of the traceless
+    /// ones, and marks all of them seeded (names a later version wrote are kept). Returns what it did, by hint.
+    @discardableResult
+    public static func seed(_ inUse: InUse, _ defaults: UserDefaults, now: Date) -> [Hint: Seed] {
+        let due: [Hint] = unseeded(defaults)
+        var done: [Hint: Seed] = [:]
+        for hint in due {
+            let seed: Seed = seed(hint, inUse)
+            done[hint] = seed
+            var record: Record = load(hint, defaults)
+            switch seed {
+            case .retire: record = retire(record, .actionPerformed)
+            case .watch: if record.retired == nil, record.watchFrom == nil { record.watchFrom = now }
+            case .due: continue
+            }
+            save(record, hint, defaults)
+        }
+        if !due.isEmpty || defaults.stringArray(forKey: seededHintsKey) == nil {
+            let names: Set<String> = seededNames(defaults).union(due.map(\.rawValue))
+            defaults.set(names.sorted(), forKey: seededHintsKey)
+        }
+        defaults.set(true, forKey: seededKey)
+        return done
     }
 }

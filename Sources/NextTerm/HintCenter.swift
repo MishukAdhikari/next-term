@@ -121,13 +121,13 @@ final class HintCenter {
         post()
     }
 
-    /// Once, on the first launch with hints: a hint whose feature is in use already retires, so nobody who moved the
-    /// column or pinned it is taught it after the update. The rest wait for their trigger, as a new user's do.
-    func seed(columnSideChosen: Bool, columnExpandedEver: Bool) {
-        guard !defaults.bool(forKey: HintRules.seededKey) else { return }
-        defaults.set(true, forKey: HintRules.seededKey)
-        let inUse = HintRules.InUse(columnSideChosen: columnSideChosen, columnExpandedEver: columnExpandedEver)
-        for hint in HintRules.seeded(inUse) { retire(hint, reason: .actionPerformed) }
+    /// At each launch, each hint not seeded yet, once (HintRules.seed): one whose feature is in use already retires, so
+    /// nobody who moved the column, pinned it or rebound its key is taught it after the update, and on an install used
+    /// before, one whose feature leaves no trace is watched for two weeks first. The rest wait for their trigger, as a
+    /// new user's do. Nothing is shown.
+    func seed(_ inUse: HintRules.InUse) {
+        let done: [Hint: HintRules.Seed] = HintRules.seed(inUse, defaults, now: Date())
+        if done.values.contains(where: { $0 != .due }) { post() }
     }
 
     private func post() { NotificationCenter.default.post(name: Self.changed, object: nil) }

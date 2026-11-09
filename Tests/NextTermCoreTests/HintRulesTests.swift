@@ -106,9 +106,10 @@ struct HintRulesTests {
     @Test func itsKeysAreKept() {
         #expect(HintRules.key(.columnSide, .shown) == "hint.columnSide.shown")
         #expect(HintRules.key(.nextAgent, .retired) == "hint.nextAgent.retired")
-        #expect(HintRules.resetKeys.count == 13 && HintRules.resetKeys.last == "hint.lastAnyShownAt")
+        #expect(HintRules.resetKeys.count == Hint.allCases.count * 5 + 1 && HintRules.resetKeys.last == "hint.lastAnyShownAt")
+        #expect(HintRules.resetKeys.contains("hint.nextAgent.watchFrom"))
         #expect(HintRules.resetKeys.contains("hint.columnBasics.firstEligibleAt") && HintRules.resetKeys.contains("hint.columnSide.lastShownAt"))
-        #expect(HintRules.keys == HintRules.resetKeys + ["hint.seeded", "showTips"])
+        #expect(HintRules.keys == HintRules.resetKeys + ["hint.seeded", "hint.seededHints", "showTips"])
     }
 
     @Test func aRecordIsSavedAndLoadedAndAFreshOneLeavesNoKey() throws {
@@ -116,7 +117,8 @@ struct HintRulesTests {
         defer { TestDefaults.remove(defaults, name) }
         #expect(HintRules.load(.columnSide, defaults) == .init())
         #expect(HintRules.tipsOn(defaults) && HintRules.lastAnyShownAt(defaults) == nil)
-        let record = HintRules.Record(shown: 2, lastShownAt: now, firstEligibleAt: now.addingTimeInterval(-day), retired: .closed)
+        let record = HintRules.Record(shown: 2, lastShownAt: now, firstEligibleAt: now.addingTimeInterval(-day), retired: .closed,
+                                      watchFrom: now.addingTimeInterval(-2 * day))
         HintRules.save(record, .columnSide, defaults)
         #expect(HintRules.load(.columnSide, defaults) == record)
         #expect(HintRules.load(.nextAgent, defaults) == .init())
@@ -143,10 +145,82 @@ struct HintRulesTests {
     }
 
     @Test func anUpdateRetiresOnlyWhatIsInUse() {
-        #expect(HintRules.seeded(.init()).isEmpty)
-        #expect(HintRules.seeded(.init(columnSideChosen: true)) == [.columnSide])
-        #expect(HintRules.seeded(.init(columnExpandedEver: true)) == [.columnBasics])
-        // Nothing kept says whether the jump was used: never seeded.
-        #expect(!HintRules.seeded(.init(columnSideChosen: true, columnExpandedEver: true)).contains(.nextAgent))
+        #expect(HintRules.seed(.columnSide, .init()) == .due)
+        #expect(HintRules.seed(.columnSide, .init(columnSideChosen: true)) == .retire)
+        #expect(HintRules.seed(.columnBasics, .init(columnExpandedEver: true)) == .retire)
+        #expect(HintRules.seed(.columnBasics, .init(columnSideChosen: true)) == .due)
+        // Nothing kept says whether the jump was used: a new install has it due, one used before watches it.
+        #expect(HintRules.seed(.nextAgent, .init(columnSideChosen: true, columnExpandedEver: true)) == .due)
+        #expect(HintRules.seed(.nextAgent, .init(existingInstall: true)) == .watch)
+    }
+
+    @Test func aKeyTheUserReboundCountsAsUsed() {
+        #expect(Hint.nextAgent.command == "goToNextAgentNeedingYou:")
+        #expect(HintRules.seed(.nextAgent, .init(existingInstall: true, overrides: ["goToNextAgentNeedingYou:"])) == .retire)
+        #expect(HintRules.seed(.nextAgent, .init(overrides: ["goToNextAgentNeedingYou:"])) == .retire)
+        // Another command's key says nothing about this one.
+        #expect(HintRules.seed(.nextAgent, .init(existingInstall: true, overrides: ["newTab:"])) == .watch)
+    }
+
+    @Test func aWatchedHintHoldsBackForTwoWeeksAndStartsNoExpiry() {
+        let watched = HintRules.Record(watchFrom: now)
+        #expect(HintRules.heldBack(.nextAgent, clear(watched)) == .watching)
+        var later = clear(watched)
+        later.now = now.addingTimeInterval(14 * day - 1)
+        #expect(HintRules.heldBack(.nextAgent, later) == .watching)
+        later.now = now.addingTimeInterval(14 * day)
+        #expect(HintRules.heldBack(.nextAgent, later) == nil)
+        // Its trigger in the watch starts no 60 days; after it, it does.
+        #expect(HintRules.noteTriggered(watched, now: now.addingTimeInterval(day)).firstEligibleAt == nil)
+        #expect(HintRules.noteTriggered(watched, now: now.addingTimeInterval(14 * day)).firstEligibleAt == now.addingTimeInterval(14 * day))
+        // Retired in the watch (the feature was used), retired is the reason.
+        #expect(HintRules.heldBack(.nextAgent, clear(.init(retired: .actionPerformed, watchFrom: now))) == .retired)
+    }
+
+    @Test func aFreshInstallSeedsEveryHintAtOnceWithNoWatch() throws {
+        let (defaults, name) = try TestDefaults.make("hints-seed-fresh")
+        defer { TestDefaults.remove(defaults, name) }
+        #expect(HintRules.unseeded(defaults) == Hint.allCases)
+        let done = HintRules.seed(.init(), defaults, now: now)
+        #expect(Set(done.keys) == Set(Hint.allCases) && done.values.allSatisfy { $0 == .due })
+        #expect(HintRules.unseeded(defaults).isEmpty)
+        #expect(Hint.allCases.allSatisfy { HintRules.load($0, defaults) == .init() })
+        #expect(defaults.stringArray(forKey: HintRules.seededHintsKey) == Hint.allCases.map(\.rawValue).sorted())
+        #expect(defaults.bool(forKey: HintRules.seededKey))
+    }
+
+    @Test func eachHintIsSeededOnceAndAFactLaterChangesNothing() throws {
+        let (defaults, name) = try TestDefaults.make("hints-seed-once")
+        defer { TestDefaults.remove(defaults, name) }
+        HintRules.seed(.init(), defaults, now: now)
+        // The column moved after: its hint retires by its use (HintCenter.retire), never by a second seeding.
+        let again = HintRules.seed(.init(columnSideChosen: true, existingInstall: true), defaults, now: now.addingTimeInterval(day))
+        #expect(again.isEmpty && HintRules.load(.columnSide, defaults) == .init() && HintRules.load(.nextAgent, defaults) == .init())
+    }
+
+    @Test func anInstallFromTheFirstSeedingCountsItsThreeHintsAsSeeded() throws {
+        let (defaults, name) = try TestDefaults.make("hints-seed-migrate")
+        defer { TestDefaults.remove(defaults, name) }
+        defaults.set(true, forKey: HintRules.seededKey)
+        let first: [Hint] = [.columnSide, .nextAgent, .columnBasics]
+        #expect(HintRules.unseeded(defaults) == Hint.allCases.filter { !first.contains($0) })
+        // Its facts no longer reach the three: a user who closed nothing and moved the column after keeps the hint as it was.
+        let done = HintRules.seed(.init(columnSideChosen: true, existingInstall: true, overrides: ["goToNextAgentNeedingYou:"]), defaults, now: now)
+        #expect(first.allSatisfy { done[$0] == nil && HintRules.load($0, defaults) == .init() })
+        #expect(Set(defaults.stringArray(forKey: HintRules.seededHintsKey) ?? []) == Set(Hint.allCases.map(\.rawValue)))
+    }
+
+    @Test func seedingRetiresWatchesAndKeepsALaterVersionsNames() throws {
+        let (defaults, name) = try TestDefaults.make("hints-seed-apply")
+        defer { TestDefaults.remove(defaults, name) }
+        defaults.set(["someLaterHint"], forKey: HintRules.seededHintsKey)
+        let done = HintRules.seed(.init(columnSideChosen: true, existingInstall: true), defaults, now: now)
+        #expect(done[.columnSide] == .retire && HintRules.load(.columnSide, defaults).retired == .actionPerformed)
+        #expect(done[.nextAgent] == .watch && HintRules.load(.nextAgent, defaults) == .init(watchFrom: now))
+        #expect(done[.columnBasics] == .due && HintRules.load(.columnBasics, defaults) == .init())
+        #expect(Set(defaults.stringArray(forKey: HintRules.seededHintsKey) ?? []) == Set(Hint.allCases.map(\.rawValue) + ["someLaterHint"]))
+        // Reset Tips ends the watch and leaves the seeding: the tips show again at once, and nothing is seeded twice.
+        HintRules.reset(defaults)
+        #expect(HintRules.load(.nextAgent, defaults) == .init() && HintRules.unseeded(defaults).isEmpty)
     }
 }

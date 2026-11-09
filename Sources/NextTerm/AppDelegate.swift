@@ -685,10 +685,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         DispatchQueue.global(qos: .utility).async { ImagePaste.removeOld(in: ImagePaste.parent, now: Date()) }
         // The window column hidden before its time was kept: the two weeks before it is offered again start now.
         WindowColumnOffer.stampHidden(shown: showsWindowColumn, now: Date(), .standard)
-        // The first launch with hints: those whose feature is in use already retire, and the rest wait for their trigger.
-        let columnSideChosen: Bool = windowColumnSide != nil
-        let columnExpandedEver: Bool = UserDefaults.standard.object(forKey: WindowColumnSettings.expandedKey) != nil
-        MainActor.assumeIsolated { HintCenter.shared.seed(columnSideChosen: columnSideChosen, columnExpandedEver: columnExpandedEver) }
+        // Each hint new to this install, once: those whose feature is in use already retire, and the rest wait for their trigger.
+        MainActor.assumeIsolated { HintCenter.shared.seed(hintsInUse) }
         // Skill updates, once a day, for Agents › Skills…' count.
         MainActor.assumeIsolated { SkillsUpdateCheck.start() }
         // Settings › Agents' scheduled updates: every schedule is Off until the user picks one, and then nothing is read.
@@ -892,6 +890,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     /// The project windows open when Next Term last quit: a launch whose restore built no window reopens them when
     /// Settings › General says so, each with one fresh shell. Written at every quit, so changing the setting later works.
+    /// What this install already shows of each hint's feature, read at launch for the hints' seeding: the settings each
+    /// feature writes when used, a key the user rebound, and whether it was used before (Recent Projects, as kept).
+    private var hintsInUse: HintRules.InUse {
+        let defaults = UserDefaults.standard
+        return HintRules.InUse(columnSideChosen: windowColumnSide != nil,
+                               columnExpandedEver: defaults.object(forKey: WindowColumnSettings.expandedKey) != nil,
+                               terminalPositionChosen: defaults.object(forKey: "terminalPosition") != nil,
+                               worktreesFoldedEver: defaults.object(forKey: WindowColumnSettings.foldedKey) != nil,
+                               existingInstall: !(defaults.stringArray(forKey: "recentProjects") ?? []).isEmpty,
+                               overrides: Set(KeyboardShortcuts.shared.bindings.overrides.keys))
+    }
+
     private var sessionProjects: [String] {
         get { launchDefaults.stringArray(forKey: "sessionProjects") ?? [] }
         set { launchDefaults.set(newValue, forKey: "sessionProjects") }
