@@ -108,7 +108,9 @@ extension SelfTest {
         NSApp.hide(nil)
         await pause(1)
         NSApp.unhide(nil)
-        second.makeKeyAndOrderFront(nil)
+        // Unhidden, the app need not be active again (another took the front while it was hidden): with no key window
+        // the keys below reach no tab and nothing takes the keyboard, so it is brought back as the user would.
+        if !(await bringToFront(second)) { note("merged windows: the app did not come back in front after being unhidden") }
         await pause(1)
         await screenshot(other, suffix: "-merged-back")
         let ids: Set<Int> = [c.indexID, other.indexID]
