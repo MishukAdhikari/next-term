@@ -124,9 +124,9 @@ extension SelfTest {
         let titles: [String] = menu.items.map { $0.isSeparatorItem ? "—" : $0.title }
         let keys: [String] = menu.items.filter { !$0.isSeparatorItem }.map { KeyboardShortcuts.chord(of: $0)?.display ?? "" }
         let merge: String = KeyboardShortcuts.shared.chord(for: "mergeAllWindows:")?.display ?? ""
-        check(titles == ["Collapse Window Column", "Move to the \(other) Edge", "—", "Merge All Windows", "—", "Hide Window Column"]
-              && keys == ["⌃⌘S", "", merge, "⌃⇧⌘S"],
-              "window column: its right-click menu groups Collapse and Move to the \(other) Edge, then Merge All Windows, then Hide, with ⌃⌘S and ⌃⇧⌘S",
+        check(titles == ["Unpin Window Column", "Collapse Window Column", "Move to the \(other) Edge", "—", "Merge All Windows", "—", "Hide Window Column"]
+              && keys == ["", "⌃⌘S", "", merge, "⌃⇧⌘S"],
+              "window column: its right-click menu groups Unpin, Collapse and Move to the \(other) Edge, then Merge All Windows, then Hide, with ⌃⌘S and ⌃⇧⌘S",
               "\(titles.joined(separator: " | ")); keys \(keys.joined(separator: ", "))")
         if let move = menu.items.first(where: { $0.title.hasPrefix("Move to the") }) { menu.performActionForItem(at: menu.index(of: move)) }
         let moved: Bool = app.windowColumnOnRight != onRight

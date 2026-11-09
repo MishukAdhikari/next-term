@@ -307,8 +307,8 @@ extension SelfTest {
                 return item.title
             }
             let edge: String = app.windowColumnOnRight ? "Left" : "Right"
-            check(offered == ["Expand Window Column", "Move to the \(edge) Edge", "—", "Merge All Windows", "—", "Hide Window Column"],
-                  "window column: a right-click below its top row offers Expand Window Column and Move to the \(edge) Edge, then Merge All Windows, then Hide",
+            check(offered == ["Pin Window Column", "Expand Window Column", "Move to the \(edge) Edge", "—", "Merge All Windows", "—", "Hide Window Column"],
+                  "window column: a right-click below its top row offers Pin and Expand Window Column and Move to the \(edge) Edge, then Merge All Windows, then Hide",
                   offered.joined(separator: " | "))
         }
         if let top = column.onTopRowMenu?() { await screenshot(top, in: column, suffix: "-menu-window-column") }

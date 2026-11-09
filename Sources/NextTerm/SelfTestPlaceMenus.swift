@@ -87,11 +87,12 @@ extension SelfTest {
 
         // The window column's top row: its own group, then Project Color.
         let fold: String = app.windowColumnExpanded ? "Collapse Window Column" : "Expand Window Column"
+        let pin: String = app.windowColumnExpanded ? "Unpin Window Column" : "Pin Window Column"
         let otherEdge: String = app.windowColumnOnRight ? "Left" : "Right"
         let column: NSMenu? = c.windowColumn.onTopRowMenu?()
         let columnTitles: [String] = column.map(titles) ?? []
-        check(columnTitles == [fold, "Move to the \(otherEdge) Edge", "—", "Merge All Windows", "—", "Hide Window Column", "—", "Project Color"]
-              && titles(WindowColumnView.columnMenu()) == Array(columnTitles.prefix(6)),
+        check(columnTitles == [pin, fold, "Move to the \(otherEdge) Edge", "—", "Merge All Windows", "—", "Hide Window Column", "—", "Project Color"]
+              && titles(WindowColumnView.columnMenu()) == Array(columnTitles.prefix(7)),
               "place menus: the window column's top row has its own menu, then Project Color", columnTitles.joined(separator: " | "))
         if let column, !c.windowColumn.isHiddenOrHasHiddenAncestor { await screenshot(column, in: c.windowColumn, suffix: "-menu-window-column") }
 
