@@ -10,13 +10,16 @@ public enum Hint: String, CaseIterable, Sendable {
     case nextAgent
     /// The column's first appearance: rest on it to see the windows, double-click to keep it open.
     case columnBasics
+    /// The divider between the editor and the terminal dragged to an extreme: the terminal can sit beside the editor.
+    case terminalBeside
 
     /// How the hint asks: a passive line, or a notice with a button that does it.
     public enum Kind: Sendable {
         case passive, action
     }
 
-    /// All three are passive lines; a hint with a button of its own is an `action`.
+    /// Every hint is a passive line, its button (where it has one) doing the thing it teaches; a hint that asks a
+    /// question of its own would be an `action`.
     public var kind: Kind { .passive }
 
     /// How many real exposures it gets: three for a line, one for a notice with an action (asking twice is nagging).
@@ -27,19 +30,19 @@ public enum Hint: String, CaseIterable, Sendable {
     public var command: String? {
         switch self {
         case .nextAgent: return "goToNextAgentNeedingYou:"
-        case .columnSide, .columnBasics: return nil
+        case .columnSide, .columnBasics, .terminalBeside: return nil
         }
     }
 
     /// It sits in a tab bar, beside where the Update button would be: that button holds it back.
-    public var inTabBar: Bool { false }
+    public var inTabBar: Bool { self == .terminalBeside }
 
     /// Its feature leaves nothing behind that says it was used, so an install that had it before the hint gets a watch
     /// (HintRules.watch) in place of a fact: use in those days retires the hint before it ever shows.
     public var traceless: Bool {
         switch self {
         case .nextAgent: return true
-        case .columnSide, .columnBasics: return false
+        case .columnSide, .columnBasics, .terminalBeside: return false
         }
     }
 }
@@ -321,6 +324,7 @@ public enum HintRules {
         switch hint {
         case .columnSide: return inUse.columnSideChosen ? .retire : .due
         case .columnBasics: return inUse.columnExpandedEver ? .retire : .due
+        case .terminalBeside: return inUse.terminalPositionChosen ? .retire : .due
         case .nextAgent: break
         }
         return hint.traceless && inUse.existingInstall ? .watch : .due

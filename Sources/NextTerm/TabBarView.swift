@@ -148,10 +148,8 @@ final class TabBarView: NSView, ProjectGlowing {
     /// The hint up in this bar (HintStage puts it there), in `hintRoom`: the free strip between the last control after
     /// the tabs and the buttons at the end. It takes no room of its own, so the tabs and the keys are laid out as if it
     /// were not there; when what is left can't hold its words whole it goes (`onHintRoomWent`), before a key or a tab
-    /// would give way.
+    /// would give way: its room went (the bar narrowed, a tab or a button came), the stage takes it down.
     private(set) var hint: HintLine?
-    /// The hint's room went (the bar narrowed, a tab or a button came): whoever put it takes it down.
-    var onHintRoomWent: (() -> Void)?
 
     /// The free strip, in the bar's coordinates, as the last layout left it.
     var hintRoom: (start: CGFloat, end: CGFloat) {
@@ -204,7 +202,7 @@ final class TabBarView: NSView, ProjectGlowing {
             DispatchQueue.main.async { [weak self, weak line] in
                 MainActor.assumeIsolated {
                     guard let self, let line, self.hint === line else { return }
-                    self.onHintRoomWent?()
+                    HintStage.shared.placeWent(in: self)
                 }
             }
             return
@@ -1321,4 +1319,9 @@ extension Array {
 /// A borderless icon button that does not drag the window (it sits in the title-bar strip).
 final class HoverButton: NSButton {
     override var mouseDownCanMoveWindow: Bool { false }
+}
+
+extension TabBarView: HintPlace {
+    /// A bar's line goes after a few seconds: the bar stays.
+    var hintGoesWithPlace: Bool { false }
 }

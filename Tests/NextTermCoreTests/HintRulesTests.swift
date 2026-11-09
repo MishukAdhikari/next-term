@@ -11,8 +11,8 @@ struct HintRulesTests {
         HintRules.Situation(record: record, now: now, sinceKey: 60, windowAge: 120)
     }
 
-    @Test func theThreeHintsArePassiveWithThreeShowings() {
-        #expect(Hint.allCases == [.columnSide, .nextAgent, .columnBasics])
+    @Test func everyHintIsPassiveWithThreeShowings() {
+        #expect(Hint.allCases == [.columnSide, .nextAgent, .columnBasics, .terminalBeside])
         for hint in Hint.allCases { #expect(hint.kind == .passive && hint.limit == 3) }
     }
 
@@ -154,6 +154,13 @@ struct HintRulesTests {
         // Nothing kept says whether the jump was used: a new install has it due, one used before watches it.
         #expect(HintRules.seed(.nextAgent, .init(columnSideChosen: true, columnExpandedEver: true)) == .due)
         #expect(HintRules.seed(.nextAgent, .init(existingInstall: true)) == .watch)
+    }
+
+    @Test func aTerminalPositionEverChosenRetiresTheTerminalBesideHint() {
+        #expect(HintRules.seed(.terminalBeside, .init()) == .due)
+        #expect(HintRules.seed(.terminalBeside, .init(existingInstall: true)) == .due)
+        #expect(HintRules.seed(.terminalBeside, .init(terminalPositionChosen: true)) == .retire)
+        #expect(Hint.terminalBeside.inTabBar && !Hint.columnSide.inTabBar)
     }
 
     @Test func aKeyTheUserReboundCountsAsUsed() {

@@ -20,6 +20,12 @@ public enum HintWords {
     /// H3, beside the rail's foot, the first time the column shows.
     public static let columnBasics = "Rest here to see your windows"
 
+    /// H7, in the terminal's tab bar after its divider was dragged to an extreme: a button that moves the terminal to
+    /// the right of the editor, the common layout, and its tooltip naming the menu and the agent's way. Terminal
+    /// Position has no key, so there is none to name.
+    public static let terminalBeside = (words: "Move terminal to the right",
+                                        help: "Or ⋯ › Move Terminal To. Or ask your agent: ‘put the terminal on the right’.")
+
     /// The × on every hint, for VoiceOver and its tooltip: it closes the tip for good.
     public static let close = "Close Tip"
 }

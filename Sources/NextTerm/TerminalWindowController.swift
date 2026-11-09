@@ -201,6 +201,16 @@ final class ThemedSplitView: HairlineSplitView {}
 final class WorkSplitView: HairlineSplitView {
     static let line = NSColor(hex: 0x393B40)
     override var lineColor: NSColor { Self.line }
+
+    /// A drag of the divider ended: the user pressed, moved it and let go (a window resize never calls it).
+    var onDividerReleased: (() -> Void)?
+
+    /// AppKit tracks a divider drag inside `super`, which returns once the button is up: what follows runs on release.
+    override func mouseDown(with event: NSEvent) {
+        let before: [NSRect] = arrangedSubviews.map(\.frame)
+        super.mouseDown(with: event)
+        if arrangedSubviews.map(\.frame) != before { onDividerReleased?() }
+    }
 }
 
 final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSplitViewDelegate, NSMenuItemValidation,
@@ -431,6 +441,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         workSplit.isVertical = false
         workSplit.dividerStyle = .thin
         workSplit.delegate = self
+        workSplit.onDividerReleased = { [weak self] in self?.workDividerReleased() }
         workSplit.addArrangedSubview(editorArea)
         workSplit.addArrangedSubview(terminalPane)
         workSplit.translatesAutoresizingMaskIntoConstraints = false
@@ -1667,6 +1678,23 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             }
             bar.onUpdate = { Updater.shared.showAvailable() }
         }
+    }
+
+    /// A drag of the divider between the editor and the terminal ended: one to an extreme, above or below the editor
+    /// in a window wide enough, may say the terminal can go beside it (H7).
+    func workDividerReleased() {
+        guard terminalDividerAtExtreme else { return }
+        BarHints.shared.terminalDividerReleased(in: self)
+    }
+
+    /// The terminal above or below the editor, open, at under 15% or over 85% of a work area wide enough to hold the
+    /// two side by side (HintTriggers.terminalBeside).
+    var terminalDividerAtExtreme: Bool {
+        let length: CGFloat = workSplit.isVertical ? workSplit.bounds.width : workSplit.bounds.height
+        guard length > 0 else { return false }
+        return HintTriggers.terminalBeside(position: AppDelegate.shared.terminalPosition, collapsed: terminalCollapsed,
+                                           editorShown: !editorArea.isHidden, terminalShare: terminalLength / length,
+                                           workWidth: workSplit.bounds.width)
     }
 
     /// The Update button shows in one of this window's tab bars.

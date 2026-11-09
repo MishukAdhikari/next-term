@@ -183,6 +183,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     func moveTerminal(to position: TerminalPosition, announce: Bool = false) {
         guard position != terminalPosition else { return }
         terminalPosition = position
+        // Moved, by any route (the View menu, the terminal's ⋯, Settings, an import, an agent): the hint on it is done.
+        MainActor.assumeIsolated { HintCenter.shared.retire(.terminalBeside, reason: .actionPerformed) }
         controllers.forEach { $0.applyLayout() }
         NotificationCenter.default.post(name: Self.terminalPositionChanged, object: nil)
         guard announce, let front = TerminalWindow.front, let controller = front.windowController as? TerminalWindowController,
