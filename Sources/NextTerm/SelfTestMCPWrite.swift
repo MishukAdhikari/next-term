@@ -684,6 +684,32 @@ extension SelfTest {
               "MCP writes: run_command still running answers running with a request_id, and calling with it waits for the end",
               "\(first) / \(later)")
         if let slowTab = tab(first["tab_id"]) { pc.remove(slowTab) }
+
+        #if DEBUG
+        // Exit code 0: the tab shows "Closes in 3 s" with Keep Open and closes by itself, and read_tab on its id then says
+        // it closed after finishing, with its exit code and output (CommandPaneAutoClose). The exit 3 above stayed.
+        let fine = await client.asked("run_command", ["command": "echo \(marker)-ok", "directory": root.path], .approve).json ?? [:]
+        let fineID = fine["tab_id"] as? String ?? ""
+        let barShown = await wait(5) { tab(fineID).map { CommandPaneAutoClose.keepButton($0) != nil } ?? false }
+        let closedItself = await wait(10) { tab(fineID) == nil }
+        let read = json(await client.call("read_tab", ["tab_id": fineID]).text) ?? [:]
+        check(fine["exit_code"] as? Int == 0 && barShown && closedItself && read["closed"] as? Bool == true
+              && read["exit_code"] as? Int == 0 && (read["output"] as? String ?? "").contains(marker + "-ok"),
+              "MCP writes: run_command's tab closes by itself a few seconds after exit 0, and read_tab says it closed after finishing",
+              "\(fine) / bar \(barShown) closed \(closedItself) / \(read)")
+        if let left = tab(fineID) { pc.remove(left) }
+
+        // Keep Open in the bar: the tab stays past the count, and its menus no longer offer Keep Open.
+        let keptRun = await client.asked("run_command", ["command": "echo \(marker)-kept", "directory": root.path], .approve).json ?? [:]
+        let keptID = keptRun["tab_id"] as? String ?? ""
+        _ = await wait(5) { tab(keptID).map { CommandPaneAutoClose.keepButton($0) != nil } ?? false }
+        if let kept = tab(keptID) { CommandPaneAutoClose.keepButton(kept)?.performClick(nil) }
+        _ = await wait(CommandPaneClose.delay + 1.5) { tab(keptID) == nil }
+        let stayed = tab(keptID)
+        check(stayed != nil && stayed.map { !CommandPaneAutoClose.mayClose($0) } == true,
+              "MCP writes: Keep Open keeps run_command's finished tab open", "kept \(keptRun)")
+        if let stayed { pc.remove(stayed) }
+        #endif
     }
 
     private static func json(_ text: String) -> [String: Any]? {

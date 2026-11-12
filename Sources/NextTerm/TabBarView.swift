@@ -249,6 +249,10 @@ final class TabBarView: NSView, ProjectGlowing {
     func toolTip(at index: Int) -> String? { tabViews[safe: index]?.toolTip }
     /// For the self-test: whether tab `index` heard the pointer come in, and whether it counts its name as cut.
     func hoverState(at index: Int) -> String { tabViews[safe: index].map { $0.hoverStateForTest } ?? "no tab" }
+    #if DEBUG
+    /// For the self-test: the pointer rests on tab `index`, as the bar follows it there.
+    func restPointerForTest(at index: Int) { tabViews[safe: index]?.pointerRests() }
+    #endif
     /// For the self-test: tab `index`, in screen coordinates.
     func screenFrame(at index: Int) -> NSRect? {
         guard let view = tabViews[safe: index], let window = view.window else { return nil }
@@ -780,7 +784,8 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
         if label.lineBreakMode != newItem.truncation { label.lineBreakMode = newItem.truncation }
         let font = newItem.preview ? Self.previewFont : Self.font
         if label.font != font { label.font = font }
-        let tip = newItem.tooltip + (newItem.place.map { "\n" + $0 } ?? "") + (newItem.shortcut.map { "\n\($0) switches to this tab" } ?? "")
+        // An agent's spinner frame stays out of it: a tooltip set anew with each frame is reset and never shows.
+        let tip = AgentTitle.withoutSpinnerFrame(newItem.tooltip) + (newItem.place.map { "\n" + $0 } ?? "") + (newItem.shortcut.map { "\n\($0) switches to this tab" } ?? "")
         if toolTip != tip { toolTip = tip }
         if hint.stringValue != newItem.shortcut ?? "" {
             hint.stringValue = newItem.shortcut ?? ""
@@ -935,9 +940,11 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
         HoverTip.shared.hide(from: self)
     }
 
-    /// Its name cut short (or a shorter one in its place): the whole name under it, as the title strip shows no tooltip.
+    /// Its name cut short (or a shorter one in its place): the whole name under it, wherever the bar sits. In the title
+    /// strip AppKit shows no tooltip; below a system tab bar (a merged window) the tooltip comes late and is reset by an
+    /// agent's changing title, so the name shows here in both.
     private func restTip() {
-        guard let title = item?.title, isInTitleStrip, isNameCut(title) else { return }
+        guard let title = item?.title, isNameCut(title) else { return }
         HoverTip.shared.rest(AgentTitle.withoutSpinnerFrame(title), on: self)
     }
 

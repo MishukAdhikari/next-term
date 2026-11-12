@@ -89,6 +89,10 @@ extension TerminalWindowController {
         menu.addItem(.separator())
         menu.addCommand("Split Right", "splitRight:") { [weak self] in self?.split(vertical: true, from: tab) }
         menu.addCommand("Split Down", "splitDown:") { [weak self] in self?.split(vertical: false, from: tab) }
+        if CommandPaneAutoClose.mayClose(tab) { // an agent's command pane that closes by itself once it finishes well
+            menu.addItem(.separator())
+            menu.addCommand("Keep Open", nil) { CommandPaneAutoClose.keep(tab) }
+        }
         if selected, agentTab != nil {
             menu.addItem(.separator())
             menu.addCommand("Send Selection to Agent", "sendToAgent:") { [weak self] in self?.sendSelection(of: tab) }
@@ -165,6 +169,11 @@ extension TerminalWindowController {
         let menu = NSMenu()
         addPlaceChoices(to: menu, for: group) // Keep Going, for a branch switched under its chat
         menu.addCommand("Rename…", "renameTab:") { [weak self] in self?.rename(group) }
+        // An agent's command pane in it that closes by itself once it finishes well.
+        let closing = group.panes.filter { CommandPaneAutoClose.mayClose($0) }
+        if !closing.isEmpty {
+            menu.addCommand("Keep Open", nil) { closing.forEach { CommandPaneAutoClose.keep($0) } }
+        }
         menu.addItem(.separator())
         menu.addCommand("Split Right", "splitRight:") { [weak self] in self?.split(group, vertical: true) }
         menu.addCommand("Split Down", "splitDown:") { [weak self] in self?.split(group, vertical: false) }

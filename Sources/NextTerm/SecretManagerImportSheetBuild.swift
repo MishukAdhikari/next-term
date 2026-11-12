@@ -119,6 +119,8 @@ extension SecretManagerImportSheet {
             let shell: String = SecretsMCP.shellName(of: tab)
             guard let line = Self.line(preset, shell: shell) else { return say(Self.untypableLine(shell)) }
             guard MCPControl.canType(tab) else { return say(Self.notTyped) }
+            // Once the user runs it and it finishes well, the tab closes by itself (CommandPaneAutoClose).
+            MainActor.assumeIsolated { CommandPaneAutoClose.watch(tab, before: tab.status.commandsAtPrompt) }
             MCPControl.type(line, into: tab, submit: false)
             say(Self.typedLine)
         }
