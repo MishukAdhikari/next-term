@@ -101,7 +101,7 @@ public enum MCPServer {
 
     /// What the instructions leave out to make room for the hub's line.
     static let spareSentences = [
-        "For another app's settings use list_import_sources and preview_import, never its files.",
+        "Another app's settings: list_import_sources and preview_import, never its files.",
         "A tab Next Term brings back after an update or a quit keeps its id.",
     ]
 
