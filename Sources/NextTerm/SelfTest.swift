@@ -5262,14 +5262,32 @@ enum SelfTest {
     static func screenshot(_ window: NSWindow, suffix: String) async {
         guard let base = reportPath else { return }
         await pause(0.4)
-        guard let image = CGWindowListCreateImage(.null, .optionIncludingWindow, CGWindowID(window.windowNumber),
-                                                  [.boundsIgnoreFraming, .bestResolution]) else {
+        var rep = CGWindowListCreateImage(.null, .optionIncludingWindow, CGWindowID(window.windowNumber),
+                                          [.boundsIgnoreFraming, .bestResolution]).map { NSBitmapImageRep(cgImage: $0) }
+        // Since macOS 27.2 the window server can hand back a wholly clear image: the window then draws itself instead.
+        if rep.map(isClear) ?? true, let view = window.contentView?.superview ?? window.contentView,
+           let drawn = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
+            view.cacheDisplay(in: view.bounds, to: drawn)
+            rep = drawn
+        }
+        guard let rep else {
             note("screenshot failed")
             return
         }
         let path = (base as NSString).deletingPathExtension + suffix + ".png"
-        try? NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+        try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
         note("screenshot: \(path)")
+    }
+
+    /// Whether no pixel on a sparse grid shows anything.
+    private static func isClear(_ rep: NSBitmapImageRep) -> Bool {
+        let step = max(1, min(rep.pixelsWide, rep.pixelsHigh) / 40)
+        for y in stride(from: 0, to: rep.pixelsHigh, by: step) {
+            for x in stride(from: 0, to: rep.pixelsWide, by: step) where (rep.colorAt(x: x, y: y)?.alphaComponent ?? 0) > 0 {
+                return false
+            }
+        }
+        return true
     }
 
     static var reportPath: String? {

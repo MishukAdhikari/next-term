@@ -300,10 +300,13 @@ final class SecretApprovalPanel: NSWindowController, NSWindowDelegate {
             // whole in the tooltip; the project's or worktree's own folder says so instead.
             let full = Self.sanitized(content.folder, limit: 1000)
             let place = Self.sanitized(ApprovalPlaceText.folder(content.folder, project: content.project, worktree: content.worktree), limit: 1000)
-            let label = ApprovalLayout.body(place, width: valueWidth)
-            label.maximumNumberOfLines = 1
-            label.cell?.wraps = false
+            // A plain one-line label: body()'s paragraph style wraps by word, which would beat the middle cut.
+            let label = NSTextField(labelWithString: place)
+            label.font = .systemFont(ofSize: 12)
             label.lineBreakMode = .byTruncatingMiddle
+            // Held to the value column, so the middle is what gives way, not the card's edge.
+            label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+            label.widthAnchor.constraint(lessThanOrEqualToConstant: valueWidth).isActive = true
             label.isSelectable = true
             label.toolTip = full
             label.setAccessibilityLabel(place == full ? "In \(full)" : "In \(place), \(full)")
@@ -515,7 +518,9 @@ final class SecretApprovalPanel: NSWindowController, NSWindowDelegate {
             let label = ApprovalLayout.secondary(reach, width: inner - 200)
             label.lineBreakMode = .byTruncatingTail
             label.maximumNumberOfLines = 1
-            label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+            // The pop-up's long title gives way first: the reach reads whole.
+            label.setContentCompressionResistancePriority(.defaultHigh, for: .horizontal)
+            popUp.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
             reachLabel = label
             rowViews.append(label)
         }
