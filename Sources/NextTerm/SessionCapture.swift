@@ -17,7 +17,9 @@ enum SessionCapture {
 
     /// Every terminal window. `scrollback` names the scrollback a quit saves for each tab, by tab id.
     static func windows(_ controllers: [TerminalWindowController], scrollback: [UUID: UUID] = [:]) -> [SessionSnapshot.Window] {
-        let numbered: [(offset: Int, element: TerminalWindowController)] = Array(controllers.enumerated())
+        // An agent's scratch window (AgentScratch) is not brought back.
+        let kept: [TerminalWindowController] = controllers.filter { !$0.isAgentScratch }
+        let numbered: [(offset: Int, element: TerminalWindowController)] = Array(kept.enumerated())
         let ordered = numbered.sorted { (a: (offset: Int, element: TerminalWindowController),
                                          b: (offset: Int, element: TerminalWindowController)) -> Bool in
             a.element.lastKey != b.element.lastKey ? a.element.lastKey > b.element.lastKey : a.offset < b.offset

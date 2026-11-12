@@ -155,7 +155,8 @@ final class ProjectHistoryRecorder {
     private func windows(_ controllers: [TerminalWindowController]) -> [OpenProjects.Window] {
         var windows: [OpenProjects.Window] = []
         for controller in controllers where !controller.hasClosed {
-            guard let path = controller.project else { continue }
+            // An agent's scratch window (AgentScratch) is in no history.
+            guard let path = controller.project, AgentScratch.isRemembered(path, byAgent: controller.openedByAgent) else { continue }
             let id = Int(bitPattern: ObjectIdentifier(controller))
             let isFront: Bool = controller === front && controller.window?.isKeyWindow == true
             windows.append(OpenProjects.Window(id: id, path: path, lastInFront: controller.lastKey, isFront: isFront))

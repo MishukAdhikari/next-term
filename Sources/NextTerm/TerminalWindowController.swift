@@ -41,6 +41,9 @@ final class TerminalWindow: NSWindow {
 
     override func sendEvent(_ event: NSEvent) {
         if event.type == .keyDown { UserKeys.pressed() }
+        if [.keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown].contains(event.type) {
+            (windowController as? TerminalWindowController)?.userTouched()
+        }
         // A click on a tab an agent opened chooses it: it takes the keyboard, and the click reaches nothing in it (a
         // button in the agent's screen).
         if [.leftMouseDown, .rightMouseDown, .otherMouseDown].contains(event.type), let view = awaitingTerminal(at: event.locationInWindow) {
@@ -325,6 +328,13 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     /// The window closed. AppDelegate drops it from its windows a moment later (windowClosed): until then, nothing may
     /// open a project or a tab in it.
     private(set) var hasClosed = false
+    /// An agent opened the window over MCP (`byAgent`): on a temporary folder it is an agent's scratch window
+    /// (AgentScratch), kept out of the lists and closed once quiet.
+    let openedByAgent: Bool
+    /// The user keyed or clicked into the window, or brought it to the front: it is theirs, never closed by itself.
+    private(set) var touchedByUser = false
+    /// The one grace a quiet scratch window waits out before it closes (AgentScratch.grace); nil while it is not quiet.
+    private var scratchClose: DispatchWorkItem?
 
     /// `repository`: the one `project` is a linked worktree of (WorktreeWindow.repository), read once for the title and
     /// the colour.
@@ -358,6 +368,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     /// the window over MCP, so its first tab waits for the user to choose it (AgentArrival).
     init(directory: String?, project: String? = nil, firstTab: Bool = true, byAgent: Bool = false) {
         self.project = project.map(canonicalPath)
+        openedByAgent = byAgent
         Self.lastIndexID += 1
         indexID = Self.lastIndexID
         // Swift runs no didSet in init: the title and the colour's key here, the colour once the bars exist.
@@ -945,6 +956,51 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         HerdrAgentMenu.popUp(in: self)
     }
 
+    // MARK: agent scratch
+
+    /// An agent's scratch window, as AgentScratch reads it.
+    var isAgentScratch: Bool { openedByAgent && project.map { AgentScratch.isTemporary($0) } == true }
+
+    /// A key or a click in the window, or the user bringing it to the front: it is theirs from now on.
+    func userTouched() {
+        guard openedByAgent, !touchedByUser else { return }
+        touchedByUser = true
+        scratchClose?.cancel()
+        scratchClose = nil
+    }
+
+    private var scratchState: AgentScratch.Window {
+        let terminals: [AgentScratch.Tab] = tabs.map { (tab: TerminalTab) -> AgentScratch.Tab in
+            AgentScratch.Tab(running: tab.status.running, jobs: tab.status.jobs, state: tab.status.state, remote: tab.remote != nil)
+        }
+        let unsaved: Bool = !editorArea.dirtyDocuments.isEmpty || !editorArea.draftDatabases.isEmpty
+        return AgentScratch.Window(scratch: isAgentScratch, touched: touchedByUser, unsaved: unsaved, tabs: terminals)
+    }
+
+    /// Read on each tick of an agent's window, acting only when the window turns quiet or stops being so: quiet, one
+    /// grace is armed; anything running, asking or unsaved again, or the user, cancels it. The grace ends with a last
+    /// look, and the window closes without asking only if it is still quiet then.
+    private func armScratchClose() {
+        guard !touchedByUser, !hasClosed else { return }
+        let quiet: Bool = AgentScratch.isQuiet(scratchState)
+        if !quiet {
+            scratchClose?.cancel()
+            scratchClose = nil
+            return
+        }
+        guard scratchClose == nil else { return }
+        let close = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.scratchClose = nil
+            guard !self.hasClosed, AgentScratch.isQuiet(self.scratchState) else { return }
+            self.closeConfirmed = true
+            self.opensWelcome = false
+            self.window?.close()
+        }
+        scratchClose = close
+        DispatchQueue.main.asyncAfter(deadline: .now() + AgentScratch.grace, execute: close)
+    }
+
     // MARK: status
 
     /// The user can see the active tab only while this window is in front in the active app: key, or main
@@ -998,6 +1054,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
                 AppDelegate.shared.post(notice, tab: tab, in: self)
             }
         }
+        if openedByAgent { armScratchClose() }
         if tickCount % 4 == 0 { editorArea.checkDisk() } // agents edit the files you have open
         // A window no one can see refreshes once a second (its tabs' marks still reach the Dock badge and the
         // notifications), and at once when it shows again (visibilityChanged).
@@ -2910,6 +2967,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     func windowWillClose(_ notification: Notification) {
         hasClosed = true
+        scratchClose?.cancel()
+        scratchClose = nil
         ticker?.invalidate()
         ticker = nil
         columnHost.windowClosing() // a pending open, the list, its reveal's timer and its Escape monitor go with it
@@ -2923,6 +2982,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     func windowDidBecomeKey(_ notification: Notification) {
         if !keyingForAgent { lastKey = Date() } // brought forward for an agent: not a window the user went to
+        if !keyingForAgent { userTouched() }
         watchTabGroup()
         activityChanged()
         refreshVisibility()

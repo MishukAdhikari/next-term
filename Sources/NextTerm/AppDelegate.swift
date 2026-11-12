@@ -785,7 +785,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     @discardableResult
     func openFolder(_ path: String, newWindow: Bool, forAgent: Bool = false) -> TerminalWindowController {
         let path = canonicalPath(path)
-        if WorktreeWindow.repository(ofLinkedWorktree: path) == nil { recent.add(path) }
+        // An agent's temporary folder (its scratchpad) is never a recent project (AgentScratch).
+        if WorktreeWindow.repository(ofLinkedWorktree: path) == nil, AgentScratch.isRemembered(path, byAgent: forAgent) { recent.add(path) }
         closeWelcome(forAgent: forAgent)
         if !newWindow, let open = controllers.first(where: { $0.project == path && !$0.hasClosed }) {
             if !forAgent { open.window?.makeKeyAndOrderFront(nil) }
