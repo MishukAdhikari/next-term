@@ -33,7 +33,7 @@ public struct BuiltInSkill: Sendable, Equatable {
     public static let tabs = BuiltInSkill(name: "next-term-tabs", text: #"""
         ---
         name: next-term-tabs
-        description: Run parallel work in Next Term tabs, one agent per tab, that the user can watch and answer. Use in a Next Term tab (list_tabs has a row with "you": true) when the user asks for tasks in parallel, in the background or "in tabs", or for another agent (Codex, Claude, Gemini…) to do or review part.
+        description: Run work in Next Term tabs, one agent each, that the user can watch. Use in a Next Term tab when the user asks to orchestrate, hand off or "run X in a tab/the next tab" with another agent (Command Code cmd, Codex, Claude Code, OpenCode, Gemini), or for parallel or background work.
         ---
 
         # Parallel work in Next Term tabs
@@ -46,7 +46,7 @@ public struct BuiltInSkill: Sendable, Equatable {
 
         Offer tabs only when all of these hold:
 
-        - The user asked for parallel or background work ("in parallel", "at the same time", "meanwhile", "in the background", "fan out", "in tabs"), or for a different agent to do or review part of the work ("have Codex review it", "a second opinion").
+        - The user asked for parallel or background work ("in parallel", "at the same time", "meanwhile", "in the background", "fan out", "in tabs"), to orchestrate or hand off work ("run commandcode on the next tab", "hand this to Codex"), or for a different agent to do or review part of the work ("have Codex review it", "a second opinion").
         - You run in a Next Term tab: `list_tabs` returns a row with `"you": true`. Elsewhere, or when the `next-term` tools are missing, say nothing about tabs.
         - Your own row has no `opened_by`: you were not started by another agent. A worker never opens tabs unless the user asks it to, there.
         - The tasks are independent: they don't need each other's results and don't edit the same files.
@@ -57,7 +57,7 @@ public struct BuiltInSkill: Sendable, Equatable {
         - after the user has said no in this conversation;
         - when the user named another way to run them (subagents, teammates, a workflow, background agents): use that.
 
-        If the user asked for tabs in so many words, that is the yes: don't ask again.
+        If the user asked for tabs in so many words, or to run, hand off or orchestrate work with another agent in a tab ("run commandcode on the next tab"), that is the yes: don't ask again, and don't use your own subagents instead.
 
         ## How to offer
 
@@ -72,14 +72,14 @@ public struct BuiltInSkill: Sendable, Equatable {
         ## How to run them
 
         1. `list_tabs`: find your tab (`"you": true`) and its folder.
-        2. For each task, `new_tab` with the project's folder, a `title` naming the task, the agent as `command` (`claude`, `codex`, `opencode`, `gemini -i`) and the task as `prompt`, in plain words: Next Term quotes it for the shell (for `opencode`, after `--prompt`), so never quote it yourself. The task says what to do, which files are its, that another agent started this tab and it should open no tabs, and that it should end with a one-line result (and the branch or worktree its changes are on). Never type the task into an agent that has just started: it may be showing an update or a trust question first, and what you type answers it.
+        2. For each task, `new_tab` with the project's folder, a `title` naming the task, the agent as `command` (`claude`, `codex`, `opencode`, `gemini -i`, Command Code's `cmd`) and the task as `prompt`, in plain words: Next Term quotes it for the shell (for `opencode`, after `--prompt`), so never quote it yourself. The task says what to do, which files are its, that another agent started this tab and it should open no tabs, and that it should end with a one-line result (and the branch or worktree its changes are on). Never type the task into an agent that has just started: it may be showing an update or a trust question first, and what you type answers it.
         3. Tasks that edit files in the same checkout can overwrite each other: split them by files, or give each its own worktree (`command` `claude -w <name>` or `codex --worktree`), and say so in the offer.
         4. `wait_for_tab` on each, calling again while it says `timed_out`; `read_tab` for its result. When one waits on a question (`state: "attention"`: a trust, update or permission question, or the agent asking something), tell the user here which tab asks what; answer with `answer_agent` only what the user told you to.
         5. Report each result here, one line per tab, with where its changes are. Don't merge branches, close tabs or commit for the user unless they ask.
 
         Never type into your own tab. If a tab fails or its agent isn't installed, say so and go on with the others.
         """#, offersTabs: true,
-        when: "when the user asks for work in parallel, in the background or by another agent (Codex, Claude…): offer once, and open tabs only after the user types yes")
+        when: "when the user asks for work in parallel, in the background or by another agent: an explicit ask is the yes, else offer once")
 
     /// A pasted repository, branch, pull request or worktree the project already has: the offer to open that worktree
     /// in its own window and go on there, with the same agent and a hand-off.

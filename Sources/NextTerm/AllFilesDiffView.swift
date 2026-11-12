@@ -122,6 +122,7 @@ final class AllFilesView: NSView, DiffSelectionHost {
         }
         let kept = Set(entries.map(ObjectIdentifier.init))
         for entry in old.values where !kept.contains(ObjectIdentifier(entry)) { drop(entry) }
+        updateFoldAllTitle() // files come and go: a new one comes open
         let totals = files.reduce(LineStats()) { LineStats(added: $0.added + ($1.added ?? 0), removed: $0.removed + ($1.removed ?? 0), files: $0.files + 1) }
         let numbers = NSMutableAttributedString(string: totals.files == 1 ? "1 file  " : "\(totals.files.formatted()) files  ", attributes: [
             .font: NSFont.systemFont(ofSize: 12), .foregroundColor: Theme.textDim,
@@ -247,7 +248,7 @@ final class AllFilesView: NSView, DiffSelectionHost {
     }
 
     private func updateFoldAllTitle() {
-        foldAll.title = entries.contains { !$0.collapsed } ? "Collapse All" : "Expand All"
+        foldAll.title = FoldAllTitle.title(collapsed: entries.map(\.collapsed))
     }
 
     private func showAnyway(_ entry: Entry) {

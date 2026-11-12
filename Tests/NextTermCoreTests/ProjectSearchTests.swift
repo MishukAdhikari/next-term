@@ -74,6 +74,30 @@ import Testing
         #expect(files == [".gitignore", "src/a.swift"])
     }
 
+    /// Go to File lists the `.env` files git ignores; find_in_files' list leaves them out and the MCP tools refuse them.
+    @Test func goToFileListsEnvFilesTheMCPToolsRefuse() throws {
+        guard let git = GitRunner.locateGit() else { return }
+        let root = try folder()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: git)
+        p.arguments = ["-C", root.path, "init", "-q"]
+        try p.run(); p.waitUntilExit()
+        try write(root, ".gitignore", ".env*\n*.log\n")
+        try write(root, "src/a.swift", "x")
+        try write(root, ".env", "KEY=1")
+        try write(root, ".env.local", "KEY=2")
+        try write(root, "api/.env.production", "KEY=3")
+        try write(root, "debug.log", "x")
+        let listed = ProjectSearch.goToFiles(in: root.path, git: git)
+        #expect(listed == [".env", ".env.local", ".gitignore", "api/.env.production", "src/a.swift"])
+        #expect(ProjectSearch.files(in: root.path, git: git) == [".gitignore", "src/a.swift"])
+        for path in [".env", ".env.local", "api/.env.production"] {
+            #expect(MCPProjects.secretReason(path) != nil)
+        }
+        #expect(ProjectSearch.isEnvFile(".env.local") && !ProjectSearch.isEnvFile("env.txt") && !ProjectSearch.isEnvFile(".envrc"))
+    }
+
     @Test func replaceOnlySelectedAndStillThere() throws {
         let root = try folder()
         defer { try? FileManager.default.removeItem(at: root) }

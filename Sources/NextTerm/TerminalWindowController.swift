@@ -1054,7 +1054,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     /// An agent Next Term recognises runs here, in a window with no project, in the home folder: once in this window, a
     /// notice offers to open a project for it (Choose Folder…, as Open… does), with Don’t Ask Again for every window
-    /// (HomeAgentOffer). The agent is never held: the notice only offers.
+    /// and Skip for this time only (HomeAgentOffer). The agent is never held: the notice only offers.
     private func offerProjectForHomeAgent() {
         guard project == nil, !offeredProjectForAgent else { return }
         let agents: [TerminalTab] = tabs.filter { (tab: TerminalTab) -> Bool in tab.status.running && tab.status.kind == .agent }
@@ -1078,7 +1078,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         // window key, or none. Weak, as the notice keeps its action while it shows.
         let choose: () -> Void = { [weak self] in AppDelegate.shared.chooseProjectFolder(from: self) }
         GitToast.show(text, in: window, button: "Choose Folder…", action: choose,
-                      other: "Don’t Ask Again", otherAction: { HomeAgentOffer.turnOff(.standard) })
+                      other: "Don’t Ask Again", otherAction: { HomeAgentOffer.turnOff(.standard) }, skip: HomeAgentOffer.skip)
     }
 
     /// Needs you, then working, failed, done, idle. With Agent Spinner off a working pane shows no mark, so it never

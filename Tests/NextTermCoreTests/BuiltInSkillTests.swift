@@ -246,7 +246,7 @@ import Testing
         #expect(with.utf16.count <= 2_048 && noTabs.utf16.count <= 2_048 && outside == MCPServer.instructions)
         #expect(with.hasPrefix(MCPServer.secretsLead + "\n" + MCPServer.skillsParagraph(offeringTabs: true) + " "))
         #expect(noTabs.hasPrefix(MCPServer.secretsLead + "\n" + MCPServer.skillsParagraph(offeringTabs: false) + " "))
-        #expect(with.contains("get_skill next-term-tabs when the user asks for work in parallel") && with.contains("only after the user types yes")
+        #expect(with.contains("get_skill next-term-tabs when the user asks for work in parallel") && with.contains("an explicit ask is the yes, else offer once")
                 && with.contains("next-term-worktrees when the user pastes a repo, branch or PR")
                 && with.contains("next-term-setup when the user asks to change Next Term") && with.contains("opened_by"))
         #expect(!noTabs.contains("next-term-tabs") && noTabs.contains("get_skill next-term-worktrees") && noTabs.contains("next-term-setup"))

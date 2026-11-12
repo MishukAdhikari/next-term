@@ -70,9 +70,18 @@ import Testing
         }
     }
 
+    /// Asked to run or hand off work with another agent in a tab, an agent uses Next Term's tabs, not its subagents, and
+    /// the ask is the yes: in the instructions and in new_tab's description.
+    @Test func anAskToRunAnotherAgentInATabIsTheYes() throws {
+        #expect(MCPServer.instructions.contains("use tabs, not subagents: the ask is the yes"))
+        let newTab = try #require(MCPServer.tools.first { $0.name == "new_tab" })
+        #expect(newTab.description.contains("not your own subagents: their ask is the yes"))
+        #expect(newTab.description.contains("Command Code's"))
+    }
+
     /// OpenCode is named beside Claude Code and Codex wherever the server gives agents as examples.
     @Test func theAgentExamplesNameOpencode() throws {
-        #expect(MCPServer.instructions.contains(#"a command such as "claude", "codex" or "opencode""#))
+        #expect(MCPServer.instructions.contains(#"a command such as "claude", "codex" or "opencode"; Command Code's is "cmd""#))
         for name in ["new_tab", "check_host", "new_remote_tab"] {
             let tool = try #require(MCPServer.tools.first { $0.name == name })
             #expect(tool.description.contains("opencode"), "\(name)")

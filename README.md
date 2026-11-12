@@ -317,7 +317,7 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   line for Return. A local OpenCode tab’s line names the session OpenCode was showing when its title
   matches exactly one of the folder’s sessions, so after `opencode -c` or a switch inside OpenCode, Return
   resumes the session you were in.
-- **Native.** Swift and AppKit, universal (Apple Silicon and Intel): about 34 MB to download, 73 MB
+- **Native.** Swift and AppKit, universal (Apple Silicon and Intel): about 37 MB to download, 78 MB
   installed. macOS 13 or later.
 
 ## Install
