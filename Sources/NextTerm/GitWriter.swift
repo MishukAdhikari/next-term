@@ -400,22 +400,24 @@ final class GitToast {
     }
 
     /// A notice that offers something: its button, then `other` after it ("Don’t Ask Again"). `primary`: the button is
-    /// the offer's one primary, in the accent colour (the MCP hub's new-server offer).
+    /// the offer's one primary, in the accent colour (the MCP hub's new-server offer). `skip`: a last button that only
+    /// puts the notice away, this time.
     static func show(_ text: String, in window: NSWindow?, button: String, action: @escaping () -> Void, other: String,
-                     otherAction: @escaping () -> Void, primary: Bool = false) {
+                     otherAction: @escaping () -> Void, primary: Bool = false, skip: String? = nil) {
         present(text, in: window, button: button, isError: false, begun: nil, action: action, other: other, otherAction: otherAction,
-                primary: primary)
+                primary: primary, skip: skip)
     }
 
     private static func present(_ text: String, in window: NSWindow?, button: String?, isError: Bool, begun: Int?,
-                                action: (() -> Void)?, other: String?, otherAction: (() -> Void)?, primary: Bool = false) {
+                                action: (() -> Void)?, other: String?, otherAction: (() -> Void)?, primary: Bool = false,
+                                skip: String? = nil) {
         guard let window else { return }
         // For a project merged behind another's tab (plan 032): it waits for that tab to come to the front, and never
         // pushes away the notice of the project in use.
         if window.isBackgroundTab {
             return hold(for: window) { [weak window] in
                 present(text, in: window, button: button, isError: isError, begun: begun, action: action, other: other, otherAction: otherAction,
-                        primary: primary)
+                        primary: primary, skip: skip)
             }
         }
         guard GitNotice.replaces(shown, hasButton: button != nil, isError: isError, begun: begun) else { return }
@@ -441,6 +443,12 @@ final class GitToast {
             let control = NSButton(title: other, target: GitToastTarget.shared, action: #selector(GitToastTarget.pressedOther))
             control.bezelStyle = .rounded
             control.controlSize = primary ? .regular : .small // beside a primary, at its size
+            views.append(control)
+        }
+        if let skip {
+            let control = NSButton(title: skip, target: GitToastTarget.shared, action: #selector(GitToastTarget.pressedSkip))
+            control.bezelStyle = .rounded
+            control.controlSize = primary ? .regular : .small
             views.append(control)
         }
         for control in views.dropFirst() { control.setContentCompressionResistancePriority(.required, for: .horizontal) }
@@ -534,12 +542,15 @@ final class GitToast {
     static var text: String? { (current?.contentView?.subviews.first as? NSStackView)?.views.compactMap { ($0 as? NSTextField)?.stringValue }.first }
     static func pressButtonForTest() { pressed() }
     static func pressOtherButtonForTest() { pressedOther() }
+    /// The buttons' titles of the notice up, in order, for the self-test.
+    static var buttonTitles: [String] { (current?.contentView?.subviews.first as? NSStackView)?.views.compactMap { ($0 as? NSButton)?.title } ?? [] }
 }
 
 private final class GitToastTarget: NSObject {
     static let shared = GitToastTarget()
     @objc func pressed() { GitToast.pressed() }
     @objc func pressedOther() { GitToast.pressedOther() }
+    @objc func pressedSkip() { GitToast.dismiss() }
 }
 
 /// Small sheets the git operations share: a name to type (checked as it is typed), a yes/no.
