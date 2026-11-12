@@ -482,6 +482,15 @@ final class SecretRequests {
             for kind in offer.scopes { always.labels[.always(kind)] = offer.label(kind) }
             content.always = always
         }
+        // Where it comes from: git's places when Always was weighed, else the asking tab's project.
+        if let places = request.always?.places {
+            content.project = places.project
+            content.worktree = places.worktree
+        } else if !request.isRemote {
+            content.project = request.askedBy.project
+        }
+        content.origin = ApprovalPlaceText.origin(project: content.project, worktree: content.worktree,
+                                                  branch: content.worktree.flatMap(ApprovalPlaceText.branch(of:)))
         if !request.isUse {
             content.offersHowLong = false
             content.allowTitle = "Save"

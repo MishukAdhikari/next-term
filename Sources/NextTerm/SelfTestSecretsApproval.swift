@@ -97,8 +97,10 @@ extension SelfTest {
                 + "then Always in the project and the folder",
               "\(window.title): \(titles), \(first.always?.refusal ?? "")")
         let card = texts(window.contentView)
-        check(card.contains("Codex in a Next Term tab in app") && card.contains("app \u{203A} src") && card.contains("Who") && card.contains("For"),
-              "secrets approval: the card says who (the agent, in a Next Term tab in the project), the key, what for and where", card)
+        check(card.contains("Codex in a Next Term tab in app") && card.contains("/app/src") && card.contains("app")
+              && card.contains("Up to: Always in this folder") && card.contains("Who") && card.contains("For"),
+              "secrets approval: the card says who (the agent, in a Next Term tab in the project), the key, what for and where "
+                + "(the whole path), the project under the heading, and Remember's longest choice beside it", card)
         await screenshot(window, suffix: "-approval-command")
         var notes: [SecretRequests.How: Bool] = [:]
         for how in [SecretRequests.How.fifteenMinutes, .untilLock, .alwaysFolder, .alwaysProject, .once] {

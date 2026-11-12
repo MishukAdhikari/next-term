@@ -337,6 +337,8 @@ public enum SecretAlwaysGrants {
 /// Whether Always is offered for a command, and if not, why, in a line the panel shows: "Always isn’t offered: …".
 public enum SecretAlwaysRules {
     public static let lead = "Always isn\u{2019}t offered: "
+    /// The refusal for run_with_secrets' text in the shell's own syntax: the panel adds how to get Always.
+    public static let shellSyntaxRefusal = lead + "the command uses the shell\u{2019}s own syntax, so what runs can change around it."
 
     /// The facts about a command that decide it.
     public struct Command: Sendable {
@@ -406,7 +408,7 @@ public enum SecretAlwaysRules {
     /// `writable`: whether this user (so any agent running as them) can change a folder or file.
     public static func refusal(_ command: Command, scopes: [String], writable: (String) -> Bool) -> String? {
         if command.usesShellSyntax {
-            return lead + "the command uses the shell\u{2019}s own syntax, so what runs can change around it."
+            return shellSyntaxRefusal
         }
         if let warning = command.warnings.first { return lead + short(warning) }
         let (program, rest) = SecretRun.program(of: command.words)

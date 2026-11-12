@@ -68,6 +68,12 @@ final class SecretApprovalPanel: NSWindowController, NSWindowDelegate {
         var serverName: String?
         /// The In row's name for the folder (the project's or worktree's, with the path inside it), when known.
         var place: String?
+        /// The main checkout and the linked worktree the folder is in, when known: the line under the heading, and the In
+        /// row's "project root".
+        var project: String?
+        var worktree: String?
+        /// The line under the heading: "app · worktree fix-login (branch fix-login)".
+        var origin: String?
         var always: Always?
         /// For this session reaches any plain command of the agent's session (an agent in front of its tab, no key that asks
         /// every time); else only this exact request.
@@ -220,6 +226,8 @@ final class SecretApprovalPanel: NSWindowController, NSWindowDelegate {
     }
 
     private var rowsStack: NSStackView?
+    /// "Up to: Always in app", beside Remember.
+    private(set) var reachLabel: NSTextField?
     private var pinnedStack: NSStackView?
 
     /// The rows' height, up to about 70% of the screen's visible height with Remember and the buttons below; again
@@ -249,6 +257,11 @@ final class SecretApprovalPanel: NSWindowController, NSWindowDelegate {
         let inner = ApprovalLayout.inner(Self.width)
         var groups: [NSView] = []
         var top: [NSView] = [ApprovalLayout.heading(Self.sanitized(content.title, limit: 200), width: inner)]
+        if let origin = content.origin.map({ Self.sanitized($0, limit: 200) }), !origin.isEmpty {
+            let line = ApprovalLayout.secondary(origin, width: inner)
+            line.setAccessibilityLabel("From \(origin)")
+            top.append(line)
+        }
         if let words = content.agentWords.map({ Self.sanitized($0, limit: 500) }), !words.isEmpty {
             top.append(ApprovalLayout.agentWords(words, who: content.askedBy.agent.map { Self.sanitized($0, limit: 60) }, width: inner))
         }
@@ -283,10 +296,17 @@ final class SecretApprovalPanel: NSWindowController, NSWindowDelegate {
             rows.append(cardRow(content.reachesURL ? "globe" : "terminal", "For", [what]))
         }
         if !content.folder.isEmpty {
-            let place = Self.sanitized(content.place ?? (content.folder as NSString).lastPathComponent, limit: 200)
+            // The whole path, so a temporary folder never passes for a project: on one line, cut in the middle, selectable,
+            // whole in the tooltip; the project's or worktree's own folder says so instead.
+            let full = Self.sanitized(content.folder, limit: 1000)
+            let place = Self.sanitized(ApprovalPlaceText.folder(content.folder, project: content.project, worktree: content.worktree), limit: 1000)
             let label = ApprovalLayout.body(place, width: valueWidth)
-            label.toolTip = Self.sanitized(content.folder, limit: 1000)
-            label.setAccessibilityLabel("In \(place), \(Self.sanitized(content.folder, limit: 1000))")
+            label.maximumNumberOfLines = 1
+            label.cell?.wraps = false
+            label.lineBreakMode = .byTruncatingMiddle
+            label.isSelectable = true
+            label.toolTip = full
+            label.setAccessibilityLabel(place == full ? "In \(full)" : "In \(place), \(full)")
             rows.append(cardRow("folder", "In", [label]))
         }
         let stack = NSStackView(views: rows)
@@ -488,9 +508,21 @@ final class SecretApprovalPanel: NSWindowController, NSWindowDelegate {
         var lines: [NSView] = []
         let caption = ApprovalLayout.caption("Remember")
         caption.setAccessibilityElement(false)
-        let row = NSStackView(views: [caption, popUp])
+        var rowViews: [NSView] = [caption, popUp]
+        // The longest choice, beside the pop-up: a lasting one (Always) is seen without opening it.
+        let titles: [String] = (0..<popUp.numberOfItems).compactMap { popUp.item(at: $0) }.filter { !$0.isSeparatorItem }.map(\.title)
+        if let reach = ApprovalPlaceText.reach(titles) {
+            let label = ApprovalLayout.secondary(reach, width: inner - 200)
+            label.lineBreakMode = .byTruncatingTail
+            label.maximumNumberOfLines = 1
+            label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+            reachLabel = label
+            rowViews.append(label)
+        }
+        let row = NSStackView(views: rowViews)
         row.spacing = 8
         row.alignment = .firstBaseline
+        var only: String?
         if durationChoice.count > 1 {
             lines.append(row)
             lines.append(rememberNote)
@@ -498,13 +530,13 @@ final class SecretApprovalPanel: NSWindowController, NSWindowDelegate {
             // One choice is no choice: the pop-up stays (the panel's state reads it), out of sight.
             row.isHidden = true
             lines.append(row)
-            let only = content.askingEveryUse.isEmpty
+            only = content.askingEveryUse.isEmpty
                 ? (content.isRemote ? "A remote connection\u{2019}s request is allowed once at a time." : nil)
                 : Self.askingNote(content.askingEveryUse)
-            if let only { lines.append(ApprovalLayout.secondary(only, width: inner)) }
         }
-        if let refusal = content.always?.refusal {
-            lines.append(ApprovalLayout.secondary(Self.sanitized(refusal, limit: 300), width: inner))
+        // Why only once, why not Always and how it could be: one short note.
+        if let note = ApprovalPlaceText.rememberNote([only], refusal: content.always?.refusal) {
+            lines.append(ApprovalLayout.secondary(Self.sanitized(note, limit: 600), width: inner))
         }
         if let bridge = content.always?.bridge {
             let button = NSButton(title: "Use as an MCP Server\u{2026}", target: self, action: #selector(useAsServer))
