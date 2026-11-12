@@ -10,6 +10,11 @@ final class PaneView: NSView {
     private let veil = Veil()
     /// The header's room, taken from the pane's height (none while it is hidden).
     private var headerHeight: NSLayoutConstraint?
+    /// Below the terminal: the prompt box's room (View › Prompt Box), none while it is hidden.
+    private let boxArea = NSView()
+    private var boxAreaHeight: NSLayoutConstraint?
+    /// The prompt box, made the first time it shows.
+    private(set) var promptBox: AgentPromptBox?
 
     init(tab: TerminalTab) {
         self.tab = tab
@@ -22,9 +27,17 @@ final class PaneView: NSView {
         veil.isHidden = true
         veil.translatesAutoresizingMaskIntoConstraints = false
         addSubview(veil)
+        boxArea.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(boxArea)
+        let boxHeight = boxArea.heightAnchor.constraint(equalToConstant: 0)
+        boxAreaHeight = boxHeight
         let height = header.heightAnchor.constraint(equalToConstant: 0)
         headerHeight = height
         NSLayoutConstraint.activate([
+            boxArea.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
+            boxArea.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+            boxArea.bottomAnchor.constraint(equalTo: bottomAnchor),
+            boxHeight,
             header.topAnchor.constraint(equalTo: topAnchor),
             header.leadingAnchor.constraint(equalTo: leadingAnchor),
             header.trailingAnchor.constraint(equalTo: trailingAnchor),
@@ -49,8 +62,40 @@ final class PaneView: NSView {
             view.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 4),
             view.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
             view.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -2),
-            view.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -2),
+            view.bottomAnchor.constraint(equalTo: boxArea.topAnchor, constant: -2),
         ])
+    }
+
+    /// Whether the prompt box shows under the terminal.
+    var showsPromptBox: Bool { promptBox?.isHidden == false }
+
+    /// Shows or hides the prompt box; shown, it takes the keyboard, and hidden, the terminal takes it back if the box had it.
+    func setPromptBox(shown: Bool) {
+        if shown {
+            let box = promptBox ?? {
+                let box = AgentPromptBox(tab: tab)
+                box.translatesAutoresizingMaskIntoConstraints = false
+                boxArea.addSubview(box)
+                NSLayoutConstraint.activate([
+                    box.topAnchor.constraint(equalTo: boxArea.topAnchor, constant: 4),
+                    box.leadingAnchor.constraint(equalTo: boxArea.leadingAnchor),
+                    box.trailingAnchor.constraint(equalTo: boxArea.trailingAnchor),
+                    box.bottomAnchor.constraint(equalTo: boxArea.bottomAnchor, constant: -8),
+                ])
+                promptBox = box
+                return box
+            }()
+            box.isHidden = false
+            boxAreaHeight?.isActive = false
+            box.refreshPlaceholder()
+            window?.makeFirstResponder(box.textView)
+        } else {
+            guard let box = promptBox, !box.isHidden else { return }
+            let had = window?.firstResponder === box.textView
+            box.isHidden = true
+            boxAreaHeight?.isActive = true
+            if had { window?.makeFirstResponder(tab.view) }
+        }
     }
 
     var dimmed = false {
