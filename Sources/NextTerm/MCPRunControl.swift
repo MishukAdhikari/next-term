@@ -96,6 +96,7 @@ extension MCPWriteControl {
                 run.before = pane.status.commandsAtPrompt
                 MCPControl.type(command, into: pane, submit: true)
                 run.typed = true
+                CommandPaneAutoClose.watch(pane, before: run.before)
                 watch(run)
             }
             wait(run, until: max(started + answerWithin, TerminalTab.now + 2), reply: reply)
@@ -144,6 +145,13 @@ extension MCPWriteControl {
     /// How the command ended: its exit code when the shell reports one, and the pane's last lines as read_tab gives them.
     private static func ended(_ run: Run, gone: Bool) -> [String: Any] {
         var answer: [String: Any] = ["status": "ran", "tab_id": run.tabID]
+        if gone, let record = CommandPaneAutoClose.closedRecord(run.tabID) {
+            // It closed by itself after finishing well: how it ended was kept before it closed.
+            answer["exit_code"] = Int(record.exitCode)
+            answer["output"] = record.output
+            answer["closed"] = true
+            return answer
+        }
         if gone {
             answer["status"] = "closed"
             answer["note"] = "The pane closed before the command was seen to end; ask the user how it went."
