@@ -25,6 +25,8 @@ struct TabBarItem: Equatable {
     /// Agent tabs: what the place mark after the title says (its agent works in another checkout than the
     /// window shows, or its branch was switched under it); nil without one.
     var place: String? = nil
+    /// Agent tabs: how full the agent's context is, shown as a small gauge after the title.
+    var context: AgentUsage? = nil
 }
 
 protocol TabBarViewDelegate: AnyObject {
@@ -246,6 +248,7 @@ final class TabBarView: NSView, ProjectGlowing {
     func spokenLabel(at index: Int) -> String? { tabViews[safe: index]?.accessibilityLabel() }
     /// Whether a tab shows its place mark, and its tooltip (for the self-test).
     func showsPlaceMark(at index: Int) -> Bool { tabViews[safe: index]?.showsPlaceMark ?? false }
+    func shownContextPercent(at index: Int) -> Int? { tabViews[safe: index]?.shownContextPercent }
     func toolTip(at index: Int) -> String? { tabViews[safe: index]?.toolTip }
     /// For the self-test: whether tab `index` heard the pointer come in, and whether it counts its name as cut.
     func hoverState(at index: Int) -> String { tabViews[safe: index].map { $0.hoverStateForTest } ?? "no tab" }
@@ -708,6 +711,8 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
     private let label = NSTextField(labelWithString: "")
     /// The place mark, right after the title.
     private let placeMark = NSImageView()
+    /// How full an agent's context is, after the title (and the place mark).
+    private let gauge = ContextGaugeView()
     private let closeButton = NSButton()
     private var closeTip: ShortcutToolTip?
     /// "⌘1": how to get to this tab from the keyboard.
@@ -746,6 +751,7 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
         placeMark.contentTintColor = Theme.textDim
         placeMark.isHidden = true
         addSubview(placeMark)
+        addSubview(gauge)
 
         closeButton.bezelStyle = .regularSquare
         closeButton.isBordered = false
@@ -794,6 +800,8 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
         }
         setAccessibilityHelp(newItem.shortcut.map { "\($0) switches to this tab" })
         dot.state = newItem.state
+        if (newItem.context == nil) != (item?.context == nil) { needsLayout = true }
+        gauge.usage = newItem.context
         if iconView.image !== newItem.icon { iconView.image = newItem.icon }
         iconView.isHidden = newItem.icon == nil
         dot.isHidden = newItem.icon != nil
@@ -857,7 +865,7 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
             let end = closeShown ? bounds.width - 27 : bounds.width - 14
             return hintWidth == 0 || end - hintRoom - 6 - titleStart < (closeShown ? 56 : 40) ? nil : end
         }
-        let placeRoom: CGFloat = placeMark.isHidden ? 0 : 15
+        let placeRoom: CGFloat = (placeMark.isHidden ? 0 : 15) + (gauge.isHidden ? 0 : ContextGaugeView.size + 5)
         func titleWidth(hintEnd: CGFloat?) -> CGFloat {
             max(0, min(bounds.width - 28, hintEnd.map { $0 - hintWidth - 6 } ?? .infinity) - labelX - placeRoom)
         }
@@ -881,11 +889,15 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
         // The place mark right after the title's last letter.
         let text = (label.stringValue as NSString).size(withAttributes: [.font: label.font as Any]).width + 4
         placeMark.frame = NSRect(x: label.frame.minX + min(label.frame.width, ceil(text)) + 1, y: (h - 11) / 2, width: 11, height: 11)
+        let gaugeX = placeMark.isHidden ? placeMark.frame.minX + 2 : placeMark.frame.maxX + 4
+        gauge.frame = NSRect(x: gaugeX, y: (h - ContextGaugeView.size) / 2, width: ContextGaugeView.size, height: ContextGaugeView.size)
         renameField?.frame = NSRect(x: labelX - 3, y: (h - 22) / 2, width: max(40, bounds.width - labelX - 26), height: 22)
     }
 
     /// For the self-test: the place mark shows.
     var showsPlaceMark: Bool { !placeMark.isHidden }
+    /// For the self-test: the context gauge's percent, when it shows.
+    var shownContextPercent: Int? { gauge.shownPercent }
 
     /// A remote tab too narrow for "web-1: app (connecting)" says less rather than "web-1: a…g)": first
     /// "web-1: " goes (the mark says it is on a server, the tooltip which one), then the note (the dot on

@@ -461,6 +461,7 @@ enum MCPControl {
         }
         // A dev server's local address, without the query, where a login token goes (Jupyter's `?token=`).
         if let url = tab.servedURL { info["served_url"] = field(ServedURL.shared(url)) }
+        if let usage = tab.contextUsage { info["context"] = usage.fields } // how full its agent's context is
         info.merge(AgentPlaces.shared.fields(of: tab, in: controller)) { $1 } // where its agent works, against the window
         if let remote = tab.remote {
             if tab.loginPrompt { info["login_prompt"] = true } // ssh asks the user something in that tab
