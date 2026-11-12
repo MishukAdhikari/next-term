@@ -102,6 +102,7 @@ extension SelfTest {
               "window tabs: the project behind counts as unseen, and the one in front is the front window",
               "host seen \(host.canBeSeen), front \(TerminalWindow.front?.title ?? "none")")
         await screenshot(other, suffix: "-merged")
+        await mergedTabHoverCheck(other)
         // The tab bar a while later, and with the window no longer in front (a reported fade).
         await pause(6)
         await screenshot(other, suffix: "-merged-later")
@@ -234,6 +235,25 @@ extension SelfTest {
         let closed: Bool = await wait(5) { other.hasClosed && last.hasClosed }
         check(closed && !c.hasClosed && host.isVisible, "window tabs: Close Window closes every project merged into the window, and no other window",
               "second closed \(other.hasClosed), third closed \(last.hasClosed), sheet \(lastWindow.attachedSheet != nil)")
+    }
+
+    /// In a merged window, where the terminal's tab bar sits below the system tab bar and out of the title strip: resting
+    /// on a tab whose name is cut short still shows its whole name.
+    private static func mergedTabHoverCheck(_ c: TerminalWindowController) async {
+        guard let tab = c.activeTab else { return check(false, "window tabs: the merged window in front has a tab") }
+        let long = "A tab with a name far too long to fit in its place in the tab bar of a merged window, so it is cut short"
+        tab.userTitle = long
+        c.refresh()
+        defer { tab.userTitle = nil; c.refresh(); HoverTip.shared.hide() }
+        let index: Int = c.groups.firstIndex { $0.contains(tab) } ?? 0
+        await pause(0.3)
+        c.window?.layoutIfNeeded()
+        HoverTip.shared.hide()
+        c.tabBar.restPointerForTest(at: index)
+        let shown: Bool = await wait(2) { HoverTip.shared.shownText == long }
+        check(shown && c.tabBar.shownTitle(at: index) != long,
+              "window tabs: in a merged window, resting on a tab whose name is cut short shows its whole name",
+              "showing “\(HoverTip.shared.shownText ?? "")”, state \(c.tabBar.hoverState(at: index))")
     }
 
     /// The first of a window's top-row views (the terminal's and the editor's tab bars, the sidebar header, the window
