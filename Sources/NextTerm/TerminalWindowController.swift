@@ -958,6 +958,20 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     // MARK: agent scratch
 
+    #if DEBUG
+    /// The self-test's grace (NEXTTERM_SELFTEST_ONLY=agentScratch): seconds instead of AgentScratch.grace's minute.
+    static var scratchGraceForTest: TimeInterval?
+    #endif
+
+    /// How long a quiet scratch window waits before it closes: AgentScratch.grace, or the self-test's.
+    private static var scratchGrace: TimeInterval {
+        #if DEBUG
+        return scratchGraceForTest ?? AgentScratch.grace
+        #else
+        return AgentScratch.grace
+        #endif
+    }
+
     /// An agent's scratch window, as AgentScratch reads it.
     var isAgentScratch: Bool { openedByAgent && project.map { AgentScratch.isTemporary($0) } == true }
 
@@ -998,7 +1012,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             self.window?.close()
         }
         scratchClose = close
-        DispatchQueue.main.asyncAfter(deadline: .now() + AgentScratch.grace, execute: close)
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.scratchGrace, execute: close)
     }
 
     // MARK: status
