@@ -328,7 +328,7 @@ enum MCPBridge {
         let socket = environment[MCPServer.socketVariable].flatMap { $0.isEmpty ? nil : $0 } ?? MCPServer.socketPath()
         // Next Term's own skills, first, for an agent in a Next Term tab; next-term-tabs while the setting is on.
         let offering = UserDefaults.standard.object(forKey: "agentsOfferTabs") as? Bool ?? true
-        let instructions = MCPServer.instructions(inTab: MCPServer.runsUnder(executable: Bundle.main.executablePath ?? ""), offeringTabs: offering)
+        let inTab = MCPServer.runsUnder(executable: Bundle.main.executablePath ?? "")
         let calls = DispatchGroup()
         #if DEBUG
         // The self-test's shorter progress interval (SelfTestOpencodeProgress).
@@ -358,8 +358,11 @@ enum MCPBridge {
                                                  callExtra: { session?.call($0, $1) ?? [:] }, call: { forward($0, $1, socket: socket) })
                     }
                 } else {
-                    // The tool list is the one place the hub shows: it waits for the plan (MCPBridgeHub.planWait at most).
-                    let session = message["method"] as? String == "tools/list" ? hub.session : nil
+                    // The tool list and the instructions are where the hub shows: they wait for the plan (MCPBridgeHub.planWait
+                    // at most), so the agent is told which of the user's servers it has, and has their tools.
+                    let method = message["method"] as? String
+                    let session = method == "tools/list" || method == "initialize" ? hub.session : nil
+                    let instructions = MCPServer.instructions(inTab: inTab, offeringTabs: offering, hubServers: session?.serverNames ?? [])
                     if let response = MCPServer.respond(to: message, version: version, instructions: instructions,
                                                         extra: session?.tools ?? [],
                                                         call: { _, _ in MCPServer.CallResult(text: "") }) {
@@ -459,10 +462,16 @@ enum MCPBridge {
 
 /// The MCP hub in a bridge: the plan the app gives for this agent, asked for as the bridge starts so tools/list rarely
 /// waits, and the session that runs its servers (MCPHubSession). No list of the user's (the app isn't even asked), no
-/// app, no tab, or no server: no plan, and the catalog stays out of every answer.
+/// app, a remote tab, or no server: no plan, and the catalog stays out of every answer. An agent outside Next Term's tabs
+/// gets the plan for the folder the bridge runs in.
 final class MCPBridgeHub: @unchecked Sendable {
-    /// The longest the app's plan is waited for: within Codex's 10-second start-up wait, with room for the rest.
-    static let planWait: TimeInterval = 5
+    /// The longest the session is waited for (the app's plan, then `warmWait`): within Codex's 10-second start-up wait.
+    static let planWait: TimeInterval = 8
+    /// The longest the app's answer with the plan is waited for.
+    static let askWait: TimeInterval = 3
+    /// The longest a server just connected (no cached tool list) is given to start and list its tools, so they are this
+    /// first session's direct tools (MCPHubSession.warm).
+    static let warmWait: TimeInterval = 4
 
     private let ready = DispatchSemaphore(value: 0)
     /// The reports to the app on their way, which the bridge lets finish before it goes: a server's tool list among them.
@@ -472,7 +481,9 @@ final class MCPBridgeHub: @unchecked Sendable {
     private var terminate: DispatchSourceSignal?
 
     init(socket: String, version: String, environment: [String: String]) {
-        let fetch: MCPHubSession.Refresh = { Self.plan(socket: socket) }
+        // Where the agent works, for an agent outside Next Term's tabs: the app takes its tab's folder for one in a tab.
+        let folder = FileManager.default.currentDirectoryPath
+        let fetch: MCPHubSession.Refresh = { Self.plan(socket: socket, folder: folder) }
         let nxtrm = [Bundle.main.executablePath ?? CommandLine.arguments[0], "--cli"]
         // No list of the user's, no server (R17): the app isn't asked, and nothing waits. The file is made with the first
         // server the user adds (MCPHubScope.save); a project's list starts nothing until the user approves it, and that
@@ -487,7 +498,7 @@ final class MCPBridgeHub: @unchecked Sendable {
         let report: MCPHubSession.Report = { server, list, failure, tools in
             reports.enter()
             DispatchQueue.global(qos: .utility).async {
-                var arguments: [String: Any] = ["server": server, "list": list, "tools": tools]
+                var arguments: [String: Any] = ["server": server, "list": list, "tools": tools, "folder": folder]
                 if let failure { arguments["failure"] = failure }
                 _ = MCPBridge.attempt(MCPHubPlan.reportTool, arguments, socket: socket, wait: 2)
                 reports.leave()
@@ -500,13 +511,15 @@ final class MCPBridgeHub: @unchecked Sendable {
             guard let data = try? encoder.encode(manifest), let object = try? JSONSerialization.jsonObject(with: data) else { return }
             reports.enter()
             DispatchQueue.global(qos: .utility).async {
-                _ = MCPBridge.attempt(MCPHubPlan.reportTool, ["server": server, "list": list, "manifest": object], socket: socket, wait: 5)
+                _ = MCPBridge.attempt(MCPHubPlan.reportTool, ["server": server, "list": list, "manifest": object, "folder": folder], socket: socket, wait: 5)
                 reports.leave()
             }
         }
         // A remote server is reached by the app, which alone fills its keys in: the bridge runs as the user under the
         // agent, so a key it held, or could ask the socket for, the agent could read too.
         let remote: MCPHubSession.Remote = { arguments, wait in
+            var arguments = arguments
+            arguments["folder"] = folder
             guard case .success(let answer) = MCPBridge.attempt(MCPHubPlan.remoteTool, arguments, socket: socket, wait: wait) else { return nil }
             return (answer.text, answer.isError)
         }
@@ -516,7 +529,10 @@ final class MCPBridgeHub: @unchecked Sendable {
             self.lock.lock()
             self.made = session
             self.lock.unlock()
-            if session.isActive { self.stopOnTerminate() }
+            if session.isActive {
+                self.stopOnTerminate()
+                session.warm(seconds: Self.warmWait)
+            }
             self.ready.signal()
         }
     }
@@ -563,9 +579,10 @@ final class MCPBridgeHub: @unchecked Sendable {
     static let selfTestUserFileVariable = "NEXTTERM_SELFTEST_MCP_HUB_FILE"
     #endif
 
-    /// The app's plan for this bridge's agent, or nil (no app, no tab, no server).
-    static func plan(socket: String) -> MCPHubPlan? {
-        guard case .success(let answer) = MCPBridge.attempt(MCPHubPlan.tool, [:], socket: socket, wait: planWait), !answer.isError else {
+    /// The app's plan for this bridge's agent, or nil (no app, a remote tab, no server). `folder`: where the bridge runs,
+    /// which the app uses for an agent outside its tabs.
+    static func plan(socket: String, folder: String) -> MCPHubPlan? {
+        guard case .success(let answer) = MCPBridge.attempt(MCPHubPlan.tool, ["folder": folder], socket: socket, wait: askWait), !answer.isError else {
             return nil
         }
         return MCPHubPlan.decode(answer.text)

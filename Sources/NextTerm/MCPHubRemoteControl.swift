@@ -7,7 +7,7 @@ import NextTermCore
 /// request (MCPHubRemote), and answers with the server's tools or result. The keys are never written, never in an
 /// answer (MCPControlServer masks stored values in every one), and never in the bridge.
 ///
-/// - **Which server.** Only an agent in one of this Mac's tabs, and only a server that applies where it works and is
+/// - **Which server.** Only an agent on this Mac (in a tab, or outside them for the folder its bridge sends), and only a server that applies where it works and is
 ///   ready there, as its plan says, read from the lists as they are now: the bridge's word names it, never decides it.
 /// - **Keys.** Released through Secrets' one queue and panel (SecretRequests), as `nxtrm secret run` does for a local
 ///   server: the panel names the server and its URL, offers "Allow for this session" for the agent's session, and a
@@ -33,8 +33,8 @@ enum MCPHubRemoteControl {
 
     static func call(_ arguments: [String: Any], caller: TerminalTab?, pid: pid_t?, reply: @escaping MCPControl.Reply) {
         func fail(_ text: String) { reply(MCPServer.CallResult(text: text, isError: true)) }
-        guard let folder = MCPHubControl.folder(of: caller) else {
-            return fail("Next Term reaches remote MCP servers only for an agent in one of this Mac's tabs.")
+        guard let folder = MCPHubControl.folder(of: caller, arguments: arguments) else {
+            return fail("Next Term reaches remote MCP servers only for an agent on this Mac, not one in a remote tab.")
         }
         guard let name = arguments["server"] as? String, let list = arguments["list"] as? String, let url = arguments["url"] as? String,
               let op = arguments["op"] as? String, op == "tools" || op == "call" else {

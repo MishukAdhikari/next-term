@@ -1149,7 +1149,10 @@ struct TOMLOutline {
                 advance()
                 let isArray = i < scalars.endIndex && scalars[i] == "["
                 if isArray { advance() }
-                guard let path = parseKey(), take("]"), !isArray || take("]"), endOfLine() else { return nil }
+                // The second ] apart: a mutating call can't sit in ||'s autoclosure (Swift 6.4).
+                guard let path = parseKey(), take("]") else { return nil }
+                if isArray { guard take("]") else { return nil } }
+                guard endOfLine() else { return nil }
                 headers.append(Header(path: path, isArray: isArray, line: lineStart..<i))
                 table = path
                 continue

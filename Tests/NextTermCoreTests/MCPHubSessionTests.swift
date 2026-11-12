@@ -105,8 +105,8 @@ import Testing
         }
         let names = ((listed?["result"] as? [String: Any])?["tools"] as? [[String: Any]] ?? []).compactMap { $0["name"] as? String }
         #expect(names == MCPServer.tools.map(\.name) + ["mcp_servers", "mcp_tools", "mcp_call"])
-        // Deferred, and tagged for the remote door's cross-check.
-        #expect(MCPHubCatalog.tools.allSatisfy { !$0.alwaysLoad && $0.scope != nil })
+        // Kept loaded (an agent can't search for a server it doesn't know about), and tagged for the remote door's cross-check.
+        #expect(MCPHubCatalog.tools.allSatisfy { $0.alwaysLoad && $0.scope != nil })
         #expect(MCPHubCatalog.tools.allSatisfy { MCPServer.tool(named: $0.name) == nil })
     }
 

@@ -123,9 +123,9 @@ import Testing
         // Left out: MCP's defaults, as the server's own listing would mean.
         #expect(annotations["destructiveHint"] as? Bool == true && annotations["idempotentHint"] as? Bool == false)
         #expect((listed["inputSchema"] as? [String: Any])?["required"] as? [String] == ["q"])
-        // Deferred for Claude Code, tagged write as mcp_call is.
+        // Kept loaded for Claude Code (never behind its tool search), tagged write as mcp_call is.
         let meta = try #require(listed["_meta"] as? [String: Any])
-        #expect(meta["anthropic/alwaysLoad"] == nil && meta["next-term/scope"] as? String == "write")
+        #expect(meta["anthropic/alwaysLoad"] as? Bool == true && meta["next-term/scope"] as? String == "write")
         // No title: the tool's name, after its server's.
         let bare = MCPHubDirect.listed(MCPHubDirect.Entry(name: "s__t", server: "s", tool: MCPHubManifest.Tool(name: "t")))
         #expect(bare.title == "s: t" && bare.description == "t, a tool of s.")

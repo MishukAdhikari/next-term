@@ -80,6 +80,46 @@ public enum MCPServer {
         return secretsLead + "\n" + skillsParagraph(offeringTabs: offeringTabs) + " " + orchestration + " " + secretsUse
     }
 
+    /// The 2,048 characters older Claude Code keeps of a server's instructions.
+    public static let instructionsLimit = 2_048
+
+    /// `instructions(inTab:offeringTabs:)` with, once servers the user connected in Next Term apply to this agent (the
+    /// hub's session is active), a line naming them right after Secrets' first line: an agent uses a tool it knows it has,
+    /// and never searches for a server it doesn't know about. When it doesn't fit in the limit, the two sentences an agent
+    /// needs least (`spareSentences`) make room; names that still don't fit are counted instead.
+    public static func instructions(inTab: Bool, offeringTabs: Bool, hubServers: [String]) -> String {
+        let base = instructions(inTab: inTab, offeringTabs: offeringTabs)
+        guard !hubServers.isEmpty else { return base }
+        let spared = spareSentences.reduce(base) { $0.replacingOccurrences(of: " " + $1, with: "") }
+        for text in [base, spared] {
+            guard let lineEnd = text.firstIndex(of: "\n"),
+                  let line = hubParagraph(hubServers, room: instructionsLimit - text.utf16.count - 1, least: text == base ? hubServers.count : 1)
+            else { continue }
+            return String(text[..<lineEnd]) + "\n" + line + String(text[lineEnd...])
+        }
+        return base
+    }
+
+    /// What the instructions leave out to make room for the hub's line.
+    static let spareSentences = [
+        "For another app's settings use list_import_sources and preview_import, never its files.",
+        "A tab Next Term brings back after an update or a quit keeps its id.",
+    ]
+
+    /// The hub's line for `servers`, within `room` characters and naming at least `least` of them, or nil.
+    static func hubParagraph(_ servers: [String], room: Int, least: Int = 1) -> String? {
+        func line(_ names: [String], more: Int) -> String {
+            let listed = names.joined(separator: ", ") + (more > 0 ? " and \(more) more" : "")
+            return "MCP servers connected in Next Term: \(listed). Use their tools, <server>__<tool>; "
+                + "mcp_servers, mcp_tools and mcp_call reach all."
+        }
+        for count in stride(from: servers.count, through: max(1, least), by: -1) {
+            let made = line(Array(servers.prefix(count)), more: servers.count - count)
+            if made.utf16.count <= room { return made }
+        }
+        return nil
+    }
+
     // MARK: tools
 
     public struct Tool: Sendable {

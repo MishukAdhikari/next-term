@@ -107,9 +107,20 @@ public struct MCPHubPlan: Codable, Equatable, Sendable {
                           problems: problems)
     }
 
+    /// Where an agent outside Next Term's tabs works, for its plan: the folder its bridge sent (`sent`, an absolute folder
+    /// that exists), else the home folder, so the user's own servers apply either way.
+    public static func outsideFolder(_ sent: String?, home: String = NSHomeDirectory()) -> String {
+        var isFolder: ObjCBool = false
+        if let sent, sent.hasPrefix("/"), FileManager.default.fileExists(atPath: sent, isDirectory: &isFolder), isFolder.boolValue {
+            return canonicalPath(sent)
+        }
+        return canonicalPath(home)
+    }
+
     // MARK: over the socket
 
-    /// The tool the bridge asks the app with: never listed, and answered only for an agent in a Next Term tab.
+    /// The tool the bridge asks the app with (`folder`: where the bridge runs): never listed; answered for any agent on
+    /// this Mac, for its tab's folder, or outside the tabs for `folder` (outsideFolder).
     public static let tool = "mcp_hub_plan"
     /// The tool the bridge tells the app with how a server's start ended (MCPHubSession.Report): never listed either,
     /// and kept only in the app's memory, for Settings › MCP Servers' state. With `manifest` (MCPHubSession.Remember), a

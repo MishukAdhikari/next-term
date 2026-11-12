@@ -78,7 +78,7 @@ public struct BuiltInSkill: Sendable, Equatable {
         5. Report each result here, one line per tab, with where its changes are. Don't merge branches, close tabs or commit for the user unless they ask.
 
         Never type into your own tab. If a tab fails or its agent isn't installed, say so and go on with the others.
-        """#, offersTabs: true,
+        """# + "\n\n" + connectedServers, offersTabs: true,
         when: "when the user asks for work in parallel, in the background or by another agent (Codex, Claude…): offer once, and open tabs only after the user types yes")
 
     /// A pasted repository, branch, pull request or worktree the project already has: the offer to open that worktree
@@ -130,7 +130,7 @@ public struct BuiltInSkill: Sendable, Equatable {
         2. Say here where the work goes on (the window, the tab and the agent), and stop working on that task here. Don't close this tab, commit, merge or remove anything unless the user asks.
 
         Never start an agent with a flag that skips its permission prompts unless the user asked.
-        """#, offersTabs: false,
+        """# + "\n\n" + connectedServers, offersTabs: false,
         when: "when the user pastes a repo, branch or PR the project already has a worktree or branch for")
 
     /// Changing Next Term for the user: what MCP may change, Settings for the rest, and a table with the user's own keys.
@@ -184,7 +184,7 @@ public struct BuiltInSkill: Sendable, Equatable {
         | — | Where new tasks are saved | Settings › Tasks › Todo folder | Settings open |
 
         Write "—" for a command with no key. Add only the keys that go with what was asked, not a full list: `list_shortcuts` is there when the user wants more.
-        """#, offersTabs: false,
+        """# + "\n\n" + connectedServers, offersTabs: false,
         when: "when the user asks to change Next Term (settings, layout, keys) or how to do something in it")
 
     /// Keys from Secrets, by name: look there first, use a key without seeing it (run_with_secrets, `nxtrm secret run`
@@ -236,7 +236,15 @@ public struct BuiltInSkill: Sendable, Equatable {
         - The user pastes a key into the chat anyway, or a CLI prints a new token: `store_secret` it right away, use it by name from then on, and never repeat it.
         - A command that asks for the user's own password or login (sudo, `gh auth login`): `run_command` if you have it, or ask the user to run it in their tab. Never ask for that password in the chat.
         - `declined`: the user said no. Say what you could not do, and don't ask again in this task.
-        """#, offersTabs: false,
+        """# + "\n\n" + connectedServers, offersTabs: false,
         // Not shown in the skills paragraph (MCPServer leaves next-term-secrets out); get_skill's description says it.
         when: "when a command, script, .env file or MCP server needs an API key, token or password")
+
+    /// Ends every one of them: the MCP servers the user connected in Next Term are the agent's to use, whatever skill
+    /// brought it here, so it uses them instead of asking the user to set a server up again in its own config.
+    public static let connectedServers = """
+        ## MCP servers connected in Next Term
+
+        MCP servers the user connected in Next Term (Settings › MCP Servers) are yours too: their tools are listed as your own, named `<server>__<tool>`, and `mcp_servers`, `mcp_tools` and `mcp_call` reach every one, a server connected after you started included. Use them before asking the user to add a server to your own config. `list_mcp_servers` shows what is connected; when a server you need isn't, `add_mcp_server` connects it for every agent once the user approves on the Mac.
+        """
 }

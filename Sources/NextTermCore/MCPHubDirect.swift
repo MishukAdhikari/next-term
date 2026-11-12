@@ -20,8 +20,9 @@ import Foundation
 /// reason about than a server reached by the catalog). Servers take their turn in the plan's order (name order), and one
 /// that doesn't fit leaves the rest of the budget to the next. 40: Next Term's own 62 tools and the catalog's 3 then come
 /// to 105, under the 128 tools VS Code takes in one request (the one documented cap among agents) with room for an
-/// agent's own built-ins; and it is the cap Cursor was long known for, which some agents and gateways still follow. Claude
-/// Code defers them all (no `anthropic/alwaysLoad`), so they cost it nothing until its tool search finds one.
+/// agent's own built-ins; and it is the cap Cursor was long known for, which some agents and gateways still follow. Each
+/// is kept loaded for Claude Code (`anthropic/alwaysLoad`): the user connected the server for its agents to use, and a
+/// deferred tool stays out of sight until a search the agent has no reason to make.
 public enum MCPHubDirect {
     public static let budget = 40
     /// The longest name: 64 less the longest agent prefix (`mcp__next-term__`).
@@ -106,14 +107,14 @@ public enum MCPHubDirect {
     }
 
     /// One as `tools/list` lists it: the server's name in its title, its description as the server gave it (cut), its
-    /// schema and hints, deferred for Claude Code. A hint the server left out is MCP's default for it, as it would be.
+    /// schema and hints, kept loaded for Claude Code. A hint the server left out is MCP's default for it, as it would be.
     public static func listed(_ entry: Entry) -> MCPServer.Tool {
         let tool = entry.tool
         let description = tool.description.flatMap { $0.isEmpty ? nil : $0 } ?? "\(tool.name), a tool of \(entry.server)."
         return MCPServer.Tool(name: entry.name, title: "\(entry.server): \(tool.title ?? tool.name)", description: description,
                               inputSchema: tool.inputSchema ?? #"{"type":"object"}"#, readOnly: tool.readOnlyHint ?? false,
                               destructive: tool.destructiveHint ?? true, idempotent: tool.idempotentHint ?? false,
-                              timeout: MCPHubUpstream.Limits.standard.call, openWorld: tool.openWorldHint ?? true, alwaysLoad: false)
+                              timeout: MCPHubUpstream.Limits.standard.call, openWorld: tool.openWorldHint ?? true, alwaysLoad: true)
     }
 
     /// Of a server's cached tools, those that can be direct: the ones with a schema an agent takes.

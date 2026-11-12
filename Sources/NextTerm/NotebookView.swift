@@ -346,7 +346,7 @@ final class NotebookBlock: NSTextBlock {
 
     required init?(coder: NSCoder) { fatalError("not used") }
 
-    override func drawBackground(withFrame frameRect: NSRect, in controlView: NSView, characterRange charRange: NSRange, layoutManager: NSLayoutManager) {
+    override func drawBackground(withFrame frameRect: NSRect, in controlView: NSView?, characterRange charRange: NSRange, layoutManager: NSLayoutManager) {
         let left = width(for: .margin, edge: .minX), right = width(for: .margin, edge: .maxX)
         let top = width(for: .margin, edge: .minY), bottom = width(for: .margin, edge: .maxY)
         let box = NSRect(x: frameRect.minX + left, y: frameRect.minY + top, width: frameRect.width - left - right,

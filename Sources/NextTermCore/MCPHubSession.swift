@@ -39,11 +39,12 @@ public final class MCPHubSession: @unchecked Sendable {
     private let report: Report?
     private let remote: Remote?
     private let remember: Remember?
-    /// The session's direct tools, by their names, as listed: fixed as it starts.
-    private let direct: [String: MCPHubDirect.Entry]
-    private let directTools: [MCPServer.Tool]
+    /// The session's direct tools, by their names, as listed: fixed as it starts (`warm` fills them in before the bridge
+    /// answers its first tool list, never after).
+    private var direct: [String: MCPHubDirect.Entry] = [:]
+    private var directTools: [MCPServer.Tool] = []
     /// Why each ready server of the first plan has no direct tools, or how many it has, for mcp_servers.
-    private let directState: [String: DirectState]
+    private var directState: [String: DirectState] = [:]
     /// Each server's tool list's digest as the session knows it: its cached list's, then what it told the app.
     private var known: [String: String] = [:]
     /// What `nxtrm` is to this bridge: its own program, so `nxtrm secret run` needs nothing on PATH.
@@ -73,21 +74,80 @@ public final class MCPHubSession: @unchecked Sendable {
         self.environment = environment
         self.limits = limits
         self.version = version
-        let entries = isActive ? MCPHubDirect.entries(self.plan) : []
+        allot(self.plan)
+    }
+
+    /// The direct tools of `plan`'s servers, with each ready server's state, and the digests the session knows.
+    private func allot(_ plan: MCPHubPlan) {
+        let entries = isActive ? MCPHubDirect.entries(plan) : []
         direct = Dictionary(entries.map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first })
         directTools = entries.map(MCPHubDirect.listed)
-        var states: [String: DirectState] = [:], known: [String: String] = [:]
-        for server in self.plan.servers where server.state == .ready {
+        var states: [String: DirectState] = [:]
+        for server in plan.servers where server.state == .ready {
             let count = entries.filter { $0.server == server.name }.count
             if count > 0 {
                 states[server.name] = .listed(count, of: server.cachedTools ?? count)
             } else {
                 states[server.name] = server.cachedTools == nil ? .notYet : .overBudget
             }
-            known[server.name] = server.manifest
+            if known[server.name] == nil { known[server.name] = server.manifest }
         }
         directState = states
-        self.known = known
+    }
+
+    /// The servers this session can reach (ready), by name, for the instructions; none while it isn't active.
+    public var serverNames: [String] {
+        isActive ? currentPlan.servers.filter { $0.state == .ready }.map(\.name) : []
+    }
+
+    /// The local servers the first plan has no cached tool list for: `warm` starts them.
+    public var unlisted: [String] {
+        isActive ? plan.servers.filter { $0.state == .ready && !$0.isRemote && $0.cachedTools == nil }.map(\.name) : []
+    }
+
+    /// Before the bridge answers its first tool list: starts each local server with no cached tool list (a server just
+    /// connected), at once and for `seconds` at most, and makes its tools direct tools of this very session, so an agent
+    /// started right after the user connects a server has them as its own (and the app keeps the list for the next
+    /// sessions, `remember`). One slow or failing to start is left to the catalog, as before. Call it once, before
+    /// `tools` is first read.
+    public func warm(seconds: TimeInterval) {
+        let names = unlisted
+        guard !names.isEmpty else { return }
+        let deadline = Date().addingTimeInterval(seconds)
+        let results = Results(count: names.count)
+        DispatchQueue.concurrentPerform(iterations: names.count) { index in
+            results.set(index, tools(of: names[index], until: deadline))
+        }
+        var manifests: [String: MCPHubManifest] = [:]
+        for (name, result) in zip(names, results.all) {
+            if case .success(let listed)? = result { manifests[name] = MCPHubManifest(listed: listed) }
+        }
+        lock.lock()
+        var warmed = plan
+        lock.unlock()
+        // The servers that had cached lists keep the tools the app gave; the budget is shared out again in plan order.
+        let given = Dictionary(uniqueKeysWithValues: warmed.servers.map { ($0.name, $0) })
+        var left = MCPHubDirect.budget
+        for index in warmed.servers.indices {
+            let server = warmed.servers[index]
+            guard server.state == .ready else { continue }
+            if let tools = given[server.name]?.tools, server.cachedTools != nil {
+                left -= tools.count
+                continue
+            }
+            guard let manifest = manifests[server.name], server.cachedTools == nil else { continue }
+            warmed.servers[index].manifest = manifest.digest
+            warmed.servers[index].cachedTools = manifest.count
+            let usable = MCPHubDirect.usable(manifest)
+            if manifest.isComplete, !usable.isEmpty, usable.count <= left {
+                warmed.servers[index].tools = usable
+                left -= usable.count
+            }
+        }
+        lock.lock()
+        plan = warmed
+        allot(warmed)
+        lock.unlock()
     }
 
     /// The tools listed after Next Term's own: none until a server applies, then the catalog and the direct tools.
