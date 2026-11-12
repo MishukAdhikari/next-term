@@ -337,6 +337,8 @@ enum SecretsMCP {
                     : "Next Term couldn't type the line in that tab."
                 return resolve(call, told(["status": "refused", "note": note, "tab_id": tabID]))
             }
+            // A new tab of its own closes by itself once the command finishes well (CommandPaneAutoClose).
+            if target == nil { CommandPaneAutoClose.watch(ticketTab, before: ticketTab.status.commandsAtPrompt) }
             MCPControl.type(line, into: ticketTab, submit: true)
             requests.typed(ticket)
         }

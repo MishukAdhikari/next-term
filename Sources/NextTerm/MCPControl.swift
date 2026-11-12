@@ -217,6 +217,7 @@ enum MCPControl {
         driven.remove(tab.id)
         HerdrMCP.userTyped(in: tab) // its herdr agents too
         MCPRestoredTabs.typedByUser(tab) // a restored tab's details count your commands from here (U13)
+        MainActor.assumeIsolated { CommandPaneAutoClose.typedByUser(tab) } // a finished command's pane stays (auto-close)
     }
 
     /// The tab closed.
@@ -332,9 +333,11 @@ enum MCPControl {
         case "list_tabs": reply(listTabs(project: arguments["project"] as? String, caller: caller, herdrCaller: herdrCaller))
         case "list_projects": reply(listProjects())
         case "read_tab":
+            if let gone = MainActor.assumeIsolated({ CommandPaneAutoClose.closedAnswer(arguments["tab_id"]) }) { return reply(gone) }
             guard let tab = findTab(arguments["tab_id"]) else { return reply(fail("No tab with that id; list_tabs shows them.")) }
             readTab(tab, lines: arguments["lines"] as? Int ?? 80, reply: reply)
         case "wait_for_tab":
+            if let gone = MainActor.assumeIsolated({ CommandPaneAutoClose.closedAnswer(arguments["tab_id"]) }) { return reply(gone) }
             guard let tab = findTab(arguments["tab_id"]) else { return reply(fail("No tab with that id; list_tabs shows them.")) }
             let seconds = min(300, max(1, arguments["timeout_seconds"] as? Int ?? 50))
             waitFor(tab, until: TerminalTab.now + Double(seconds), sawWork: false, reply: reply)
