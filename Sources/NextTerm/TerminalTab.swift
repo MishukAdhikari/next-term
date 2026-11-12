@@ -1787,6 +1787,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         var lines = [title]
         if let remoteMark { lines.append(remoteMark.summary) }
         if let ownStateDescription { lines.append(ownStateDescription) }
+        if let contextUsage { lines += contextUsage.lines }
         if status.running && !status.command.isEmpty { lines.append(String(status.command.prefix(300))) }
         lines.append(remote == nil ? directory : "Folder on the host: \(directory)")
         if let servedURL { lines.append("Serving \(ServedURL.shared(servedURL))") } // its token, if any, stays out of sight
