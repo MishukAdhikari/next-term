@@ -62,6 +62,8 @@ extension SelfTest {
         check(draft.comments.map(\.lines) == [2...2, 35...35] && draft.comments.allSatisfy(\.inFile),
               "review: the comments hold the lines in the file now", "\(draft.comments.map(\.lines))")
         check(await wait(3) { !room.review.isHidden && room.review.title == "Review (2)" }, "review: the toolbar shows Review (2)", room.review.title)
+        check(await wait(3) { diff.commentedLines.right == [2, 35] && diff.commentedLines.left.isEmpty },
+              "review: the diff marks the commented lines", "\(diff.commentedLines)")
 
         // Three lines added at the top, the second comment's line changed: the first follows, the second is outdated.
         var moved = ["new 1", "new 2", "new 3"] + lines
