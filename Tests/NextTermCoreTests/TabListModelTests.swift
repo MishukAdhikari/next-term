@@ -30,6 +30,20 @@ import Testing
         #expect(made.allSatisfy { !$0.isPane })
     }
 
+    @Test func agentRowsCarryTheirContextGauge() {
+        let usage = AgentUsage(used: 84_000, window: 200_000)
+        var agent = pane("p1", "claude", focused: true)
+        agent.context = usage
+        let plain = tab("a", [agent])
+        let split = tab("g", [pane("q1", "npm test"), agent])
+        let made = rows([plain, split])
+        #expect(made.map(\.context) == [usage, usage, nil, usage])
+        // The split tab's row follows the pane with the keyboard: none when that pane runs no agent.
+        var other = agent
+        other.focused = false
+        #expect(rows([tab("g", [pane("q1", "npm test", focused: true), other])]).map(\.context) == [nil, nil, usage])
+    }
+
     @Test func aSplitTabIsItsRowThenARowPerPane() {
         let split = tab("g", [pane("p1", "claude", .done, focused: true), pane("p2", "pytest -x", .working)], shortcut: "⌘1")
         let made = rows([split])

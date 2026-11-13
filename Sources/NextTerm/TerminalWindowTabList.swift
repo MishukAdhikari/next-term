@@ -151,7 +151,7 @@ extension TerminalWindowController: TabListViewDelegate {
                                         shorterTitles: item.shorterTitles, editableTitle: item.editableTitle, state: item.state,
                                         tooltip: item.tooltip, spokenStatus: item.accessibilityStatus, folder: folders ? tab.directory : "",
                                         question: folders ? tab.status.question : nil, remote: item.remote, focused: true,
-                                        herdrAgents: tab.herdrRows, herdrIdleOpen: tab.herdrIdleOpen)
+                                        herdrAgents: tab.herdrRows, herdrIdleOpen: tab.herdrIdleOpen, context: tab.contextUsage)
             return TabListRows.Source(key: key, panes: [pane], shortcut: item.shortcut, place: item.place)
         }
         let focused: TerminalTab = group.focused
@@ -170,7 +170,7 @@ extension TerminalWindowController: TabListViewDelegate {
                                 editableTitle: tab.editableTitle, state: tab.status.state, tooltip: tab.tooltip,
                                 spokenStatus: tab.ownStateDescription ?? "", folder: folders ? tab.directory : "",
                                 question: folders ? tab.status.question : nil, remote: tab.remoteMark, focused: focused,
-                                herdrAgents: tab.herdrRows, herdrIdleOpen: tab.herdrIdleOpen)
+                                herdrAgents: tab.herdrRows, herdrIdleOpen: tab.herdrIdleOpen, context: tab.contextUsage)
     }
 
     /// The list given its rows again as last made, in the form it shows now: when only its width or its collapse
