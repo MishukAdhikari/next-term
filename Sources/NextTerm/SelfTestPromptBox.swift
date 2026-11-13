@@ -21,7 +21,10 @@ extension SelfTest {
             try? fm.removeItem(atPath: base)
         }
         _ = await wait(20) { tab.status.integrated }
-        tab.view.send(txt: "printf '\\033[?2004h'; stty raw -echo; cat > \(ShellQuote.quote(got))\r")
+        // Under sh, not the tab's zsh, whose settings for the terminal may come back before cat runs; its modes are kept to say why
+        // when a check fails.
+        let script = "printf '\\033[?2004h'; stty raw -echo; stty -a > \(ShellQuote.quote(got)).stty; exec cat > \(ShellQuote.quote(got))"
+        tab.view.send(txt: "/bin/sh -c \(ShellQuote.quote(script))\r")
         _ = await wait(10) { tab.view.getTerminal().bracketedPasteMode }
         func read() -> String { (try? String(contentsOfFile: got, encoding: .utf8)) ?? "" }
         holder.window?.makeKeyAndOrderFront(nil)
@@ -33,7 +36,8 @@ extension SelfTest {
         box.text = "line one\nline two"
         box.submit()
         let sent = await wait(5) { read().contains("\u{1b}[200~line one\rline two\u{1b}[201~\r") }
-        check(sent, "prompt box: two lines arrive as one paste, then Return", read().debugDescription)
+        let modes = ((try? String(contentsOfFile: got + ".stty", encoding: .utf8)) ?? "no modes").split(separator: "\n").prefix(4).joined(separator: " ")
+        check(sent, "prompt box: two lines arrive as one paste, then Return", read().debugDescription + " — " + modes)
         check(box.text.isEmpty, "prompt box: the box empties once sent")
         box.textView.doCommand(by: #selector(NSResponder.moveUp(_:)))
         check(box.text == "line one\nline two", "prompt box: ↑ brings back what was sent", box.text)
