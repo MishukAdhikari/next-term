@@ -373,6 +373,9 @@ extension TerminalWindowController {
         guard let action = item.action else { return nil }
         let editing = isEditorFocused
         switch action {
+        case #selector(togglePromptBox(_:)):
+            item.state = promptBoxShown() ? .on : .off
+            return activeTab != nil
         case #selector(reopenClosedTab(_:)):
             return !ClosedTabs.isEmpty
         case #selector(duplicateTab(_:)):

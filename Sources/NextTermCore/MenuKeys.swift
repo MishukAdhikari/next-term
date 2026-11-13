@@ -34,7 +34,7 @@ public enum MenuKeys {
             "toggleBlameAnnotations:": KeyChord(key: "a", command: true, shift: true, control: true),
             "toggleCurrentLineBlame:": KeyChord(key: "l", command: true, shift: true, control: true),
             "increaseFontSize:": cmd("+"), "decreaseFontSize:": cmd("-"), "resetFontSize:": cmd("0"), "toggleFullScreen:": ctrlCmd("f"),
-            "toggleMarkdownPreview:": shiftCmd("v"), "toggleTabOverview:": shiftCmd("\\"),
+            "toggleMarkdownPreview:": shiftCmd("v"), "toggleTabOverview:": shiftCmd("\\"), "togglePromptBox:": shiftCmd("i"),
             // Markdown (Edit › Markdown), while a Markdown file's editor has the keyboard
             "toggleMarkdownBold:": cmd("b"), "toggleMarkdownItalic:": cmd("i"), "insertMarkdownLink:": cmd("k"),
             "toggleMarkdownStrikethrough:": shiftCmd("x"), "toggleMarkdownTask:": shiftCmd("l"), "markdownBodyText:": optCmd("0"),
