@@ -68,10 +68,6 @@ final class AskAgentRoom: NSView {
 
     override init(frame: NSRect) {
         super.init(frame: frame)
-        // Below the toolbar stack's own hugging: this room takes the free space between the controls, else it is
-        // 0 wide and nothing in it ever shows.
-        setContentHuggingPriority(.init(1), for: .horizontal)
-        setContentCompressionResistancePriority(.init(1), for: .horizontal)
         for view in [hint, comment, review] as [NSView] {
             view.isHidden = true
             addSubview(view) // by its frame: nothing it says reaches the toolbar's layout

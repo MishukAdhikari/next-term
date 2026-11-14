@@ -55,7 +55,7 @@ extension SelfTest {
             let range = (side.string as NSString).range(of: text)
             side.setSelectedRange(range)
             guard await wait(3, { window.contentView?.layoutSubtreeIfNeeded(); return !room.comment.isHidden }) else {
-                missed = "found \(range.location != NSNotFound), offers \(diff.offersAsk), room \(Int(room.bounds.width)) wide, Comment \(Int(room.comment.fittingSize.width))"
+                missed = "found \(range.location != NSNotFound), offers \(diff.offersAsk), room \(Int(room.bounds.width)) wide in a diff \(Int(diff.bounds.width)) wide (in a window: \(diff.window != nil), editor \(Int(holder.editorArea.bounds.width)) of \(Int(window.frame.width))), Comment \(Int(room.comment.fittingSize.width))"
                 return false
             }
             room.comment.performClick(nil)
