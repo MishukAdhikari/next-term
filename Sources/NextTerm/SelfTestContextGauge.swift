@@ -53,6 +53,16 @@ extension SelfTest {
         let grew = await wait(15) { watch.poll(); holder.refresh(); return percent() == 85 }
         check(grew, "context: the gauge follows the transcript", percent().map(String.init) ?? "none")
 
+        // The tab list down the terminal's side shows the same gauge on the tab's row, then the bar's tabs come back.
+        let tabsBefore = app.terminalTabs
+        app.moveTerminalTabs(to: .left)
+        holder.refresh()
+        let row = { holder.tabList.rowView(at: holder.tabList.rows.firstIndex { !$0.isPane && $0.context != nil } ?? -1) }
+        let listed = await wait(5) { holder.refresh(); return row()?.shownContextPercent == 85 }
+        check(listed, "context: the tab list's row shows the gauge too", row()?.shownContextPercent.map(String.init) ?? "none")
+        app.moveTerminalTabs(to: tabsBefore)
+        holder.refresh()
+
         tab.view.send(txt: "\u{03}")
         let gone = await wait(15) { watch.poll(); holder.refresh(); return percent() == nil && !tab.status.running }
         check(gone, "context: the gauge goes when the agent ends", percent().map(String.init) ?? "none")

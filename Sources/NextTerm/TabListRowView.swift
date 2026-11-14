@@ -52,6 +52,8 @@ final class TabListRowView: NSView, NSTextFieldDelegate {
     private let detail = TabListText(labelWithString: "")
     /// The place mark, right after the title.
     private let placeMark = NSImageView()
+    /// An agent's context usage, after the title (and its place mark), as on the top bar.
+    private let gauge = ContextGaugeView()
     private let closeButton = NSButton()
     /// "⌘1": how to get to this tab from the keyboard, in the ×'s place on the rows that show none.
     private let hint = TabListText(labelWithString: "")
@@ -129,6 +131,7 @@ final class TabListRowView: NSView, NSTextFieldDelegate {
         placeMark.contentTintColor = Theme.textDim
         placeMark.isHidden = true
         addSubview(placeMark)
+        addSubview(gauge)
 
         closeButton.bezelStyle = .regularSquare
         closeButton.isBordered = false
@@ -194,6 +197,8 @@ final class TabListRowView: NSView, NSTextFieldDelegate {
         // The title makes room for the place mark, or takes it back; the mark follows the title's end.
         let placeMoved: Bool = (newRow.place == nil) != (old?.place == nil) || (newRow.place != nil && newRow.title != old?.title)
         if placeMoved { needsLayout = true }
+        if (newRow.context == nil) != (old?.context == nil) || (newRow.context != nil && newRow.title != old?.title) { needsLayout = true }
+        gauge.usage = newRow.context
         row = newRow
         selected = isSelected
         setAccessibilityLabel(newRow.accessibilityLabel)
@@ -215,6 +220,8 @@ final class TabListRowView: NSView, NSTextFieldDelegate {
     var shownDetail: String? { detail.isHidden ? nil : detail.stringValue }
     var showsClose: Bool { !closeButton.isHidden }
     var showsPlaceMark: Bool { !placeMark.isHidden }
+    /// For the self-test: the context gauge's percent, when it shows.
+    var shownContextPercent: Int? { gauge.shownPercent }
     var shownRemoteLink: RemoteLink? { remoteMark.isHidden ? nil : remoteMark.link }
 
     /// Whether `point`, in the row's coordinates, is on the × it shows.
@@ -282,7 +289,7 @@ final class TabListRowView: NSView, NSTextFieldDelegate {
         dot.frame = NSRect(x: markX, y: markY, width: 10, height: 10)
         slot.frame = bounds.insetBy(dx: 3, dy: 2)
         idleDot.frame = CGRect(x: bounds.midX - 2.5, y: bounds.midY - 2.5, width: 5, height: 5)
-        let words: [NSView] = [label, detail, remoteMark, placeMark]
+        let words: [NSView] = [label, detail, remoteMark, placeMark, gauge]
         for view in words { view.isHidden = true }
         hintFits = false
     }
@@ -325,7 +332,7 @@ final class TabListRowView: NSView, NSTextFieldDelegate {
         } else {
             titleEnd = w - 28
         }
-        let placeRoom: CGFloat = row.place == nil ? 0 : 15
+        let placeRoom: CGFloat = (row.place == nil ? 0 : 15) + (row.context == nil ? 0 : ContextGaugeView.size + 5)
         let titleWidth: CGFloat = max(0, titleEnd - labelX - placeRoom)
         let words = fittedTitle(within: titleWidth)
         if let words, label.stringValue != words { label.stringValue = words }
@@ -339,6 +346,10 @@ final class TabListRowView: NSView, NSTextFieldDelegate {
         placeMark.isHidden = row.place == nil
         let text: CGFloat = (label.stringValue as NSString).size(withAttributes: [.font: Self.font]).width + 4
         placeMark.frame = NSRect(x: labelX + min(titleWidth, ceil(text)) + 1, y: lineMid - 5.5, width: 11, height: 11)
+        // The context gauge after the place mark, or where it would be.
+        gauge.isHidden = row.context == nil
+        let gaugeX: CGFloat = placeMark.isHidden ? placeMark.frame.minX + 2 : placeMark.frame.maxX + 4
+        gauge.frame = NSRect(x: gaugeX, y: lineMid - ContextGaugeView.size / 2, width: ContextGaugeView.size, height: ContextGaugeView.size)
 
         remoteMark.isHidden = !remote
         let markSize: NSSize = RemoteMarkView.size
