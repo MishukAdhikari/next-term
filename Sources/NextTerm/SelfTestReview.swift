@@ -47,16 +47,24 @@ extension SelfTest {
             return check(false, "review: the file's diff shows")
         }
         let room = diff.askRoom
+        window.setContentSize(NSSize(width: max(window.frame.width, 1400), height: max(window.frame.height, 800)))
+        window.contentView?.layoutSubtreeIfNeeded()
+        window.makeFirstResponder(side)
+        var missed = ""
         func comment(on text: String, note: String) async -> Bool {
-            side.setSelectedRange((side.string as NSString).range(of: text))
-            guard await wait(3, { !room.comment.isHidden }) else { return false }
+            let range = (side.string as NSString).range(of: text)
+            side.setSelectedRange(range)
+            guard await wait(3, { window.contentView?.layoutSubtreeIfNeeded(); return !room.comment.isHidden }) else {
+                missed = "found \(range.location != NSNotFound), offers \(diff.offersAsk), room \(Int(room.bounds.width)) wide, Comment \(Int(room.comment.fittingSize.width))"
+                return false
+            }
             room.comment.performClick(nil)
             guard await wait(3, { NoteEditor.shown != nil }), let editor = NoteEditor.shown else { return false }
             editor.note = note
             editor.saveNote()
             return true
         }
-        check(await comment(on: "line two", note: "Spell it as a digit"), "review: lines selected in an uncommitted diff offer Comment, which takes a note")
+        check(await comment(on: "line two", note: "Spell it as a digit"), "review: lines selected in an uncommitted diff offer Comment, which takes a note", missed)
         check(await comment(on: "line thirty-five", note: "Keep this one"), "review: a second comment")
         let draft = ReviewDraft.of(window)
         check(draft.comments.map(\.lines) == [2...2, 35...35] && draft.comments.allSatisfy(\.inFile),
