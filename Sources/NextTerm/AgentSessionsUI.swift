@@ -218,6 +218,8 @@ final class SessionsPanelController: NSObject, NSTextFieldDelegate, NSTableViewD
     private let table = NSTableView()
     private let footer = NSTextField(labelWithString: "")
     private let hints = NSTextField(labelWithString: "")
+    /// The selected session's last turns, beside the list.
+    let preview = SessionPreview()
     private var all: [AgentSession] = []
     private var rows: [AgentSession] = []
     private var tabs = SessionTabs()
@@ -236,9 +238,10 @@ final class SessionsPanelController: NSObject, NSTextFieldDelegate, NSTableViewD
         tabs = SessionTabs()
         table.reloadData()
         updateHints()
+        preview.show(nil)
         footer.stringValue = "Reading sessions…"
         let frame = parent.frame
-        let width = min(640, frame.width - 40)
+        let width = min(980, frame.width - 40)
         let height: CGFloat = 52 + 46 * 9 + 30
         panel.setFrame(NSRect(x: frame.midX - width / 2, y: parent.contentTop - 72 - height, width: width, height: height), display: false)
         if panel.parent == nil { parent.addChildWindow(panel, ordered: .above) }
@@ -273,6 +276,7 @@ final class SessionsPanelController: NSObject, NSTextFieldDelegate, NSTableViewD
         rows = AgentSessions.matching(all, field.stringValue)
         table.reloadData()
         if !rows.isEmpty { table.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false) }
+        preview.show(rows[safe: table.selectedRow])
         let name = (project as NSString).lastPathComponent
         footer.stringValue = all.isEmpty ? "No agent sessions in \(name) yet."
             : "\(rows.count) of \(all.count) sessions in \(name)"
@@ -292,7 +296,10 @@ final class SessionsPanelController: NSObject, NSTextFieldDelegate, NSTableViewD
 
     var hintText: String { hints.stringValue }
 
-    func tableViewSelectionDidChange(_ notification: Notification) { updateHints() }
+    func tableViewSelectionDidChange(_ notification: Notification) {
+        updateHints()
+        preview.show(rows[safe: table.selectedRow])
+    }
 
     func controlTextDidChange(_ obj: Notification) { filter() }
 
@@ -384,7 +391,14 @@ final class SessionsPanelController: NSObject, NSTextFieldDelegate, NSTableViewD
         footer.lineBreakMode = .byTruncatingTail
         hints.font = .systemFont(ofSize: 11)
         hints.textColor = Theme.textDim
-        for view in [glass, field, rule, scroll, footer, hints] as [NSView] {
+        let divider = NSBox()
+        divider.boxType = .custom
+        divider.borderWidth = 0
+        divider.fillColor = WorkSplitView.line
+        table.columnAutoresizingStyle = .firstColumnOnlyAutoresizingStyle
+        let previewWidth = preview.widthAnchor.constraint(equalTo: background.widthAnchor, multiplier: 0.42)
+        previewWidth.priority = .defaultHigh
+        for view in [glass, field, rule, scroll, divider, preview, footer, hints] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             background.addSubview(view)
         }
@@ -401,7 +415,17 @@ final class SessionsPanelController: NSObject, NSTextFieldDelegate, NSTableViewD
             rule.heightAnchor.constraint(equalToConstant: 1),
             scroll.topAnchor.constraint(equalTo: rule.bottomAnchor),
             scroll.leadingAnchor.constraint(equalTo: background.leadingAnchor),
-            scroll.trailingAnchor.constraint(equalTo: background.trailingAnchor),
+            scroll.trailingAnchor.constraint(equalTo: divider.leadingAnchor),
+            divider.topAnchor.constraint(equalTo: rule.bottomAnchor),
+            divider.bottomAnchor.constraint(equalTo: scroll.bottomAnchor),
+            divider.widthAnchor.constraint(equalToConstant: 1),
+            divider.trailingAnchor.constraint(equalTo: preview.leadingAnchor),
+            preview.topAnchor.constraint(equalTo: rule.bottomAnchor),
+            preview.bottomAnchor.constraint(equalTo: scroll.bottomAnchor),
+            preview.trailingAnchor.constraint(equalTo: background.trailingAnchor),
+            // The preview takes what the list leaves past 560 points, none in a narrow window.
+            previewWidth,
+            scroll.widthAnchor.constraint(greaterThanOrEqualToConstant: 520),
             scroll.bottomAnchor.constraint(equalTo: footer.topAnchor, constant: -6),
             footer.leadingAnchor.constraint(equalTo: background.leadingAnchor, constant: 16),
             footer.bottomAnchor.constraint(equalTo: background.bottomAnchor, constant: -8),
@@ -409,7 +433,8 @@ final class SessionsPanelController: NSObject, NSTextFieldDelegate, NSTableViewD
             hints.trailingAnchor.constraint(equalTo: background.trailingAnchor, constant: -16),
             hints.firstBaselineAnchor.constraint(equalTo: footer.firstBaselineAnchor),
         ])
-        table.tableColumns.first?.width = 640
+        table.tableColumns.first?.resizingMask = .autoresizingMask
+        table.tableColumns.first?.width = 560
     }
 
     func numberOfRows(in tableView: NSTableView) -> Int { rows.count }

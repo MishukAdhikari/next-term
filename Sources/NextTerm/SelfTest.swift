@@ -682,6 +682,7 @@ enum SelfTest {
         case "import": return await importPartChecks(c, proj: proj)
         case "rollback": return await rollbackChecks(c)
         case "contextGauge": return await contextGaugeChecks() // an agent tab's context gauge and tooltip line
+        case "sessionPreview": return await sessionPreviewChecks() // ⌥⌘O: the selected session’s last turns beside the list
         case "held": return await heldWorktreeChecks(c)
         case "closeWorktree": return await closeWorktreeChecks()
         case "parallel":
@@ -890,6 +891,7 @@ enum SelfTest {
         await gitLeftoverChecks(c)
         await placeChecks(c)
         await contextGaugeChecks()
+        await sessionPreviewChecks()
         await worktreeChecks(c)
         await heldWorktreeChecks(c)
         await closeWorktreeChecks()
