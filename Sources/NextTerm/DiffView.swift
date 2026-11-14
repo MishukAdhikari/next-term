@@ -357,6 +357,8 @@ final class DiffPane: NSView, DiffSelectionHost {
             guard let self else { return }
             (self.window?.windowController as? TerminalWindowController)?.askAgent(from: self)
         }
+        // Lines with a review comment are marked, as the window's review changes.
+        NotificationCenter.default.addObserver(self, selector: #selector(reviewChanged(_:)), name: ReviewDraft.changed, object: nil)
         // What is selected goes to the agents, as the editor's selection does.
         for view in [left.textView, right.textView] {
             NotificationCenter.default.addObserver(self, selector: #selector(sideSelectionChanged(_:)), name: NSTextView.didChangeSelectionNotification, object: view)
@@ -596,6 +598,28 @@ final class DiffPane: NSView, DiffSelectionHost {
     /// tab, Git Diff's Uncommitted); not a commit's, a branch's, an agent's proposal, or All changes since a base.
     var isUncommitted: Bool { proposal == nil && commit == nil && branchChange == nil && workingTreeBranch == nil }
 
+    @objc private func reviewChanged(_ notification: Notification) {
+        guard notification.object as? NSWindow === window else { return }
+        markComments()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        markComments()
+    }
+
+    /// The lines of this file the window's review comments are on: the file's lines now on the right, removed lines on
+    /// the left, in a diff of uncommitted changes only (another version's numbers are not the file's). Outdated ones
+    /// are not marked: their lines are not where they were.
+    func markComments() {
+        let comments = isUncommitted ? (ReviewDraft.existing(window)?.comments ?? []).filter { $0.path == canonicalPath(absolutePath) && !$0.outdated } : []
+        right.commented = Set(comments.filter(\.inFile).flatMap { Array($0.lines) })
+        left.commented = Set(comments.filter { !$0.inFile }.flatMap { Array($0.lines) })
+    }
+
+    /// For the self-test: the line numbers marked as commented, on the left and the right.
+    var commentedLines: (left: Set<Int>, right: Set<Int>) { (left.commented, right.commented) }
+
     var offersAsk: Bool {
         guard message.isHidden else { return false }
         let lines = unified.isOn ? unified.column.hasSelectedLines : (selectedSide == .old ? left : right).hasSelectedLines
@@ -811,6 +835,8 @@ final class DiffColumn: NSScrollView {
     private let spacing = LineSpacing()
     var rowHeight: CGFloat { spacing.lineHeight }
     var currentHunkRow: Int? { didSet { if currentHunkRow != oldValue { textView.needsDisplay = true } } }
+    /// Line numbers on this side with a review comment: a bar at the row's start and a tint.
+    var commented: Set<Int> = [] { didSet { if commented != oldValue { textView.needsDisplay = true } } }
 
     init(side: Side) {
         self.side = side
@@ -999,6 +1025,12 @@ final class DiffTextView: NSTextView {
                 }
             case .unchanged:
                 break
+            }
+            if !column.commented.isEmpty, let number = column.number(at: index), column.commented.contains(number) {
+                Theme.accent.withAlphaComponent(0.14).setFill()
+                band.fill()
+                Theme.accent.setFill()
+                NSRect(x: 0, y: band.minY, width: 3, height: band.height).fill()
             }
         }
     }

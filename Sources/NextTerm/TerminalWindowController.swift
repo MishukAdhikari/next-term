@@ -2378,6 +2378,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         let key = KeyboardShortcuts.shared.key(for: #selector(sendToAgent(_:)))?.display
         for host in hosts {
             host.askRoom.show(agent: agent != nil && host.offersAsk ? agent : nil, key: key)
+            host.askRoom.offerComment(for: host) // Comment, plan 039 U3
         }
     }
 
