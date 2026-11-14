@@ -87,7 +87,7 @@ extension SelfTest {
 
         _ = await wait(20) { tab.status.integrated }
         // Under sh, not the tab's zsh, whose settings for the terminal may come back before cat runs.
-        let script = "printf '\\033[?2004h'; stty raw -echo; exec cat > \(ShellQuote.quote(got))"
+        let script = "stty raw -echo; printf '\\033[?2004h'; exec cat > \(ShellQuote.quote(got))"
         tab.view.send(txt: "/bin/sh -c \(ShellQuote.quote(script))\r")
         _ = await wait(10) { tab.view.getTerminal().bracketedPasteMode }
         ReviewUI.send(draft, to: tab)
