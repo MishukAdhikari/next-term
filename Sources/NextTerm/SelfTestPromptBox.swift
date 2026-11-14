@@ -25,7 +25,8 @@ extension SelfTest {
         // when a check fails.
         let script = "stty raw -echo; stty -a > \(ShellQuote.quote(got)).stty; printf '\\033[?2004h'; exec cat > \(ShellQuote.quote(got))"
         tab.view.send(txt: "/bin/sh -c \(ShellQuote.quote(script))\r")
-        _ = await wait(10) { tab.view.getTerminal().bracketedPasteMode }
+        // zsh's own prompt has bracketed paste on too: the file cat writes is there once raw mode is set and cat reads.
+        _ = await wait(10) { FileManager.default.fileExists(atPath: got) && tab.view.getTerminal().bracketedPasteMode }
         func read() -> String { (try? String(contentsOfFile: got, encoding: .utf8)) ?? "" }
         holder.window?.makeKeyAndOrderFront(nil)
         holder.togglePromptBox(nil)
