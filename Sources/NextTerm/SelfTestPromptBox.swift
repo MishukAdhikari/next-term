@@ -23,7 +23,7 @@ extension SelfTest {
         _ = await wait(20) { tab.status.integrated }
         // Under sh, not the tab's zsh, whose settings for the terminal may come back before cat runs; its modes are kept to say why
         // when a check fails.
-        let script = "printf '\\033[?2004h'; stty raw -echo; stty -a > \(ShellQuote.quote(got)).stty; exec cat > \(ShellQuote.quote(got))"
+        let script = "stty raw -echo; stty -a > \(ShellQuote.quote(got)).stty; printf '\\033[?2004h'; exec cat > \(ShellQuote.quote(got))"
         tab.view.send(txt: "/bin/sh -c \(ShellQuote.quote(script))\r")
         _ = await wait(10) { tab.view.getTerminal().bracketedPasteMode }
         func read() -> String { (try? String(contentsOfFile: got, encoding: .utf8)) ?? "" }
