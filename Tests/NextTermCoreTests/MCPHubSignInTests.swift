@@ -87,6 +87,58 @@ import Testing
         #expect((try setup.store.read().get()).records.count == 1)
     }
 
+    /// A server that holds a registration to the redirect it named, port and all (xcdev's authorization endpoint did): the
+    /// port is registered and kept, the next sign-in listens on it again, and one taken, or a registration kept before
+    /// ports were, is registered again rather than sent to a page that refuses it.
+    @Test func aServerThatHoldsThePortGetsTheSamePortAgain() throws {
+        let setup = try Setup()
+        setup.auth.exactRedirects = true
+        let first = try setup.signIn().get()
+        let kept = try #require(try setup.store.read().get().registered(key: setup.key).first)
+        let port = try #require(kept.port)
+        #expect(port > 0 && setup.auth.registered == [[MCPHubOAuthRegistration.redirect, "http://127.0.0.1:\(port)/callback"]])
+        #expect(first.client.clientID == kept.clientID)
+
+        // The next sign-in comes back to the same port, with the same registration.
+        _ = try setup.signIn().get()
+        #expect(setup.auth.count("/register") == 1)
+        #expect(Dictionary(setup.auth.lastAuthorize, uniquingKeysWith: { a, _ in a })["redirect_uri"] == "http://127.0.0.1:\(port)/callback")
+
+        // The port taken by another program: Next Term registers again, at the port it got.
+        let squatter = try MCPHubLoopback(port: port) { _ in nil }
+        #expect(squatter.port == port)
+        _ = try setup.signIn().get()
+        squatter.close()
+        #expect(setup.auth.count("/register") == 2)
+        let moved = try #require(try setup.store.read().get().registered(key: setup.key).first?.port)
+        #expect(moved != port && moved > 0)
+
+        // A registration kept before ports were is made again once, then kept.
+        try setup.store.update { body in
+            var old = body.registered(key: setup.key)[0]
+            old.port = nil
+            try body.keep(old, key: setup.key)
+            return (true, ())
+        }
+        _ = try setup.signIn().get()
+        #expect(setup.auth.count("/register") == 3)
+        _ = try setup.signIn().get()
+        #expect(setup.auth.count("/register") == 3)
+    }
+
+    /// A server that refuses a list of two redirects gets the exact one alone, and the sign-in still works.
+    @Test func aServerThatTakesOneRedirectGetsTheExactOne() throws {
+        let setup = try Setup()
+        setup.auth.exactRedirects = true
+        setup.auth.oneRedirect = true
+        _ = try setup.signIn().get()
+        let port = try #require(try setup.store.read().get().registered(key: setup.key).first?.port)
+        // The list refused, then the exact one alone; the next sign-in registers nothing.
+        #expect(setup.auth.registered == [["http://127.0.0.1:\(port)/callback"]] && setup.auth.count("/register") == 2)
+        _ = try setup.signIn().get()
+        #expect(setup.auth.count("/register") == 2)
+    }
+
     @Test func aDeniedOrForeignAnswerIsRefusedAndAStrayRequestWaits() throws {
         let setup = try Setup()
         setup.auth.deny = true

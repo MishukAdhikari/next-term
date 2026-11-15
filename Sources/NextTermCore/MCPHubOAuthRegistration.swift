@@ -8,9 +8,11 @@ import Foundation
 /// 2. **A client metadata document** (CIMD): Next Term's client ID is an https URL it controls. Off until Next Term
 ///    publishes one (`metadataDocument` nil).
 /// 3. **Dynamic registration** (RFC 7591), when the server has a registration endpoint: a native client named "Next
-///    Term", with the loopback redirect `http://127.0.0.1/callback` (any port, RFC 8252 §7.3), public (no secret), kept
-///    per issuer. A registration the server forgot (`invalid_client`; some expire after 90 days) is made again once.
-///    A server that won't take a redirect without its port gets the sign-in's exact one.
+///    Term", public (no secret), kept per issuer, with two loopback redirects: `http://127.0.0.1/callback` (any port,
+///    RFC 8252 §7.3) and the sign-in's own `http://127.0.0.1:<port>/callback`. Not every server lets the port vary at
+///    its authorization endpoint, so the port is kept with the client and later sign-ins listen on it again; when it's
+///    taken, Next Term registers again. A server that won't take two redirects gets the exact one alone, then the
+///    portless one. A registration the server forgot (`invalid_client`; some expire after 90 days) is made again once.
 /// 4. **None of them**: a sentence offering the user's own OAuth app or a key in a header.
 public enum MCPHubOAuthRegistration {
     /// The redirect registered: loopback, by address, any port.
@@ -30,18 +32,31 @@ public enum MCPHubOAuthRegistration {
         public var secret: String?
         /// When a registered client's secret ends (RFC 7591's `client_secret_expires_at`); nil for never.
         public var secretExpires: Date?
+        /// A registered client's loopback port, the one its exact redirect names, which its sign-ins listen on: 0 when
+        /// the server took only the portless redirect (any port), nil for a registration kept before ports were (it is
+        /// made again at its next sign-in, since its server may hold it to a port long gone).
+        public var port: UInt16?
 
         public init(issuer: String, clientID: String, kind: Kind, authMethod: String = "none", secret: String? = nil,
-                    secretExpires: Date? = nil) {
+                    secretExpires: Date? = nil, port: UInt16? = nil) {
             self.issuer = issuer
             self.clientID = clientID
             self.kind = kind
             self.authMethod = authMethod
             self.secret = secret
             self.secretExpires = secretExpires
+            self.port = port
         }
 
-        enum CodingKeys: String, CodingKey { case issuer, clientID, kind, authMethod, secretExpires }
+        enum CodingKeys: String, CodingKey { case issuer, clientID, kind, authMethod, secretExpires, port }
+
+        /// Whether a sign-in listening on `listening` can use this client as it is: anything but a registered one whose
+        /// port is unknown, or is another.
+        public func fits(listening: UInt16) -> Bool {
+            guard kind == .registered else { return true }
+            guard let port else { return false }
+            return port == 0 || port == listening
+        }
 
         /// `request` with the client named as its auth method says: `client_id` in the form, and the secret in it
         /// (`client_secret_post`) or as Basic (`client_secret_basic`, RFC 6749 §2.3.1's form-encoding first).
@@ -127,23 +142,26 @@ public enum MCPHubOAuthRegistration {
     }
 
     /// The registration's body, exactly: members in this order.
-    public static func body(redirect: String = MCPHubOAuthRegistration.redirect) -> Data {
-        let escaped = redirect.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
-            .replacingOccurrences(of: "/", with: "\\/")
-        return Data(("{\"client_name\":\"Next Term\",\"application_type\":\"native\",\"redirect_uris\":[\"\(escaped)\"],"
+    public static func body(redirects: [String] = [MCPHubOAuthRegistration.redirect]) -> Data {
+        let escaped = redirects.map {
+            "\"" + $0.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
+                .replacingOccurrences(of: "/", with: "\\/") + "\""
+        }.joined(separator: ",")
+        return Data(("{\"client_name\":\"Next Term\",\"application_type\":\"native\",\"redirect_uris\":[\(escaped)],"
             + "\"grant_types\":[\"authorization_code\",\"refresh_token\"],\"response_types\":[\"code\"],"
             + "\"token_endpoint_auth_method\":\"none\"}").utf8)
     }
 
-    /// Registers Next Term at `endpoint` for `issuer`; `exact`, the sign-in's own redirect with its port, is tried when
-    /// the server refuses the portless one.
+    /// Registers Next Term at `endpoint` for `issuer`, for a sign-in listening at `exact` (its redirect with the port):
+    /// both redirects first, then the exact one alone, then the portless one, for a server that refuses a list or a port.
     public static func register(at endpoint: URL, issuer: String, name: String, exact: String?, fetch: MCPHubOAuth.Fetch,
                                 now: Date = Date()) -> Result<Client, MCPHubOAuth.Failure> {
-        var tries = [redirect]
-        if let exact, exact != redirect { tries.append(exact) }
+        var tries: [[String]] = [[redirect]]
+        if let exact, exact != redirect { tries = [[redirect, exact], [exact], [redirect]] }
+        let exactPort = exact.flatMap { URL(string: $0)?.port }.map { UInt16(clamping: $0) }
         var last = "it answered with no client"
-        for uri in tries {
-            switch fetch(MCPHubOAuth.Request(post: endpoint, json: body(redirect: uri))) {
+        for uris in tries {
+            switch fetch(MCPHubOAuth.Request(post: endpoint, json: body(redirects: uris))) {
             case .failure(let failure):
                 return .failure(MCPHubOAuth.Failure("Next Term couldn\u{2019}t register with \(name): \(failure.text)"))
             case .success(let response):
@@ -151,7 +169,8 @@ public enum MCPHubOAuthRegistration {
                 guard response.status == 200 || response.status == 201 else {
                     let code = json["error"] as? String
                     last = code.map { "it answered \($0)" } ?? "it answered HTTP \(response.status)"
-                    if code == "invalid_redirect_uri" { continue }
+                    // A redirect refused, or a list of two read as bad metadata: the next try.
+                    if code == "invalid_redirect_uri" || (code == "invalid_client_metadata" && uris.count > 1) { continue }
                     return .failure(MCPHubOAuth.Failure("\(name) didn\u{2019}t register Next Term: \(last)."))
                 }
                 guard let id = json["client_id"] as? String, !id.isEmpty else {
@@ -161,8 +180,11 @@ public enum MCPHubOAuthRegistration {
                 let ends = (json["client_secret_expires_at"] as? NSNumber)?.doubleValue ?? 0
                 var method = json["token_endpoint_auth_method"] as? String ?? (secret == nil ? "none" : "client_secret_basic")
                 if secret == nil { method = "none" }
+                // The port its sign-ins listen on: the exact redirect's, when it was registered; any, when only the
+                // portless one was.
+                let port: UInt16? = uris.contains { $0 != redirect } ? exactPort : 0
                 return .success(Client(issuer: issuer, clientID: id, kind: .registered, authMethod: method, secret: secret,
-                                       secretExpires: ends > 0 ? Date(timeIntervalSince1970: ends) : nil))
+                                       secretExpires: ends > 0 ? Date(timeIntervalSince1970: ends) : nil, port: port))
             }
         }
         return .failure(MCPHubOAuth.Failure("\(name) didn\u{2019}t take Next Term\u{2019}s sign-in address: \(last)."))

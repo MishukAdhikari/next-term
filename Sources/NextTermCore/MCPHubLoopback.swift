@@ -4,7 +4,8 @@ import Darwin
 #endif
 
 /// The one-shot loopback listener a sign-in's browser comes back to (RFC 8252 §7.3): `http://127.0.0.1:<port>/callback`,
-/// bound to 127.0.0.1 only, at a port the system picks, one per sign-in, closed after the callback or after its life.
+/// bound to 127.0.0.1 only, one per sign-in, closed after the callback or after its life: at the port its client was
+/// registered with when it's free (a server may hold the redirect to it), else at one the system picks.
 ///
 /// - Only `GET /callback` whose query `accepts` takes (its `state` is this sign-in's) ends the wait; it is answered
 ///   with the small page `accepts` gives. Anything else gets a 404 and the wait goes on, so a stray request or a
@@ -28,18 +29,29 @@ public final class MCPHubLoopback: @unchecked Sendable {
     /// Requests that didn't end the wait, for the tests.
     public private(set) var strays = 0
 
-    public init(accepts: @escaping Accepts) throws {
+    /// `port`: the one to listen on if it's free (0, or taken: one the system picks).
+    public init(port wanted: UInt16 = 0, accepts: @escaping Accepts) throws {
         self.accepts = accepts
-        listener = socket(AF_INET, SOCK_STREAM, 0)
-        guard listener >= 0 else { throw POSIXError(.EIO) }
         var address = sockaddr_in()
         address.sin_family = sa_family_t(AF_INET)
         address.sin_addr.s_addr = inet_addr("127.0.0.1")
-        address.sin_port = 0
-        let bound = withUnsafePointer(to: &address) {
-            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(listener, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+        func open(_ port: UInt16) -> Int32 {
+            let fd = socket(AF_INET, SOCK_STREAM, 0)
+            guard fd >= 0 else { return -1 }
+            // A port this Mac's last sign-in left in TIME_WAIT can be listened on again; one another program listens on
+            // can't (that would take SO_REUSEPORT).
+            var on: Int32 = 1
+            setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, socklen_t(MemoryLayout<Int32>.size))
+            address.sin_port = port.bigEndian
+            let bound = withUnsafePointer(to: &address) {
+                $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+            }
+            guard bound == 0, listen(fd, 8) == 0 else { Darwin.close(fd); return -1 }
+            return fd
         }
-        guard bound == 0, listen(listener, 8) == 0 else { Darwin.close(listener); throw POSIXError(.EADDRINUSE) }
+        listener = wanted == 0 ? -1 : open(wanted)
+        if listener < 0 { listener = open(0) }
+        guard listener >= 0 else { throw POSIXError(.EADDRINUSE) }
         var size = socklen_t(MemoryLayout<sockaddr_in>.size)
         _ = withUnsafeMutablePointer(to: &address) {
             $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(listener, $0, &size) }

@@ -63,9 +63,17 @@ enum MCPHubRemoteControl {
                     let need = Need(server: applied.server, list: list, folder: folder, op: op, tool: tool, arguments: toolArguments,
                                     deadline: deadline, userFile: file)
                     let caller = MCPControl.tab(withID: tabID)
+                    // A need that ended in something only the user can mend: the bar in the agent's window says so.
+                    @MainActor func ended(_ result: MCPServer.CallResult, _ kind: MCPHubRemote.Failure.Kind?) {
+                        if result.isError, let wanted = MCPConnectorPrompts.need(server: need.server, kind: kind, text: result.text) {
+                            MCPConnectorPrompts.report(wanted, server: name, list: list, url: url, folder: folder, caller: caller)
+                        }
+                        reply(result)
+                    }
                     withKeys(need, caller: caller, pid: pid, fail: fail) { values in
-                        MCPHubSignIns.withSignIn(need.server, deadline: need.deadline, caller: caller, pid: pid, fail: fail) { signIn in
-                            reach(need, values: values, signIn: signIn, reply: reply)
+                        MCPHubSignIns.withSignIn(need.server, deadline: need.deadline, caller: caller, pid: pid,
+                                                 fail: { ended(MCPServer.CallResult(text: $0, isError: true), nil) }) { signIn in
+                            reach(need, values: values, signIn: signIn, reply: ended)
                         }
                     }
                 }
@@ -106,7 +114,7 @@ enum MCPHubRemoteControl {
             // Its time from here: a presence check for the sign-ins' key takes none of it.
             let need = Need(server: server, list: list, folder: folder, op: "tools", tool: "", arguments: [:],
                             deadline: Date().addingTimeInterval(seconds), userFile: userFile)
-            reach(need, values: [:], signIn: signIn) { result in finish(result.isError ? result.text : nil) }
+            reach(need, values: [:], signIn: signIn) { result, _ in finish(result.isError ? result.text : nil) }
         }
     }
 
@@ -228,10 +236,13 @@ enum MCPHubRemoteControl {
 
     /// One need of the server, off the main thread, with its keys filled in and its sign-in's token when it has one;
     /// its end is the server's state in Settings.
-    private static func reach(_ need: Need, values: [String: String], signIn: MCPHubSignIns.Use?, reply: @escaping MCPControl.Reply) {
+    /// `reply` with the result, and how a failure was kinded (the connector bar tells a server out of reach from an
+    /// answer only the agent can act on).
+    private static func reach(_ need: Need, values: [String: String], signIn: MCPHubSignIns.Use?,
+                              reply: @escaping (MCPServer.CallResult, MCPHubRemote.Failure.Kind?) -> Void) {
         var endpoint: MCPHubRemote.Endpoint
         switch MCPHubRemote.endpoint(for: credentials(need.server, values, token: signIn?.token), values: values) {
-        case .failure(let failure): return reply(MCPServer.CallResult(text: failure.text, isError: true))
+        case .failure(let failure): return reply(MCPServer.CallResult(text: failure.text, isError: true), failure.kind)
         case .success(let made): endpoint = made
         }
         endpoint.signedIn = signIn != nil
@@ -308,11 +319,13 @@ enum MCPHubRemoteControl {
             }
             let run: MCPHubOverview.Run
             let result: MCPServer.CallResult
+            var kind: MCPHubRemote.Failure.Kind?
             switch answer {
             case .success(let object):
                 run = MCPHubOverview.Run(failure: nil, tools: remote.cachedTools?.count ?? 0)
                 result = MCPServer.CallResult(text: hidden(MCPServer.json(object)))
             case .failure(let failure):
+                kind = failure.kind
                 // Masked here too, for Settings: a key quoted back in a server's words is never shown there either.
                 let text = hidden(SecretMask.current.mask(failure.text))
                 run = MCPHubOverview.Run(failure: text, tools: 0, needsSignIn: needsSignIn)
@@ -327,7 +340,7 @@ enum MCPHubRemoteControl {
                         MCPHubControl.lastRuns[key] = run
                         NotificationCenter.default.post(name: MCPHubControl.changed, object: nil)
                     }
-                    reply(result)
+                    reply(result, kind)
                 }
             }
         }
