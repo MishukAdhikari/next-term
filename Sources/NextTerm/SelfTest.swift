@@ -681,6 +681,7 @@ enum SelfTest {
         case "gitAndViewKeys": return await gitAndViewKeyChecks(c, proj: proj)
         case "import": return await importPartChecks(c, proj: proj)
         case "rollback": return await rollbackChecks(c)
+        case "promptBox": return await promptBoxChecks() // the prompt box under a tab's terminal
         case "contextGauge": return await contextGaugeChecks() // an agent tab's context gauge and tooltip line
         case "sessionPreview": return await sessionPreviewChecks() // ⌥⌘O: the selected session’s last turns beside the list
         case "held": return await heldWorktreeChecks(c)
@@ -890,6 +891,7 @@ enum SelfTest {
         await gitLogPagingChecks(c)
         await gitLeftoverChecks(c)
         await placeChecks(c)
+        await promptBoxChecks()
         await contextGaugeChecks()
         await sessionPreviewChecks()
         await worktreeChecks(c)
