@@ -182,6 +182,7 @@ final class MCPConnectorBar: NSView {
     #if DEBUG
     /// The buttons a user can press now, by title, for the self-test.
     var buttonsForTest: [String] { [settingsButton, notNow, cancel, primary].filter { !$0.isHidden }.map(\.title) }
+    var primaryKeyForTest: String { primary.keyEquivalent }
     func pressForTest(_ title: String) { [settingsButton, notNow, cancel, primary].first { !$0.isHidden && $0.title == title }?.performClick(nil) }
     #endif
 }

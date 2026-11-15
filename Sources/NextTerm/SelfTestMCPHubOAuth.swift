@@ -121,7 +121,13 @@ extension SelfTest {
         _ = await call("oauth-lapsed-again")
         view.reload()
         let signInNotices = AppDelegate.shared.testNotifications.dropFirst(notices).filter { $0.identifier.hasPrefix("mcp-sign-in-") }
-        let expected = NotificationSettings(defaults: .standard).programAlerts ? 1 : 0
+        // The bar in the agent's window says it; a notice only when no window in front shows that bar.
+        let barInFront = MCPConnectorPrompts.showing(url: remote.url.absoluteString)
+        let expected = NotificationSettings(defaults: .standard).programAlerts && !barInFront ? 1 : 0
+        check(c.connector.isShowing && c.connector.bar.shown?.message.hasPrefix("linear signed out") == true
+              && c.connector.bar.shown?.primary == "Reconnect",
+              "MCP connector: a lapse an agent met puts Reconnect in a bar at the foot of its window", c.connector.bar.shown?.message ?? "no bar")
+        if let barWindow = c.window { await screenshot(barWindow, suffix: "-mcp-connector-reconnect") }
         check(lapsed == MCPHubSignInWords.lapsed("linear") && state() == .signedOut && signInNotices.count == expected
               && (signInNotices.first.map { $0.content.title == MCPHubSignInWords.notice("linear").title } ?? true),
               "MCP OAuth: a revoked sign-in reads Signed out, with one notice, and the agent is told to reconnect",
@@ -146,6 +152,8 @@ extension SelfTest {
             view.signInOrOut()
             _ = await wait(20) { state() == .signedIn(tools: nil) || { view.reload(); return state() == .signedIn(tools: nil) }() }
             check(state() == .signedIn(tools: nil), "MCP OAuth: Reconnect\u{2026} signs in again", "\(String(describing: state()))")
+            await connectorChecks(c, auth: auth, url: remote.url.absoluteString, call: call)
+            view.reload()
             let revoked = auth.count("/revoke")
             view.table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
             view.remove()
@@ -158,6 +166,63 @@ extension SelfTest {
               "MCP OAuth: the sign-ins\u{2019} key is never listed in Secrets")
 
         await ownAppChecks(view: view, window: window, userFile: userFile)
+    }
+
+    /// The connector bar (MCPConnectorPrompt): mended in Settings, it says "connected" and goes; its own Reconnect signs
+    /// in from the window, the browser's progress in it; Not Now holds it while the agent keeps meeting the lapse; it
+    /// never takes the keyboard. Screenshots: connected, and the browser's progress.
+    @MainActor
+    static func connectorChecks(_ c: TerminalWindowController, auth: MCPHubFakeAuth, url: String, call: (String) async -> String) async {
+        let saved = MCPConnectorPrompt.connectedFor
+        MCPConnectorPrompt.connectedFor = 1.5
+        defer { MCPConnectorPrompt.connectedFor = saved }
+        let bar = c.connector.bar
+        // Settings' Reconnect… mended it: "connected", then gone.
+        _ = await wait(5) { bar.shown?.glyph == .done }
+        check(bar.shown?.message == "linear is connected. Your agents can use it now." && c.connector.items.isEmpty,
+              "MCP connector: a reconnect in Settings turns the bar to \u{201C}connected\u{201D}", bar.shown?.message ?? "no bar")
+        if let window = c.window { await screenshot(window, suffix: "-mcp-connector-connected") }
+        check(await wait(5) { bar.isHidden && bar.shown == nil }, "MCP connector: \u{201C}connected\u{201D} goes by itself")
+
+        // Its own Reconnect: the sign-in from the bar, and the agent's next call goes through.
+        auth.revokeAll()
+        _ = await call("connector-lapse")
+        check(bar.shown?.primary == "Reconnect" && bar.buttonsForTest == ["MCP Servers\u{2026}", "Not Now", "Reconnect"],
+              "MCP connector: the bar offers Reconnect as its one primary, with MCP Servers\u{2026} and Not Now", "\(bar.buttonsForTest)")
+        let responder = c.window?.firstResponder as? NSView
+        check(bar.primaryKeyForTest.isEmpty && !(responder.map { $0.isDescendant(of: bar) } ?? false),
+              "MCP connector: the bar takes no keyboard; Return stays the terminal\u{2019}s")
+        let authorized = auth.count("/authorize")
+        bar.pressForTest("Reconnect")
+        check(bar.shown?.glyph == .working || bar.shown?.glyph == .done || auth.count("/authorize") > authorized,
+              "MCP connector: Reconnect shows the browser\u{2019}s progress in the bar", bar.shown?.message ?? "")
+        if bar.shown?.glyph == .working, let window = c.window { await screenshot(window, suffix: "-mcp-connector-browser") }
+        _ = await wait(20) { bar.shown?.glyph == .done }
+        let said = await call("connector-after")
+        check(bar.shown?.glyph == .done && said == "hello from remote" && auth.count("/authorize") == authorized + 1,
+              "MCP connector: the bar\u{2019}s Reconnect signs in, and the agent\u{2019}s same call works with no restart", said)
+        _ = await wait(5) { bar.isHidden }
+
+        // Not Now holds it, however often the agent meets the lapse.
+        auth.revokeAll()
+        _ = await call("connector-held")
+        check(c.connector.isShowing, "MCP connector: a new lapse shows the bar again")
+        bar.pressForTest("Not Now")
+        _ = await call("connector-held-again")
+        check(await wait(2) { bar.isHidden } && !c.connector.isShowing, "MCP connector: Not Now holds the bar while the server needs the same")
+        // Signed in again for what follows.
+        let back = await withCheckedContinuation { (done: CheckedContinuation<Bool, Never>) in
+            guard let server = MCPHubSignIns.record(for: url).flatMap({ _ in hubServer(named: "linear") }) else { return done.resume(returning: false) }
+            MCPHubSignIns.signIn(server, progress: { _ in }, done: { done.resume(returning: $0 == nil) })
+        }
+        check(back, "MCP connector: signed in again after Not Now")
+    }
+
+    /// The self-test list's server by name.
+    @MainActor
+    static func hubServer(named name: String) -> MCPHubServer? {
+        let file = MCPHubControl.userFile ?? MCPHubScope.userPath()
+        return MCPHubScope.servers(folder: NSHomeDirectory(), userFile: file).servers.first { $0.name == name }?.server
     }
 
     /// The user's own OAuth app, for a server set up as GitHub's is: no registration, no client metadata documents, and
