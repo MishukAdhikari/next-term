@@ -983,6 +983,28 @@ final class DiffTextView: NSTextView {
         return became
     }
 
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let menu = super.menu(for: event)
+        if let menu, let item = commentItem() {
+            menu.insertItem(item, at: 0)
+            menu.insertItem(.separator(), at: 1)
+        }
+        return menu
+    }
+
+    /// "Add Review Comment…" for the selected lines, where Comment in the toolbar would be offered: the toolbar may
+    /// have no room for it, the menu always has (plan 039 U3). nil when the selection can't take a comment.
+    func commentItem() -> NSMenuItem? {
+        var view: NSView? = superview
+        while let current = view, !(current is DiffPane) { view = current.superview }
+        guard let pane = view as? DiffPane, pane.offersAsk else { return nil }
+        let item = ClosureMenuItem(title: "Add Review Comment…") { [weak self, weak pane] in
+            guard let self, let pane else { return }
+            ReviewUI.addComment(from: pane, anchor: self)
+        }
+        return item
+    }
+
     override func mouseDown(with event: NSEvent) {
         super.mouseDown(with: event)
         guard let column, column.rowHeight > 0 else { return }

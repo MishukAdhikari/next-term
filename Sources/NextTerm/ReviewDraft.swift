@@ -377,3 +377,18 @@ private final class ClosureTargets: NSObject {
 
     @objc private func run(_ sender: NSButton) { actions[ObjectIdentifier(sender)]?() }
 }
+
+/// A menu item whose action is a closure; it is its own target (a menu item holds its target weakly).
+final class ClosureMenuItem: NSMenuItem {
+    private let run: () -> Void
+
+    init(title: String, _ run: @escaping () -> Void) {
+        self.run = run
+        super.init(title: title, action: #selector(runAction), keyEquivalent: "")
+        target = self
+    }
+
+    required init(coder: NSCoder) { fatalError("not used") }
+
+    @objc private func runAction() { run() }
+}

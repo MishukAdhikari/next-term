@@ -51,21 +51,33 @@ extension SelfTest {
         window.contentView?.layoutSubtreeIfNeeded()
         window.makeFirstResponder(side)
         var missed = ""
-        func comment(on text: String, note: String) async -> Bool {
+        /// Selects `text` and adds a comment on it: by the diff's menu, or by Comment in the toolbar when asked and
+        /// the toolbar has room for it (it has none at some widths; the menu always has).
+        func comment(on text: String, saying: String, toolbar: Bool) async -> Bool {
             let range = (side.string as NSString).range(of: text)
             side.setSelectedRange(range)
-            guard await wait(3, { window.contentView?.layoutSubtreeIfNeeded(); return !room.comment.isHidden }) else {
-                missed = "found \(range.location != NSNotFound), offers \(diff.offersAsk), room \(Int(room.bounds.width)) wide in a diff \(Int(diff.bounds.width)) wide (in a window: \(diff.window != nil), editor \(Int(holder.editorArea.bounds.width)) of \(Int(window.frame.width))), Comment \(Int(room.comment.fittingSize.width))"
+            guard await wait(3, { window.contentView?.layoutSubtreeIfNeeded(); return room.commentWanted }) else {
+                missed = "found \(range.location != NSNotFound), offers \(diff.offersAsk)"
                 return false
             }
-            room.comment.performClick(nil)
-            guard await wait(3, { NoteEditor.shown != nil }), let editor = NoteEditor.shown else { return false }
-            editor.note = note
+            if toolbar && !room.comment.isHidden {
+                room.comment.performClick(nil)
+            } else {
+                if toolbar { note("review: the toolbar has \(Int(room.bounds.width)) points free in a diff \(Int(diff.bounds.width)) wide, too few for Comment; the menu's item instead") }
+                guard let item = (side as? DiffTextView)?.commentItem(), let action = item.action else {
+                    missed = "the diff's menu has no Add Review Comment…"
+                    return false
+                }
+                NSApp.sendAction(action, to: item.target, from: item)
+            }
+            guard await wait(3, { NoteEditor.shown != nil }), let editor = NoteEditor.shown else { missed = "no note editor"; return false }
+            editor.note = saying
             editor.saveNote()
             return true
         }
-        check(await comment(on: "line two", note: "Spell it as a digit"), "review: lines selected in an uncommitted diff offer Comment, which takes a note", missed)
-        check(await comment(on: "line thirty-five", note: "Keep this one"), "review: a second comment")
+        check(await comment(on: "line two", saying: "Spell it as a digit", toolbar: false),
+              "review: lines selected in an uncommitted diff offer Add Review Comment… in its menu, which takes a note", missed)
+        check(await comment(on: "line thirty-five", saying: "Keep this one", toolbar: true), "review: a second comment, by Comment in the toolbar where it fits", missed)
         let draft = ReviewDraft.of(window)
         check(draft.comments.map(\.lines) == [2...2, 35...35] && draft.comments.allSatisfy(\.inFile),
               "review: the comments hold the lines in the file now", "\(draft.comments.map(\.lines))")
