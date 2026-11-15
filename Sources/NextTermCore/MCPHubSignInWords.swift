@@ -8,19 +8,22 @@ public enum MCPHubSignInWords {
 
     /// The server asked for a sign-in Next Term doesn't have.
     public static func needsSignIn(_ name: String) -> String {
-        "\(name) needs a sign-in. Ask the user to sign in to \(name) in \(settings); Next Term then keeps it signed in for every agent. Nothing was sent."
+        "\(name) needs a sign-in, so nothing was sent. Next Term is asking the user to sign in to \(name) (a bar at the foot of their window, "
+            + "or \(settings)), then keeps it signed in for every agent. Tell the user; once they have, call the same tool again. "
+            + "No restart is needed."
     }
 
     /// The sign-in lapsed: refused at the server, or its refresh token spent.
     public static func lapsed(_ name: String) -> String {
-        "\(name)\u{2019}s sign-in in Next Term has lapsed, so nothing was sent. Ask the user to choose Reconnect for \(name) in \(settings) "
-            + "(Next Term has shown them a notice), then call again."
+        "\(name)\u{2019}s sign-in in Next Term has lapsed, so nothing was sent. Next Term is asking the user to reconnect \(name) (a bar "
+            + "at the foot of their window, or \(settings)). Tell the user; once they have, call the same tool again. No restart is needed."
     }
 
     /// The server asked for more access than the sign-in has.
     public static func moreAccess(_ name: String, scopes: [String]) -> String {
         let named = scopes.isEmpty ? "" : " (\(scopes.joined(separator: " ")))"
-        return "\(name) needs more access for this\(named). Ask the user to choose Reconnect for \(name) in \(settings), then call again."
+        return "\(name) needs more access for this\(named). Next Term is asking the user to allow it (a bar at the foot of their window, "
+            + "or Reconnect in \(settings)). Call again once they have."
     }
 
     /// The user chose Don't Allow for this agent.
@@ -41,7 +44,7 @@ public enum MCPHubSignInWords {
     /// The sign-ins were changed outside Next Term (SignInFile's MAC), so every one reads as signed out.
     public static func tampered(_ name: String) -> String {
         "Next Term\u{2019}s sign-ins were changed outside Next Term, so it doesn\u{2019}t use them, and nothing was sent to \(name). "
-            + "Ask the user to choose Reconnect for \(name) in \(settings)."
+            + "Next Term is asking the user to reconnect \(name); call again once they have."
     }
 
     /// The sign-in server couldn't be reached for a refresh, and nothing was spent.

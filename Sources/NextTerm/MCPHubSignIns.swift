@@ -600,6 +600,16 @@ enum MCPHubSignIns {
     static func notice(_ id: String, lapse: Int, name: String, url: String) {
         guard noticed.insert(id + ":" + String(lapse)).inserted else { return }
         guard NotificationSettings(defaults: .standard).programAlerts else { return }
+        // After the need's answer has reached the bar: a window in front showing it needs no notice repeating it.
+        DispatchQueue.main.async {
+            MainActor.assumeIsolated {
+                guard !MCPConnectorPrompts.showing(url: url) else { return }
+                deliverNotice(id, lapse: lapse, name: name, url: url)
+            }
+        }
+    }
+
+    private static func deliverNotice(_ id: String, lapse: Int, name: String, url: String) {
         let words = MCPHubSignInWords.notice(name)
         let content = UNMutableNotificationContent()
         content.title = words.title

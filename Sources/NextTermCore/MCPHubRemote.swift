@@ -41,6 +41,9 @@ public final class MCPHubRemote: @unchecked Sendable {
     public struct Failure: Error, Equatable, Sendable {
         public enum Kind: Equatable, Sendable {
             case other
+            /// Not reached, or no answer in time, or the server failing (HTTP 5xx): mended by reaching it again, not by
+            /// the agent changing its call.
+            case unreachable
             /// HTTP 401 or 403, with the server's WWW-Authenticate when it sent one: where an OAuth sign-in starts.
             case unauthorized(status: Int, challenge: String?)
         }
@@ -346,11 +349,11 @@ public final class MCPHubRemote: @unchecked Sendable {
         }
         let host = endpoint.url.host ?? ""
         guard let addresses = MCPHubAddress.resolve(host, until: deadline) else {
-            return .failure(Failure("\(name) can't be reached: looking up \(host) took longer than the call may."))
+            return .failure(Failure("\(name) can't be reached: looking up \(host) took longer than the call may.", kind: .unreachable))
         }
         if let reason = MCPHubAddress.reason(url: endpoint.url, addresses: addresses, name: name) { return .failure(Failure(reason)) }
         let left = deadline.timeIntervalSinceNow
-        guard left > 0 else { return .failure(Failure("\(name) didn't answer Next Term's \(method == "initialize" ? "start" : "call") in time.")) }
+        guard left > 0 else { return .failure(Failure("\(name) didn't answer Next Term's \(method == "initialize" ? "start" : "call") in time.", kind: .unreachable)) }
 
         // URLSession's own timeout a moment after the deadline, so the wait here is the one that ends it.
         var request = URLRequest(url: endpoint.url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: left + 1)
@@ -368,10 +371,12 @@ public final class MCPHubRemote: @unchecked Sendable {
         let exchange = router.begin(task, origin: endpoint.url, expecting: id, name: name)
         task.resume()
         let what = method == "initialize" ? "start" : method == nil ? "notice" : "call"
+        // A tool that takes longer than the call may is slow, not out of reach.
+        let late: Failure.Kind = method == "tools/call" ? .other : .unreachable
         guard exchange.done.wait(timeout: .now() + max(0, left)) == .success else {
             task.cancel()
             router.end(task)
-            return .failure(Failure("\(name) didn't answer Next Term's \(what) in time."))
+            return .failure(Failure("\(name) didn't answer Next Term's \(what) in time.", kind: late))
         }
         router.end(task)
         answerRequests(exchange.serverRequests, endpoint: endpoint)
@@ -386,9 +391,9 @@ public final class MCPHubRemote: @unchecked Sendable {
             return .failure(Failure(reason))
         }
         guard let response = exchange.response else {
-            if (exchange.error as? URLError)?.code == .timedOut { return .failure(Failure("\(name) didn't answer Next Term's \(what) in time.")) }
+            if (exchange.error as? URLError)?.code == .timedOut { return .failure(Failure("\(name) didn't answer Next Term's \(what) in time.", kind: late)) }
             let why = exchange.error.map { ": " + $0.localizedDescription } ?? "."
-            return .failure(Failure("\(name) can't be reached at \(Self.shown(endpoint.url))\(why)"))
+            return .failure(Failure("\(name) can't be reached at \(Self.shown(endpoint.url))\(why)", kind: .unreachable))
         }
         let status = response.statusCode
         var headers: [String: String] = [:]
@@ -406,7 +411,7 @@ public final class MCPHubRemote: @unchecked Sendable {
         guard (200..<300).contains(status) else {
             let said = String(decoding: exchange.body.prefix(300), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
             let quoted = said.isEmpty ? "" : ": " + MCPRedaction.redact(String(said.prefix(200))).text
-            return .failure(Failure("\(name) answered Next Term's \(what) with HTTP \(status)\(quoted)"))
+            return .failure(Failure("\(name) answered Next Term's \(what) with HTTP \(status)\(quoted)", kind: status >= 500 ? .unreachable : .other))
         }
         guard let id else { return .success(Reply(status: status, headers: headers, message: nil)) }
         if exchange.answer == nil { exchange.finish() }

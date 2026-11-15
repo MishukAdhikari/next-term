@@ -245,6 +245,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     let editorArea = EditorArea(frame: NSRect(x: 0, y: 0, width: 800, height: 360))
     let terminalPane = NSView(frame: NSRect(x: 0, y: 0, width: 800, height: 240))
     let container = NSView()
+    /// The connector bar along the work area's foot, for an MCP server an agent here needed (MCPConnectorPrompt).
+    let connector = MCPConnectorPrompt()
     /// Unsaved files were dealt with (saved or discarded) for this close.
     private var editorsConfirmed = false
     /// Close Anyway was chosen for the database values not saved yet, for this close.
@@ -457,11 +459,20 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         workSplit.addArrangedSubview(terminalPane)
         workSplit.translatesAutoresizingMaskIntoConstraints = false
         mainPane.addSubview(workSplit)
+        let bar = connector.bar
+        bar.translatesAutoresizingMaskIntoConstraints = false
+        mainPane.addSubview(bar)
+        let barHeight = bar.heightAnchor.constraint(equalToConstant: 0)
+        bar.heightConstraint = barHeight
         NSLayoutConstraint.activate([
             workSplit.topAnchor.constraint(equalTo: mainPane.topAnchor),
             workSplit.leadingAnchor.constraint(equalTo: mainPane.leadingAnchor),
             workSplit.trailingAnchor.constraint(equalTo: mainPane.trailingAnchor),
-            workSplit.bottomAnchor.constraint(equalTo: mainPane.bottomAnchor),
+            workSplit.bottomAnchor.constraint(equalTo: bar.topAnchor),
+            bar.leadingAnchor.constraint(equalTo: mainPane.leadingAnchor),
+            bar.trailingAnchor.constraint(equalTo: mainPane.trailingAnchor),
+            bar.bottomAnchor.constraint(equalTo: mainPane.bottomAnchor),
+            barHeight,
         ])
         editorArea.delegate = self
         editorArea.onShowChanges = { [weak self] url in self?.showChanges(of: url) }

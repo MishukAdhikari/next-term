@@ -35,8 +35,11 @@ struct MCPHubSignInStatesTests {
 
     @Test func theAgentsSentencesSendItToTheUser() {
         #expect(MCPHubSignInWords.needsSignIn("Linear")
-            == "Linear needs a sign-in. Ask the user to sign in to Linear in Next Term \u{203A} Settings \u{203A} MCP Servers; Next Term then keeps it signed in for every agent. Nothing was sent.")
-        #expect(MCPHubSignInWords.lapsed("Linear").hasPrefix("Linear\u{2019}s sign-in in Next Term has lapsed, so nothing was sent. Ask the user to choose Reconnect"))
+            == "Linear needs a sign-in, so nothing was sent. Next Term is asking the user to sign in to Linear (a bar at the foot of their window, "
+            + "or Next Term \u{203A} Settings \u{203A} MCP Servers), then keeps it signed in for every agent. Tell the user; once they have, "
+            + "call the same tool again. No restart is needed.")
+        #expect(MCPHubSignInWords.lapsed("Linear").hasPrefix("Linear\u{2019}s sign-in in Next Term has lapsed, so nothing was sent. Next Term is asking the user to reconnect"))
+        #expect(MCPHubSignInWords.lapsed("Linear").hasSuffix("call the same tool again. No restart is needed."))
         #expect(MCPHubSignInWords.moreAccess("Linear", scopes: ["files:write"]).hasPrefix("Linear needs more access for this (files:write)."))
         #expect(MCPHubSignInWords.declined(agent: "Codex", "Linear") == "The user didn\u{2019}t allow Codex to use their Linear sign-in, so nothing was sent.")
         let panel = MCPHubSignInWords.consent(agent: "Codex", "Linear")

@@ -54,6 +54,10 @@ enum MCPHubControl {
             lastRuns[key] = run
             NotificationCenter.default.post(name: changed, object: nil)
         }
+        // A server the agent's session couldn't start: the bar in its window says why, and offers Settings.
+        if let failure = run.failure, !failure.isEmpty {
+            MCPConnectorPrompts.report(.didntStart(failure), server: server, list: list, url: nil, folder: folder, caller: caller)
+        }
         reply(MCPServer.CallResult(text: ""))
     }
 
