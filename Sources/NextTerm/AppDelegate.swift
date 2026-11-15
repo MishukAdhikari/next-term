@@ -2542,6 +2542,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             item(spinner, choice.title, #selector(setAgentSpinner(_:)), "", target: self).representedObject = choice.rawValue
         }
         view.addItem(withTitle: "Agent Spinner", action: nil, keyEquivalent: "").submenu = spinner
+        // A native box under the terminal for writing to its agent (plan 039 U2); AgentPromptBox.swift.
+        item(view, "Prompt Box", #selector(TerminalWindowController.togglePromptBox(_:)), "i", [.command, .shift])
         // The window's colour along its top row; also a right-click there, and Show Project Colors in Settings › General.
         view.addItem(withTitle: ProjectColorMenu.title, action: nil, keyEquivalent: "").submenu = ProjectColorMenu.submenu()
         view.addItem(.separator())
