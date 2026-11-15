@@ -71,12 +71,25 @@ public final class MCPHubSignIn: @unchecked Sendable {
         self.metadata = metadata
         lock.unlock()
 
-        // The listener first: its port is the redirect, and a server that won't take a portless one registers it.
+        // The client first, then the listener at its port: a server may hold a registration's redirect to its port.
+        let registered: [MCPHubOAuthRegistration.Client]
+        switch store.read() {
+        case .success(let body): registered = body.registered(key: store.key)
+        case .failure: registered = []
+        }
+        var chosen: MCPHubOAuthRegistration.Client?
+        var endpoint: URL?
+        switch MCPHubOAuthRegistration.choose(name: name, metadata: metadata, own: own, registered: registered, metadataDocument: metadataDocument) {
+        case .none(let why): return .failure(MCPHubOAuth.Failure(why))
+        case .use(let found): chosen = found
+        case .register(let url): endpoint = url
+        }
+
         let state = MCPHubOAuthFlow.random(32)
         let box = PendingBox()
         let listener: MCPHubLoopback
         do {
-            listener = try MCPHubLoopback { [name] query in
+            listener = try MCPHubLoopback(port: chosen?.port ?? 0) { [name] query in
                 guard let pending = box.pending else { return nil }
                 switch MCPHubOAuthFlow.callback(query: query, pending: pending) {
                 case .notOurs: return nil
@@ -96,20 +109,22 @@ public final class MCPHubSignIn: @unchecked Sendable {
         lock.unlock()
         if stop { return .failure(MCPHubOAuth.Failure(Self.cancelledText)) }
 
-        let registered: [MCPHubOAuthRegistration.Client]
-        switch store.read() {
-        case .success(let body): registered = body.registered(key: store.key)
-        case .failure: registered = []
+        // A registration whose port is unknown (kept before ports were) or taken now is made again, at this port.
+        if let found = chosen, !found.fits(listening: listener.port) {
+            chosen = nil
+            endpoint = metadata.registrationEndpoint.flatMap(URL.init(string:))
+            if endpoint == nil { return .failure(MCPHubOAuth.Failure("\(name) doesn\u{2019}t let Next Term register again. Remove \(name) and add it again.")) }
         }
         var client: MCPHubOAuthRegistration.Client
-        switch MCPHubOAuthRegistration.choose(name: name, metadata: metadata, own: own, registered: registered, metadataDocument: metadataDocument) {
-        case .none(let why): return .failure(MCPHubOAuth.Failure(why))
-        case .use(let chosen): client = chosen
-        case .register(let endpoint):
+        if let chosen {
+            client = chosen
+        } else if let endpoint {
             switch MCPHubOAuthRegistration.register(at: endpoint, issuer: metadata.issuer, name: name, exact: listener.redirect, fetch: fetch) {
             case .failure(let failure): return .failure(failure)
             case .success(let made): client = made
             }
+        } else {
+            return .failure(MCPHubOAuth.Failure("Next Term couldn\u{2019}t find how to sign in to \(name)."))
         }
         let wanted = scopes ?? metadata.scopes(challenge: challenge)
         let pending = MCPHubOAuthFlow.Pending(state: state, metadata: metadata, client: client, redirect: listener.redirect, scopes: wanted)

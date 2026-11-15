@@ -40,6 +40,10 @@ public final class MCPHubFakeAuth: @unchecked Sendable {
     public var loseNextRefresh = false
     public var scopes = ["read", "write"]
     public var ownApp: (id: String, secret: String)?
+    /// Holds a registration to the redirects it named, port and all, as a server that doesn't let the loopback port vary
+    /// (RFC 8252 §7.3) does: any other is refused on a page, never redirected. `oneRedirect` refuses a list of two.
+    public var exactRedirects = false
+    public var oneRedirect = false
     /// The resource its tokens are for: the fake remote's URL.
     public var resource = ""
 
@@ -48,6 +52,9 @@ public final class MCPHubFakeAuth: @unchecked Sendable {
     public private(set) var port: UInt16 = 0
     private var countsByPath: [String: Int] = [:]
     private var clients: [String: Date] = [:]
+    private var redirects: [String: [String]] = [:]
+    /// The redirects each registration named, in order, for the tests.
+    public private(set) var registered: [[String]] = []
     private var codes: [String: (client: String, challenge: String, redirect: String, resource: String, scope: String)] = [:]
     private struct Access { let grant: String; let resource: String; let expires: Date; let scope: String }
     private var access: [String: Access] = [:]
@@ -246,9 +253,13 @@ public final class MCPHubFakeAuth: @unchecked Sendable {
             return json(fd, 200, metadata)
         case ("POST", "/register"):
             guard dcr else { return json(fd, 404, [:]) }
+            let asked = ((try? JSONSerialization.jsonObject(with: body)) as? [String: Any])?["redirect_uris"] as? [String] ?? []
+            if oneRedirect, asked.count > 1 { return json(fd, 400, ["error": "invalid_client_metadata"]) }
             let id = "client-" + UUID().uuidString.prefix(8).lowercased()
             lock.lock()
             clients[id] = registrationLife.map { Date().addingTimeInterval($0) } ?? .distantFuture
+            redirects[id] = asked
+            registered.append(asked)
             lock.unlock()
             return json(fd, 201, ["client_id": id, "token_endpoint_auth_method": "none", "client_id_issued_at": Int(Date().timeIntervalSince1970)])
         case ("GET", "/authorize"):
@@ -257,6 +268,12 @@ public final class MCPHubFakeAuth: @unchecked Sendable {
             lastAuthorize = query
             lock.unlock()
             func q(_ name: String) -> String { query.first { $0.0 == name }?.1 ?? "" }
+            lock.lock()
+            let allowed = redirects[q("client_id")]
+            lock.unlock()
+            if exactRedirects, let allowed, !allowed.contains(q("redirect_uri")) {
+                return send(fd, status: "400 Bad Request", headers: ["Content-Type": "text/html"], body: "redirect_uri is not one the client registered")
+            }
             var back = URLComponents(string: q("redirect_uri"))
             var items = [URLQueryItem(name: "state", value: q("state"))]
             switch iss {

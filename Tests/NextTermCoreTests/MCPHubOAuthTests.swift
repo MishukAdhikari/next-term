@@ -338,7 +338,9 @@ struct MCPHubOAuthTests {
         }
         let made = try MCPHubOAuthRegistration.register(at: URL(string: "https://a.example/register")!, issuer: "https://a.example", name: "a",
                                                          exact: "http://127.0.0.1:5555/callback", fetch: fetch).get()
-        #expect(bodies.seen.count == 2)
+        // Both redirects at once, and the port kept.
+        #expect(bodies.seen.count == 1 && made.port == 5555)
+        #expect(bodies.seen[0].contains(#"["http:\/\/127.0.0.1\/callback","http:\/\/127.0.0.1:5555\/callback"]"#))
         #expect(made.clientID == "new" && made.secret == "cs" && made.secretExpires == nil && made.authMethod == "client_secret_post")
         let posted = made.authenticated(MCPHubOAuth.Request(post: URL(string: "https://a.example/token")!, form: [("grant_type", "x")]))
         #expect(posted.value("client_id") == "new" && posted.value("client_secret") == "cs")
@@ -347,6 +349,29 @@ struct MCPHubOAuthTests {
         let headed = basic.authenticated(MCPHubOAuth.Request(post: URL(string: "https://a.example/token")!, form: []))
         #expect(headed.headers["Authorization"] == "Basic " + Data("new:cs".utf8).base64EncodedString())
         #expect(headed.value("client_secret") == nil)
+        // A server that refuses the list gets the exact one alone; one that refuses a port, the portless one (any port).
+        func registering(refuse: @escaping @Sendable (String) -> Bool) throws -> (MCPHubOAuthRegistration.Client, Int) {
+            let tried = Bodies()
+            let fetch: MCPHubOAuth.Fetch = { request in
+                let text = String(decoding: request.json ?? Data(), as: UTF8.self)
+                tried.seen.append(text)
+                if refuse(text) { return .success(MCPHubOAuth.Response(status: 400, body: Data(#"{"error":"invalid_redirect_uri"}"#.utf8))) }
+                return .success(MCPHubOAuth.Response(status: 201, body: Data(#"{"client_id":"c"}"#.utf8)))
+            }
+            let client = try MCPHubOAuthRegistration.register(at: URL(string: "https://a.example/register")!, issuer: "https://a.example", name: "a",
+                                                              exact: "http://127.0.0.1:5555/callback", fetch: fetch).get()
+            return (client, tried.seen.count)
+        }
+        let exactOnly = try registering { $0.contains("\\/callback\",\"") }
+        #expect(exactOnly.0.port == 5555 && exactOnly.1 == 2)
+        let portless = try registering { $0.contains(":5555") }
+        #expect(portless.0.port == 0 && portless.1 == 3)
+        // Which registrations a sign-in listening at a port can use as they are.
+        let registered = MCPHubOAuthRegistration.Client(issuer: "https://a.example", clientID: "c", kind: .registered, port: 5555)
+        #expect(registered.fits(listening: 5555) && !registered.fits(listening: 6000))
+        #expect(portless.0.fits(listening: 6000))
+        #expect(!MCPHubOAuthRegistration.Client(issuer: "https://a.example", clientID: "c", kind: .registered).fits(listening: 5555))
+        #expect(MCPHubOAuthRegistration.Client(issuer: "https://a.example", clientID: "c", kind: .preRegistered).fits(listening: 1))
         // The secret is never encoded with the client.
         let encoded = String(decoding: try JSONEncoder().encode(made), as: UTF8.self)
         #expect(!encoded.contains("cs\""))
