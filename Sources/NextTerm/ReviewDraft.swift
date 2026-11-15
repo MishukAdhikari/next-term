@@ -116,7 +116,7 @@ enum ReviewUI {
         tab.view.typeText(text)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak tab] in
             guard let tab, MCPControl.canType(tab) else { return }
-            tab.view.typeText("\r")
+            tab.view.send(txt: "\r") // a key, not a paste: the agent sends what was pasted
         }
         draft.clear()
     }

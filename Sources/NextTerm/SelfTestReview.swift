@@ -81,7 +81,8 @@ extension SelfTest {
         let draft = ReviewDraft.of(window)
         check(draft.comments.map(\.lines) == [2...2, 35...35] && draft.comments.allSatisfy(\.inFile),
               "review: the comments hold the lines in the file now", "\(draft.comments.map(\.lines))")
-        check(await wait(3) { !room.review.isHidden && room.review.title == "Review (2)" }, "review: the toolbar shows Review (2)", room.review.title)
+        check(await wait(3) { room.review.title == "Review (2)" && (side as? DiffTextView)?.reviewItem()?.title == "Review (2)…" },
+              "review: Review (2) in the toolbar where it fits, and in the diff's menu", room.review.title)
         check(await wait(3) { diff.commentedLines.right == [2, 35] && diff.commentedLines.left.isEmpty },
               "review: the diff marks the commented lines", "\(diff.commentedLines)")
 
@@ -93,7 +94,11 @@ extension SelfTest {
         check(draft.comments.map(\.lines) == [5...5, 35...35] && draft.comments.map(\.outdated) == [false, true],
               "review: a comment follows its lines; one whose lines changed is outdated",
               "\(draft.comments.map(\.lines)) \(draft.comments.map(\.outdated))")
-        room.review.performClick(nil)
+        if !room.review.isHidden {
+            room.review.performClick(nil)
+        } else if let item = (side as? DiffTextView)?.reviewItem(), let action = item.action {
+            NSApp.sendAction(action, to: item.target, from: item)
+        }
         check(await wait(3) { ReviewList.isShown }, "review: Review (2) lists the comments")
         ReviewList.close()
 

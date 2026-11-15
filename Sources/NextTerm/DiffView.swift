@@ -985,11 +985,22 @@ final class DiffTextView: NSTextView {
 
     override func menu(for event: NSEvent) -> NSMenu? {
         let menu = super.menu(for: event)
-        if let menu, let item = commentItem() {
-            menu.insertItem(item, at: 0)
-            menu.insertItem(.separator(), at: 1)
+        let items = [commentItem(), reviewItem()].compactMap { $0 }
+        if let menu, !items.isEmpty {
+            for (index, item) in items.enumerated() { menu.insertItem(item, at: index) }
+            menu.insertItem(.separator(), at: items.count)
         }
         return menu
+    }
+
+    /// "Review (N)…": the window's review comments, as Review (N) in the toolbar lists them where it fits.
+    func reviewItem() -> NSMenuItem? {
+        let count = ReviewDraft.existing(window)?.comments.count ?? 0
+        guard count > 0 else { return nil }
+        return ClosureMenuItem(title: "Review (\(count))…") { [weak self] in
+            guard let self else { return }
+            ReviewUI.showReview(anchor: self)
+        }
     }
 
     /// "Add Review Comment…" for the selected lines, where Comment in the toolbar would be offered: the toolbar may
