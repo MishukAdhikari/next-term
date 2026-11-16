@@ -683,6 +683,7 @@ enum SelfTest {
         case "rollback": return await rollbackChecks(c)
         case "promptBox": return await promptBoxChecks() // the prompt box under a tab's terminal
         case "contextGauge": return await contextGaugeChecks() // an agent tab's context gauge and tooltip line
+        case "reviewComments": return await reviewCommentsChecks() // review comments in a diff, sent to the agent as one prompt
         case "sessionPreview": return await sessionPreviewChecks() // ⌥⌘O: the selected session’s last turns beside the list
         case "held": return await heldWorktreeChecks(c)
         case "closeWorktree": return await closeWorktreeChecks()
@@ -893,6 +894,7 @@ enum SelfTest {
         await placeChecks(c)
         await promptBoxChecks()
         await contextGaugeChecks()
+        await reviewCommentsChecks()
         await sessionPreviewChecks()
         await worktreeChecks(c)
         await heldWorktreeChecks(c)
