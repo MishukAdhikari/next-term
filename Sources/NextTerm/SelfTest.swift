@@ -318,6 +318,17 @@ enum SelfTest {
         let restoreDiffSettings = keepDiffSettings()
         defer { restoreDiffSettings() }
         DiffLayout.current = .sideBySide
+        // The MCP hub reads a list of the run's own, empty, never the user's (Application Support's mcp.json): an
+        // agent the checks start would otherwise get the user's servers and their cached tools. The parts that need
+        // servers set their own list and put this one back.
+        let hubFolder = URL(fileURLWithPath: canonicalPath(NSTemporaryDirectory())).appendingPathComponent("nt-selftest-hub-\(getpid())")
+        try? FileManager.default.createDirectory(at: hubFolder, withIntermediateDirectories: true)
+        let hubBefore = MCPHubControl.userFile
+        MCPHubControl.userFile = hubFolder.appendingPathComponent("mcp.json").path
+        defer {
+            MCPHubControl.userFile = hubBefore
+            try? FileManager.default.removeItem(at: hubFolder)
+        }
         guard let c = AppDelegate.shared.controllers.first, let window = c.window else {
             check(false, "a window opens at launch")
             return
