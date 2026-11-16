@@ -26,7 +26,7 @@ jobs:
           if [[ -n "$(git ls-files site claudedocs)" ]]; then echo "::error::site/ or claudedocs/ is tracked again"; git ls-files site claudedocs | head; exit 1; fi
 
       - name: Unit tests
-        timeout-minutes: 20 # about 8 minutes on a slow runner (October 2026), 5 on a fast one
+        timeout-minutes: 35 # 13 to 18 minutes on most runners (November 2026: the build is most of it, the 4,700 tests about 3)
         run: |
           # If the run stalls, show what is still running (test output is buffered until the end).
           ( sleep 420; echo "::group::Still running after 7 minutes"; ps -axo pid,ppid,stat,etime,command | grep -E "git|swiftpm|xctest|NextTerm" | grep -v grep; echo "::endgroup::" ) &
