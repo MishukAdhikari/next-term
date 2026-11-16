@@ -709,6 +709,13 @@ extension SelfTest {
         check(stayed != nil && stayed.map { !CommandPaneAutoClose.mayClose($0) } == true,
               "MCP writes: Keep Open keeps run_command's finished tab open", "kept \(keptRun)")
         if let stayed { pc.remove(stayed) }
+
+        // new_tab with a command (not an agent): its tab closes by itself after exit 0 too.
+        let typed = json(await client.call("new_tab", ["directory": root.path, "command": "echo \(marker)-tab"]).text) ?? [:]
+        let typedID = typed["id"] as? String ?? typed["tab_id"] as? String ?? ""
+        let tabClosed = await wait(15) { tab(typedID) == nil }
+        check(!typedID.isEmpty && tabClosed, "MCP writes: new_tab's tab opened with a command closes by itself after exit 0", "\(typed)")
+        if let left = tab(typedID) { pc.remove(left) }
         #endif
     }
 

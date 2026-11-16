@@ -58,7 +58,7 @@ extension SelfTest {
                   "agents settings: the copy PATH hides is named, and Claude Code's own updater with its switch", line)
         }
         if let cursor = row("cursor") {
-            check(AgentCLIs.decide(cursor.agent, copy: cursor.copy, schedule: .daily, lastTry: nil, now: Date(), running: false,
+            check(AgentCLIs.decide(cursor.agent, copy: cursor.copy, schedule: .daily, lastTry: nil, now: Date(),
                                    latest: "2099.01.01") == .skip(.updatesItself),
                   "agents settings: a tool that updates itself with no switch of its own is never scheduled")
         }

@@ -708,6 +708,7 @@ enum MCPControl {
         let line = sessionLine ?? MCPServer.commandLine(command, prompt: arguments["prompt"] as? String)
         // Type it once the shell is at its first prompt (its integration reports in), or after 3 s.
         whenReady(tab, until: TerminalTab.now + 3) {
+            if sessionLine == nil { MainActor.assumeIsolated { CommandPaneAutoClose.watchNewTab(tab, command: command) } } // closes after exit 0
             type(line, into: tab, submit: true)
             answer()
         }

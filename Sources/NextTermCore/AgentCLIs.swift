@@ -610,17 +610,19 @@ public enum AgentCLIs {
     }
 
     public enum Skip: String, Equatable, Sendable {
-        case off, notDue, notInstalled, updatesItself, noCommand, running, upToDate, noLatest
+        case off, notDue, notInstalled, updatesItself, noCommand, upToDate, noLatest
 
-        /// Whether the look counts as the interval's try, so the next comes a whole interval later. A busy agent or no
-        /// answer about the latest version (offline) is looked at again within the hour.
-        public var counts: Bool { ![.off, .notDue, .running, .noLatest].contains(self) }
+        /// Whether the look counts as the interval's try, so the next comes a whole interval later. No answer about the
+        /// latest version (offline) is looked at again within the hour.
+        public var counts: Bool { ![.off, .notDue, .noLatest].contains(self) }
     }
 
-    /// What a scheduled look does for one agent. `running`: a tab runs it, or any process of it is running (an
-    /// in-place update would pull the files from under it). `latest`: the latest version, nil when no source answered.
+    /// What a scheduled look does for one agent. `latest`: the latest version, nil when no source answered.
+    ///
+    /// A running agent is updated too, as its own updater does: its sessions keep the version they started with, and
+    /// the next start runs the new one. Waiting for none to run never ended for an agent the user always has open.
     public static func decide(_ agent: Agent, copy: Copy?, schedule: Schedule, lastTry: Date?, now: Date,
-                              running: Bool, latest: String?) -> Decision {
+                              latest: String?) -> Decision {
         guard schedule != .off else { return .skip(.off) }
         guard isDue(schedule, lastTry: lastTry, now: now) else { return .skip(.notDue) }
         guard let copy else { return .skip(.notInstalled) }
@@ -628,7 +630,6 @@ public enum AgentCLIs {
             if case .yes(off: nil) = agent.selfUpdate(copy.method) { return .skip(.updatesItself) }
             return .skip(.noCommand)
         }
-        if running { return .skip(.running) }
         guard let latest else { return .skip(.noLatest) }
         if let installed = copy.version, !isNewer(latest, than: installed) { return .skip(.upToDate) }
         return .update(command: command)
