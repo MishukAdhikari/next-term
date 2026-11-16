@@ -8,8 +8,8 @@ import UserNotifications
 /// the background: the login shell's PATH, a clean environment, never sudo, ten minutes at most, its output in a log
 /// in Application Support, and one notification when it is done.
 ///
-/// A scheduled update waits while a tab runs that agent or any process of it is running, so it never pulls the files
-/// from under a session, nor comes while the user types to it. It is looked at a minute after launch, on waking and
+/// A scheduled update runs while the agent runs too, as its own updater does: open sessions keep the version they
+/// started with, and the next start runs the new one (the notification says so). It is looked at a minute after launch, on waking and
 /// every hour: no daemon, nothing between launches. The self-test gives it a PATH, a latest lookup, defaults and a log
 /// folder of its own, so it never reads the user's agents, their schedules or the network.
 @MainActor
@@ -299,25 +299,17 @@ final class AgentCLIManager {
         }
         reload(fetch: true, only: Set(due.map(\.id))) { [self] in
             let looked = due.compactMap { agent in statuses.first(where: { $0.agent.id == agent.id }) }
-            // Every process's arguments, and their paths resolved, are read off the main thread.
-            DispatchQueue.global(qos: .utility).async {
-                let processes = Self.processes()
-                let busy = Set(looked.filter { AgentCLIs.isRunning($0.agent, copies: $0.copies, processes: processes) }.map(\.agent.id))
-                DispatchQueue.main.async {
-                    MainActor.assumeIsolated { self.decide(looked, busy: busy, now: now, done: done) }
-                }
-            }
+            decide(looked, now: now, done: done)
         }
     }
 
-    /// The decisions of one look, on the main thread: `busy`, the agents a process runs (read off it).
-    private func decide(_ looked: [AgentCLIs.Status], busy: Set<String>, now: Date, done: (() -> Void)?) {
+    /// The decisions of one look, on the main thread.
+    private func decide(_ looked: [AgentCLIs.Status], now: Date, done: (() -> Void)?) {
         for status in looked {
             let agent = status.agent
             guard !updating.contains(agent.id) else { continue }
-            let running = busy.contains(agent.id) || tabRuns(agent)
             let decision = AgentCLIs.decide(agent, copy: status.copy, schedule: schedule(agent.id), lastTry: lastTry(agent.id),
-                                            now: now, running: running, latest: status.latest)
+                                            now: now, latest: status.latest)
             switch decision {
             case .update(let command):
                 setLastTry(now, for: agent.id)
@@ -328,23 +320,6 @@ final class AgentCLIManager {
         }
         refreshKept()
         done?()
-    }
-
-    /// A local tab runs `agent` now.
-    private func tabRuns(_ agent: AgentCLIs.Agent) -> Bool {
-        AppDelegate.shared.controllers.flatMap(\.tabs).contains { tab in
-            tab.remote == nil && tab.status.running && tab.status.kind == .agent
-                && (agent.programs.contains(tab.status.program) || CommandClassifier.agentName(tab.status.command).map(agent.programs.contains) == true)
-        }
-    }
-
-    /// Every process of the user's now: its executable and argv.
-    nonisolated private static func processes() -> [(executable: String, arguments: [String])] {
-        (ProcessSnapshot.take() ?? []).compactMap { record in
-            // Another user's arguments can't be read: only the user's own processes come back.
-            guard record.pid > 1, let line = ProcessInspector.commandLine(of: record.pid) else { return nil }
-            return (line.path, line.arguments)
-        }
     }
 
     /// The log a background update writes to.

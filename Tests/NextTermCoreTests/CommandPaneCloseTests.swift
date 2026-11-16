@@ -20,6 +20,15 @@ import Testing
         #expect(!CommandPaneClose.closes(exitCode: 0, kept: false, userTyped: false, lastInWindow: true))
     }
 
+    @Test func newTabFollowsCommandsButNotAgents() {
+        #expect(CommandPaneClose.followsNewTab(command: "open ."))
+        #expect(CommandPaneClose.followsNewTab(command: "cd web && npm test"))
+        #expect(!CommandPaneClose.followsNewTab(command: "claude"))
+        #expect(!CommandPaneClose.followsNewTab(command: "codex --full-auto"))
+        #expect(!CommandPaneClose.followsNewTab(command: "cd app && opencode"))
+        #expect(!CommandPaneClose.followsNewTab(command: "  "))
+    }
+
     @Test func theCountdownSaysWholeSeconds() {
         #expect(CommandPaneClose.countdown(3) == "Closes in 3 s")
         #expect(CommandPaneClose.countdown(2.2) == "Closes in 3 s")

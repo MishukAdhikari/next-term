@@ -302,18 +302,16 @@ import Testing
         let codex = Self.agent("codex")
         let copy = try #require(only("codex", home, [".local/bin"]).first)
         let now = Date()
-        func decide(_ schedule: AgentCLIs.Schedule, running: Bool = false, latest: String? = "0.167.0", last: Date? = nil) -> AgentCLIs.Decision {
-            AgentCLIs.decide(codex, copy: copy, schedule: schedule, lastTry: last, now: now, running: running, latest: latest)
+        func decide(_ schedule: AgentCLIs.Schedule, latest: String? = "0.167.0", last: Date? = nil) -> AgentCLIs.Decision {
+            AgentCLIs.decide(codex, copy: copy, schedule: schedule, lastTry: last, now: now, latest: latest)
         }
         #expect(decide(.off) == .skip(.off))
         #expect(decide(.daily, last: now.addingTimeInterval(-3600)) == .skip(.notDue))
-        #expect(decide(.daily, running: true) == .skip(.running))
-        #expect(!AgentCLIs.Skip.running.counts)
         #expect(decide(.daily, latest: "0.166.0") == .skip(.upToDate))
         #expect(decide(.daily, latest: nil) == .skip(.noLatest))
         guard case .update(let command) = decide(.weekly) else { return #expect(Bool(false)) }
         #expect(command.hasSuffix("codex update"))
-        #expect(AgentCLIs.decide(codex, copy: nil, schedule: .daily, lastTry: nil, now: now, running: false, latest: "1") == .skip(.notInstalled))
+        #expect(AgentCLIs.decide(codex, copy: nil, schedule: .daily, lastTry: nil, now: now, latest: "1") == .skip(.notInstalled))
     }
 
     @Test func aToolThatUpdatesItselfWithNoSwitchIsNeverScheduled() throws {
@@ -321,7 +319,7 @@ import Testing
         try home.program(".local/share/cursor-agent/versions/2026.11.05-86047df/cursor-agent", "binary")
         try home.link(".local/bin/cursor-agent", to: home.folder(".local/share/cursor-agent/versions/2026.11.05-86047df/cursor-agent"))
         let copy = try #require(only("cursor", home, [".local/bin"]).first)
-        #expect(AgentCLIs.decide(Self.agent("cursor"), copy: copy, schedule: .daily, lastTry: nil, now: Date(), running: false,
+        #expect(AgentCLIs.decide(Self.agent("cursor"), copy: copy, schedule: .daily, lastTry: nil, now: Date(),
                                  latest: "2027.01.01") == .skip(.updatesItself))
     }
 

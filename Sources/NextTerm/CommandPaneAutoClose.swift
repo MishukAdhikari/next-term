@@ -2,8 +2,9 @@ import AppKit
 import NextTermCore
 
 /// Closes a pane or tab Next Term opened to run one command for an agent once that command has finished well: the
-/// pane run_command opens below the agent's tab, the new tab run_with_secrets opens, and the tab the password
-/// manager's import types its line in. Never the user's own tabs.
+/// pane run_command opens below the agent's tab, the new tab run_with_secrets opens, the tab the password
+/// manager's import types its line in, and new_tab's tab opened with a command that is not an agent. Never the
+/// user's own tabs.
 ///
 /// When the command ends with exit code 0, a small bar at the pane's top says "Closes in 3 s" with a Keep Open button,
 /// and the pane closes when the count ends (CommandPaneClose has the rule). A failure, or a shell that reports no exit
@@ -52,6 +53,13 @@ enum CommandPaneAutoClose {
         let entry = Entry(pane: pane, before: before, until: TerminalTab.now + seconds)
         entries[pane.id] = entry
         poll(entry, id: pane.id)
+    }
+
+    /// new_tab's tab, about to have `command` typed in it: followed as run_command's pane is, unless the command is
+    /// an agent (CommandPaneClose.followsNewTab).
+    static func watchNewTab(_ tab: TerminalTab, command: String) {
+        guard CommandPaneClose.followsNewTab(command: command) else { return }
+        watch(tab, before: tab.status.commandsAtPrompt)
     }
 
     /// Whether `pane` is followed and may still close by itself: its menus offer Keep Open.
