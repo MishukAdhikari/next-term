@@ -125,10 +125,13 @@ final class HandoverPicker: NSWindowController, NSWindowDelegate, NSTableViewDat
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         let candidate = request.candidates[row]
         let title = NSTextField(labelWithString: SecretApprovalPanel.sanitized(Self.name(candidate), limit: 120))
+
         title.font = .systemFont(ofSize: 13)
         title.lineBreakMode = .byTruncatingTail
         let state = candidate.open ? "open tab" : "closed, opens in a new tab"
-        let detail = NSTextField(labelWithString: "\(candidate.project) \u{00B7} \(candidate.agent) \u{00B7} \(state)")
+        let named = Self.name(candidate)
+        let parts = (named == candidate.project ? [] : [candidate.project]) + [candidate.agent, state]
+        let detail = NSTextField(labelWithString: parts.joined(separator: " \u{00B7} "))
         detail.font = .systemFont(ofSize: 11)
         detail.textColor = .secondaryLabelColor
         detail.lineBreakMode = .byTruncatingTail
