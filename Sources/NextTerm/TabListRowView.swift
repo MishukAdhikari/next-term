@@ -55,6 +55,10 @@ final class TabListRowView: NSView, NSTextFieldDelegate {
     /// An agent's context usage, after the title (and its place mark), as on the top bar.
     private let gauge = ContextGaugeView()
     private let closeButton = NSButton()
+    /// A pinned tab's pin, where its × would be, and the hairline under the last pinned tab (plan 045).
+    private let pinView = NSImageView()
+    private let pinLine = NSView()
+    var showsPin: Bool { !pinView.isHidden }
     /// "⌘1": how to get to this tab from the keyboard, in the ×'s place on the rows that show none.
     private let hint = TabListText(labelWithString: "")
     private var renameField: NSTextField?
@@ -143,6 +147,16 @@ final class TabListRowView: NSView, NSTextFieldDelegate {
         closeButton.refusesFirstResponder = true // the list never takes the keyboard from the terminal
         closeButton.isHidden = true
         addSubview(closeButton)
+        pinView.image = NSImage(systemSymbolName: "pin.fill", accessibilityDescription: "Pinned")?
+            .withSymbolConfiguration(.init(pointSize: 9, weight: .semibold))
+        pinView.contentTintColor = Theme.textDim
+        pinView.isHidden = true
+        pinView.toolTip = "Pinned: Close Other Tabs leaves it, and closing it asks first."
+        addSubview(pinView)
+        pinLine.wantsLayer = true
+        pinLine.layer?.backgroundColor = Theme.textDim.withAlphaComponent(0.35).cgColor
+        pinLine.isHidden = true
+        addSubview(pinLine)
         KeyHint.style(hint) // said in the row's own help, as the buttons' keys are in theirs
         hint.font = Self.hintFont
         hint.isHidden = true
@@ -264,7 +278,10 @@ final class TabListRowView: NSView, NSTextFieldDelegate {
     /// others. So the title is as wide in every state, and never re-truncates as the pointer passes.
     private func updateCloseAndHint() {
         let tabRow = !isPane && !collapsed && !isEditing
-        let closeShown = tabRow && (selected || hovering)
+        let pinned = row?.pinned == true
+        if pinView.isHidden == (tabRow && pinned) { pinView.isHidden = !(tabRow && pinned) }
+        if pinLine.isHidden == (row?.endsPinnedGroup == true) { pinLine.isHidden = row?.endsPinnedGroup != true }
+        let closeShown = tabRow && !pinned && (selected || hovering)
         if closeButton.isHidden == closeShown { closeButton.isHidden = !closeShown }
         let hintShown = tabRow && !closeShown && hintFits
         if hint.isHidden == hintShown { hint.isHidden = !hintShown }
@@ -339,6 +356,8 @@ final class TabListRowView: NSView, NSTextFieldDelegate {
         label.frame = NSRect(x: labelX, y: titleY, width: titleWidth, height: titleHeight)
         label.isHidden = isEditing
         closeButton.frame = NSRect(x: closeX, y: lineMid - 9, width: 18, height: 18)
+        pinView.frame = closeButton.frame
+        pinLine.frame = NSRect(x: 8, y: bounds.height - 1, width: max(0, bounds.width - 16), height: 1) // flipped: the bottom
         let hintHeight: CGFloat = Self.hintHeight
         hint.frame = NSRect(x: hintEnd - hintWidth, y: lineMid - hintHeight / 2, width: hintWidth, height: hintHeight)
 
