@@ -40,3 +40,19 @@ import Testing
         #expect(try !JSONDecoder().decode(SessionSnapshot.Group.self, from: plain).pinned)
     }
 }
+
+/// The tab list marks the pinned tabs and the last of them.
+@Suite struct PinnedTabListTests {
+    func source(_ key: String, pinned: Bool) -> TabListRows.Source {
+        TabListRows.Source(key: key, panes: [TabListRows.Pane(key: key + "p", title: key, focused: true)], pinned: pinned)
+    }
+
+    @Test func theLastPinnedRowEndsTheGroupWhenOthersFollow() {
+        let rows = TabListRows.make(tabs: [source("a", pinned: true), source("b", pinned: true), source("c", pinned: false)],
+                                    showsFolders: false, home: "/")
+        #expect(rows.map(\.pinned) == [true, true, false])
+        #expect(rows.map(\.endsPinnedGroup) == [false, true, false])
+        let all = TabListRows.make(tabs: [source("a", pinned: true)], showsFolders: false, home: "/")
+        #expect(all.map(\.endsPinnedGroup) == [false])
+    }
+}

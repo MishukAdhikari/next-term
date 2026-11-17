@@ -279,6 +279,8 @@ final class TabBarView: NSView, ProjectGlowing {
     func titleColor(at index: Int) -> NSColor? { tabViews[safe: index]?.titleColor }
     /// A tab's view, to click (for the self-test).
     func tabView(at index: Int) -> NSView? { tabViews[safe: index] }
+    /// For the self-test: the tab at `index` shows its pin.
+    func showsPin(at index: Int) -> Bool { tabViews[safe: index]?.showsPin ?? false }
 
     override init(frame: NSRect) {
         super.init(frame: frame)

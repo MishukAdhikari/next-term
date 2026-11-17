@@ -11,6 +11,8 @@ enum ClosedTabs {
         let remote: RemoteTab?
         /// The window it was in, to come back there while that is open.
         weak var window: TerminalWindowController?
+        /// It was pinned (plan 045): it comes back pinned.
+        var pinned = false
     }
 
     private(set) static var entries: [Entry] = []
@@ -23,7 +25,8 @@ enum ClosedTabs {
     static func remember(_ tab: TerminalTab, in window: TerminalWindowController) {
         if tab.remote == nil, tab.userTitle == nil, tab.status.commandsRun == 0, !tab.leftStartFolder { return }
         let directory = tab.exited ? tab.directory : tab.liveDirectory // an ended shell's process is gone
-        entries.append(Entry(directory: directory, title: tab.userTitle, remote: tab.remote, window: window))
+        entries.append(Entry(directory: directory, title: tab.userTitle, remote: tab.remote, window: window,
+                             pinned: window.group(of: tab).map { $0.pinned && !$0.isSplit } ?? false))
         if entries.count > limit { entries.removeFirst(entries.count - limit) }
     }
 
@@ -340,6 +343,7 @@ extension TerminalWindowController {
             tab.userTitle = title
             refresh()
         }
+        if entry.pinned, let group = group(of: tab) { setPinned(group, true) }
         return tab
     }
 
