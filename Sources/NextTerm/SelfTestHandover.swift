@@ -1,3 +1,4 @@
+#if DEBUG
 import AppKit
 import NextTermCore
 
@@ -161,3 +162,4 @@ extension SelfTest {
         }
     }
 }
+#endif
