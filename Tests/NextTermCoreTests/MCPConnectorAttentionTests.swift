@@ -25,7 +25,7 @@ import Testing
         #expect(more.primary == "Allow More Access" && more.action == .signIn)
 
         let away = try #require(A.words([item("Linear", .unreachable("Linear can't be reached at mcp.linear.app: offline.\nmore"))]))
-        #expect(away.message == "Next Term can\u{2019}t reach Linear for Claude Code.")
+        #expect(away.message == "Next Term can\u{2019}t reach Linear for Claude Code. It tries again on its own.")
         #expect(away.primary == "Retry Now" && away.action == .retry && away.glyph == .offline)
         #expect(away.detail == "Linear can't be reached at mcp.linear.app: offline.")
 

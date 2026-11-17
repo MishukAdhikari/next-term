@@ -60,11 +60,14 @@ public enum MCPHubOverview {
         public var tools: Int
         /// The failure was a 401 asking for a sign-in Next Term doesn't have.
         public var needsSignIn: Bool
+        /// The server wasn't reached at all (MCPHubRemote's `.unreachable`): Next Term tries again on its own (MCPHubReconnect).
+        public var unreachable: Bool
 
-        public init(failure: String?, tools: Int, needsSignIn: Bool = false) {
+        public init(failure: String?, tools: Int, needsSignIn: Bool = false, unreachable: Bool = false) {
             self.failure = failure
             self.tools = tools
             self.needsSignIn = needsSignIn
+            self.unreachable = unreachable
         }
     }
 
