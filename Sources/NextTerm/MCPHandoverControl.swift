@@ -66,7 +66,12 @@ enum MCPHandoverControl {
                               callerTranscript: caller.flatMap(transcript(of:)))
         let excluded = caller.map { [$0.id] } ?? []
         let tabs = openCandidates(excluding: excluded)
-        let projects = Array(Set(AppDelegate.shared.controllers.compactMap(\.project) + AppDelegate.shared.recentProjects))
+        // Each open window's project, or for a window with none (a folder that isn't a repository) its tabs' folders, then
+        // the recent projects: where closed sessions are looked for.
+        let windows = AppDelegate.shared.controllers.flatMap { controller -> [String] in
+            controller.project.map { [$0] } ?? controller.tabs.filter { $0.remote == nil }.map { canonicalPath($0.directory) }
+        }
+        let projects = Array(Set(windows + AppDelegate.shared.recentProjects))
         Task.detached {
             let check = request.callerTranscript.map { userTurns(at: $0) }
             let open = tabs.map { item -> PromptHandover.Candidate in

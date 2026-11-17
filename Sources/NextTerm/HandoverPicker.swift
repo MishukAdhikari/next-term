@@ -58,7 +58,7 @@ final class HandoverPicker: NSWindowController, NSWindowDelegate, NSTableViewDat
         let inner = ApprovalLayout.inner(Self.width)
         let heading = ApprovalLayout.heading("Where should these prompts go?", width: inner)
         let from = SecretApprovalPanel.sanitized(request.from, limit: 80)
-        let lead = ApprovalLayout.secondary("You said prompts typed in the \u{201C}\(from)\u{201D} tab were meant for another session. "
+        let lead = ApprovalLayout.secondary("These prompts were typed in the \u{201C}\(from)\u{201D} tab, meant for another session. "
             + "Next Term types them there when that agent is idle.", width: inner)
 
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("session"))
@@ -124,10 +124,10 @@ final class HandoverPicker: NSWindowController, NSWindowDelegate, NSTableViewDat
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         let candidate = request.candidates[row]
-        let title = NSTextField(labelWithString: SecretApprovalPanel.sanitized(candidate.title.isEmpty ? candidate.project : candidate.title, limit: 120))
+        let title = NSTextField(labelWithString: SecretApprovalPanel.sanitized(Self.name(candidate), limit: 120))
         title.font = .systemFont(ofSize: 13)
         title.lineBreakMode = .byTruncatingTail
-        let state = candidate.open ? "open" : "closed, resumed in a new tab"
+        let state = candidate.open ? "open tab" : "closed, opens in a new tab"
         let detail = NSTextField(labelWithString: "\(candidate.project) \u{00B7} \(candidate.agent) \u{00B7} \(state)")
         detail.font = .systemFont(ofSize: 11)
         detail.textColor = .secondaryLabelColor
@@ -140,6 +140,14 @@ final class HandoverPicker: NSWindowController, NSWindowDelegate, NSTableViewDat
         stack.setAccessibilityElement(true)
         stack.setAccessibilityLabel("\(title.stringValue), \(detail.stringValue)")
         return stack
+    }
+
+    /// A row's name: the session's title, or its project when the title says nothing more than the agent's name.
+    static func name(_ candidate: PromptHandover.Candidate) -> String {
+        let title = candidate.title.trimmingCharacters(in: .whitespaces)
+        let plain = title.lowercased()
+        let agentWords: Set<String> = ["claude", "codex", "cmd", "opencode", "gemini", candidate.agent.lowercased()]
+        return title.isEmpty || agentWords.contains(plain) ? candidate.project : title
     }
 
     // MARK: answers

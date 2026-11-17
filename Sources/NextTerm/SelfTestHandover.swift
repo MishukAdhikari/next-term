@@ -151,7 +151,9 @@ extension SelfTest {
 
         // A target whose agent has ended gets nothing.
         if let xcloud = agents["xcloud"] {
-            xcloud.view.send(txt: "\u{03}")
+            // The stand-in reads raw, so ^C is only a byte to it: its process is ended instead.
+            let group = tcgetpgrp(xcloud.view.process.childfd)
+            if group > 0 { kill(-group, SIGTERM) }
             _ = await wait(10) { !xcloud.status.running }
             let gone = await forward(["prompts": ["check the invoices"], "session": xcloud.id.uuidString.lowercased()])
             check(gone.structured["status"] as? String == "not_moved" && received("xcloud").isEmpty,
