@@ -74,6 +74,22 @@ public enum RunTasks {
         return RunScan(tasks: Array(tasks.prefix(limit)), needs: needs)
     }
 
+    // MARK: ⌘P
+
+    /// ⌘P's Run lines for what is typed there: none unless it starts with "run" (any case, then a space, a colon or
+    /// nothing); then every task whose command holds each word after it, in the group's order. "run" alone lists all.
+    public static func matching(_ tasks: [RunTask], query: String) -> [RunTask] {
+        let text = query.trimmingCharacters(in: .whitespaces).lowercased()
+        guard text.hasPrefix("run") else { return [] }
+        let rest = text.dropFirst(3)
+        guard rest.isEmpty || rest.first == " " || rest.first == ":" else { return [] }
+        let words = rest.split(whereSeparator: { (c: Character) -> Bool in c == " " || c == ":" })
+        return tasks.filter { (task: RunTask) -> Bool in
+            let command = task.command.lowercased()
+            return words.allSatisfy { (word: Substring) -> Bool in command.contains(word) }
+        }
+    }
+
     // MARK: package.json
 
     /// The scripts npm runs by itself around install and publish, and the `pre`/`post` hooks of another script: run

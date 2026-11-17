@@ -154,6 +154,18 @@ import Testing
         #expect(scan(["README.md": "# hi\n"]) == RunScan())
     }
 
+    @Test func commandPListsTasksOnlyAfterRun() {
+        let tasks = scan(["package.json": #"{"scripts": {"dev": "vite", "build": "vite build"}}"#,
+                          "Cargo.toml": "[package]\nname = \"x\"\n"]).tasks
+        #expect(RunTasks.matching(tasks, query: "").isEmpty)
+        #expect(RunTasks.matching(tasks, query: "dev").isEmpty) // a file search stays a file search
+        #expect(RunTasks.matching(tasks, query: "runner").isEmpty)
+        #expect(RunTasks.matching(tasks, query: "run").count == tasks.count)
+        #expect(RunTasks.matching(tasks, query: "Run: dev").map(\.command) == ["npm run dev"])
+        #expect(RunTasks.matching(tasks, query: "run cargo te").map(\.command) == ["cargo test"])
+        #expect(RunTasks.matching(tasks, query: "run nothing").isEmpty)
+    }
+
     @Test func needsComeOnlyFromTheFilesThatNeedATool() {
         #expect(scan(["pyproject.toml": "[project]\nname = \"a\"\n"]).needs.isEmpty)
         #expect(scan(["pyproject.toml": "[project]\nname = \"a\"\n", "uv.lock": ""]).needs == [.uv])
