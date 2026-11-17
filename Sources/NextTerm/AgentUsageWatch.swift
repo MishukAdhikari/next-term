@@ -96,34 +96,40 @@ final class AgentUsageWatch {
     }
 
     nonisolated private static func look(_ probe: Probe, claudePaths: [String: String]) -> Found {
-        let home = probe.home
-        var path: String?
-        var claudeID: String?
-        switch probe.kind {
-        case .claude:
-            guard let id = AgentSessions.sessionID(of: probe.agent, pid: probe.pid, home: home) ?? probe.resumed else { break }
-            claudeID = id
-            if let known = claudePaths[id], FileManager.default.fileExists(atPath: known) {
-                path = known
-            } else if case .success(let only) = AgentTranscript.only(AgentTranscript.candidates(.claude(id: id), home: home,
-                                                                                                 environment: home == NSHomeDirectory() ? ProcessInfo.processInfo.environment : [:])) {
-                path = only
-            }
-        case .codex:
-            for pid in ProcessInspector.family(of: probe.pid).prefix(12) {
-                if let rollout = ProcessInspector.openFiles(of: pid).first(where: { AgentLocation.isCodexRollout($0, home: home) }) {
-                    path = rollout
-                    break
-                }
-            }
-        }
-        guard let path else { return Found(tab: probe.tab, path: nil, size: 0, usage: nil, claudeID: claudeID) }
+        let found = transcriptPath(kind: probe.kind, agent: probe.agent, pid: probe.pid, resumed: probe.resumed, home: probe.home,
+                                   claudePaths: claudePaths)
+        let claudeID = found.claudeID
+        guard let path = found.path else { return Found(tab: probe.tab, path: nil, size: 0, usage: nil, claudeID: claudeID) }
         let size = (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? Int) ?? 0
         if let known = probe.known, known.path == path, known.size == size {
             return Found(tab: probe.tab, path: path, size: size, usage: nil, claudeID: claudeID)
         }
         guard let tail = AgentTranscript.readTail(path) else { return Found(tab: probe.tab, path: path, size: size, usage: .some(nil), claudeID: claudeID) }
         return Found(tab: probe.tab, path: path, size: tail.size, usage: .some(AgentUsage.read(tail: tail.tail, kind: probe.kind)), claudeID: claudeID)
+    }
+
+    /// The transcript a running agent writes: Claude Code's from its session id (its own record of the process, else the
+    /// id the tab's line resumed), Codex's rollout from the files its processes have open. Shared with the live chat
+    /// (LiveChatWatch). `claudePaths`: paths already found, by session id.
+    nonisolated static func transcriptPath(kind: AgentTranscript.Kind, agent: AgentKind, pid: Int32, resumed: String?, home: String,
+                                           claudePaths: [String: String] = [:]) -> (path: String?, claudeID: String?) {
+        switch kind {
+        case .claude:
+            guard let id = AgentSessions.sessionID(of: agent, pid: pid, home: home) ?? resumed else { return (nil, nil) }
+            if let known = claudePaths[id], FileManager.default.fileExists(atPath: known) { return (known, id) }
+            let environment = home == NSHomeDirectory() ? ProcessInfo.processInfo.environment : [:]
+            if case .success(let only) = AgentTranscript.only(AgentTranscript.candidates(.claude(id: id), home: home, environment: environment)) {
+                return (only, id)
+            }
+            return (nil, id)
+        case .codex:
+            for member in ProcessInspector.family(of: pid).prefix(12) {
+                if let rollout = ProcessInspector.openFiles(of: member).first(where: { AgentLocation.isCodexRollout($0, home: home) }) {
+                    return (rollout, nil)
+                }
+            }
+            return (nil, nil)
+        }
     }
 }
 

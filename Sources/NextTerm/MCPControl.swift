@@ -177,7 +177,10 @@ final class MCPControlServer: @unchecked Sendable {
     /// time, whatever tool made it (RemoteMCP, MCPWriteControl, SkillsMCP included), in its JSON's strings too, where
     /// a value's quotes and line breaks are escaped.
     private func send(_ answer: MCPServer.CallResult, on fd: Int32) {
-        let masked = MCPServer.CallResult(text: SecretMask.current.mask(answer: answer.text), isError: answer.isError)
+        // The structured part too (forward_prompt's): masked, and dropped if masking left it unreadable.
+        let structured = answer.structured.map { SecretMask.current.mask(answer: $0) }
+            .flatMap { (try? JSONSerialization.jsonObject(with: Data($0.utf8))) != nil ? $0 : nil }
+        let masked = MCPServer.CallResult(text: SecretMask.current.mask(answer: answer.text), isError: answer.isError, structured: structured)
         let data = MCPServer.encodeAnswer(masked)
         data.withUnsafeBytes { raw in
             var offset = 0
@@ -330,6 +333,7 @@ enum MCPControl {
             if HerdrMCP.route(tool, target, arguments, caller: caller, herdrCaller: herdrCaller, reply: reply) { return }
         }
         switch tool {
+        case "forward_prompt": MainActor.assumeIsolated { MCPHandoverControl.call(arguments, caller: caller, reply: reply) }
         case "list_tabs": reply(listTabs(project: arguments["project"] as? String, caller: caller, herdrCaller: herdrCaller))
         case "list_projects": reply(listProjects())
         case "read_tab":

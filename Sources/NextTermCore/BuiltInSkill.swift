@@ -33,7 +33,7 @@ public struct BuiltInSkill: Sendable, Equatable {
     public static let tabs = BuiltInSkill(name: "next-term-tabs", text: #"""
         ---
         name: next-term-tabs
-        description: Run work in Next Term tabs, one agent each, the user can watch. Use in a Next Term tab when the user asks to run, orchestrate or hand off work with another agent, or "run X in a tab/the next/another tab" (Command Code cmd, Codex, Claude Code, OpenCode, Gemini), or for parallel or background work.
+        description: Run work in Next Term tabs, one agent each, the user can watch. Use in a Next Term tab when the user asks to run, orchestrate or hand off work with another agent or "in the next/another tab" (cmd, Codex, Claude Code, OpenCode, Gemini), for parallel work, or when a prompt was meant for another tab.
         ---
 
         # Parallel work in Next Term tabs
@@ -77,7 +77,11 @@ public struct BuiltInSkill: Sendable, Equatable {
         4. `wait_for_tab` on each, calling again while it says `timed_out`; `read_tab` for its result. When one waits on a question (`state: "attention"`: a trust, update or permission question, or the agent asking something), tell the user here which tab asks what; answer with `answer_agent` only what the user told you to.
         5. Report each result here, one line per tab, with where its changes are. Don't merge branches, close tabs or commit for the user unless they ask.
 
-        Never type into your own tab. If a tab fails or its agent isn't installed, say so and go on with the others.
+        Never type into your own tab. If a tab fails or its agent isn't installed, say so and go on with the others. A tab Next Term brings back after an update or a quit keeps its id.
+
+        ## A prompt meant for another tab
+
+        When the user says prompts they gave you were meant for another session ("wrong tab", "find the cs tab", "I gave you that by mistake"), call `forward_prompt` at once, before any other work. Pass only those prompts, in order and as typed (never the user's words about the mix-up), their words about where they belong as `hint`, and in `note` what you had already done on them. Next Term finds the session, asks the user when more than one fits, and types them there when that agent is idle. Then stop work on them, keep any changes you made, and tell the user where they went and what you had changed. On `not_moved`, ask the user which candidate and call again with its `session`.
         """# + "\n\n" + connectedServers, offersTabs: true,
         when: "when the user asks for work in parallel, in the background or by another agent: an explicit ask is the yes, else offer once")
 
