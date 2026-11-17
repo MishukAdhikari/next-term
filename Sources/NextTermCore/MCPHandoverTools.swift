@@ -20,5 +20,5 @@ extension MCPServer {
     static let handoverOutputSchema = #"{"type": "object", "properties": {"status": {"type": "string", "enum": ["delivered", "not_moved", "pending"]}, "tab_id": {"type": "string"}, "project": {"type": "string"}, "agent": {"type": "string"}, "resumed": {"type": "boolean"}, "candidates": {"type": "array", "items": {"type": "object", "properties": {"id": {"type": "string"}, "project": {"type": "string"}, "agent": {"type": "string"}, "open": {"type": "boolean"}}, "required": ["id", "project", "agent", "open"]}}, "request_id": {"type": "string"}, "note": {"type": "string"}}, "required": ["status"]}"#
 
     /// The arguments forward_prompt takes; any other is refused.
-    static let handoverArguments: Set<String> = ["prompts", "hint", "note", "images", "session", "request_id"]
+    public static let handoverArguments: Set<String> = ["prompts", "hint", "note", "images", "session", "request_id"]
 }

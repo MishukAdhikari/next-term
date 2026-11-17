@@ -144,6 +144,27 @@ public enum PromptHandover {
         "something", "great", "sure", "how", "you", "we", "me", "my", "so", "if", "then", "but", "at", "as", "an",
     ]
 
+    // MARK: only the user's own prompts
+
+    /// Whether `prompt` is one the user typed: found among the user's turns at the tail of the calling agent's transcript,
+    /// compared with spaces and case set aside, as a whole or as the larger part of one turn (an agent may trim the end
+    /// of a long prompt, or the transcript may hold a command's expansion after what was typed).
+    public static func isUsersPrompt(_ prompt: String, among turns: [String]) -> Bool {
+        let wanted = squeezed(prompt)
+        guard !wanted.isEmpty else { return false }
+        for turn in turns {
+            let said = squeezed(turn)
+            if said == wanted || said.contains(wanted) { return true }
+            if wanted.count >= 40, wanted.contains(said), said.count * 4 >= wanted.count * 3 { return true }
+        }
+        return false
+    }
+
+    /// Lowercased, with every run of whitespace one space, trimmed.
+    static func squeezed(_ text: String) -> String {
+        text.lowercased().split(whereSeparator: \.isWhitespace).joined(separator: " ")
+    }
+
     // MARK: what the target is given
 
     /// The text typed into the target: one line on where it came from and what was done there, then the prompts in the
