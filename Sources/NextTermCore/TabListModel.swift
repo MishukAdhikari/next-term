@@ -52,6 +52,10 @@ public struct TabListRow: Equatable, Sendable {
     public var spokenTitle: String?
     /// An agent tab's or pane's context usage, shown as a gauge after the title; nil for any other row.
     public var context: AgentUsage?
+    /// A tab the user pinned (plan 045): its pin shows where the × would.
+    public var pinned = false
+    /// The last pinned tab's row, with unpinned tabs after it: a hairline under it sets the pinned ones apart.
+    public var endsPinnedGroup = false
 
     public init(key: String, kind: Kind = .tab, title: String, truncatesTail: Bool = false, shorterTitles: [String] = [],
                 editableTitle: String? = nil, state: TabState = .idle, tooltip: String = "", spokenStatus: String = "",
@@ -168,9 +172,12 @@ public enum TabListRows {
         /// pane with the keyboard's own.
         public var tooltip: String?
         public var spokenStatus: String?
+        /// The user pinned the tab (plan 045).
+        public var pinned = false
 
         public init(key: String, panes: [Pane], shortcut: String? = nil, place: String? = nil, tooltip: String? = nil,
-                    spokenStatus: String? = nil) {
+                    spokenStatus: String? = nil, pinned: Bool = false) {
+            self.pinned = pinned
             self.key = key
             self.panes = panes
             self.shortcut = shortcut
@@ -189,8 +196,12 @@ public enum TabListRows {
                             now: TimeInterval? = nil) -> [TabListRow] {
         var rows: [TabListRow] = []
         rows.reserveCapacity(tabs.count)
-        for source in tabs {
-            rows.append(tabRow(source, showsFolders: showsFolders, home: home, workingShown: workingShown))
+        let lastPinned = tabs.lastIndex { $0.pinned }
+        for (number, source) in tabs.enumerated() {
+            var row = tabRow(source, showsFolders: showsFolders, home: home, workingShown: workingShown)
+            row.pinned = source.pinned
+            row.endsPinnedGroup = number == lastPinned && number + 1 < tabs.count
+            rows.append(row)
             guard source.panes.count > 1 else {
                 if let pane = source.panes.first { rows += agentRows(pane, showsFolders: showsFolders, home: home, now: now) }
                 continue
