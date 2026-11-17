@@ -723,6 +723,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     private func requestClose(_ tab: TerminalTab, saveAsked: Bool) {
         guard tabs.contains(where: { $0 === tab }) else { return }
+        // A pinned tab's last pane: asked about as the pinned tab (plan 045); a pane of a split pinned tab closes as a pane.
+        if !saveAsked, let group = group(of: tab), group.pinned, !group.isSplit { return askToClosePinned(group) }
         if !saveAsked, asksToSave(closing: tab) {
             return askToSave(closing: [tab]) { [weak self] in self?.requestClose(tab, saveAsked: true) }
         }
@@ -1100,7 +1102,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
                 return TabBarItem(title: AgentSpinner.shown(tab.title), truncation: tab.titleTruncation, state: tab.status.state, tooltip: tab.tooltip,
                                   accessibilityStatus: tab.ownStateDescription ?? "", shortcut: shortcuts[index], remote: tab.remoteMark,
                                   shorterTitles: tab.shorterTitles.map(AgentSpinner.shown), editableTitle: tab.editableTitle,
-                                  context: tab.contextUsage)
+                                  context: tab.contextUsage, pinned: group.pinned)
             }
             // A split tab: named by the pane with the keyboard, marked by the pane that most needs you.
             let lines = group.panes.map(\.paneSummary)
@@ -1114,7 +1116,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
                               tooltip: ([mark?.summary].compactMap { $0 } + lines).joined(separator: "\n"),
                               accessibilityStatus: spoken.joined(separator: "; "), shortcut: shortcuts[index], remote: mark,
                               shorterTitles: tab.shorterTitles.map { AgentSpinner.shown($0) + others }, editableTitle: tab.editableTitle,
-                              context: tab.contextUsage)
+                              context: tab.contextUsage, pinned: group.pinned)
         }
         feedTabStrips(placeMarked(items))
         // An agent started or stopped, or another one is the one Send to Agent types into: the Ask hints follow.
@@ -3082,6 +3084,39 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     /// The smallest a window gets, its top row's room for a system tab bar on top.
     static let minimumSize = NSSize(width: 420, height: 240)
 
+    // MARK: pinned tabs (plan 045)
+
+    /// Pins or unpins `group`: pinned, it moves to just after the tabs pinned before it; unpinned, to just after them.
+    func setPinned(_ group: PaneGroup, _ on: Bool) {
+        guard let from = groups.firstIndex(where: { $0 === group }), group.pinned != on else { return }
+        let flags = groups.map(\.pinned)
+        let to = on ? PinnedTabs.indexWhenPinned(from, pinned: flags) : PinnedTabs.indexWhenUnpinned(from, pinned: flags)
+        group.pinned = on
+        self.tabBar(self.tabBar, didMove: from, to: min(to, groups.count - 1)) // the move keeps the tab in front, and refreshes
+        NSAccessibility.post(element: window as Any, notification: .announcementRequested,
+                             userInfo: [.announcement: on ? "Pinned \(group.focused.title)" : "Unpinned \(group.focused.title)"])
+    }
+
+    /// ⌘W, Close Tab or the tab's close on a pinned tab: asked first, with what closing stops, never a silent no-op.
+    func askToClosePinned(_ group: PaneGroup) {
+        guard let window else { return }
+        let busy = group.panes.filter { $0.closeNote != nil }
+        let kept = Self.keptList(group.panes)
+        let alert = NSAlert()
+        alert.messageText = PinnedTabs.closeQuestion(title: group.focused.title)
+        alert.informativeText = [busy.isEmpty ? "It stays open until you close it here." : Self.stopText("Closing it stops", busy), kept]
+            .filter { !$0.isEmpty }.joined(separator: "\n\n")
+        alert.addButton(withTitle: "Close Tab")
+        alert.addButton(withTitle: "Cancel")
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard response == .alertFirstButtonReturn, let self else { return }
+            if self.closesWindow(group.panes), !self.editorArea.dirtyDocuments.isEmpty || !self.editorArea.draftDatabases.isEmpty {
+                return self.askToSave(closing: group.panes, kept: kept) { [weak self] in group.panes.forEach { self?.remove($0, saveAsked: true) } }
+            }
+            group.panes.forEach { self.remove($0) }
+        }
+    }
+
     // MARK: TabBarViewDelegate
 
     /// Folded to its bar, a click chooses the tab there and the terminal stays folded: opening it on the press would
@@ -3090,6 +3125,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     func tabBar(_ bar: TabBarView, didClose index: Int) {
         guard let group = groups[safe: index] else { return }
+        if group.pinned { return askToClosePinned(group) }
         guard group.isSplit else { return requestClose(group.focused) }
         // The tab's × closes all its panes, asking once if that stops anything (or, as the window's last
         // tab with files or a database value unsaved, about those: the window closes too).
@@ -3110,11 +3146,13 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         }
     }
 
-    func tabBar(_ bar: TabBarView, didMove from: Int, to: Int) {
-        guard groups.indices.contains(from), groups.indices.contains(to) else { return }
+    func tabBar(_ bar: TabBarView, didMove from: Int, to wanted: Int) {
+        guard groups.indices.contains(from), groups.indices.contains(wanted) else { return }
+        // Pinned tabs stay together, first: a drag lands on its own side of the divider.
+        let to = PinnedTabs.clampedMove(from: from, to: wanted, pinned: groups.map(\.pinned))
         let active = activeGroup
         let group = groups.remove(at: from)
-        groups.insert(group, at: to)
+        groups.insert(group, at: min(to, groups.count))
         activeIndex = active.flatMap { a in groups.firstIndex { $0 === a } } ?? 0
         refresh()
     }

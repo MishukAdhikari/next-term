@@ -59,7 +59,7 @@ extension MCPServer {
                      "add_host", "remove_host", "edit_host", "end_session", "new_remote_tab", "install_skill", "remove_skill", "open_in_editor", "show_settings",
                      "propose_edit", "write_file", "create_file", "stage", "commit", "run_command", "focus_tab", "split_pane",
                      "close_pane", "zoom_pane", "set_layout", "settings_set", "apply_import", "undo_import", "apply_setup", "add_task",
-                     "add_mcp_server",
+                     "add_mcp_server", "forward_prompt",
                      "reopen_before_update",
                      "request_secret", "store_secret", "run_with_secrets", "import_secrets",
                      "mcp_tools", "mcp_call"] // they start the user's servers on this Mac

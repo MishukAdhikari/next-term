@@ -565,6 +565,8 @@ final class PaneGroup {
     var focused: TerminalTab
     /// One pane filling the tab, the others kept running behind it.
     var zoomed: TerminalTab?
+    /// The user pinned the tab (plan 045): first in its window, compact, left by bulk closes, asked about before ⌘W.
+    var pinned = false
     /// The tab's content, filling the terminal area.
     let view = NSView()
     private var paneViews: [UUID: PaneView] = [:]

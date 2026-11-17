@@ -307,7 +307,7 @@ extension SelfTest {
                 return item.title
             }
             let edge: String = app.windowColumnOnRight ? "Left" : "Right"
-            check(offered == ["Pin Window Column", "Expand Window Column", "Move to the \(edge) Edge", "—", "Merge All Windows", "—", "Hide Window Column"],
+            check(offered == ["Keep Window Column Open", "Expand Window Column", "Move to the \(edge) Edge", "—", "Merge All Windows", "—", "Hide Window Column"],
                   "window column: a right-click below its top row offers Pin and Expand Window Column and Move to the \(edge) Edge, then Merge All Windows, then Hide",
                   offered.joined(separator: " | "))
         }

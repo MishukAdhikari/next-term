@@ -2401,6 +2401,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         item(shell, "Split Down", #selector(TerminalWindowController.splitDown(_:)), "d", [.command, .shift])
         shell.addItem(.separator())
         item(shell, "Rename Tab…", #selector(TerminalWindowController.renameTab(_:)), "r", [.command, .option])
+        // No default key (plan 045): the user can bind one in Settings › Keyboard Shortcuts.
+        item(shell, "Pin Tab", #selector(TerminalWindowController.togglePinTab(_:)), "")
         item(shell, "Use Option as Meta Key", #selector(toggleOptionAsMeta(_:)), "", target: self)
         shell.addItem(.separator())
         item(shell, "Close Tab", #selector(TerminalWindowController.closeTab(_:)), "w")

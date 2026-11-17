@@ -43,7 +43,8 @@ public final class MCPHubFakeRemote: @unchecked Sendable {
     private var known = Set<String>()
     private var seenList: [Seen] = []
 
-    public init() throws {
+    /// `port`: one to listen on again (a server that went away and came back); 0 for one the system picks.
+    public init(port wanted: UInt16 = 0) throws {
         listener = socket(AF_INET, SOCK_STREAM, 0)
         guard listener >= 0 else { throw POSIXError(.EIO) }
         var yes: Int32 = 1
@@ -51,7 +52,7 @@ public final class MCPHubFakeRemote: @unchecked Sendable {
         var address = sockaddr_in()
         address.sin_family = sa_family_t(AF_INET)
         address.sin_addr.s_addr = inet_addr("127.0.0.1")
-        address.sin_port = 0
+        address.sin_port = wanted.bigEndian
         let bound = withUnsafePointer(to: &address) {
             $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(listener, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
         }
