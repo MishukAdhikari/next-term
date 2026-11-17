@@ -33,7 +33,7 @@ public struct BuiltInSkill: Sendable, Equatable {
     public static let tabs = BuiltInSkill(name: "next-term-tabs", text: #"""
         ---
         name: next-term-tabs
-        description: Run work in Next Term tabs, one agent each, that the user can watch. Use in a Next Term tab when the user asks to orchestrate, hand off or "run X in a tab/the next tab" with another agent (Command Code cmd, Codex, Claude Code, OpenCode, Gemini), or for parallel or background work.
+        description: Run work in Next Term tabs, one agent each, the user can watch. Use in a Next Term tab when the user asks to run, orchestrate or hand off work with another agent, or "run X in a tab/the next/another tab" (Command Code cmd, Codex, Claude Code, OpenCode, Gemini), or for parallel or background work.
         ---
 
         # Parallel work in Next Term tabs
