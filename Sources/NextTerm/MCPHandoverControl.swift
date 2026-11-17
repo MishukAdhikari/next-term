@@ -124,7 +124,7 @@ enum MCPHandoverControl {
             let candidate = PromptHandover.Candidate(id: tab.id.uuidString.lowercased(), open: true, agent: kind?.name ?? tab.status.program,
                                                      folder: folder, title: tab.title)
             let pid = tcgetpgrp(tab.view.process.childfd)
-            let session = kind.flatMap { kind in (pid > 0 ? AgentSessions.sessionID(of: kind, pid: pid) : nil) ?? kind.resumedID(in: tab.status.command) }
+            let session = kind.flatMap { kind in (pid > 0 ? AgentSessions.sessionID(of: kind, pid: pid, home: SessionStore.home) : nil) ?? kind.resumedID(in: tab.status.command) }
             return OpenItem(candidate: candidate, transcript: transcript(of: tab), sessionID: session)
         }
     }
@@ -133,9 +133,9 @@ enum MCPHandoverControl {
     static func transcript(of tab: TerminalTab) -> Transcript? {
         guard tab.remote == nil, let kind = AgentKind(program: tab.status.program) else { return nil }
         let pid = tcgetpgrp(tab.view.process.childfd)
-        let id = (pid > 0 ? AgentSessions.sessionID(of: kind, pid: pid) : nil) ?? kind.resumedID(in: tab.status.command)
+        let id = (pid > 0 ? AgentSessions.sessionID(of: kind, pid: pid, home: SessionStore.home) : nil) ?? kind.resumedID(in: tab.status.command)
         guard case .success(let locator) = AgentTranscript.locate(agent: kind, sessionID: id),
-              case .success(let path) = AgentTranscript.only(AgentTranscript.candidates(locator, home: NSHomeDirectory(),
+              case .success(let path) = AgentTranscript.only(AgentTranscript.candidates(locator, home: SessionStore.home,
                                                                                         environment: ProcessInfo.processInfo.environment))
         else { return nil }
         return Transcript(path: path, kind: locator.kind)
@@ -153,7 +153,7 @@ enum MCPHandoverControl {
         var seen = Set<String>()
         var sessions: [AgentSession] = []
         for project in projects {
-            for session in AgentSessions.list(project: project, perAgent: 20).sessions
+            for session in AgentSessions.list(project: project, home: SessionStore.home, perAgent: 20).sessions
             where (session.agent == .claude || session.agent == .codex) && !session.isRunning && !open.contains(session.id) {
                 if seen.insert(session.identity).inserted { sessions.append(session) }
             }
@@ -285,7 +285,7 @@ enum MCPHandoverControl {
 
     /// Types the session's resume command, then delivers once its agent has started.
     private static func runResume(_ item: ClosedItem, in tab: TerminalTab, then text: String, run: Run) {
-        MCPControl.type(item.session.resumeCommand(), into: tab, submit: true)
+        MCPControl.type(SessionStore.commandPrefix + item.session.resumeCommand(), into: tab, submit: true)
         let deadline = TerminalTab.now + resumeWithin
         func look() {
             if agentRuns(in: tab) { return deliver(text, to: tab, candidate: item.candidate, resumed: true, run: run) }
