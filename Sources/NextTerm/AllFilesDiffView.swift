@@ -431,7 +431,7 @@ final class AllFilesView: NSView, DiffSelectionHost {
                 self.selectionMayHaveChanged()
             }
             block.column = column
-            markComments(entry)
+            markComments(entry, in: column) // entry.block is set once the block is made
         case let .note(text, action):
             let note = AllFilesNote(frame: NSRect(x: 0, y: Self.headerHeight, width: block.bounds.width, height: Self.noteHeight))
             note.autoresizingMask = [.width]
@@ -520,8 +520,8 @@ final class AllFilesView: NSView, DiffSelectionHost {
     /// The window's review comments on a file shown here: every one for uncommitted changes; for the branch's changes
     /// (All), those on the file's lines now, as the new side is the file on disk (the old side is the base's, not
     /// HEAD's); none for a commit's.
-    private func markComments(_ entry: Entry) {
-        guard let column = entry.block?.column else { return }
+    private func markComments(_ entry: Entry, in made: UnifiedColumn? = nil) {
+        guard let column = made ?? entry.block?.column else { return }
         let all = ReviewDraft.existing(window)?.comments ?? []
         let comments: [ReviewComment]
         if isUncommitted(entry.file.path) {
