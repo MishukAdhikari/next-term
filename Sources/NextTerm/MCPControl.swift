@@ -637,6 +637,7 @@ enum MCPControl {
     }
 
     private static func newTab(_ arguments: [String: Any], caller: TerminalTab?, reply: @escaping Reply) {
+        if let raw = arguments["split_beside"] as? String, let herdr = HerdrTarget.parse(raw) { return MainActor.assumeIsolated { HerdrMCP.runBeside(herdr, arguments, caller: caller, reply: reply) } } // plan 040 U4: its folder is on herdr's side
         guard let directory = absolute(arguments["directory"]), isFolder(directory) else {
             return reply(fail("Not a folder (give an absolute path): \(arguments["directory"] as? String ?? "")"))
         }
@@ -661,7 +662,6 @@ enum MCPControl {
         }
         let tab: TerminalTab
         let controller: TerminalWindowController
-        if let raw = arguments["split_beside"] as? String, let herdr = HerdrTarget.parse(raw) { return MainActor.assumeIsolated { HerdrMCP.runBeside(herdr, arguments, caller: caller, reply: reply) } } // plan 040 U4
         if let besideID = arguments["split_beside"] {
             // A pane next to another tab, so the user can watch both.
             guard let beside = findTab(besideID), let owner = self.controller(of: beside) else {
