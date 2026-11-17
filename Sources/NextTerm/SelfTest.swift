@@ -693,6 +693,7 @@ enum SelfTest {
         case "import": return await importPartChecks(c, proj: proj)
         case "rollback": return await rollbackChecks(c)
         case "promptBox": return await promptBoxChecks() // the prompt box under a tab's terminal
+        case "pinnedTabs": return await pinnedTabsChecks() // pinned tabs: first, the pin, bulk closes leave them, ⌘W asks
         case "contextGauge": return await contextGaugeChecks() // an agent tab's context gauge and tooltip line
         case "reviewComments": return await reviewCommentsChecks() // review comments in a diff, sent to the agent as one prompt
         case "sessionPreview": return await sessionPreviewChecks() // ⌥⌘O: the selected session’s last turns beside the list
