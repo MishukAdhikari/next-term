@@ -271,6 +271,7 @@ enum RestoreBuild {
             guard let focused = tabs[group.focused] ?? root.panes.first else { continue }
             let zoomed = group.zoomed.flatMap { (id: UUID) -> TerminalTab? in tabs[id] }
             let built = PaneGroup(root: root, focused: focused, zoomed: zoomed)
+            built.pinned = group.pinned
             let local: [TerminalTab] = built.panes.filter { (tab: TerminalTab) -> Bool in tab.remote == nil }
             controller.insertRestored(built, starting: local)
             if index == window.selected { selected = controller.groups.count - 1 }

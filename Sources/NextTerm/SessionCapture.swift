@@ -65,7 +65,7 @@ enum SessionCapture {
         let project = controller.project
         let groups: [SessionSnapshot.Group] = controller.groups.map { (group: PaneGroup) -> SessionSnapshot.Group in
             SessionSnapshot.Group(root: node(group.root, project: project, scrollback: scrollback), focused: group.focused.id,
-                                  zoomed: group.zoomed?.id)
+                                  zoomed: group.zoomed?.id, pinned: group.pinned)
         }
         var window = SessionSnapshot.Window(project: project, groups: groups, selected: controller.activeIndex)
         // Merged behind another's tab, the window takes the frame, screen and state of the tab in front: they are one.
