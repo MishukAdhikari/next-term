@@ -11,6 +11,8 @@ enum ClosedTabs {
         let remote: RemoteTab?
         /// The window it was in, to come back there while that is open.
         weak var window: TerminalWindowController?
+        /// It was pinned (plan 045): it comes back pinned.
+        var pinned = false
     }
 
     private(set) static var entries: [Entry] = []
@@ -23,7 +25,8 @@ enum ClosedTabs {
     static func remember(_ tab: TerminalTab, in window: TerminalWindowController) {
         if tab.remote == nil, tab.userTitle == nil, tab.status.commandsRun == 0, !tab.leftStartFolder { return }
         let directory = tab.exited ? tab.directory : tab.liveDirectory // an ended shell's process is gone
-        entries.append(Entry(directory: directory, title: tab.userTitle, remote: tab.remote, window: window))
+        entries.append(Entry(directory: directory, title: tab.userTitle, remote: tab.remote, window: window,
+                             pinned: window.group(of: tab).map { $0.pinned && !$0.isSplit } ?? false))
         if entries.count > limit { entries.removeFirst(entries.count - limit) }
     }
 
@@ -178,15 +181,18 @@ extension TerminalWindowController {
         menu.addCommand("Split Right", "splitRight:") { [weak self] in self?.split(group, vertical: true) }
         menu.addCommand("Split Down", "splitDown:") { [weak self] in self?.split(group, vertical: false) }
         menu.addCommand("Duplicate Tab", "duplicateTab:") { [weak self] in self?.duplicate(group) }
+        menu.addCommand(group.pinned ? "Unpin Tab" : "Pin Tab", "togglePinTab:") { [weak self] in self?.setPinned(group, !group.pinned) }
         menu.addItem(.separator())
         menu.addCommand("Close Tab", "closeTab:") { [weak self] in self?.closeGroup(group) }
-        menu.addCommand("Close Other Tabs", "closeOtherTabs:", enabled: groups.count > 1) { [weak self] in
-            guard let self else { return }
-            self.closeTabs(self.groups.filter { $0 !== group })
+        // Pinned tabs stay: Close Other Tabs and Close Tabs to the Right leave them (plan 045).
+        let others = groups.filter { $0 !== group && !$0.pinned }
+        menu.addCommand("Close Other Tabs", "closeOtherTabs:", enabled: !others.isEmpty) { [weak self] in
+            self?.closeTabs(others)
         }
         // Down a tab list, the tabs after it are below it: the same command, named for where they are.
         let after = barShowsTabs ? "Close Tabs to the Right" : "Close Tabs Below"
-        menu.addCommand(after, "closeTabsToTheRight:", enabled: index < groups.count - 1) { [weak self] in
+        let later = groups.dropFirst(index + 1).filter { !$0.pinned }
+        menu.addCommand(after, "closeTabsToTheRight:", enabled: !later.isEmpty) { [weak self] in
             self?.closeTabs(toTheRightOf: group)
         }
         return menu
@@ -212,7 +218,15 @@ extension TerminalWindowController {
 
     private func closeTabs(toTheRightOf group: PaneGroup) {
         guard let index = groups.firstIndex(where: { $0 === group }) else { return }
-        closeTabs(Array(groups.dropFirst(index + 1)))
+        closeTabs(groups.dropFirst(index + 1).filter { !$0.pinned })
+    }
+
+    // MARK: pinned tabs (plan 045)
+
+    /// Window › Pin Tab / Unpin Tab: the tab in front.
+    @objc func togglePinTab(_ sender: Any?) {
+        guard let group = activeGroup, !terminalRailed else { return NSSound.beep() }
+        setPinned(group, !group.pinned)
     }
 
     /// A new tab next to `group`, in the folder of its pane with the keyboard (on its server, for a remote
@@ -329,6 +343,7 @@ extension TerminalWindowController {
             tab.userTitle = title
             refresh()
         }
+        if entry.pinned, let group = group(of: tab) { setPinned(group, true) }
         return tab
     }
 
@@ -338,7 +353,7 @@ extension TerminalWindowController {
             return editorArea.close(editorArea.panes.filter { $0 !== pane }, keeping: pane)
         }
         guard let group = activeGroup, !terminalRailed else { return NSSound.beep() }
-        closeTabs(groups.filter { $0 !== group })
+        closeTabs(groups.filter { $0 !== group && !$0.pinned })
     }
 
     /// File › Close Tabs to the Right: as Close Other Tabs, for the tabs after the one in front.
@@ -380,12 +395,15 @@ extension TerminalWindowController {
             return !ClosedTabs.isEmpty
         case #selector(duplicateTab(_:)):
             return activeGroup != nil
+        case #selector(togglePinTab(_:)):
+            item.title = activeGroup?.pinned == true ? "Unpin Tab" : "Pin Tab"
+            return activeGroup != nil && !editing && !terminalRailed
         case #selector(closeOtherTabs(_:)):
             if editing { return editorArea.panes.count > 1 }
-            return groups.count > 1 && !terminalRailed
+            return groups.contains { $0 !== activeGroup && !$0.pinned } && !terminalRailed // pinned tabs stay
         case #selector(closeTabsToTheRight(_:)):
             if editing { return editorArea.activeIndex + 1 < editorArea.panes.count }
-            return activeIndex + 1 < groups.count && !terminalRailed
+            return groups.dropFirst(activeIndex + 1).contains { !$0.pinned } && !terminalRailed
         case #selector(revealInFinder(_:)), #selector(copyFilePath(_:)), #selector(copyRelativeFilePath(_:)):
             return editorArea.activePath != nil
         default:
