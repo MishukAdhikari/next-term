@@ -517,10 +517,20 @@ final class AllFilesView: NSView, DiffSelectionHost {
         entries.forEach { markComments($0) }
     }
 
-    /// The window's review comments on a file shown here, as a file's own diff marks them: uncommitted changes only.
+    /// The window's review comments on a file shown here: every one for uncommitted changes; for the branch's changes
+    /// (All), those on the file's lines now, as the new side is the file on disk (the old side is the base's, not
+    /// HEAD's); none for a commit's.
     private func markComments(_ entry: Entry) {
         guard let column = entry.block?.column else { return }
-        let comments = isUncommitted(entry.file.path) ? ReviewDraft.existing(window)?.comments ?? [] : []
+        let all = ReviewDraft.existing(window)?.comments ?? []
+        let comments: [ReviewComment]
+        if isUncommitted(entry.file.path) {
+            comments = all
+        } else if case .all = scope {
+            comments = all.filter(\.inFile)
+        } else {
+            comments = []
+        }
         column.mark(ReviewComments.marks(comments, path: canonicalPath((root as NSString).appendingPathComponent(entry.file.path))))
     }
 

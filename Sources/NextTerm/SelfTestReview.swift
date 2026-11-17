@@ -134,7 +134,8 @@ extension SelfTest {
             draft.add(ReviewComment(path: canonicalPath(file.path), lines: 5...5, quoted: "line two", note: "On the page", inFile: true))
             gitDiff.select(path: nil)
             check(await wait(8) { gitDiff.allFiles?.commentedRows(of: "src/app.txt").isEmpty == false },
-                  "review: the All files page marks the commented lines", "\(gitDiff.allFiles?.commentedRows(of: "src/app.txt") ?? [])")
+                  "review: the All files page marks the commented lines",
+                  "page \(gitDiff.allFiles != nil), files \(gitDiff.allFiles?.paths ?? []), scope \(gitDiff.scope), rows \(gitDiff.allFiles?.commentedRows(of: "src/app.txt") ?? [])")
             draft.clear()
         } else {
             check(false, "review: the All files page marks the commented lines", "no Git Diff tab")
