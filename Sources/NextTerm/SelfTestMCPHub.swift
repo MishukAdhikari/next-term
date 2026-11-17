@@ -74,7 +74,9 @@ extension SelfTest {
         ]
         let answers = await bridgeInTab(c, folder: inScope, requests: requests, name: "in", userFile: userFile)
         let names = toolNames(answers[2])
-        check(names == MCPServer.tools.map(\.name) + MCPHubCatalog.tools.map(\.name),
+        // Then the servers' direct tools, <server>__<tool>, once a server's list is known (0.11.52).
+        let ownAndCatalog = MCPServer.tools.map(\.name) + MCPHubCatalog.tools.map(\.name)
+        check(Array(names.prefix(ownAndCatalog.count)) == ownAndCatalog && names.dropFirst(ownAndCatalog.count).allSatisfy { $0.hasPrefix("fake__") },
               "MCP hub: an agent in the server's folder gets the catalog after Next Term's own tools",
               "\(answers.count) answers; last tools: \(names.suffix(4))")
         let listed = resultText(answers[3])
@@ -193,7 +195,10 @@ extension SelfTest {
         ], name: "remote-away", userFile: userFile)
         check(MCPHubControl.lastRuns[key]?.unreachable == true && MCPHubReconnectControl.isWatching(list: userFile, server: "remote"),
               "MCP hub: a server out of reach is watched, to be tried again on its own", resultText(away[2]))
-        check(c.connector.bar.shown?.message.contains("It tries again on its own") == true,
+        let item = c.connector.items.first { $0.server == "remote" }
+        let tries: Bool = { if case .unreachable? = item?.need { return true } else { return false } }()
+        let said = item.flatMap { MCPConnectorAttention.words([$0])?.message } ?? ""
+        check(tries && said.contains("It tries again on its own"),
               "MCP hub: the bar says Next Term tries again on its own", c.connector.bar.shown?.message ?? "no bar")
         guard let back = try? MCPHubFakeRemote(port: port) else { return check(false, "MCP hub: the server comes back at its address") }
         defer { back.stop() }
@@ -201,8 +206,8 @@ extension SelfTest {
         MCPHubReconnectControl.startOver() // as when the network comes back or the Mac wakes
         let reached = await wait(15) { MCPHubControl.lastRuns[key]?.failure == nil && !MCPHubReconnectControl.isWatching(list: userFile, server: "remote") }
         check(reached, "MCP hub: Next Term reaches it again by itself once it is back", "\(String(describing: MCPHubControl.lastRuns[key]))")
-        let connected = await wait(5) { c.connector.bar.shown?.glyph == .done || c.connector.bar.isHidden }
-        check(connected, "MCP hub: the bar says it is connected, then goes", c.connector.bar.shown?.message ?? "hidden")
+        let connected = await wait(5) { !c.connector.items.contains { $0.server == "remote" } }
+        check(connected, "MCP hub: the bar no longer asks about it once it is back", c.connector.bar.shown?.message ?? "hidden")
         if let window = c.window, c.connector.bar.shown?.glyph == .done { await screenshot(window, suffix: "-mcp-hub-reconnected") }
     }
 
