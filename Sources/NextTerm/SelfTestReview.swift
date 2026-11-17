@@ -85,6 +85,18 @@ extension SelfTest {
               "review: Review (2) in the toolbar where it fits, and in the diff's menu", room.review.title)
         check(await wait(3) { diff.commentedLines.right == [2, 35] && diff.commentedLines.left.isEmpty },
               "review: the diff marks the commented lines", "\(diff.commentedLines)")
+        check(diff.shownNotes.right == [2: "Spell it as a digit", 35: "Keep this one"] && diff.shownNotes.left.isEmpty,
+              "review: each note shows after its line", "\(diff.shownNotes)")
+        // The Unified layout marks the same lines and shows the same notes; then side by side again.
+        let layout = DiffLayout.current
+        DiffLayout.current = .unified
+        let unifiedMarked = await wait(5) { diff.unified.column.commentedRows.count == 2 }
+        let unifiedNotes = Set(diff.unified.column.shownNotes.values)
+        check(unifiedMarked && unifiedNotes == ["Spell it as a digit", "Keep this one"],
+              "review: the Unified layout marks the commented lines, with their notes",
+              "rows \(diff.unified.column.commentedRows), notes \(diff.unified.column.shownNotes)")
+        DiffLayout.current = layout
+        _ = await wait(5) { !diff.showsUnified || layout == .unified }
 
         // Three lines added at the top, the second comment's line changed: the first follows, the second is outdated.
         var moved = ["new 1", "new 2", "new 3"] + lines
@@ -116,5 +128,16 @@ extension SelfTest {
               && text.contains("Keep this one") && text.hasPrefix("\u{1b}[200~Review comments on your changes:"),
               "review: it goes to the program as one paste, then Return", text.debugDescription)
         check(draft.comments.isEmpty && room.review.isHidden, "review: sent, the review is empty and Review is gone")
+
+        // The All files page marks a commented file's lines too.
+        if let gitDiff = holder.editorArea.activeGitDiff {
+            draft.add(ReviewComment(path: canonicalPath(file.path), lines: 5...5, quoted: "line two", note: "On the page", inFile: true))
+            gitDiff.select(path: nil)
+            check(await wait(8) { gitDiff.allFiles?.commentedRows(of: "src/app.txt").isEmpty == false },
+                  "review: the All files page marks the commented lines", "\(gitDiff.allFiles?.commentedRows(of: "src/app.txt") ?? [])")
+            draft.clear()
+        } else {
+            check(false, "review: the All files page marks the commented lines", "no Git Diff tab")
+        }
     }
 }
