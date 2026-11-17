@@ -392,3 +392,27 @@ final class ClosureMenuItem: NSMenuItem {
 
     @objc private func runAction() { run() }
 }
+
+/// A review comment's note after the last line it is on, in a diff: a quiet pill in the row, past the line's text,
+/// that is drawn, not typed (it is not in the text, so it is never selected, copied or sent).
+enum ReviewNoteDrawing {
+    static let font = NSFont.systemFont(ofSize: 11)
+
+    /// Draws `note` in `band` (the row), starting `gap` points after `textEnd`, cut to what fits before `limit`.
+    static func draw(_ note: String, in band: NSRect, after textEnd: CGFloat, limit: CGFloat) {
+        let x = textEnd + 24
+        guard limit - x > 40 else { return }
+        let style = NSMutableParagraphStyle()
+        style.lineBreakMode = .byTruncatingTail
+        let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: Theme.textDim, .paragraphStyle: style]
+        let text = NSAttributedString(string: note, attributes: attributes)
+        let width = min(ceil(text.size().width) + 14, limit - x)
+        let height = min(band.height - 2, 17)
+        let pill = NSRect(x: x, y: band.midY - height / 2, width: width, height: height)
+        Theme.accent.withAlphaComponent(0.16).setFill()
+        NSBezierPath(roundedRect: pill, xRadius: 4, yRadius: 4).fill()
+        let textHeight = ceil(font.ascender - font.descender)
+        text.draw(with: NSRect(x: pill.minX + 7, y: pill.midY - textHeight / 2, width: pill.width - 14, height: textHeight),
+                  options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
+    }
+}
