@@ -391,12 +391,15 @@ extension TerminalWindowController {
             return !ClosedTabs.isEmpty
         case #selector(duplicateTab(_:)):
             return activeGroup != nil
+        case #selector(togglePinTab(_:)):
+            item.title = activeGroup?.pinned == true ? "Unpin Tab" : "Pin Tab"
+            return activeGroup != nil && !editing && !terminalRailed
         case #selector(closeOtherTabs(_:)):
             if editing { return editorArea.panes.count > 1 }
-            return groups.count > 1 && !terminalRailed
+            return groups.contains { $0 !== activeGroup && !$0.pinned } && !terminalRailed // pinned tabs stay
         case #selector(closeTabsToTheRight(_:)):
             if editing { return editorArea.activeIndex + 1 < editorArea.panes.count }
-            return activeIndex + 1 < groups.count && !terminalRailed
+            return groups.dropFirst(activeIndex + 1).contains { !$0.pinned } && !terminalRailed
         case #selector(revealInFinder(_:)), #selector(copyFilePath(_:)), #selector(copyRelativeFilePath(_:)):
             return editorArea.activePath != nil
         default:

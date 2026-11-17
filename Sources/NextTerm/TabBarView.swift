@@ -27,6 +27,8 @@ struct TabBarItem: Equatable {
     var place: String? = nil
     /// Agent tabs: how full the agent's context is, shown as a small gauge after the title.
     var context: AgentUsage? = nil
+    /// Terminal tabs: pinned (plan 045). A pin stands where the × would, and a divider follows the last pinned tab.
+    var pinned = false
 }
 
 protocol TabBarViewDelegate: AnyObject {
@@ -223,6 +225,16 @@ final class TabBarView: NSView, ProjectGlowing {
     var onTopRowMenu: (() -> NSMenu?)?
 
     private(set) var items: [TabBarItem] = []
+    /// The hairline between pinned tabs and the rest.
+    private let pinDivider: NSView = {
+        let line = NSView()
+        line.wantsLayer = true
+        line.layer?.backgroundColor = Theme.textDim.withAlphaComponent(0.35).cgColor
+        line.setAccessibilityElement(false)
+        return line
+    }()
+    /// For the self-test: the divider after the pinned tabs shows.
+    var showsPinDivider: Bool { pinDivider.superview != nil && !pinDivider.isHidden }
     private(set) var selectedIndex = 0
     private var tabViews: [TabItemView] = []
     private let newTabButton = NSButton()
@@ -433,6 +445,16 @@ final class TabBarView: NSView, ProjectGlowing {
         for (i, view) in tabViews.enumerated() where view !== dragging?.view {
             view.isHidden = !range.contains(i)
             if !view.isHidden { view.frame = frameForTab(at: i) }
+        }
+        // A hairline after the last pinned tab, while unpinned tabs follow it on screen (plan 045).
+        let lastPinned = items.lastIndex { $0.pinned }
+        if let lastPinned, range.contains(lastPinned), lastPinned + 1 < range.upperBound {
+            if pinDivider.superview == nil { addSubview(pinDivider) }
+            pinDivider.isHidden = false
+            let edge = frameForTab(at: lastPinned).maxX
+            pinDivider.frame = NSRect(x: edge, y: 7, width: 1, height: max(0, bounds.height - 15))
+        } else {
+            pinDivider.isHidden = true
         }
         var x = tabsStart + CGFloat(range.count) * tabWidth
         sidebarButton.frame = NSRect(x: leadingInset + room(sidebarHint), y: 0, width: Self.sidebarButtonWidth, height: bounds.height - 1)
@@ -762,6 +784,12 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
         closeButton.action = #selector(closeClicked)
         closeTip = ShortcutToolTip(closeButton, "Close tab", #selector(TerminalWindowController.closeTab(_:)))
         addSubview(closeButton)
+        pinView.image = NSImage(systemSymbolName: "pin.fill", accessibilityDescription: "Pinned")?
+            .withSymbolConfiguration(.init(pointSize: 9, weight: .semibold))
+        pinView.contentTintColor = Theme.textDim
+        pinView.isHidden = true
+        pinView.toolTip = "Pinned: Close Other Tabs leaves it, and closing it asks first."
+        addSubview(pinView)
         KeyHint.style(hint) // said in the tab's own help, as the buttons' keys are in theirs
         hint.isHidden = true
         addSubview(hint)
@@ -776,6 +804,9 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
     override var mouseDownCanMoveWindow: Bool { false }
 
     private var item: TabBarItem?
+    private let pinView = NSImageView()
+    /// For the self-test: the tab shows its pin.
+    var showsPin: Bool { !pinView.isHidden }
     var shownShortcut: String? { hint.isHidden ? nil : hint.stringValue }
     var titleFont: NSFont? { label.font }
     var titleColor: NSColor? { label.textColor }
@@ -815,7 +846,7 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
         selected = isSelected
         // "web-1: app (connecting), Remote: web-1 (deploy@203.0.113.5), connecting": a state that is only
         // the connection's comes once, in the remote part.
-        let spoken = [newItem.title, newItem.accessibilityStatus, newItem.remote?.summary ?? "", newItem.place ?? ""]
+        let spoken = [newItem.title, newItem.pinned ? "pinned" : "", newItem.accessibilityStatus, newItem.remote?.summary ?? "", newItem.place ?? ""]
         setAccessibilityLabel(spoken.filter { !$0.isEmpty }.joined(separator: ", "))
         setAccessibilityValue(isSelected)
         refresh()
@@ -830,7 +861,11 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
         remoteMark.tint = label.textColor ?? Theme.textDim
         // Unsaved: a dot that turns into the close button under the pointer.
         let modified = item?.modified == true
-        let closeHidden = !(selected || hovering || modified)
+        // Pinned: the pin, never the × (closing it is asked about from ⌘W or the menu).
+        let pinned = item?.pinned == true
+        pinView.isHidden = !pinned
+        pinView.contentTintColor = label.textColor ?? Theme.textDim
+        let closeHidden = pinned || !(selected || hovering || modified)
         if closeButton.isHidden != closeHidden {
             closeButton.isHidden = closeHidden
             needsLayout = true // the shortcut moves into its place, or out of it
@@ -849,6 +884,7 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
         dot.frame = NSRect(x: 12, y: (h - 10) / 2, width: 10, height: 10)
         iconView.frame = NSRect(x: 10, y: (h - 16) / 2, width: 16, height: 16)
         closeButton.frame = NSRect(x: bounds.width - 24, y: (h - 18) / 2, width: 18, height: 18)
+        pinView.frame = closeButton.frame
         // A remote tab: the status mark keeps its column (the same place on every tab), and the server
         // mark goes before the title, like an icon of the title.
         // Its server sits on the title's centre line; the dot hangs a point lower.
@@ -874,7 +910,7 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
         // would say less, and a pointer passing over it would drop and add "web-1: " or "(connecting)".
         let restWidth = titleWidth(hintEnd: hintEnd(closeShown: false))
         let words = fittedTitle(within: restWidth)
-        var shownHintEnd = hintEnd(closeShown: !closeButton.isHidden)
+        var shownHintEnd = hintEnd(closeShown: !closeButton.isHidden || !pinView.isHidden)
         if item?.shorterTitles.isEmpty == false, let words, fits(words, within: restWidth),
            !fits(words, within: titleWidth(hintEnd: shownHintEnd)) {
             shownHintEnd = nil
