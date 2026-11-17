@@ -391,6 +391,13 @@ enum HerdrAgentMenu {
         // herdr's own verbs (plan 040): its name (agent rename), a new agent beside it (pane split, agent start).
         add("Rename…", #selector(Target.rename(_:)), agent)
         add("New Agent Beside…", #selector(Target.newBeside(_:)), agent)
+        // Its place in herdr (U5, U6, U7): zoom, its own tab, its tab's and workspace's names, a worktree beside it.
+        let listed = tab.herdrTracker.agents.first { $0.paneID == pane }
+        add("Zoom in herdr", #selector(Target.zoom(_:)), agent)
+        add("Move to a New herdr Tab", #selector(Target.moveToNewTab(_:)), agent)
+        add("Rename herdr Tab…", #selector(Target.renameHerdrTab(_:)), agent, enabled: listed?.tabID != nil)
+        add("Rename herdr Workspace…", #selector(Target.renameWorkspace(_:)), agent, enabled: listed?.workspaceID != nil)
+        add("New Worktree Workspace…", #selector(Target.newWorktree(_:)), agent, enabled: listed?.directory != nil)
         menu.addItem(.separator())
         // Next Term's own flag: herdr's state stays as it is. Not for an agent at work or waiting on a decision.
         let unread = tab.herdrTracker.isUnread(pane)
@@ -458,6 +465,17 @@ enum HerdrAgentMenu {
         @objc func newBeside(_ sender: NSMenuItem) {
             guard let choice = sender.representedObject as? AgentChoice, let tab = choice.tab, !tab.exited else { return NSSound.beep() }
             MainActor.assumeIsolated { HerdrAgentActions.newAgent(tab: tab, beside: choice.pane) }
+        }
+
+        @objc func zoom(_ sender: NSMenuItem) { act(sender) { HerdrAgentActions.zoom(tab: $0, pane: $1) } }
+        @objc func moveToNewTab(_ sender: NSMenuItem) { act(sender) { HerdrAgentActions.moveToNewTab(tab: $0, pane: $1) } }
+        @objc func renameHerdrTab(_ sender: NSMenuItem) { act(sender) { HerdrAgentActions.renameContainer(tab: $0, pane: $1, workspace: false) } }
+        @objc func renameWorkspace(_ sender: NSMenuItem) { act(sender) { HerdrAgentActions.renameContainer(tab: $0, pane: $1, workspace: true) } }
+        @objc func newWorktree(_ sender: NSMenuItem) { act(sender) { HerdrAgentActions.newWorktree(tab: $0, pane: $1) } }
+
+        private func act(_ sender: NSMenuItem, _ body: @MainActor (TerminalTab, String) -> Void) {
+            guard let choice = sender.representedObject as? AgentChoice, let tab = choice.tab, !tab.exited else { return NSSound.beep() }
+            MainActor.assumeIsolated { body(tab, choice.pane) }
         }
 
         @objc func keepUnread(_ sender: NSMenuItem) {

@@ -15,6 +15,9 @@ extension HerdrMCP {
 
     @MainActor static func recordOpener(_ id: String, caller: TerminalTab?) { openers[id] = openerKey(caller) }
 
+    /// Who started or made the agent, pane, tab or workspace with this id over MCP, as recordOpener keeps it.
+    @MainActor static func openerOf(_ id: String) -> String? { openers[id] }
+
     private static func failure(_ text: String) -> MCPServer.CallResult { MCPControl.fail(text) }
     private static func success(_ value: Any) -> MCPServer.CallResult { MCPControl.ok(value) }
 

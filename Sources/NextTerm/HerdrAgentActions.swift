@@ -86,6 +86,66 @@ enum HerdrAgentActions {
         }
     }
 
+    // MARK: plan 040 U5–U7
+
+    /// Zoom in herdr: the agent's pane fills its herdr tab, or its tab shows every pane again (`pane zoom --toggle`).
+    static func zoom(tab: TerminalTab, pane: String) {
+        run(.zoom(pane: pane, on: nil), in: tab, failing: "Couldn’t zoom the pane")
+    }
+
+    /// Move to a New herdr Tab: the agent's pane gets a herdr tab of its own (`pane move --new-tab`).
+    static func moveToNewTab(tab: TerminalTab, pane: String) {
+        run(.move(pane: pane, toTab: nil), in: tab, failing: "Couldn’t move the pane")
+    }
+
+    /// Rename herdr Tab… or Rename herdr Workspace…: the agent's herdr tab's or workspace's label.
+    static func renameContainer(tab: TerminalTab, pane: String, workspace: Bool) {
+        let agent = tab.herdrTracker.agents.first { $0.paneID == pane }
+        guard let id = workspace ? agent?.workspaceID : agent?.tabID else { return NSSound.beep() }
+        let field = NSTextField(string: "")
+        field.placeholderString = workspace ? "Workspace name" : "Tab name"
+        field.frame = NSRect(x: 0, y: 0, width: 260, height: 24)
+        let alert = NSAlert()
+        alert.messageText = workspace ? "Rename the herdr workspace" : "Rename the herdr tab"
+        alert.informativeText = "herdr's name for \(workspace ? "workspace" : "tab") \(id), which holds this agent."
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Rename")
+        alert.addButton(withTitle: "Cancel")
+        present(alert, in: tab, focus: field) { response in
+            guard response == .alertFirstButtonReturn else { return }
+            let label: String = field.stringValue.trimmingCharacters(in: .whitespaces)
+            run(workspace ? .renameWorkspace(workspace: id, label: label) : .renameTab(tab: id, label: label), in: tab, failing: "Couldn’t rename it")
+        }
+    }
+
+    /// New Worktree Workspace…: a branch name, then herdr makes a git worktree of the agent's repository on it, in a
+    /// workspace of its own (`worktree create`), trusting the repository for that request: the user asked for it here.
+    static func newWorktree(tab: TerminalTab, pane: String) {
+        guard let folder = tab.herdrTracker.agents.first(where: { $0.paneID == pane })?.directory else { return NSSound.beep() }
+        let field = NSTextField(string: "")
+        field.placeholderString = "Branch, such as fix/login"
+        field.frame = NSRect(x: 0, y: 0, width: 260, height: 24)
+        let alert = NSAlert()
+        alert.messageText = "New git worktree in herdr"
+        alert.informativeText = "herdr makes a worktree of the repository at \(folder) on a new branch, in a herdr workspace of its own."
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Create")
+        alert.addButton(withTitle: "Cancel")
+        present(alert, in: tab, focus: field) { response in
+            guard response == .alertFirstButtonReturn else { return }
+            run(.newWorktree(directory: folder, branch: field.stringValue.trimmingCharacters(in: .whitespaces)), in: tab, failing: "Couldn’t make the worktree")
+        }
+    }
+
+    /// herdr runs `command` in the tab's herdr; a sheet says why when it did not.
+    private static func run(_ command: HerdrCommand, in tab: TerminalTab, failing title: String) {
+        if let refusal = command.refusal(session: nil) { return say(title, refusal, in: tab) }
+        HerdrRunner.run(command, for: tab) { result in
+            guard let problem = HerdrMCP.problem(result, pane: "", sent: false) else { return }
+            MainActor.assumeIsolated { say(title, problem, in: tab) }
+        }
+    }
+
     private static func present(_ alert: NSAlert, in tab: TerminalTab, focus: NSView, then: @escaping (NSApplication.ModalResponse) -> Void) {
         shown = alert
         let done: (NSApplication.ModalResponse) -> Void = { response in

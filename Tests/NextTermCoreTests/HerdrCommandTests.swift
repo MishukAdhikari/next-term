@@ -15,7 +15,11 @@ import Testing
         .split(pane: "w1:p1", direction: .right, directory: "/srv/app"), .split(pane: "w1:p1", direction: .down, directory: nil),
         .waitAgent(pane: "w1:p1", states: ["idle", "blocked"], timeout: 30_000), .waitOutput(pane: "w1:p1", regex: false, timeout: 5000),
         .waitOutput(pane: "w1:p1", regex: true, timeout: 5000), .rename(pane: "w1:p1", name: "reviewer"), .rename(pane: "w1:p1", name: nil),
-        .run(pane: "w1:p2"),
+        .run(pane: "w1:p2"), .zoom(pane: "w1:p1", on: true), .zoom(pane: "w1:p1", on: nil), .focusNeighbor(pane: "w1:p1", direction: .left),
+        .move(pane: "w1:p3", toTab: "w1:t1"), .move(pane: "w1:p3", toTab: nil), .snapshot, .renameTab(tab: "w1:t2", label: "builds"),
+        .closeTab(tab: "w1:t2"), .focusTab(tab: "w1:t2"), .focusWorkspace(workspace: "w2"), .renameWorkspace(workspace: "w2", label: "repo"),
+        .closeWorkspace(workspace: "w2"), .newWorkspace(directory: "/srv/app", label: "app"), .worktrees(directory: "/srv/app"),
+        .newWorktree(directory: "/srv/app", branch: "fix/login"), .removeWorktree(workspace: "w3"),
     ]
 
     /// The words of each herdr call in a script (`nt_call LABEL WORDS…`), unquoted as sh reads them.
@@ -100,12 +104,12 @@ import Testing
         }
         // Nothing that makes or changes herdr's own things is in the list, nor anything that stops a session or a server, and
         // of herdr's machines only the list. One agent is ended (pane close) only after Approve on the Mac (010a U6b). Plan
-        // 040 adds, case by case: agent rename (U3) and pane run (U4, after Approve).
+        // 040 adds, case by case: agent rename (U3), pane run (U4, after Approve), and tab and workspace close and create
+        // and worktree create and remove (U6, U7, after Approve).
         let flat = HerdrCommand.allowed.map { $0.joined(separator: " ") }
         #expect(flat.contains("pane close") && flat.contains("agent rename") && flat.contains("pane run"))
         #expect(!HerdrCommand.allowedOnMachine.contains(["pane", "close"]) && !HerdrCommand.closePane(pane: "w1:p1").goesToMachines)
-        for never in ["server", "session stop", "session delete", "session attach",
-                      "tab close", "workspace create", "update", "integration", "plugin", "worktree",
+        for never in ["server", "session stop", "session delete", "session attach", "update", "integration", "plugin",
                       "machine add", "machine remove", "machine rename", "machine enable", "machine disable", "machine status",
                       "machine reconnect"] {
             #expect(!flat.contains { $0.hasPrefix(never) }, "\(never)")
