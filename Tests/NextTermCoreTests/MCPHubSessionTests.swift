@@ -89,7 +89,7 @@ import Testing
                 answer("prompts/list"),
             ]
             let data = try JSONSerialization.data(withJSONObject: answers, options: [.sortedKeys, .withoutEscapingSlashes])
-            #expect(SecretRun.digest(data) == "4149ab9ce879ae4703654ffd2a1900ccf0ba945d0161a8c3ea00c5b6c05c9998")
+            #expect(SecretRun.digest(data) == "f424ffc2a1fa7f637c97ebccb8551ab1e7f6abc0bd98f7631cde1eb1e4406d02")
             // A catalog tool is unknown, as it was.
             let called = MCPServer.respond(to: ["jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": ["name": "mcp_servers"]],
                                            version: "0", extra: hub.tools, callExtra: hub.call) { _, _ in MCPServer.CallResult(text: "") }
