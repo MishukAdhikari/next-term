@@ -337,7 +337,8 @@ final class TabListRowView: NSView, NSTextFieldDelegate {
         // "⌘N" ends 14 points from the edge, in the ×'s place, as long as the title keeps 40 points to be read
         // (the bar's rule without its ×). Every tab row leaves the widest key's room, so they all decide alike.
         let closeX: CGFloat = w - 24
-        let hintEnd: CGFloat = w - 14
+        // A pinned tab's pin keeps the ×'s place: its key ends just before the pin.
+        let hintEnd: CGFloat = row.pinned && !pane ? closeX - 4 : w - 14
         let keyRoom: CGFloat = max(hintWidth, listHintWidth)
         let keysShow: Bool = !pane && listHintWidth > 0 && hintEnd - listHintWidth - 6 - labelX >= 40
         hintFits = keysShow && hintWidth > 0
