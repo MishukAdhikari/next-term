@@ -354,7 +354,7 @@ final class MCPServersSettingsView: NSView, NSTableViewDataSource, NSTableViewDe
             let cell = MCPStateCell()
             let checking = isChecking(row)
             cell.show(cellText(row, column: "state"), indicator: checking ? .unchecked : MCPHubOverview.indicator(row.state),
-                      tip: checking ? "Next Term is reaching it now." : MCPHubOverview.stateTip(row.state, remote: row.isRemote))
+                      tip: checking ? "Next Term is reaching it now." : MCPHubOverview.stateTip(row.state, remote: row.isRemote) + retrying(row))
             return cell
         }
         let cell = NSTextField(labelWithString: cellText(row, column: column.identifier.rawValue))
@@ -423,9 +423,15 @@ final class MCPServersSettingsView: NSView, NSTableViewDataSource, NSTableViewDe
         updateButtons()
     }
 
+    /// For a server out of reach that Next Term tries again on its own (MCPHubReconnectControl): when it does.
+    private func retrying(_ row: MCPHubOverview.Row) -> String {
+        MCPHubReconnectControl.isWatching(list: row.list, server: row.name)
+            ? " Next Term tries again on its own while it\u{2019}s open, and at once when the network comes back." : ""
+    }
+
     private func updateButtons() {
         let row = selected
-        var said = row.map { MCPHubOverview.stateTip($0.state, remote: $0.isRemote) } ?? ""
+        var said = row.map { MCPHubOverview.stateTip($0.state, remote: $0.isRemote) + retrying($0) } ?? ""
         let signedIn = row.flatMap { $0.isRemote ? $0.server.flatMap { MCPHubSignIns.record(for: $0.url) } : nil }
         var allowed = false // Change… goes with the agents it names, never beside a lapse, whose one action is Reconnect…
         if let signedIn, case .signedIn = row?.state {

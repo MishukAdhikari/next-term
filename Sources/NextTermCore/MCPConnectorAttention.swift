@@ -128,7 +128,8 @@ public enum MCPConnectorAttention {
             return Words(message: "\(server) needs more access for \(who ?? "your agents")\(named).", primary: "Allow More Access",
                          action: .signIn, glyph: .needsYou)
         case .unreachable(let why):
-            let message = who.map { "Next Term can\u{2019}t reach \(server) for \($0)." } ?? "Next Term can\u{2019}t reach \(server)."
+            let message = (who.map { "Next Term can\u{2019}t reach \(server) for \($0)." } ?? "Next Term can\u{2019}t reach \(server).")
+                + " It tries again on its own."
             return Words(message: message, primary: "Retry Now", action: .retry, glyph: .offline, detail: line(why))
         case .didntStart(let why):
             let reason = line(why)

@@ -74,7 +74,9 @@ extension SelfTest {
         ]
         let answers = await bridgeInTab(c, folder: inScope, requests: requests, name: "in", userFile: userFile)
         let names = toolNames(answers[2])
-        check(names == MCPServer.tools.map(\.name) + MCPHubCatalog.tools.map(\.name),
+        // Then the servers' direct tools, <server>__<tool>, once a server's list is known (0.11.52).
+        let ownAndCatalog = MCPServer.tools.map(\.name) + MCPHubCatalog.tools.map(\.name)
+        check(Array(names.prefix(ownAndCatalog.count)) == ownAndCatalog && names.dropFirst(ownAndCatalog.count).allSatisfy { $0.hasPrefix("fake__") },
               "MCP hub: an agent in the server's folder gets the catalog after Next Term's own tools",
               "\(answers.count) answers; last tools: \(names.suffix(4))")
         let listed = resultText(answers[3])
@@ -176,7 +178,37 @@ extension SelfTest {
         check(ran == MCPHubOverview.Run(failure: nil, tools: 3) && refused?.failure?.contains("HTTP 401") == true
                 && refused?.needsSignIn == false,
               "MCP hub: Settings shows the remote servers ready and failed, with why", "\(String(describing: ran)) \(String(describing: refused))")
+        await reconnectChecks(c, open: open, folder: folder, userFile: userFile, initialize: initialize)
         for name in ["remote", "locked", "asks"] { _ = MCPHubScope.save(.remove(name), to: userFile, place: .user) }
+    }
+
+    /// A server out of reach is tried again on its own (MCPHubReconnectControl): it goes away, an agent's call can't reach
+    /// it and the bar at the foot of the window says so, it comes back at the same address, and once the network is back
+    /// (here, as if) Next Term reaches it by itself: Settings' state is reached again and the bar says it is connected.
+    private static func reconnectChecks(_ c: TerminalWindowController, open: MCPHubFakeRemote, folder: URL, userFile: String,
+                                        initialize: [String: Any]) async {
+        let port = open.port
+        open.stop()
+        let key = MCPHubOverview.runKey(list: userFile, server: "remote")
+        let away = await bridgeInTab(c, folder: folder, requests: [
+            initialize, ["jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": ["name": "mcp_call", "arguments": ["server": "remote", "tool": "echo", "arguments": ["say": "hi"]]]],
+        ], name: "remote-away", userFile: userFile)
+        check(MCPHubControl.lastRuns[key]?.unreachable == true && MCPHubReconnectControl.isWatching(list: userFile, server: "remote"),
+              "MCP hub: a server out of reach is watched, to be tried again on its own", resultText(away[2]))
+        let item = c.connector.items.first { $0.server == "remote" }
+        let tries: Bool = { if case .unreachable? = item?.need { return true } else { return false } }()
+        let said = item.flatMap { MCPConnectorAttention.words([$0])?.message } ?? ""
+        check(tries && said.contains("It tries again on its own"),
+              "MCP hub: the bar says Next Term tries again on its own", c.connector.bar.shown?.message ?? "no bar")
+        guard let back = try? MCPHubFakeRemote(port: port) else { return check(false, "MCP hub: the server comes back at its address") }
+        defer { back.stop() }
+        back.sessions = true
+        MCPHubReconnectControl.startOver() // as when the network comes back or the Mac wakes
+        let reached = await wait(15) { MCPHubControl.lastRuns[key]?.failure == nil && !MCPHubReconnectControl.isWatching(list: userFile, server: "remote") }
+        check(reached, "MCP hub: Next Term reaches it again by itself once it is back", "\(String(describing: MCPHubControl.lastRuns[key]))")
+        let connected = await wait(5) { !c.connector.items.contains { $0.server == "remote" } }
+        check(connected, "MCP hub: the bar no longer asks about it once it is back", c.connector.bar.shown?.message ?? "hidden")
+        if let window = c.window, c.connector.bar.shown?.glyph == .done { await screenshot(window, suffix: "-mcp-hub-reconnected") }
     }
 
     /// Runs `nxtrm mcp` in a new tab in `folder`, as an agent there starts it, with `requests` on its stdin and the
