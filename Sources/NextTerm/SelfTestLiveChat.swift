@@ -79,7 +79,7 @@ extension SelfTest {
 
         pane.chatStrip.chatButton.performClick(nil)
         guard await wait(3, { pane.showsChat }), let chat = pane.liveChat else { return check(false, "live chat: the chat button shows the chat") }
-        let shown = await wait(5) { chat.shownBlocks.count >= 7 }
+        let shown = await wait(5) { chat.shownBlocks.count >= 6 } // prompt, thought, two tools, the change, the reply
         let words = chat.shownBlocks.map { "\($0.content)" }.joined(separator: " | ")
         check(shown && words.contains("Tidy the readme") && words.contains("read_file(README.md)") && words.contains("new words"),
               "live chat: the chat shows the session: the prompt, reasoning, tool rows, the edit and the reply", words)
