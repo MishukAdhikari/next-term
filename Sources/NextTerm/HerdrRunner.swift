@@ -58,7 +58,7 @@ enum HerdrRunner {
                                 timeout: TimeInterval, completion: @escaping (HerdrResult, String?) -> Void) {
         // A machine has its own herdr session, and herdr's list of machines is no session's: the client's session is not
         // passed with either, which herdr would refuse.
-        let session = machine == nil && command != .machines ? client.session : nil
+        let session = machine == nil && !command.takesNoSession ? client.session : nil
         guard let attempts = command.argv(executable: client.executable, session: session, machine: machine, text: input) else {
             let refusal = command.refusal(session: session, machine: machine) ?? "That herdr command cannot be built."
             return completion(.error(code: "", message: refusal), nil)

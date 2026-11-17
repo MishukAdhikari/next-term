@@ -78,6 +78,10 @@ public struct BuiltInSkill: Sendable, Equatable {
         5. Report each result here, one line per tab, with where its changes are. Don't merge branches, close tabs or commit for the user unless they ask.
 
         Never type into your own tab. If a tab fails or its agent isn't installed, say so and go on with the others.
+
+        ## Inside herdr
+
+        If you run in a herdr pane (`HERDR_PANE_ID` is set), herdr's own skill (`herdr --skill`) covers splitting your herdr tab and starting agents beside you there. Next Term's tools reach the same herdr from outside: `start_agent` (`split_beside`, `worktree`), `new_tab` with `split_beside` a herdr pane's id, `wait_for_tab` (`until`, `match`), and `list_tabs` with `herdr_layout`. Use Next Term's for work across windows or hosts.
         """# + "\n\n" + connectedServers, offersTabs: true,
         when: "when the user asks for work in parallel, in the background or by another agent: an explicit ask is the yes, else offer once")
 

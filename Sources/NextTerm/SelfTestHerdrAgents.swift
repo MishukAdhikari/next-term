@@ -64,6 +64,7 @@ extension SelfTest {
               'agent rename'|'agent wait'|'pane wait-output'|'pane run') echo '{"id":"cli:ok","result":{"type":"ok"}}' ;;
               'api snapshot') cat \(file("herdr-snapshot")) ;;
               'pane zoom'|'pane focus'|'pane move'|'tab focus'|'tab rename'|'tab close'|'workspace focus'|'workspace rename'|'workspace close'|'worktree remove') echo '{"id":"cli:ok","result":{"type":"ok"}}' ;;
+              'session stop'|'session delete') echo '{"ok":true}' ;;
               'worktree create'|'workspace create') echo '{"id":"cli:worktree:create","result":{"root_pane":{"pane_id":"w9:p1","tab_id":"w9:t1"},"tab":{"tab_id":"w9:t1"},"workspace":{"workspace_id":"w9"},"type":"worktree_created"}}' ;;
             esac
             exit 0

@@ -81,6 +81,7 @@ extension HerdrMCP {
         case .failure(let error): return reply(failed(error.text))
         case .success(let found): ref = HerdrAgentRef(tab: found.tab, pane: container.id)
         }
+        if container.kind == .session { return sessionTool(tool, target, container.id, ref.tab, arguments, caller: caller, reply: reply) }
         let tab: Bool = container.kind == .tab
         let noun: String = tab ? "herdr tab" : "herdr workspace"
         switch tool {
@@ -150,6 +151,8 @@ extension HerdrMCP {
                     panes = found.tabs.flatMap(\.panes)
                     name = "herdr workspace \(container.id)" + (found.label.map { " (“\(SecretApprovalPanel.sanitized($0, limit: 40))”)" } ?? "")
                     if found.linkedWorktree { checkout = found.checkout }
+                case .session:
+                    return reply(failed("A herdr session is stopped by its own id. Nothing was closed."))
                 }
                 if panes.count >= snapshot.paneCount { return reply(failed("That is everything in the herdr session: Next Term never closes its last panes. Nothing was closed.")) }
                 if panes.contains(where: { isCaller($0.id, in: ref.tab, caller: herdrCaller) }) {
@@ -187,6 +190,50 @@ extension HerdrMCP {
         process.waitUntilExit()
         let lines: Int = String(decoding: data, as: UTF8.self).split(separator: "\n").count
         return lines == 0 ? nil : "\(lines) changed file\(lines == 1 ? "" : "s")"
+    }
+
+    /// close_tab on `<tab id>/session:<name>` (U10): herdr stops that session (`session stop`), and with delete: true deletes a
+    /// stopped one's files (`session delete`), once the user approves on the Mac. Never a session a tab here shows: the user
+    /// closes or detaches that tab first.
+    @MainActor private static func sessionTool(_ tool: String, _ target: HerdrTarget, _ name: String, _ tab: TerminalTab,
+                                               _ arguments: [String: Any], caller: TerminalTab?, reply: @escaping Reply) {
+        guard tool == "close_tab" else { return reply(failed("A herdr session's id goes to close_tab (it stops the session); host_sessions lists them.")) }
+        guard HerdrTarget.isSession(name) else { return reply(failed("“\(name)” is not a herdr session name.")) }
+        let deleting: Bool = arguments["delete"] as? Bool ?? false
+        HerdrRunner.run(.sessions, for: tab) { listed in
+            MainActor.assumeIsolated {
+                guard case .json(let json) = listed, let sessions = HerdrSession.parse(json) else {
+                    return reply(failed((problem(listed, pane: "", sent: false) ?? "herdr did not list its sessions there.") + " Nothing was stopped."))
+                }
+                guard let session = sessions.first(where: { $0.name == name }) else { return reply(failed("herdr there has no session “\(name)”.")) }
+                let defaultName: String? = sessions.first(where: \.isDefault)?.name
+                let shownHere: Bool = AppDelegate.shared.controllers.flatMap { $0.tabs }.contains { (other: TerminalTab) -> Bool in
+                    guard other.followsHerdr else { return false }
+                    if let remote = other.remote {
+                        guard let mine = tab.remote, remote.host.id == mine.host.id else { return false }
+                        return (remote.herdrSession ?? defaultName) == name
+                    }
+                    return tab.remote == nil && (other.localHerdr?.session ?? defaultName) == name
+                }
+                if shownHere { return reply(failed("A tab here shows herdr session “\(name)”: close that tab first. Nothing was stopped.")) }
+                if deleting, session.running { return reply(failed("“\(name)” is still running: stop it first (close_tab without delete).")) }
+                if !deleting, !session.running { return reply(failed("“\(name)” is not running; delete: true deletes its files.")) }
+                let command: HerdrCommand = deleting ? .deleteSession(name: name) : .stopSession(name: name)
+                let place: String = tab.remote.map { "on \($0.host.name)" } ?? "on this Mac"
+                let what: String = deleting ? "herdr deletes the stopped session “\(name)” \(place), with its saved layout."
+                    : "herdr stops the session “\(name)” \(place): every pane in it and what runs there stops."
+                let ask = MCPWriteControl.Ask(title: deleting ? "An agent asks to delete a herdr session" : "An agent asks to stop a herdr session",
+                                              details: "\(what) Next Term runs: herdr \(deleting ? "session delete" : "session stop") \(name)")
+                let context = MCPWriteControl.context(arguments, caller: caller, approval: .askOnMac, requester: nil, connection: nil)
+                MCPWriteControl.approve(ask, context, reply: reply) { approved, window in
+                    window?.finish()
+                    HerdrRunner.run(command, for: tab) { result in
+                        if let problem = problem(result, pane: "", sent: false) { return reply(failed(problem)) }
+                        reply(done(["id": target.id, deleting ? "deleted" : "stopped": true, "approved": approved]))
+                    }
+                }
+            }
+        }
     }
 
     @MainActor static func isOpener(_ id: String, caller: TerminalTab?) -> Bool { openerOf(id) == (caller?.id.uuidString ?? "outside") }
