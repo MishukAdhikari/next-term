@@ -44,7 +44,8 @@ public enum MCPServer {
         and get_skill give skills: read one that fits and your agent doesn't load. propose_edit offers the user an edit. write_file, \
         create_file, stage, commit, focus_tab, split_pane, close_pane, zoom_pane, set_layout, settings_set, \
         install_skill, remove_skill, apply_import, undo_import, apply_setup, add_task and add_mcp_server ask the user on the \
-        Mac first. Another app's settings: list_import_sources and preview_import, never its files. A tab Next Term brings back after an update or a quit keeps its id.
+        Mac first. Another app's settings: list_import_sources and preview_import, never its files. A tab Next Term brings back after an update or a quit keeps its id. \
+        Told a prompt was meant for another tab: forward_prompt.
         """
 
     /// Right after Secrets' first line when the agent runs in a Next Term tab: each of Next Term's own skills offered
@@ -76,7 +77,13 @@ public enum MCPServer {
     /// place of the line that names Next Term.
     public static func instructions(inTab: Bool, offeringTabs: Bool) -> String {
         guard inTab else { return instructions }
-        return secretsLead + "\n" + skillsParagraph(offeringTabs: offeringTabs) + " " + orchestration + " " + secretsUse
+        return secretsLead + "\n" + skillsParagraph(offeringTabs: offeringTabs) + " " + inTabOrchestration + " " + secretsUse
+    }
+
+    /// The orchestration paragraph in a tab: next-term-tabs says that a restored tab keeps its id, which leaves room
+    /// for every variant within the limit with or without the hub's line.
+    static var inTabOrchestration: String {
+        orchestration.replacingOccurrences(of: " A tab Next Term brings back after an update or a quit keeps its id.", with: "")
     }
 
     /// The 2,048 characters older Claude Code keeps of a server's instructions.
@@ -103,6 +110,8 @@ public enum MCPServer {
     static let spareSentences = [
         "Another app's settings: list_import_sources and preview_import, never its files.",
         "A tab Next Term brings back after an update or a quit keeps its id.",
+        // The host tools are listed with their own descriptions; the line naming them goes before the hub's line does.
+        "list_hosts, new_remote_tab, host_sessions and host_changes work on hosts.",
     ]
 
     /// The hub's line for `servers`, within `room` characters and naming at least `least` of them, or nil.
@@ -138,6 +147,8 @@ public enum MCPServer {
         /// Listed for Claude Code to keep loaded (`anthropic/alwaysLoad`). Tools used once in a while (apply_import,
         /// undo_import, apply_setup, add_task and the MCP hub's two, MCPServer.isDeferred) leave it off, so they cost nothing until tool search finds them.
         public var alwaysLoad = true
+        /// JSON Schema for the tool's structured answer, as JSON text (`structuredContent`); nil for text only.
+        public var outputSchema: String? = nil
     }
 
     private static let tabID = #""tab_id": {"type": "string", "description": "A tab's id from list_tabs."}"#
@@ -290,7 +301,7 @@ public enum MCPServer {
              description: "Opens a file in Next Term's editor, at a line and column if given (1-based).",
              inputSchema: #"{"type": "object", "properties": {"path": {"type": "string", "description": "Absolute file path."}, "line": {"type": "integer", "minimum": 1}, "column": {"type": "integer", "minimum": 1}}, "required": ["path"], "additionalProperties": false}"#,
              readOnly: false, destructive: false, idempotent: true, timeout: 15),
-    ] + controlTools + hubTools + importTools + setupTools + taskTools + secretTools
+    ] + controlTools + hubTools + importTools + setupTools + taskTools + handoverTools + secretTools
 
     public static func tool(named name: String) -> Tool? { tools.first { $0.name == name } }
 
@@ -307,7 +318,7 @@ public enum MCPServer {
 
     static func listing(_ listed: [Tool] = tools) -> [[String: Any]] {
         listed.map { tool in
-            [
+            var listed: [String: Any] = [
                 "name": tool.name,
                 "title": tool.title,
                 "description": tool.description,
@@ -322,6 +333,10 @@ public enum MCPServer {
                 // Claude Code defers MCP tools behind its tool search; most are worth having at hand (Tool.alwaysLoad).
                 "_meta": tool.meta,
             ]
+            if let schema = tool.outputSchema, let object = try? JSONSerialization.jsonObject(with: Data(schema.utf8)) {
+                listed["outputSchema"] = object
+            }
+            return listed
         }
     }
 
@@ -331,9 +346,12 @@ public enum MCPServer {
     public struct CallResult: Sendable {
         public var text: String
         public var isError: Bool
-        public init(text: String, isError: Bool = false) {
+        /// The same answer as JSON text, for a tool with an outputSchema: sent as `structuredContent` beside the text.
+        public var structured: String?
+        public init(text: String, isError: Bool = false, structured: String? = nil) {
             self.text = text
             self.isError = isError
+            self.structured = structured
         }
     }
 
@@ -372,7 +390,11 @@ public enum MCPServer {
                 return error(-32602, "Unknown tool: \(params["name"] as? String ?? "")")
             }
             let outcome = call(name, params["arguments"] as? [String: Any] ?? [:])
-            return result(["content": [["type": "text", "text": outcome.text]], "isError": outcome.isError])
+            var answer: [String: Any] = ["content": [["type": "text", "text": outcome.text]], "isError": outcome.isError]
+            if let structured = outcome.structured, let object = try? JSONSerialization.jsonObject(with: Data(structured.utf8)) {
+                answer["structuredContent"] = object
+            }
+            return result(answer)
         case "resources/list":
             return result(["resources": [Any]()])
         case "prompts/list":
@@ -411,11 +433,13 @@ public enum MCPServer {
     public static func decodeAnswer(_ line: Data) -> CallResult? {
         guard let object = (try? JSONSerialization.jsonObject(with: line)) as? [String: Any],
               let text = object["text"] as? String else { return nil }
-        return CallResult(text: text, isError: object["isError"] as? Bool ?? false)
+        return CallResult(text: text, isError: object["isError"] as? Bool ?? false, structured: object["structured"] as? String)
     }
 
     public static func encodeAnswer(_ result: CallResult) -> Data {
-        var data = (try? JSONSerialization.data(withJSONObject: ["text": result.text, "isError": result.isError])) ?? Data("{}".utf8)
+        var answer: [String: Any] = ["text": result.text, "isError": result.isError]
+        if let structured = result.structured { answer["structured"] = structured }
+        var data = (try? JSONSerialization.data(withJSONObject: answer)) ?? Data("{}".utf8)
         data.append(0x0A)
         return data
     }

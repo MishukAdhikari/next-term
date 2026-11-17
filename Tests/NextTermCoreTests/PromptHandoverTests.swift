@@ -71,3 +71,44 @@ import Testing
             == "(Moved here from the \u{201C}other\u{201D} tab, where the user typed this by mistake.)\n\nhi")
     }
 }
+
+/// forward_prompt as the MCP server lists and answers it.
+@Suite struct ForwardPromptToolTests {
+    @Test func itIsListedWithItsOutputSchemaAndTheWriteScope() throws {
+        let listed = MCPServer.listing(MCPServer.handoverTools)
+        let tool = try #require(listed.first)
+        #expect(tool["name"] as? String == "forward_prompt")
+        let schema = try #require(tool["outputSchema"] as? [String: Any])
+        #expect(((schema["properties"] as? [String: Any])?["status"]) != nil)
+        #expect(MCPServer.scopeTags["forward_prompt"] == .write)
+        #expect(MCPServer.tool(named: "forward_prompt")?.alwaysLoad == true)
+    }
+
+    @Test func aStructuredAnswerGoesAsTextAndStructuredContent() throws {
+        let structured = #"{"status":"delivered","project":"coding-sessions"}"#
+        let message: [String: Any] = ["jsonrpc": "2.0", "id": 7, "method": "tools/call",
+                                      "params": ["name": "forward_prompt", "arguments": ["prompts": ["x"]]]]
+        let answer = try #require(MCPServer.respond(to: message, version: "2025-11-25") { _, _ in
+            MCPServer.CallResult(text: "Delivered to coding-sessions.", structured: structured)
+        })
+        let result = try #require(answer["result"] as? [String: Any])
+        #expect(((result["content"] as? [[String: Any]])?.first?["text"] as? String) == "Delivered to coding-sessions.")
+        #expect((result["structuredContent"] as? [String: Any])?["status"] as? String == "delivered")
+        // Over the socket too.
+        let line = MCPServer.encodeAnswer(MCPServer.CallResult(text: "t", structured: structured))
+        #expect(MCPServer.decodeAnswer(line)?.structured == structured)
+    }
+
+    @Test func everyVariantNamesTheHandOverWithinTheLimit() {
+        for inTab in [false, true] {
+            for tabs in [false, true] {
+                for hub in [[], ["weather", "linear"]] {
+                    let said = MCPServer.instructions(inTab: inTab, offeringTabs: tabs, hubServers: hub)
+                    #expect(said.utf16.count <= MCPServer.instructionsLimit)
+                    #expect(said.contains("forward_prompt"))
+                }
+            }
+        }
+        #expect(BuiltInSkill.tabs.text.contains("forward_prompt"))
+    }
+}
