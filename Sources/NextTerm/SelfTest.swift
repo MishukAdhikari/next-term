@@ -709,6 +709,7 @@ enum SelfTest {
         case "mcpHub": return await mcpHubChecks(c, proj: proj) // a fake local server reached through the real nxtrm mcp's catalog
         case "mcpHubSettings": return await mcpHubSettingsChecks() // Settings › MCP Servers: add, paste a key, approve a project's list
         case "mcpHubOAuth": return await mcpHubOAuthChecks(c) // signing in to a fake OAuth server, consent, refresh, a lapse, revoke
+        case "handover": return await handoverChecks(c) // forward_prompt: prompts typed in the wrong tab go to the right session
         case "agentsMenu": return await agentsMenuChecks(c) // the Agents menu: Skills…, MCP Servers…, the moved commands and their keys
         case "settingsSections": return await settingsSectionsChecks(c) // each Settings section's screenshot, one size, over full screen
         case "agentsSettings": return await agentsSettingsChecks() // Settings › Agents with made-up agents: rows, a scheduled update, empty
