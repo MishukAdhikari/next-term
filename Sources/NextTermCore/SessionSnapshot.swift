@@ -164,11 +164,14 @@ extension SessionSnapshot {
         public var focused: UUID
         /// The pane filling the tab, the others kept behind it.
         public var zoomed: UUID?
+        /// The user pinned the tab (PinnedTabs): it comes back pinned, first in its window.
+        public var pinned: Bool
 
-        public init(root: Node, focused: UUID, zoomed: UUID? = nil) {
+        public init(root: Node, focused: UUID, zoomed: UUID? = nil, pinned: Bool = false) {
             self.root = root
             self.focused = focused
             self.zoomed = zoomed
+            self.pinned = pinned
         }
 
         public var panes: [Pane] { root.panes }
@@ -1337,13 +1340,14 @@ extension SessionSnapshot.Window: Codable {
 }
 
 extension SessionSnapshot.Group: Codable {
-    private enum Keys: String, CodingKey { case root, focused, zoomed }
+    private enum Keys: String, CodingKey { case root, focused, zoomed, pinned }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: Keys.self)
         let root = try c.decode(SessionSnapshot.Node.self, forKey: .root)
         guard let first = root.panes.first else { throw SessionSnapshot.DecodeError.unreadable }
-        self.init(root: root, focused: c.uuid(.focused) ?? first.id, zoomed: c.uuid(.zoomed))
+        self.init(root: root, focused: c.uuid(.focused) ?? first.id, zoomed: c.uuid(.zoomed),
+                  pinned: (try? c.decodeIfPresent(Bool.self, forKey: .pinned)) ?? false)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -1351,6 +1355,7 @@ extension SessionSnapshot.Group: Codable {
         try c.encode(root, forKey: .root)
         try c.encode(focused.lowercased, forKey: .focused)
         try c.encodeIfPresent(zoomed?.lowercased, forKey: .zoomed)
+        if pinned { try c.encode(true, forKey: .pinned) } // absent when not: older snapshots read the same
     }
 }
 

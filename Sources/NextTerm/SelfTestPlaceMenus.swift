@@ -87,7 +87,7 @@ extension SelfTest {
 
         // The window column's top row: its own group, then Project Color.
         let fold: String = app.windowColumnExpanded ? "Collapse Window Column" : "Expand Window Column"
-        let pin: String = app.windowColumnExpanded ? "Unpin Window Column" : "Pin Window Column"
+        let pin: String = "Keep Window Column Open"
         let otherEdge: String = app.windowColumnOnRight ? "Left" : "Right"
         let column: NSMenu? = c.windowColumn.onTopRowMenu?()
         let columnTitles: [String] = column.map(titles) ?? []

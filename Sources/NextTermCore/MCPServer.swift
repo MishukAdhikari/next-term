@@ -44,7 +44,8 @@ public enum MCPServer {
         and get_skill give skills: read one that fits and your agent doesn't load. propose_edit offers the user an edit. write_file, \
         create_file, stage, commit, focus_tab, split_pane, close_pane, zoom_pane, set_layout, settings_set, \
         install_skill, remove_skill, apply_import, undo_import, apply_setup, add_task and add_mcp_server ask the user on the \
-        Mac first. Another app's settings: list_import_sources and preview_import, never its files. A tab Next Term brings back after an update or a quit keeps its id.
+        Mac first. Another app's settings: list_import_sources and preview_import, never its files. A tab Next Term brings back after an update or a quit keeps its id. \
+        Told a prompt was meant for another tab: forward_prompt.
         """
 
     /// Right after Secrets' first line when the agent runs in a Next Term tab: each of Next Term's own skills offered
@@ -76,7 +77,13 @@ public enum MCPServer {
     /// place of the line that names Next Term.
     public static func instructions(inTab: Bool, offeringTabs: Bool) -> String {
         guard inTab else { return instructions }
-        return secretsLead + "\n" + skillsParagraph(offeringTabs: offeringTabs) + " " + orchestration + " " + secretsUse
+        return secretsLead + "\n" + skillsParagraph(offeringTabs: offeringTabs) + " " + inTabOrchestration + " " + secretsUse
+    }
+
+    /// The orchestration paragraph in a tab: next-term-tabs says that a restored tab keeps its id, which leaves room
+    /// for every variant within the limit with or without the hub's line.
+    static var inTabOrchestration: String {
+        orchestration.replacingOccurrences(of: " A tab Next Term brings back after an update or a quit keeps its id.", with: "")
     }
 
     /// The 2,048 characters older Claude Code keeps of a server's instructions.
@@ -103,6 +110,8 @@ public enum MCPServer {
     static let spareSentences = [
         "Another app's settings: list_import_sources and preview_import, never its files.",
         "A tab Next Term brings back after an update or a quit keeps its id.",
+        // The host tools are listed with their own descriptions; the line naming them goes before the hub's line does.
+        "list_hosts, new_remote_tab, host_sessions and host_changes work on hosts.",
     ]
 
     /// The hub's line for `servers`, within `room` characters and naming at least `least` of them, or nil.
@@ -138,6 +147,8 @@ public enum MCPServer {
         /// Listed for Claude Code to keep loaded (`anthropic/alwaysLoad`). Tools used once in a while (apply_import,
         /// undo_import, apply_setup, add_task and the MCP hub's two, MCPServer.isDeferred) leave it off, so they cost nothing until tool search finds them.
         public var alwaysLoad = true
+        /// JSON Schema for the tool's structured answer, as JSON text (`structuredContent`); nil for text only.
+        public var outputSchema: String? = nil
     }
 
     private static let tabID = #""tab_id": {"type": "string", "description": "A tab's id from list_tabs."}"#
@@ -150,7 +161,7 @@ public enum MCPServer {
 
     public static let tools: [Tool] = [
         Tool(name: "list_tabs", title: "List projects and tabs",
-             description: "Every Next Term window (one per project) and its terminal tabs: id, title, folder, the program running, and its state: idle, working (an agent is busy), done, failed, or attention (an agent waits for a decision; the question, its choices and a question_id for answer_agent are included). Remote tabs also have their host, and can be connecting (ssh is logging in; login_prompt: the user must answer ssh in that tab) or disconnected. A local agent tab whose agent works in a git repository also has, once read, its checkout, its branch (or detached_at), and sync: same (the window shows that checkout), elsewhere (another checkout of the window's repository), switched_under (its branch was switched under the chat) or other_repository (the window shows another repository, or none); and chat_branch and switched_by whenever the chat's branch was switched under it. The tab you run in has \"you\": true. A project window merged with others into one window, as macOS's tabs, has merged_with (the others' projects) and behind (its tab is out of sight behind the one in front, where the user is working). A tab another agent started with new_tab has opened_by (that tab's id): its agent opens no tabs unless the user asks it to, there. A local agent that started before Next Term was added to it has needs_restart: it has Next Term's tools once restarted. A tab Next Term brought back after an update or a quit has restored (why, and what the restart did to it) until its next command, and calls made while a tab restarts say what happens to it. A herdr tab (keep herdr, or herdr run in a local tab) lists herdr's agents in herdr_agents, each with a herdr agent's id (the tab's id, a slash and herdr's pane id), pane, name, agent, state, title, directory, workspace, tab, focused and session, waiting_seconds while it needs the user, and, while it waits on a decision, question, choices and question_id: read_tab, wait_for_tab, send_to_tab, press_keys, answer_agent, show_tab, close_tab and focus_tab take that id as tab_id. A tmux tab whose session was gone when it came back, so a new one was made, has session_created. Agents on one of herdr's own machines (a herdr run in a local tab) also have machine, and their id is the tab's id, /@, the machine's id, / and the pane.",
+             description: "Every Next Term window (one per project) and its terminal tabs: id, title, folder, the program running, and its state: idle, working (an agent is busy), done, failed, or attention (an agent waits for a decision; the question, its choices and a question_id for answer_agent are included). Remote tabs also have their host, and can be connecting (ssh is logging in; login_prompt: the user must answer ssh in that tab) or disconnected. A local agent tab whose agent works in a git repository also has, once read, its checkout, its branch (or detached_at), and sync: same (the window shows that checkout), elsewhere (another checkout of the window's repository), switched_under (its branch was switched under the chat) or other_repository (the window shows another repository, or none); and chat_branch and switched_by whenever the chat's branch was switched under it. The tab you run in has \"you\": true. A project window merged with others into one window, as macOS's tabs, has merged_with (the others' projects) and behind (its tab is out of sight behind the one in front, where the user is working). A tab another agent started with new_tab has opened_by (that tab's id): its agent opens no tabs unless the user asks it to, there. A tab the user pinned has pinned: true: close_tab on it asks the user on the Mac first. A local agent that started before Next Term was added to it has needs_restart: it has Next Term's tools once restarted. A tab Next Term brought back after an update or a quit has restored (why, and what the restart did to it) until its next command, and calls made while a tab restarts say what happens to it. A herdr tab (keep herdr, or herdr run in a local tab) lists herdr's agents in herdr_agents, each with a herdr agent's id (the tab's id, a slash and herdr's pane id), pane, name, agent, state, title, directory, workspace, tab, focused and session, waiting_seconds while it needs the user, and, while it waits on a decision, question, choices and question_id: read_tab, wait_for_tab, send_to_tab, press_keys, answer_agent, show_tab, close_tab and focus_tab take that id as tab_id. A tmux tab whose session was gone when it came back, so a new one was made, has session_created. Agents on one of herdr's own machines (a herdr run in a local tab) also have machine, and their id is the tab's id, /@, the machine's id, / and the pane.",
              inputSchema: #"{"type": "object", "properties": {"project": {"type": "string", "description": "Only the window of this project folder."}}, "additionalProperties": false}"#,
              readOnly: true, destructive: false, idempotent: true, timeout: 15),
         Tool(name: "read_tab", title: "Read a tab's screen",
@@ -294,7 +305,7 @@ public enum MCPServer {
              description: "Opens a file in Next Term's editor, at a line and column if given (1-based).",
              inputSchema: #"{"type": "object", "properties": {"path": {"type": "string", "description": "Absolute file path."}, "line": {"type": "integer", "minimum": 1}, "column": {"type": "integer", "minimum": 1}}, "required": ["path"], "additionalProperties": false}"#,
              readOnly: false, destructive: false, idempotent: true, timeout: 15),
-    ] + controlTools + hubTools + importTools + setupTools + taskTools + secretTools
+    ] + controlTools + handoverTools + hubTools + importTools + setupTools + taskTools + secretTools
 
     public static func tool(named name: String) -> Tool? { tools.first { $0.name == name } }
 
@@ -311,7 +322,7 @@ public enum MCPServer {
 
     static func listing(_ listed: [Tool] = tools) -> [[String: Any]] {
         listed.map { tool in
-            [
+            var listed: [String: Any] = [
                 "name": tool.name,
                 "title": tool.title,
                 "description": tool.description,
@@ -326,6 +337,10 @@ public enum MCPServer {
                 // Claude Code defers MCP tools behind its tool search; most are worth having at hand (Tool.alwaysLoad).
                 "_meta": tool.meta,
             ]
+            if let schema = tool.outputSchema, let object = try? JSONSerialization.jsonObject(with: Data(schema.utf8)) {
+                listed["outputSchema"] = object
+            }
+            return listed
         }
     }
 
@@ -335,9 +350,12 @@ public enum MCPServer {
     public struct CallResult: Sendable {
         public var text: String
         public var isError: Bool
-        public init(text: String, isError: Bool = false) {
+        /// The same answer as JSON text, for a tool with an outputSchema: sent as `structuredContent` beside the text.
+        public var structured: String?
+        public init(text: String, isError: Bool = false, structured: String? = nil) {
             self.text = text
             self.isError = isError
+            self.structured = structured
         }
     }
 
@@ -376,7 +394,11 @@ public enum MCPServer {
                 return error(-32602, "Unknown tool: \(params["name"] as? String ?? "")")
             }
             let outcome = call(name, params["arguments"] as? [String: Any] ?? [:])
-            return result(["content": [["type": "text", "text": outcome.text]], "isError": outcome.isError])
+            var answer: [String: Any] = ["content": [["type": "text", "text": outcome.text]], "isError": outcome.isError]
+            if let structured = outcome.structured, let object = try? JSONSerialization.jsonObject(with: Data(structured.utf8)) {
+                answer["structuredContent"] = object
+            }
+            return result(answer)
         case "resources/list":
             return result(["resources": [Any]()])
         case "prompts/list":
@@ -415,11 +437,13 @@ public enum MCPServer {
     public static func decodeAnswer(_ line: Data) -> CallResult? {
         guard let object = (try? JSONSerialization.jsonObject(with: line)) as? [String: Any],
               let text = object["text"] as? String else { return nil }
-        return CallResult(text: text, isError: object["isError"] as? Bool ?? false)
+        return CallResult(text: text, isError: object["isError"] as? Bool ?? false, structured: object["structured"] as? String)
     }
 
     public static func encodeAnswer(_ result: CallResult) -> Data {
-        var data = (try? JSONSerialization.data(withJSONObject: ["text": result.text, "isError": result.isError])) ?? Data("{}".utf8)
+        var answer: [String: Any] = ["text": result.text, "isError": result.isError]
+        if let structured = result.structured { answer["structured"] = structured }
+        var data = (try? JSONSerialization.data(withJSONObject: answer)) ?? Data("{}".utf8)
         data.append(0x0A)
         return data
     }
