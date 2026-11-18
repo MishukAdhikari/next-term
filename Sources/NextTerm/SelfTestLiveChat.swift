@@ -117,5 +117,23 @@ extension SelfTest {
         LiveChatView.isOn = true
         holder.liveChatSettingChanged()
         check(!pane.chatStrip.isHidden, "live chat: turned on again, the buttons come back")
+
+        // MCP (plan 041 U5): list_tabs gives the view, switch_view changes it, a plain shell's tab is refused.
+        let id = tab.id.uuidString.lowercased()
+        func call(_ tool: String, _ arguments: [String: Any]) async -> MCPServer.CallResult {
+            await withCheckedContinuation { done in MCPControl.call(tool, arguments, caller: nil) { done.resume(returning: $0) } }
+        }
+        let toChat = await call("switch_view", ["tab_id": id, "view": "chat"])
+        check(!toChat.isError && toChat.text.contains("\"chat\"") && pane.showsChat, "live chat: switch_view shows the chat", toChat.text)
+        let listed = await call("list_tabs", [:])
+        check(listed.text.contains("\"view\" : \"chat\"") || listed.text.contains("\"view\":\"chat\""),
+              "live chat: list_tabs gives the tab's view")
+        let toTerminal = await call("switch_view", ["tab_id": id, "view": "terminal"])
+        check(!toTerminal.isError && !pane.showsChat, "live chat: switch_view brings the terminal back", toTerminal.text)
+        let other = holder.tabs.count > 1 ? holder.tabs[1] : nil
+        if let other {
+            let refused = await call("switch_view", ["tab_id": other.id.uuidString.lowercased(), "view": "chat"])
+            check(refused.isError, "live chat: switch_view refuses a tab with no chat view", refused.text)
+        }
     }
 }
