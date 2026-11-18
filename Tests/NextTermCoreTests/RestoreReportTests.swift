@@ -195,4 +195,116 @@ extension RestorePlannerTests {
                               start: StartWatch.Report(verdict: .resumed))
         #expect(ran?.fields["held_because"] == nil)
     }
+
+    // MARK: checking a held pane again
+
+    /// Only facts that can clear without the user are transient: the session, a folder or store not there. Every check
+    /// that guards the user is not, and a pane any of them holds is never checked again.
+    @Test func onlyFactsThatClearByThemselvesAreTransient() {
+        let transient: Set<ResumeCheck> = [.session, .folderGone, .storeGone]
+        for check in ResumeCheck.allCases {
+            #expect(check.isTransient == transient.contains(check), "\(check)")
+        }
+        #expect(RestoreRecheck.mayRecheck([.session]) && RestoreRecheck.mayRecheck([.storeGone, .folderGone, .session]))
+        #expect(!RestoreRecheck.mayRecheck([]))
+        for safety in [ResumeCheck.flags, .autoContinue, .projectConfig, .executable, .executableChanged, .location, .ownership,
+                       .folder, .store, .idPattern, .routing, .sessionFile, .automatic] {
+            #expect(!RestoreRecheck.mayRecheck([.session, safety]), "\(safety)")
+        }
+        // About 1 s after the shell is ready, backing off, about 30 s in all.
+        let schedule = RestoreRecheck.schedule
+        #expect(schedule.first == 1 && schedule.last == 30 && schedule == schedule.sorted() && schedule.count >= 3)
+        let gaps = zip(schedule.dropFirst(), schedule).map { $0 - $1 }
+        #expect(gaps == gaps.sorted())
+    }
+
+    /// A pane held only because its session was not available, or its folder or store not there, is marked for checks;
+    /// one held for a safety reason too, after a crash, or not the pane selected last of its session, is not.
+    @Test func aPaneHeldByTransientFactsAloneIsCheckedAgain() {
+        let (exact, base) = exactClaude()
+        var busy = base
+        busy.sessionAvailable = false
+        let waiting = plan(pane(1, typed("claude"), agent: exact), world: world(facts: busy))
+        #expect(waiting.outcome == .agentOnTheLine && waiting.rechecks && waiting.heldBecause == [.session])
+        #expect(shown(waiting).contains("Next Term checks again for up to 30 seconds once the shell is ready"))
+        var unmounted = base
+        unmounted.files[folder] = nil
+        unmounted.files["/Users/x/.claude"] = nil
+        #expect(plan(pane(1, typed("claude"), agent: exact), world: world(facts: unmounted)).heldBecause == [.storeGone, .folderGone])
+        #expect(plan(pane(1, typed("claude"), agent: exact), world: world(facts: unmounted)).rechecks)
+        var flagged = exact
+        flagged.options = [SessionSnapshot.LaunchOption(["--dangerously-skip-permissions"])]
+        #expect(!plan(pane(1, typed("claude"), agent: flagged), world: world(facts: busy)).rechecks)
+        #expect(!plan(pane(1, typed("claude"), agent: exact), kind: .crash, world: world(facts: busy)).rechecks)
+        #expect(!plan(pane(1, typed("claude"), agent: exact), safeMode: true, world: world(facts: busy)).rechecks)
+        var first = pane(1, typed("claude"), agent: exact)
+        var second = pane(2, typed("claude"), agent: exact)
+        first.lastSelected = start
+        second.lastSelected = start.addingTimeInterval(60)
+        #expect(plan([first, second], world: world(facts: busy)).map(\.rechecks) == [false, true])
+        // In the report.
+        let shot = snapshot([pane(1, typed("claude"), agent: exact)])
+        let plans = RestorePlanner.plan(shot, kind: .update, world: world(facts: busy))
+        var report = RestoreReport(decision: updateDecision(), snapshot: shot, plans: plans, planTimedOut: false, appVersion: "1")
+        #expect(report.panes[0].rechecks)
+        report.record(RestoreRecheck.Entry(attempt: 1, after: 1.04, event: .waiting, failed: [.session]), pane: id(1))
+        report.record(RestoreRecheck.Entry(attempt: 2, after: 3.0, event: .passed), pane: id(1))
+        report.record(RestoreRecheck.Entry(attempt: 1, after: 1, event: .passed), pane: id(99))
+        let listed = (try? json(report)["panes"] as? [[String: Any]]) ?? []
+        let checks = listed.first?["rechecks"] as? [[String: Any]] ?? []
+        #expect(checks.map { $0["result"] as? String } == ["waiting", "passed"])
+        #expect(checks.first?["failed"] as? [String] == ["session"] && checks.first?["after_seconds"] as? Double == 1.0)
+        #expect(checks.first?["attempt"] as? Int == 1 && checks.last?["failed"] == nil)
+    }
+
+    /// Each check runs the same gate on fresh facts: still transient waits, a pass resumes with the gate's command, and a
+    /// safety failure that turned up holds for good.
+    @Test func aCheckRunsTheSameGateOnFreshFacts() {
+        let (exact, base) = exactClaude()
+        var busy = base
+        busy.sessionAvailable = false
+        #expect(RestoreRecheck.check(exact, facts: busy, projects: [folder], tabFolder: folder) == .waiting([.session]))
+        #expect(RestoreRecheck.check(exact, facts: base, projects: [folder], tabFolder: folder) == .resume(exact.resumeCommand ?? "none"))
+        var changed = base
+        changed.projectConfigChanged = true
+        changed.sessionAvailable = false
+        #expect(RestoreRecheck.check(exact, facts: changed, projects: [folder], tabFolder: folder) == .held([.session, .projectConfig]))
+        // What runs lies in a project open now: held, whatever the facts said of the folders it must stay out of.
+        var inProject = base
+        inProject.files["/Users/x/.local/bin/claude"]?.realPath = "/Users/x/work/bin/claude"
+        inProject.outside = []
+        #expect(RestoreRecheck.check(exact, facts: inProject, projects: ["/Users/x/work"], tabFolder: folder) == .held([.location]))
+    }
+
+    /// A pass runs in the session's folder: as it is when the tab opened there, else after the shell's own `cd`.
+    @Test func aPassRunsInTheSessionsFolder() {
+        let command = "/usr/bin/env /Users/x/.local/bin/claude --resume \(s)"
+        #expect(RestoreRecheck.line(command: command, folder: folder, tabFolder: folder) == command)
+        #expect(RestoreRecheck.line(command: command, folder: folder, tabFolder: "/Users/x") == "builtin cd -- \(folder) && " + command)
+        #expect(RestoreRecheck.line(command: command, folder: "/Users/x/my app", tabFolder: "/Users/x")
+                == "builtin cd -- '/Users/x/my app' && " + command)
+        #expect(RestoreRecheck.line(command: command, folder: "/Users/x/a\nb", tabFolder: "/Users/x") == nil)
+    }
+
+    /// How the checks ended, in the tab's words, and the plan a pass runs from.
+    @Test func theTabSaysHowTheChecksEnded() {
+        #expect(RestoreRecheck.note(.passed, agent: .claude, session: s, failed: [])
+                == "What held Claude Code cleared, so session \(s) resumes now.")
+        #expect(RestoreRecheck.note(.exhausted, agent: .claude, session: s, failed: [.session])
+                == "Checked again for 30 seconds, and still held: its session is gone or open elsewhere.")
+        #expect(RestoreRecheck.note(.held, agent: .claude, session: s, failed: [.session, .projectConfig])
+                == "Checked again, and still held: its session is gone or open elsewhere and its project settings changed.")
+        #expect(RestoreRecheck.note(.stoppedByInput, agent: .claude, session: s, failed: []) == nil)
+        let (exact, base) = exactClaude()
+        var busy = base
+        busy.sessionAvailable = false
+        var held = plan(pane(1, typed("claude"), agent: exact), world: world(facts: busy))
+        let resuming = held.resuming("run it")
+        #expect(resuming.outcome == .resume && resuming.line == "run it" && !resuming.rechecks && resuming.heldBecause.isEmpty)
+        #expect(resuming.listLine == "Claude Code resumes")
+        held.note.rechecks = false
+        held.note.recheckEnded = RestoreRecheck.note(.exhausted, agent: .claude, session: s, failed: [.session])
+        #expect(text(held).hasSuffix("Held: its session is gone or open elsewhere. "
+            + "Checked again for 30 seconds, and still held: its session is gone or open elsewhere."))
+    }
 }

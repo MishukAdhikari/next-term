@@ -110,6 +110,7 @@ final class SessionRestore {
         let report = RestoreReport(decision: decision, snapshot: restored == nil ? nil : read.snapshot, plans: restored?.planned.plans ?? [],
                                    planTimedOut: restored?.planned.timedOut ?? false, appVersion: version)
         report.write(in: files)
+        self.report = report
         let opened = restored?.opened ?? false
         openGate()
         if decision.attemptsReset == .afterLaunch { settle(after: RestoreAttempts.settleTime) }
@@ -145,6 +146,7 @@ final class SessionRestore {
         RemoteConnection.releaseRestore(kept: built.keptRemote)
         RemoteConnection.tellSkipped(built.skipped, kept: false)
         let actions = RestoreActions(panes: built.panes, safeMode: safeMode)
+        actions.onRecheck = { [weak self] (pane: UUID, entry: RestoreRecheck.Entry) in self?.recordRecheck(entry, pane: pane) }
         MCPRestoredTabs.restored(built.panes)
         self.actions = actions
         actions.onSettled = { [weak self] in self?.restoreSettled() }
@@ -152,6 +154,17 @@ final class SessionRestore {
         actions.start()
         if safeMode { DispatchQueue.main.async { SessionRestoreAlerts.askAfterSafeMode() } }
         return Restored(opened: !built.windows.isEmpty, planned: planned)
+    }
+
+    /// The launch's restore report (`last-restore.json`), as last written.
+    private var report: RestoreReport?
+
+    /// A held pane was checked again (RestoreRecheck): the report is written again with it, on the saves' queue.
+    private func recordRecheck(_ entry: RestoreRecheck.Entry, pane: UUID) {
+        guard var report, let files else { return }
+        report.record(entry, pane: pane)
+        self.report = report
+        queue.async { report.write(in: files) }
     }
 
     /// Safe mode's Try Again (R21): one more try, counted first, applies each pane's action. A try the folder refuses to

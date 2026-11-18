@@ -34,9 +34,12 @@ public struct RestoreReport: Equatable, Sendable {
         public var outcome: RestoreOutcome
         public var heldBecause: [ResumeCheck]
         public var stop: ResumeStop?
+        /// It is checked again once its shell is ready (RestoreRecheck), and each check so far.
+        public var rechecks: Bool
+        public var checks: [RestoreRecheck.Entry]
 
         public init(window: Int, tab: Int, id: UUID, agent: String?, outcome: RestoreOutcome, heldBecause: [ResumeCheck] = [],
-                    stop: ResumeStop? = nil) {
+                    stop: ResumeStop? = nil, rechecks: Bool = false, checks: [RestoreRecheck.Entry] = []) {
             self.window = window
             self.tab = tab
             self.id = id
@@ -44,6 +47,8 @@ public struct RestoreReport: Equatable, Sendable {
             self.outcome = outcome
             self.heldBecause = heldBecause
             self.stop = stop
+            self.rechecks = rechecks
+            self.checks = checks
         }
     }
 
@@ -95,7 +100,7 @@ public struct RestoreReport: Equatable, Sendable {
                     guard let plan = byID[pane.id] else { continue }
                     let agent = pane.remote == nil ? (pane.agent?.agent.rawValue ?? pane.agentSession.flatMap { ACPAgent.named($0.agent)?.id }) : nil
                     panes.append(Pane(window: windowIndex, tab: tabIndex, id: pane.id, agent: agent, outcome: plan.outcome,
-                                      heldBecause: plan.heldBecause, stop: plan.stop))
+                                      heldBecause: plan.heldBecause, stop: plan.stop, rechecks: plan.rechecks))
                 }
             }
         }
@@ -124,10 +129,24 @@ public struct RestoreReport: Equatable, Sendable {
             if let agent = pane.agent { fields["agent"] = agent }
             if !pane.heldBecause.isEmpty { fields["held_because"] = pane.heldBecause.map(\.word) }
             if let stop = pane.stop { fields["stopped_before_gate"] = stop.word }
+            if pane.rechecks {
+                fields["rechecks"] = pane.checks.map { (entry: RestoreRecheck.Entry) -> [String: Any] in
+                    var check: [String: Any] = ["attempt": entry.attempt, "after_seconds": (entry.after * 10).rounded() / 10,
+                                                "result": entry.event.word]
+                    if !entry.failed.isEmpty { check["failed"] = entry.failed.map(\.word) }
+                    return check
+                }
+            }
             return fields
         }
         let options: JSONSerialization.WritingOptions = [.sortedKeys, .prettyPrinted, .withoutEscapingSlashes]
         return (try? JSONSerialization.data(withJSONObject: object, options: options)) ?? Data("{}".utf8)
+    }
+
+    /// Adds a re-check of the pane `id` (RestoreRecheck), as it ran. Nothing for a pane the report does not hold.
+    public mutating func record(_ entry: RestoreRecheck.Entry, pane id: UUID) {
+        guard let index = panes.firstIndex(where: { $0.id == id }) else { return }
+        panes[index].checks.append(entry)
     }
 
     /// Writes it in `files` (a 0600 file, replaced whole: SessionFiles.replace). False when it could not be written.

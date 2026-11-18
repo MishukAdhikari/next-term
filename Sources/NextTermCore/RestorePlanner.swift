@@ -249,6 +249,21 @@ public struct PanePlan: Equatable, Sendable {
     /// Why the gate was not asked at all for the pane, when it was not (`RestorePlanner.verdict`): for the restore
     /// report.
     public var stop: ResumeStop?
+    /// Held by transient facts alone, it is checked again once its shell is ready (RestoreRecheck), its line put back
+    /// only when the checks end without a resume.
+    public var rechecks: Bool { note.rechecks }
+
+    /// The plan of a pane whose re-check passed: the resume `line` runs, as an automatic resume's does.
+    public func resuming(_ line: String) -> PanePlan {
+        var plan = self
+        plan.outcome = .resume
+        plan.line = line
+        plan.note.outcome = .resume
+        plan.note.heldBecause = []
+        plan.note.rechecks = false
+        plan.listLine = plan.note.listLine
+        return plan
+    }
 
     /// The action that carries it out, not yet applied.
     public var pending: SessionSnapshot.PendingAction {
@@ -397,6 +412,7 @@ public enum RestorePlanner {
         note.reminted = pane.reminted
         note.safeMode = input.safeMode && pane.remote == nil
         note.heldBecause = decision.outcome == .agentOnTheLine ? decision.heldBecause : []
+        note.rechecks = decision.outcome == .agentOnTheLine && decision.rechecks
         let reason: SessionSnapshot.RestoreKind = input.safeMode ? .safeMode : input.kind
         return PanePlan(pane: pane.id, outcome: decision.outcome, reason: reason, line: decision.line, folder: folder,
                         session: decision.session, note: note, listLine: note.listLine, stop: pane.remote == nil ? input.stop : nil)
@@ -470,6 +486,8 @@ public enum RestorePlanner {
         var sessionAgent: RestoreAgent?
         /// What held an agent that could have resumed by itself on the line.
         var heldBecause: [ResumeCheck] = []
+        /// It is checked again once its shell is ready (RestoreRecheck).
+        var rechecks = false
     }
 
     private static func decide(_ input: PaneInput) -> Decision {
@@ -757,6 +775,10 @@ public struct RestoreNote: Equatable, Sendable {
     /// What held an agent that could have resumed by itself, its line put back instead: the gate's checks that failed,
     /// said in plain words after the line ("Held: its launch flags.").
     public var heldBecause: [ResumeCheck] = []
+    /// Held by transient facts alone, it is checked again once its shell is ready (RestoreRecheck).
+    public var rechecks = false
+    /// How those checks ended, in the tab's words (RestoreRecheck.note), once they have.
+    public var recheckEnded: String?
 
     public init(outcome: RestoreOutcome) {
         self.outcome = outcome
@@ -869,6 +891,14 @@ public struct RestoreNote: Equatable, Sendable {
             }
             if let session { said += about(session, dates) }
             return said
+        case .agentOnTheLine where !safeMode && rechecks && when == .waiting:
+            // Nothing goes on the line while it is checked again: its line waits for the checks to end.
+            let id = session?.id ?? ""
+            var said = ["\(name) session \(id) is held for now."]
+            said += heldText
+            said.append("Next Term checks again for up to \(Int(RestoreRecheck.schedule.last ?? 0)) seconds once the shell is ready, "
+                + "unless you type first, and resumes it if that clears; if not, \(line ?? "its resume command") goes back on the line, not run.")
+            return said
         case .agentOnTheLine where !safeMode:
             let line = self.line ?? ""
             guard let session else {
@@ -878,6 +908,7 @@ public struct RestoreNote: Equatable, Sendable {
             }
             var said = ["\(line) \(back) Press Return to resume \(name) session \(session.id), or edit it first."]
             said += heldText
+            if let recheckEnded { said.append(recheckEnded) }
             said += about(session, dates)
             said += sharedText
             said += leftOffText

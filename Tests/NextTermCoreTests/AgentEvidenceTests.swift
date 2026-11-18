@@ -899,7 +899,7 @@ import Testing
                 Issue.record("resumed with another config folder")
                 return
             }
-            #expect(failed.contains(.routing) && failed.contains(.store))
+            #expect(failed.contains(.routing) && failed.contains(.storeGone))
         }
     }
 

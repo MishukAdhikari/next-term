@@ -557,11 +557,13 @@ import Testing
             guard let evidence = claude.agent, case .onTheLine(let failed) = evidence.gate(exactClaude().1) else { return [] }
             return failed
         }()
-        #expect(failed == [.routing, .store])
+        #expect(failed == [.routing, .storeGone])
         let update = plan(claude, world: world)
         #expect(update.outcome == .agentOnTheLine && update.line == "cw --resume \(s)")
-        #expect(text(update) == back("cw --resume \(s)") + " Held: its provider settings and its session store.")
-        #expect(update.heldBecause == [.routing, .store])
+        #expect(text(update) == back("cw --resume \(s)") + " Held: its provider settings and its session store is not there.")
+        #expect(update.heldBecause == [.routing, .storeGone])
+        // Routing guards the user: the store being there later would not resume it, so it is not checked again.
+        #expect(!update.rechecks)
     }
 
     /// AE28: a code-loading option never runs by itself, and comes back on the line on every restore.

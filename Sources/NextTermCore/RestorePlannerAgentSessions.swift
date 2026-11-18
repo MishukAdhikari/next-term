@@ -29,7 +29,18 @@ extension RestorePlanner {
         var held = Decision(outcome: .agentOnTheLine, line: line, noteLine: line, session: session, folder: input.sessionFolder,
                             leftOff: putBack.leftOff)
         held.heldBecause = heldBecause(input)
+        held.rechecks = rechecks(input, evidence: evidence, session: session)
         return held
+    }
+
+    /// Whether a held pane is checked again once its shell is ready (RestoreRecheck): where it could have resumed by
+    /// itself, held by transient facts alone, the pane selected last of those on its session, with the exact id its
+    /// evidence holds.
+    private static func rechecks(_ input: PaneInput, evidence: SessionSnapshot.Evidence, session: NamedSession?) -> Bool {
+        guard case .onTheLine(let failed)? = input.verdict, RestoreRecheck.mayRecheck(failed),
+              mayResume(input.kind, consent: input.quitConsent, safeMode: input.safeMode), !input.selectedEarlier,
+              let session, session.naming == .exact, session.id == evidence.sessionID else { return false }
+        return true
     }
 
     /// What held an agent that could have resumed by itself: the gate's checks that failed, or `sessionFile` when its id

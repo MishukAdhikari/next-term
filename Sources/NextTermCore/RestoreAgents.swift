@@ -417,11 +417,15 @@ public enum ResumeCheck: String, CaseIterable, Sendable {
     case autoContinue
     /// The session is not in its store, or a live process holds it.
     case session
-    /// The store its session file was read in is gone, is no longer that real folder, is not the user's alone, or lies
-    /// where a tab can write: a project, the tab's or session's folder, a temporary folder (KTD4).
+    /// No store was recorded, or the store its session file was read in is no longer that real folder, is not the user's
+    /// alone, or lies where a tab can write: a project, the tab's or session's folder, a temporary folder (KTD4).
     case store
-    /// The session's folder is gone, someone else's, writable by others or not local.
+    /// The store recorded is not there: a volume not mounted yet, say.
+    case storeGone
+    /// No session folder was recorded, or it is someone else's, writable by others or not local.
     case folder
+    /// The session's folder recorded is not there: a volume not mounted yet, say.
+    case folderGone
     /// What runs no longer resolves.
     case executable
     /// What runs now is not the file that ran: its recorded path leads elsewhere, other than the agent's own install
@@ -440,6 +444,17 @@ extension ResumeCheck {
     /// Its name as MCP and the restore report give it: `executable_changed`.
     public var word: String { RestoreReport.snake(rawValue) }
 
+    /// A fact that can clear without the user (plan 046): the session not in its store or held by a process yet, or its
+    /// folder or store not there yet (a volume not mounted). A pane held by these alone is checked again after the
+    /// restore (RestoreRecheck). Every other check guards the user (flags, auto-continue, project config, what runs and
+    /// where, ownership and permissions, the id, routing): it is never checked again, and its line waits for the user.
+    public var isTransient: Bool {
+        switch self {
+        case .session, .folderGone, .storeGone: return true
+        default: return false
+        }
+    }
+
     /// What held the agent, in plain words, for its tab's note: "its launch flags".
     public var heldWords: String {
         switch self {
@@ -451,7 +466,9 @@ extension ResumeCheck {
         case .autoContinue: return "its auto-continue setting"
         case .session: return "its session is gone or open elsewhere"
         case .store: return "its session store"
+        case .storeGone: return "its session store is not there"
         case .folder: return "its folder"
+        case .folderGone: return "its folder is not there"
         case .executable: return "its program could not be found"
         case .executableChanged: return "its program changed since it started"
         case .location: return "where its program lies"
@@ -580,8 +597,8 @@ extension SessionSnapshot.Evidence {
         if !routingHolds { failed.append(.routing) }
         if !autoContinueOff || facts.settingsAutoContinue { failed.append(.autoContinue) }
         if !facts.sessionAvailable { failed.append(.session) }
-        if !storeIsSafe(facts) { failed.append(.store) }
-        if !folderIsSafe(facts) { failed.append(.folder) }
+        if let problem = storeProblem(facts) { failed.append(problem) }
+        if let problem = folderProblem(facts) { failed.append(problem) }
         failed += codeProblems(facts)
         if startedAt == nil || facts.projectConfigChanged { failed.append(.projectConfig) }
         guard failed.isEmpty else { return .onTheLine(failed) }
@@ -589,18 +606,21 @@ extension SessionSnapshot.Evidence {
         return .resume(command)
     }
 
-    /// The session's folder exists, is the user's, others cannot write it, and it is on a local volume.
-    private func folderIsSafe(_ facts: ResumeFacts) -> Bool {
-        guard let folder = sessionFolder, let found = facts.files[folder] else { return false }
-        return found.isDirectory && found.owner == facts.user && !found.othersCanWrite && found.isLocal
+    /// The session's folder exists, is the user's, others cannot write it, and it is on a local volume: else `folder`,
+    /// or `folderGone` when a folder recorded is not there at all (a volume not mounted yet), which a re-check may find.
+    private func folderProblem(_ facts: ResumeFacts) -> ResumeCheck? {
+        guard let folder = sessionFolder else { return .folder }
+        guard let found = facts.files[folder] else { return .folderGone }
+        return found.isDirectory && found.owner == facts.user && !found.othersCanWrite && found.isLocal ? nil : .folder
     }
 
     /// The store capture read the session file in is still that real folder, the user's alone, and outside every
-    /// folder a tab can write.
-    private func storeIsSafe(_ facts: ResumeFacts) -> Bool {
-        guard let store, let found = facts.files[store] else { return false }
+    /// folder a tab can write: else `store`, or `storeGone` when a store recorded is not there at all.
+    private func storeProblem(_ facts: ResumeFacts) -> ResumeCheck? {
+        guard let store else { return .store }
+        guard let found = facts.files[store] else { return .storeGone }
         let owned = found.isDirectory && found.owner == facts.user && !found.othersCanWrite
-        return owned && found.realPath == store && !facts.forbids(found.realPath)
+        return owned && found.realPath == store && !facts.forbids(found.realPath) ? nil : .store
     }
 
     /// What runs (the executable, or a script agent's interpreter and script), by real path: there, a regular file of
