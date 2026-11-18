@@ -96,6 +96,10 @@ extension TerminalWindowController {
             menu.addItem(.separator())
             menu.addCommand("Keep Open", nil) { CommandPaneAutoClose.keep(tab) }
         }
+        if LiveChatView.isOn, LiveChatWatch.offers(tab), let group = groups.first(where: { $0.contains(tab) }) {
+            menu.addItem(.separator())
+            menu.addCommand("Show as Chat", "toggleLiveChat:") { group.paneView(tab).setChat(shown: true) } // plan 041
+        }
         if selected, agentTab != nil {
             menu.addItem(.separator())
             menu.addCommand("Send Selection to Agent", "sendToAgent:") { [weak self] in self?.sendSelection(of: tab) }
@@ -176,6 +180,12 @@ extension TerminalWindowController {
         let closing = group.panes.filter { CommandPaneAutoClose.mayClose($0) }
         if !closing.isEmpty {
             menu.addCommand("Keep Open", nil) { closing.forEach { CommandPaneAutoClose.keep($0) } }
+        }
+        // The tab's pane with the keyboard shows its agent's session as a chat, or its terminal again (plan 041).
+        if let tab = group.panes.first(where: { $0 === activeTab }) ?? group.panes.first,
+           LiveChatView.isOn, LiveChatWatch.offers(tab) {
+            let pane = group.paneView(tab)
+            menu.addCommand(pane.showsChat ? "Show Terminal" : "Show as Chat", "toggleLiveChat:") { pane.setChat(shown: !pane.showsChat) }
         }
         menu.addItem(.separator())
         menu.addCommand("Split Right", "splitRight:") { [weak self] in self?.split(group, vertical: true) }
@@ -391,6 +401,10 @@ extension TerminalWindowController {
         case #selector(togglePromptBox(_:)):
             item.state = promptBoxShown() ? .on : .off
             return activeTab != nil
+        case #selector(toggleLiveChat(_:)):
+            let chat = liveChatState()
+            item.title = chat.shown ? "Show Terminal" : "Show as Chat"
+            return chat.offered
         case #selector(reopenClosedTab(_:)):
             return !ClosedTabs.isEmpty
         case #selector(duplicateTab(_:)):
