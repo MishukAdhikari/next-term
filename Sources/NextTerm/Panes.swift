@@ -15,6 +15,12 @@ final class PaneView: NSView {
     private var boxAreaHeight: NSLayoutConstraint?
     /// The prompt box, made the first time it shows.
     private(set) var promptBox: AgentPromptBox?
+    /// Above the terminal while its agent has a live chat (plan 041): the terminal and chat buttons, never over the
+    /// agent's text. No room while it is hidden.
+    let chatStrip = LiveChatStrip()
+    private var chatStripHeight: NSLayoutConstraint?
+    /// The live chat over the terminal, made the first time it shows. The terminal keeps running under it.
+    private(set) var liveChat: LiveChatView?
 
     init(tab: TerminalTab) {
         self.tab = tab
@@ -33,7 +39,17 @@ final class PaneView: NSView {
         boxAreaHeight = boxHeight
         let height = header.heightAnchor.constraint(equalToConstant: 0)
         headerHeight = height
+        chatStrip.isHidden = true
+        chatStrip.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(chatStrip)
+        let stripHeight = chatStrip.heightAnchor.constraint(equalToConstant: 0)
+        chatStripHeight = stripHeight
+        chatStrip.onPick = { [weak self] chat in self?.setChat(shown: chat) }
         NSLayoutConstraint.activate([
+            chatStrip.topAnchor.constraint(equalTo: header.bottomAnchor),
+            chatStrip.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
+            chatStrip.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+            stripHeight,
             boxArea.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
             boxArea.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
             boxArea.bottomAnchor.constraint(equalTo: bottomAnchor),
@@ -59,7 +75,7 @@ final class PaneView: NSView {
         view.translatesAutoresizingMaskIntoConstraints = false
         addSubview(view, positioned: .below, relativeTo: veil)
         NSLayoutConstraint.activate([
-            view.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 4),
+            view.topAnchor.constraint(equalTo: chatStrip.bottomAnchor, constant: 4),
             view.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
             view.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -2),
             view.bottomAnchor.constraint(equalTo: boxArea.topAnchor, constant: -2),
@@ -96,6 +112,60 @@ final class PaneView: NSView {
             boxAreaHeight?.isActive = true
             if had { window?.makeFirstResponder(tab.view) }
         }
+    }
+
+    /// Whether the live chat shows over the terminal.
+    var showsChat: Bool { liveChat?.isHidden == false }
+
+    /// The strip follows the tab: shown while its agent has a live chat and the setting is on; gone (and the chat with
+    /// it) when the agent ends or the setting goes off.
+    func updateChatStrip() {
+        let offered = LiveChatView.isOn && LiveChatWatch.offers(tab)
+        if !offered, showsChat { setChat(shown: false) }
+        if chatStrip.isHidden == offered {
+            chatStrip.isHidden = !offered
+            chatStripHeight?.constant = offered ? LiveChatStrip.height : 0
+        }
+        chatStrip.showing(chat: showsChat)
+    }
+
+    /// Shows the chat over the terminal, its composer with the keyboard; or the terminal again, with the keyboard. The
+    /// terminal, its scrollback and its program are never touched.
+    func setChat(shown: Bool) {
+        if shown {
+            guard LiveChatView.isOn, let feed = LiveChatWatch.feed(for: tab) else { return NSSound.beep() }
+            if let old = liveChat, old.feed !== feed {
+                old.removeFromSuperview()
+                liveChat = nil
+            }
+            let chat: LiveChatView
+            if let kept = liveChat {
+                chat = kept
+            } else {
+                chat = LiveChatView(tab: tab, feed: feed)
+                chat.translatesAutoresizingMaskIntoConstraints = false
+                addSubview(chat, positioned: .below, relativeTo: veil)
+                NSLayoutConstraint.activate([
+                    chat.topAnchor.constraint(equalTo: chatStrip.bottomAnchor),
+                    chat.leadingAnchor.constraint(equalTo: leadingAnchor),
+                    chat.trailingAnchor.constraint(equalTo: trailingAnchor),
+                    chat.bottomAnchor.constraint(equalTo: bottomAnchor),
+                ])
+                chat.onShowTerminal = { [weak self] in self?.setChat(shown: false) }
+                liveChat = chat
+            }
+            chat.isHidden = false
+            chat.refresh()
+            window?.makeFirstResponder(chat.composer.textView)
+        } else {
+            guard let chat = liveChat else { return }
+            let had = chat.window != nil && !chat.isHidden
+            chat.removeFromSuperview()
+            liveChat = nil
+            LiveChatWatch.release(tab)
+            if had { window?.makeFirstResponder(tab.view) }
+        }
+        chatStrip.showing(chat: showsChat)
     }
 
     var dimmed = false {
@@ -710,12 +780,19 @@ extension PaneGroup {
     func refreshHeaders() {
         for tab in panes { paneViews[tab.id]?.header.update() }
     }
+
+    /// Each pane's live chat strip follows its agent (plan 041); panes not built yet have none.
+    func updateChatStrips() {
+        for tab in panes { paneViews[tab.id]?.updateChatStrip() }
+    }
 }
 
 extension TerminalWindowController {
     /// With the tab bar: the headers of every split tab follow their panes.
     func refreshPaneHeaders() {
         for group in groups where group.isSplit { group.refreshHeaders() }
+        // The live chat's strip follows each pane's agent (plan 041).
+        for group in groups { group.updateChatStrips() }
     }
 
     /// A header's ×: that pane alone, asking first as ⌘W on it does.

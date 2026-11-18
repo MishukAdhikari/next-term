@@ -177,6 +177,52 @@ import Testing
         #expect(LiveChat.commandCodeFile(folder: folder, since: since, id: "../x", home: home.path) == nil)
     }
 
+    /// Items as the renderer's blocks: a result goes into its call's row, a call with no result runs until a turn end,
+    /// an edit is followed by its change and a to-do list by its plan.
+    @Test func itemsBecomeBlocksWithResultsInTheirRows() {
+        let items: [LiveChat.Item] = [
+            .init(id: "1", kind: .user("Fix it")),
+            .init(id: "2", kind: .thinking("Look.")),
+            .init(id: "3", kind: .tool(.init(id: "a", name: "Bash", summary: "npm test"))),
+            .init(id: "4", kind: .result(callID: "a", output: "1 failing", isError: true)),
+            .init(id: "5", kind: .tool(.init(id: "b", name: "Edit", summary: "/p/a.swift",
+                                             diff: .init(path: "/p/a.swift", lines: ["-a", "+b", "+c"])))),
+            .init(id: "6", kind: .tool(.init(id: "c", name: "TodoWrite", summary: "", plan: [.init(text: "Fix", status: .active)]))),
+            .init(id: "7", kind: .text("Fixed.")),
+            .init(id: "8", kind: .turnEnd(durationMs: 4_200)),
+            .init(id: "9", kind: .tool(.init(id: "d", name: "Read", summary: "x"))),
+            .init(id: "10", kind: .unknown("new")),
+        ]
+        let blocks = LiveChat.blocks(items, expanded: ["2"])
+        #expect(blocks.map(\.id) == ["1", "2", "3", "5", "5#change", "6", "6#plan", "7", "8", "9"])
+        guard case .thought(let thought) = blocks[1].content, case .tool(let bash) = blocks[2].content,
+              case .tool(let edit) = blocks[3].content, case .change(let change) = blocks[4].content,
+              case .plan(let plan) = blocks[6].content, case .turnEnded(let words, _, _) = blocks[8].content,
+              case .tool(let running) = blocks[9].content else {
+            Issue.record("\(blocks)")
+            return
+        }
+        #expect(!thought.folded)
+        #expect(bash.title == "Bash(npm test)" && bash.kind == "execute" && bash.status == .failed && bash.output == "1 failing")
+        #expect(edit.status == .completed && edit.kind == "edit")
+        #expect(change.added == 2 && change.removed == 1 && change.path == "/p/a.swift")
+        #expect(plan.map(\.status) == [.inProgress])
+        #expect(words == "Done in 4 s")
+        #expect(running.status == .inProgress && running.kind == "read")
+    }
+
+    /// A question the agent's own screen asks, as the chat's card: "always" needs the Mac, "No" is Esc's.
+    @Test func aScreensQuestionBecomesACard() {
+        let card = ChatDecision.from(question: "Do you want to proceed?", choices: ["Yes", "Yes, and don't ask again", "No"],
+                                     highlighted: 0, escape: 2)
+        #expect(card.choices.map(\.number) == [1, 2, 3])
+        #expect(card.choices.allSatisfy { !$0.needsMac })
+        #expect(card.choices.map(\.kind) == ["allow_once", "allow_always", "reject_once"])
+        #expect(card.rejectIndex == 2 && card.highlighted == 0 && !card.isQuestion)
+        let pick = ChatDecision.from(question: "Which file?", choices: ["a.ts", "b.ts", "c.ts"], highlighted: 7, escape: nil)
+        #expect(pick.isQuestion && pick.highlighted == 2)
+    }
+
     @Test func onlyClaudeCodexAndCommandCodeHaveALiveChat() {
         #expect(LiveChat.Agent(.claude) == .claude && LiveChat.Agent(.codex) == .codex && LiveChat.Agent(.commandCode) == .commandCode)
         #expect(LiveChat.Agent(.gemini) == nil && LiveChat.Agent(.opencode) == nil)

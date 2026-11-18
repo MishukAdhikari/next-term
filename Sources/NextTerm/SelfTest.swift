@@ -686,13 +686,14 @@ enum SelfTest {
               "a self-test's tabs read its own zsh config, never the user's", "test config \(ownConfig): " + zdotTab.screenTail(4).joined(separator: " | "))
         c.remove(zdotTab)
         #if DEBUG
-        // One part on the project set up so far (NEXTTERM_SELFTEST_ONLY=gitAndViewKeys, import, rollback, held, closeWorktree, worktrees, markdown, mcpWrite, parallel (with scrollback), skills, notifications, services, secrets, agentSession, mcpHub, mcpHubSettings, mcpHubOAuth (only when asked), opencode, tasks, welcome, tabList, terminalPosition, completion, ghostText, gitRefresh, clicks, mouse, remote, mcp, newTerminal, cellSnap, projectColor, windowNav, windowColumn, hints, settingsSections, agentsSettings, agentScratch or database), for its own failures
+        // One part on the project set up so far (NEXTTERM_SELFTEST_ONLY=gitAndViewKeys, import, rollback, held, closeWorktree, worktrees, markdown, mcpWrite, parallel (with scrollback), skills, notifications, services, runGroup, secrets, agentSession, mcpHub, mcpHubSettings, mcpHubOAuth (only when asked), opencode, tasks, welcome, tabList, terminalPosition, completion, ghostText, gitRefresh, clicks, mouse, remote, mcp, newTerminal, cellSnap, projectColor, windowNav, windowColumn, hints, settingsSections, agentsSettings, agentScratch or database), for its own failures
         // without the whole run's 25 minutes.
         switch ProcessInfo.processInfo.environment["NEXTTERM_SELFTEST_ONLY"] {
         case "gitAndViewKeys": return await gitAndViewKeyChecks(c, proj: proj)
         case "import": return await importPartChecks(c, proj: proj)
         case "rollback": return await rollbackChecks(c)
         case "promptBox": return await promptBoxChecks() // the prompt box under a tab's terminal
+        case "liveChat": return await liveChatChecks() // an agent tab's live chat view (plan 041)
         case "pinnedTabs": return await pinnedTabsChecks() // pinned tabs: first, the pin, bulk closes leave them, ⌘W asks
         case "contextGauge": return await contextGaugeChecks() // an agent tab's context gauge and tooltip line
         case "reviewComments": return await reviewCommentsChecks() // review comments in a diff, sent to the agent as one prompt
@@ -718,6 +719,7 @@ enum SelfTest {
             notificationsMenuChecks()
             return agentSpinnerChecks()
         case "services": return await serviceChecks(c)
+        case "runGroup": return await runGroupChecks(c) // the Run group: tasks, an offer line, ▶ runs one in a tab, ⌘P's Run lines
         case "secrets": return await secretsChecks(c, proj: proj)
         case "secretsApproval": return await secretsApprovalChecks() // the panel's states and Always, with screenshots
         case "opencode": return await opencodeScreenChecks(c) // its screen, answers and own notices
@@ -906,6 +908,7 @@ enum SelfTest {
         await gitLeftoverChecks(c)
         await placeChecks(c)
         await promptBoxChecks()
+        await liveChatChecks()
         await contextGaugeChecks()
         await reviewCommentsChecks()
         await sessionPreviewChecks()

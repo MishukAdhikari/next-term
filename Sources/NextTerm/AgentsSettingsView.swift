@@ -20,6 +20,8 @@ final class AgentsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
     let installButton = NSButton(title: "Install\u{2026}", target: nil, action: nil)
     let checkButton = NSButton(title: "Check for Updates", target: nil, action: nil)
     let showAll = NSButton(checkboxWithTitle: "Show agents you don\u{2019}t have", target: nil, action: nil)
+    /// Plan 041 D7: the terminal and chat buttons on Claude Code, Codex and Command Code tabs.
+    let chatView = NSButton(checkboxWithTitle: "Chat view for agent tabs", target: nil, action: nil)
     let status = NSTextField(labelWithString: "")
     let emptyTitle = NSTextField(labelWithString: "No coding agents on your PATH")
     let emptyText = NSTextField(wrappingLabelWithString: "Agents you install with npm, Homebrew or their own installers show here.")
@@ -96,7 +98,13 @@ final class AgentsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
         }
         let buttons = NSStackView(views: [updateButton, installButton, NSView(), status, checkButton])
         buttons.spacing = 8
-        for view in [intro, scroll, detail, buttons, showAll] as [NSView] { content.addArrangedSubview(view) }
+        chatView.state = LiveChatView.isOn ? .on : .off
+        chatView.toolTip = "Claude Code, Codex and Command Code tabs show a terminal and a chat button: the chat is the same live session, and the terminal stays one click away."
+        chatView.target = self
+        chatView.action = #selector(toggleChatView)
+        let checks = NSStackView(views: [showAll, chatView])
+        checks.spacing = 24
+        for view in [intro, scroll, detail, buttons, checks] as [NSView] { content.addArrangedSubview(view) }
         content.setCustomSpacing(14, after: buttons)
         content.orientation = .vertical
         content.alignment = .leading
@@ -244,6 +252,12 @@ final class AgentsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
     @objc private func checkNow() { manager.reload(fetch: true, force: true) }
 
     @objc private func toggleAll() { reload() }
+
+    /// Chat view for agent tabs: off, every pane goes back to its terminal and loses its buttons.
+    @objc private func toggleChatView() {
+        LiveChatView.isOn = chatView.state == .on
+        AppDelegate.shared?.controllers.forEach { $0.liveChatSettingChanged() }
+    }
 
     @objc private func showMissing() {
         showAll.state = .on

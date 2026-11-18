@@ -528,6 +528,7 @@ extension AgentEvidence {
                     agent.routingVariables.allSatisfy { AgentEvidence.routingMatches(process.routing[$0], shell[$0]) }
                 }
             } ?? false
+            evidence.routingSet = routingSet(of: agent, in: candidates)
             evidence.autoContinueOff = candidates.allSatisfy { process in
                 agent.autoContinueVariables.allSatisfy { process.environment[$0] == nil }
             }
@@ -598,12 +599,14 @@ extension AgentEvidence {
         return SessionSnapshot.Launcher(word: word, typed: typedOptions.count)
     }
 
-    /// The typed line ran the agent as typed (KTD5): its last command, the one that started the agent as the launcher
+    /// The typed line ran the agent as typed: its last command, the one that started the agent as the launcher
     /// reads it, has the agent's program as its first word, with no assignment or wrapper before it and no alias in
     /// between; or that word is an alias (`launcher`, which passes argv's own arguments on) whose expansion changed
     /// nothing else of the line and runs the agent's program, with its options, first. A function, which the shell expands
     /// as itself, shows neither; nor does an alias that sets a variable, wraps the agent, or runs anything before it; nor
-    /// an earlier command that names the agent and ended before a function started it (`claude --version; cad`).
+    /// an earlier command that names the agent and ended before a function started it (`claude --version; cad`). Only the
+    /// start watch's fallback reads it (StartWatch.Start), to tell when a launcher's plain resume may be the program's:
+    /// the automatic-resume gate judges the process instead (plan 046).
     static func ranAsTyped(_ agent: RestoreAgent, typed: String?, expanded: String?, launcher: SessionSnapshot.Launcher?) -> Bool {
         guard let typed else { return false }
         guard let expanded, expanded != typed else {
@@ -616,6 +619,15 @@ extension AgentEvidence {
             return false
         }
         return agent.arguments(inLine: last)?.plain == true
+    }
+
+    /// Which of the agent's routing variables any of `candidates` had set, by name, read from their own environment
+    /// (`AgentProcess.routing`, digests only). Nil when one of the agent's routing variables is not read at all
+    /// (`routingKeys` leaves out a name shaped like a secret's): then whether it was set is not known.
+    static func routingSet(of agent: RestoreAgent, in candidates: [AgentProcess]) -> [String]? {
+        let names = agent.routingVariables
+        guard !candidates.isEmpty, names.allSatisfy(routingKeys.contains) else { return nil }
+        return names.filter { name in candidates.contains { $0.routing[name] != nil } }
     }
 
     /// The store an agent that resumes by itself keeps, by its real path (a link to it, such as a dotfiles folder,
@@ -700,22 +712,34 @@ extension AgentEvidence {
     /// What ran: the path the agent was started by when it leads to the very file the kernel ran (so a resume runs
     /// `~/.local/bin/claude`, which an update moves on, rather than one version's file), else the kernel's own. For a
     /// script agent, the interpreter so found and the script's real path.
-    static func code(of process: AgentProcess) -> (executable: String, interpreter: String?, script: String?) {
+    /// `ran` is the real path of the file the kernel ran, which the gate asks the resume's path to still lead to.
+    static func code(of process: AgentProcess) -> Code {
         let ran = FileFacts.read(process.executable)?.realPath
         let argv0 = process.arguments.first ?? ""
         let invoked = invokedPath(argv0, searchPath: process.environment["PATH"], directory: process.directory)
         let same = invoked.flatMap { path in ran != nil && FileFacts.read(path)?.realPath == ran ? path : nil }
         let program = same ?? process.executable
-        guard let index = RestoreAgent.scriptIndex(argv: process.arguments, executable: process.executable) else { return (program, nil, nil) }
+        guard let index = RestoreAgent.scriptIndex(argv: process.arguments, executable: process.executable) else {
+            return Code(executable: program, interpreter: nil, script: nil, ran: ran)
+        }
         let word = process.arguments[index]
         let path = word.hasPrefix("/") ? word : process.directory.map { $0 + "/" + word }
-        return (program, program, path.flatMap { FileFacts.read($0)?.realPath })
+        return Code(executable: program, interpreter: program, script: path.flatMap { FileFacts.read($0)?.realPath }, ran: ran)
     }
 
-    private static func record(_ code: (executable: String, interpreter: String?, script: String?), in evidence: inout SessionSnapshot.Evidence) {
+    /// What ran, as capture records it.
+    struct Code: Equatable {
+        var executable: String
+        var interpreter: String?
+        var script: String?
+        var ran: String?
+    }
+
+    private static func record(_ code: Code, in evidence: inout SessionSnapshot.Evidence) {
         evidence.executable = code.executable
         evidence.interpreter = code.interpreter
         evidence.script = code.script
+        evidence.ranPath = code.ran
     }
 
     /// The absolute path a shell would run for `word`: itself when it holds a slash (from `directory` when relative),

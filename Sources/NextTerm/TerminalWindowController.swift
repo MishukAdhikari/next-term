@@ -2122,6 +2122,10 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     private(set) lazy var fileFinder: GoToFileController = {
         let finder = GoToFileController()
         finder.onOpen = { [weak self] path, line, column in self?.openFile(URL(fileURLWithPath: path), line: line, column: column) }
+        finder.onRun = { [weak self] task in
+            guard let self else { return }
+            self.sidebar(self.sidebar, run: task)
+        }
         return finder
     }()
 
@@ -2152,7 +2156,9 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     /// the terminal) starts the search, as it does for Find; `app/User.php:42` in a log opens at line 42.
     @objc func goToFile(_ sender: Any?) {
         guard let window else { return }
-        fileFinder.show(root: searchRoot, recent: recentFiles, query: selectionSeed, over: window)
+        // The Run group's tasks too, when the sidebar shows the project ⌘P searches: typing "run" lists them.
+        let tasks = sidebar.root?.path == canonicalPath(searchRoot) ? sidebar.runGroup.tasks.map(\.task) : []
+        fileFinder.show(root: searchRoot, recent: recentFiles, query: selectionSeed, tasks: tasks, over: window)
     }
 
     /// The selected text, if it is one short line: in the editor when it has the keyboard, else the terminal's.
@@ -2571,6 +2577,23 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             DatabaseHandOff.openInTerminal(database, root: root, controller: self)
         case .vercel:
             DatabaseHandOff.openInVercel(database, root: root, controller: self)
+        }
+    }
+
+    /// A Run row: the task's command typed and run in a new tab in the project's folder, named after it.
+    func sidebar(_ sidebar: ProjectSidebarView, run task: RunTask) {
+        guard let root = sidebar.root?.path else { return }
+        runInNewTab(directory: root, command: task.command, title: task.command)
+    }
+
+    /// A Run offer's Install…: the installer typed in a new tab in the home folder, not run: the user's Return is the
+    /// yes, as Settings › Agents' Install… does. An installer this Mac can't run opens its page instead.
+    func sidebar(_ sidebar: ProjectSidebarView, install offer: ToolOffer) {
+        switch offer.action {
+        case .type(let command):
+            runInNewTab(directory: NSHomeDirectory(), command: command, title: offer.tabTitle, submit: false)
+        case .open(let page):
+            if let url = URL(string: page) { NSWorkspace.shared.open(url) }
         }
     }
 
@@ -3021,6 +3044,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         if sidebar.showsNoProject { sidebar.noProject.show(recent: AppDelegate.shared.recentProjects) }
         sidebar.retryDenied() // back from System Settings, perhaps, with a folder allowed
         sidebar.scheduleSessionsReload() // agents in other terminals may have kept new ones
+        sidebar.lookForRunTools() // a tool the Run group offered may have been installed since
         if let view = activeTab?.view, window?.firstResponder !== view, !(window?.firstResponder is NSTextView), !terminalCollapsed {
             window?.makeFirstResponder(view)
         }

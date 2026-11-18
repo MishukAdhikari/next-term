@@ -86,14 +86,20 @@ final class NameDetailLine {
     func fit(in row: NSView, badge: NSView) {
         let ends: CGFloat = Self.toBadge + badge.intrinsicContentSize.width + Self.toMore + Self.moreWidth + Self.toEnd
         let room: CGFloat = row.bounds.width - Self.nameStart - ends
-        let nameWhole: CGFloat = name.intrinsicContentSize.width
-        let detailWhole: CGFloat = detail.stringValue.isEmpty ? 0 : detail.intrinsicContentSize.width
+        // What each label needs to draw its text uncut, its cell's insets included: a single-line label that truncates
+        // reports a natural width a few points short of that, which cut short names ("he…" for "hello").
+        let nameWhole: CGFloat = Self.whole(name)
+        let detailWhole: CGFloat = detail.stringValue.isEmpty ? 0 : Self.whole(detail)
         let fit = NameDetailFit.fit(room: Double(room), name: Double(nameWhole), detail: Double(detailWhole),
                                     gap: Double(Self.detailGap), minimumDetail: Double(minimumDetail))
         Self.set(nameWidth, to: CGFloat(fit.name))
         Self.set(detailWidth, to: CGFloat(fit.detail ?? 0))
         Self.set(detailLead, to: fit.detail == nil ? 0 : Self.detailGap)
         detail.isHidden = fit.detail == nil
+    }
+
+    static func whole(_ label: NSTextField) -> CGFloat {
+        ceil(max(label.cell?.cellSize.width ?? 0, label.intrinsicContentSize.width))
     }
 
     private static func set(_ constraint: NSLayoutConstraint, to constant: CGFloat) {

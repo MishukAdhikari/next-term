@@ -24,7 +24,6 @@ final class LiveChatFeed {
     private var timer: Timer?
     private var reading = false
     private var again = false
-    private let started = Date()
     private static let queue = DispatchQueue(label: "nt.live-chat", qos: .utility)
 
     init(tab: TerminalTab, agent: LiveChat.Agent) {
@@ -58,8 +57,10 @@ final class LiveChatFeed {
         let pid = tcgetpgrp(tab.view.process.childfd)
         guard pid > 0 else { return }
         let agent = self.agent, kind = tab.localAgent, resumed = tab.localAgent?.resumedID(in: tab.status.command)
-        let folder = tab.directory, since = started.addingTimeInterval(-5), home = NSHomeDirectory()
+        let folder = tab.directory, home = LiveChatWatch.home
         Self.queue.async { [weak self] in
+            // A session written to since the agent started (its process's start, a little before): not an older one.
+            let since = (ProcessInspector.startTime(of: pid) ?? .distantPast).addingTimeInterval(-5)
             let found = Self.locate(agent: agent, kind: kind, pid: pid, resumed: resumed, folder: folder, since: since, home: home)
             DispatchQueue.main.async {
                 MainActor.assumeIsolated { self?.follow(found) }
@@ -163,6 +164,8 @@ final class LiveChatFeed {
 @MainActor
 enum LiveChatWatch {
     private static var feeds: [UUID: LiveChatFeed] = [:]
+    /// Whose agent folders are read: the self-test's own home instead of the user's.
+    static var home = NSHomeDirectory()
 
     /// Whether `tab` can show a live chat: a local tab running Claude Code, Codex or Command Code.
     static func offers(_ tab: TerminalTab) -> Bool {
