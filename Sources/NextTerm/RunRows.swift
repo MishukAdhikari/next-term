@@ -14,7 +14,7 @@ final class RunGroup {
     var expansion = SidebarGroupExpansion()
 
     /// The group's rows: the offers, then the tasks. None while the project has no task, offers or not.
-    var items: [AnyObject] { tasks.isEmpty ? [] : offers + tasks }
+    var items: [AnyObject] { tasks.isEmpty ? [] : (offers as [AnyObject]) + (tasks as [AnyObject]) }
 
     /// Takes a scan's tasks, keeping each row's object (and so its place and selection) by its id. False when nothing
     /// shown changed. Offers stay until the next look along PATH replaces them, unless no tool is needed any more.
