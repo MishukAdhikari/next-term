@@ -177,7 +177,10 @@ final class MCPControlServer: @unchecked Sendable {
     /// time, whatever tool made it (RemoteMCP, MCPWriteControl, SkillsMCP included), in its JSON's strings too, where
     /// a value's quotes and line breaks are escaped.
     private func send(_ answer: MCPServer.CallResult, on fd: Int32) {
-        let masked = MCPServer.CallResult(text: SecretMask.current.mask(answer: answer.text), isError: answer.isError)
+        // The structured part too (forward_prompt's): masked, and dropped if masking left it unreadable.
+        let structured = answer.structured.map { SecretMask.current.mask(answer: $0) }
+            .flatMap { (try? JSONSerialization.jsonObject(with: Data($0.utf8))) != nil ? $0 : nil }
+        let masked = MCPServer.CallResult(text: SecretMask.current.mask(answer: answer.text), isError: answer.isError, structured: structured)
         let data = MCPServer.encodeAnswer(masked)
         data.withUnsafeBytes { raw in
             var offset = 0
@@ -330,6 +333,7 @@ enum MCPControl {
             if HerdrMCP.route(tool, target, arguments, caller: caller, herdrCaller: herdrCaller, reply: reply) { return }
         }
         switch tool {
+        case "forward_prompt": MainActor.assumeIsolated { MCPHandoverControl.call(arguments, caller: caller, reply: reply) }
         case "list_tabs":
             if arguments["herdr_layout"] as? Bool == true { return HerdrMCP.listWithLayout(listTabs(project: arguments["project"] as? String, caller: caller, herdrCaller: herdrCaller), reply: reply) } // plan 040 U6
             reply(listTabs(project: arguments["project"] as? String, caller: caller, herdrCaller: herdrCaller))
@@ -445,6 +449,7 @@ enum MCPControl {
         if let index = controller.groups.firstIndex(where: { $0.contains(tab) }) {
             info["tab_bar_position"] = index + 1
             if controller.groups[index].isSplit { info["split"] = true }
+            if controller.groups[index].pinned { info["pinned"] = true } // plan 045: close_tab asks the user first
         }
         if tab.status.running {
             info["program"] = tab.status.program
@@ -639,6 +644,7 @@ enum MCPControl {
     }
 
     private static func newTab(_ arguments: [String: Any], caller: TerminalTab?, reply: @escaping Reply) {
+        if let raw = arguments["split_beside"] as? String, let herdr = HerdrTarget.parse(raw) { return MainActor.assumeIsolated { HerdrMCP.runBeside(herdr, arguments, caller: caller, reply: reply) } } // plan 040 U4: its folder is on herdr's side
         guard let directory = absolute(arguments["directory"]), isFolder(directory) else {
             return reply(fail("Not a folder (give an absolute path): \(arguments["directory"] as? String ?? "")"))
         }
@@ -663,7 +669,6 @@ enum MCPControl {
         }
         let tab: TerminalTab
         let controller: TerminalWindowController
-        if let raw = arguments["split_beside"] as? String, let herdr = HerdrTarget.parse(raw) { return MainActor.assumeIsolated { HerdrMCP.runBeside(herdr, arguments, caller: caller, reply: reply) } } // plan 040 U4
         if let besideID = arguments["split_beside"] {
             // A pane next to another tab, so the user can watch both.
             guard let beside = findTab(besideID), let owner = self.controller(of: beside) else {
@@ -1018,6 +1023,9 @@ enum MCPControl {
         return ok(answer)
     }
 
+    /// Pinned tabs the user let an agent close, each for the one close_tab that asked.
+    private static var pinnedCloseApproved = Set<UUID>()
+
     private static func closeTab(_ arguments: [String: Any], caller: TerminalTab?, approval: MCPApproval, requester: String?,
                                  connection: String?, reply: @escaping Reply) {
         guard let tab = findTab(arguments["tab_id"]), let controller = controller(of: tab) else {
@@ -1026,6 +1034,21 @@ enum MCPControl {
         if tab === caller { return reply(fail("That is your own tab.")) }
         // Closing would lose text someone else put on its line, force or not.
         if let why = MCPInputLine.refusal(tab) { return reply(fail(why)) }
+        // A pinned tab (plan 045): the user is asked on the Mac first, force or not, whatever the connection's grant.
+        if controller.group(of: tab)?.pinned == true, pinnedCloseApproved.remove(tab.id) == nil {
+            return MainActor.assumeIsolated {
+                let ask = MCPWriteControl.Ask(title: "An agent asks to close a pinned tab",
+                                              details: "\u{201C}\(tab.title)\u{201D} is pinned in its window. "
+                                                + (tab.closeNote.map { "Closing it stops \($0)." } ?? "Closing it ends what runs there."),
+                                              approveTitle: "Close Tab")
+                let context = MCPWriteControl.context(arguments, caller: caller, approval: .askOnMac, requester: requester, connection: connection)
+                MCPWriteControl.approve(ask, context, reply: reply) { _, window in
+                    window?.finish()
+                    pinnedCloseApproved.insert(tab.id)
+                    closeTab(arguments, caller: caller, approval: approval, requester: requester, connection: connection, reply: reply)
+                }
+            }
+        }
         let force = arguments["force"] as? Bool ?? false
         let id = tab.id.uuidString.lowercased()
         // The window's last tab, with files unsaved in its editor (or a database value): closing it closes the

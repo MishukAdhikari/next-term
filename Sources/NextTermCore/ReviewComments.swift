@@ -92,4 +92,43 @@ public enum ReviewComments {
         }
         return AgentPrompt.sanitize(parts.joined(separator: "\n\n"))
     }
+
+    /// What a diff of `path` shows for the comments: the lines marked on each side (the file's lines now for comments
+    /// on it, removed lines by their old numbers) and each comment's note, in one line, after its last line. Outdated
+    /// comments show nothing: their lines are not where they were.
+    public struct Marks: Equatable, Sendable {
+        public var new: Set<Int> = []
+        public var old: Set<Int> = []
+        /// The note shown after a line, by its number on that side; two comments ending on one line share it.
+        public var newNotes: [Int: String] = [:]
+        public var oldNotes: [Int: String] = [:]
+
+        public init() {}
+
+        public var isEmpty: Bool { new.isEmpty && old.isEmpty }
+    }
+
+    public static func marks(_ comments: [ReviewComment], path: String) -> Marks {
+        var marks = Marks()
+        for comment in comments where comment.path == path && !comment.outdated {
+            let lines: [Int] = Array(comment.lines)
+            let note: String = inline(comment.note)
+            if comment.inFile {
+                marks.new.formUnion(lines)
+                if !note.isEmpty { marks.newNotes[comment.lines.upperBound] = marks.newNotes[comment.lines.upperBound].map { $0 + "  ·  " + note } ?? note }
+            } else {
+                marks.old.formUnion(lines)
+                if !note.isEmpty { marks.oldNotes[comment.lines.upperBound] = marks.oldNotes[comment.lines.upperBound].map { $0 + "  ·  " + note } ?? note }
+            }
+        }
+        return marks
+    }
+
+    /// A note as one line beside the code: its first line with text, cut at `limit` characters, "…" when more follows.
+    public static func inline(_ note: String, limit: Int = 100) -> String {
+        let lines: [String] = note.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        guard let first = lines.first else { return "" }
+        let cut: String = first.count > limit ? String(first.prefix(limit)) : first
+        return cut + (cut.count < first.count || lines.count > 1 ? "…" : "")
+    }
 }

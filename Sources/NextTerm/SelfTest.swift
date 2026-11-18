@@ -693,6 +693,7 @@ enum SelfTest {
         case "import": return await importPartChecks(c, proj: proj)
         case "rollback": return await rollbackChecks(c)
         case "promptBox": return await promptBoxChecks() // the prompt box under a tab's terminal
+        case "pinnedTabs": return await pinnedTabsChecks() // pinned tabs: first, the pin, bulk closes leave them, ⌘W asks
         case "contextGauge": return await contextGaugeChecks() // an agent tab's context gauge and tooltip line
         case "reviewComments": return await reviewCommentsChecks() // review comments in a diff, sent to the agent as one prompt
         case "sessionPreview": return await sessionPreviewChecks() // ⌥⌘O: the selected session’s last turns beside the list
@@ -709,6 +710,7 @@ enum SelfTest {
         case "mcpHub": return await mcpHubChecks(c, proj: proj) // a fake local server reached through the real nxtrm mcp's catalog
         case "mcpHubSettings": return await mcpHubSettingsChecks() // Settings › MCP Servers: add, paste a key, approve a project's list
         case "mcpHubOAuth": return await mcpHubOAuthChecks(c) // signing in to a fake OAuth server, consent, refresh, a lapse, revoke
+        case "handover": return await handoverChecks(c) // forward_prompt: prompts typed in the wrong tab go to the right session
         case "agentsMenu": return await agentsMenuChecks(c) // the Agents menu: Skills…, MCP Servers…, the moved commands and their keys
         case "settingsSections": return await settingsSectionsChecks(c) // each Settings section's screenshot, one size, over full screen
         case "agentsSettings": return await agentsSettingsChecks() // Settings › Agents with made-up agents: rows, a scheduled update, empty
