@@ -67,7 +67,8 @@ import Testing
         #expect(data.count <= SecretSources.maxBytes)
         var report: SourceReport?
         let elapsed: Duration = ContinuousClock().measure { report = SecretSources.read(&data, name: "keys.json") }
-        #expect(elapsed < .seconds(10), "\(elapsed)")
+        // About 2 s on a Mac; shared CI runners have taken 10. A parse that blows up would take minutes.
+        #expect(elapsed < .seconds(30), "\(elapsed)")
         #expect(report?.unreadable == .tooMany)
     }
 
