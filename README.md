@@ -1,6 +1,6 @@
 # Next Term
 
-**The missing IDE for the terminal.**
+**The missing MCP for the terminal.**
 
 A native macOS terminal and editor for the AI era. Run Claude Code, Codex, OpenCode,
 Command Code, Junie, a test suite and a dev server side by side, one per tab, and see at a glance which
@@ -317,7 +317,7 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   line for Return. A local OpenCode tab’s line names the session OpenCode was showing when its title
   matches exactly one of the folder’s sessions, so after `opencode -c` or a switch inside OpenCode, Return
   resumes the session you were in.
-- **Native.** Swift and AppKit, universal (Apple Silicon and Intel): about 37 MB to download, 78 MB
+- **Native.** Swift and AppKit, universal (Apple Silicon and Intel): about 37 MB to download, 80 MB
   installed. macOS 13 or later.
 
 ## Install

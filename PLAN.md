@@ -1,6 +1,6 @@
 # Next Term — plan
 
-A native macOS terminal and editor, built for running AI agents side by side: the missing IDE for the
+A native macOS terminal and editor, built for running AI agents side by side: the missing MCP for the
 terminal. This file is the map of what is built and what comes next; the README describes it for users.
 
 ## Decisions
