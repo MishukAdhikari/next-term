@@ -334,7 +334,9 @@ enum MCPControl {
         }
         switch tool {
         case "forward_prompt": MainActor.assumeIsolated { MCPHandoverControl.call(arguments, caller: caller, reply: reply) }
-        case "list_tabs": reply(listTabs(project: arguments["project"] as? String, caller: caller, herdrCaller: herdrCaller))
+        case "list_tabs":
+            if arguments["herdr_layout"] as? Bool == true { return HerdrMCP.listWithLayout(listTabs(project: arguments["project"] as? String, caller: caller, herdrCaller: herdrCaller), reply: reply) } // plan 040 U6
+            reply(listTabs(project: arguments["project"] as? String, caller: caller, herdrCaller: herdrCaller))
         case "list_projects": reply(listProjects())
         case "read_tab":
             if let gone = MainActor.assumeIsolated({ CommandPaneAutoClose.closedAnswer(arguments["tab_id"]) }) { return reply(gone) }

@@ -70,6 +70,42 @@ public enum HerdrCommand: Equatable, Sendable {
     /// A command typed and run in `pane`, at its shell prompt (`pane run`), after Approve on the Mac. The command comes
     /// on stdin, as text does (plan 040 U4).
     case run(pane: String)
+    /// A pane zoomed in its herdr tab (`pane zoom --on|--off`), or toggled with nil (plan 040 U5).
+    case zoom(pane: String, on: Bool?)
+    /// herdr's focus to the pane next to `pane` (`pane focus --direction`) (U5).
+    case focusNeighbor(pane: String, direction: Neighbor)
+    /// A pane moved to another herdr tab beside its panes (`pane move --tab --split right`), or to a new tab of its
+    /// own with nil (`pane move --new-tab`), not focused (U5).
+    case move(pane: String, toTab: String?)
+    /// Everything herdr shows, in one read (`api snapshot`): workspaces, tabs, panes, their layouts, agents (U6, U9).
+    case snapshot
+    /// A herdr tab renamed (`tab rename`) (U6).
+    case renameTab(tab: String, label: String)
+    /// A herdr tab closed, with every pane in it (`tab close`), after Approve on the Mac (U6).
+    case closeTab(tab: String)
+    /// herdr's view to one of its tabs (`tab focus`) (U6).
+    case focusTab(tab: String)
+    /// herdr's view to a workspace (`workspace focus`) (U6).
+    case focusWorkspace(workspace: String)
+    /// A herdr workspace renamed (`workspace rename`) (U6).
+    case renameWorkspace(workspace: String, label: String)
+    /// A herdr workspace closed, with its tabs and panes (`workspace close`), after Approve on the Mac (U6).
+    case closeWorkspace(workspace: String)
+    /// A new herdr workspace in `directory`, not focused (`workspace create`), after Approve on the Mac (U6).
+    case newWorkspace(directory: String, label: String)
+    /// The git worktrees of the repository at `directory`, as herdr sees them (`worktree list`) (U7).
+    case worktrees(directory: String)
+    /// A new git worktree on `branch` of the repository at `directory`, in a workspace of its own, not focused
+    /// (`worktree create`), after Approve on the Mac. herdr trusts the repository for that one request (U7).
+    case newWorktree(directory: String, branch: String)
+    /// A linked worktree's workspace removed, and its checkout with it (`worktree remove`), after Approve on the Mac,
+    /// never with `--force` (U7).
+    case removeWorktree(workspace: String)
+
+    /// A neighbour's side, as herdr names it.
+    public enum Neighbor: String, Sendable {
+        case left, right, up, down
+    }
 
     /// Where a split puts the new pane, as herdr names it.
     public enum SplitDirection: String, Sendable {
@@ -105,6 +141,9 @@ public enum HerdrCommand: Equatable, Sendable {
         ["agent", "explain"], ["pane", "list"], ["pane", "read"], ["pane", "send-text"], ["pane", "send-keys"],
         ["tab", "list"], ["tab", "focus"], ["session", "list"], ["machine", "list"], ["pane", "close"], ["agent", "start"],
         ["tab", "create"], ["pane", "split"], ["agent", "wait"], ["pane", "wait-output"], ["agent", "rename"], ["pane", "run"],
+        ["pane", "zoom"], ["pane", "focus"], ["pane", "move"], ["api", "snapshot"], ["tab", "rename"], ["tab", "close"],
+        ["workspace", "focus"], ["workspace", "rename"], ["workspace", "close"], ["workspace", "create"], ["worktree", "list"],
+        ["worktree", "create"], ["worktree", "remove"],
     ]
 
     /// The verbs that may go to one of herdr's saved machines (`--machine`): its agent commands, and no other.
@@ -168,8 +207,12 @@ public enum HerdrCommand: Equatable, Sendable {
     /// It changes what herdr shows (a prompt, keys, its view), so the tab checks again soon after.
     public var changesHerdr: Bool {
         switch self {
-        case .prompt, .text, .keys, .focus, .closePane, .newTab, .startAgent, .split, .rename, .run: return true
-        case .list, .panes, .tabs, .sessions, .read, .version, .explain, .machines, .startKinds, .waitAgent, .waitOutput: return false
+        case .prompt, .text, .keys, .focus, .closePane, .newTab, .startAgent, .split, .rename, .run, .zoom, .focusNeighbor, .move,
+             .renameTab, .closeTab, .focusTab, .focusWorkspace, .renameWorkspace, .closeWorkspace, .newWorkspace, .newWorktree, .removeWorktree:
+            return true
+        case .list, .panes, .tabs, .sessions, .read, .version, .explain, .machines, .startKinds, .waitAgent, .waitOutput, .snapshot,
+             .worktrees:
+            return false
         }
     }
 
@@ -177,8 +220,7 @@ public enum HerdrCommand: Equatable, Sendable {
     public var goesToMachines: Bool {
         switch self {
         case .list, .read, .prompt, .keys, .focus, .explain, .waitAgent: return true
-        case .panes, .tabs, .sessions, .text, .version, .machines, .closePane, .startKinds, .newTab, .startAgent, .split, .waitOutput,
-             .rename, .run: return false
+        default: return false
         }
     }
 
@@ -247,6 +289,35 @@ public enum HerdrCommand: Equatable, Sendable {
             return [[["agent", "rename", pane, name ?? "--clear"]]]
         case .run(let pane):
             return [[["pane", "run", pane, Self.textMark]]]
+        case let .zoom(pane, on):
+            return [[["pane", "zoom", pane, on.map { $0 ? "--on" : "--off" } ?? "--toggle"]]]
+        case let .focusNeighbor(pane, direction):
+            return [[["pane", "focus", "--direction", direction.rawValue, "--pane", pane]]]
+        case let .move(pane, toTab):
+            guard let toTab else { return [[["pane", "move", pane, "--new-tab", "--no-focus"]]] }
+            return [[["pane", "move", pane, "--tab", toTab, "--split", "right", "--no-focus"]]]
+        case .snapshot:
+            return [[["api", "snapshot"]]]
+        case let .renameTab(tab, label):
+            return [[["tab", "rename", tab, label]]]
+        case .closeTab(let tab):
+            return [[["tab", "close", tab]]]
+        case .focusTab(let tab):
+            return [[["tab", "focus", tab]]]
+        case .focusWorkspace(let workspace):
+            return [[["workspace", "focus", workspace]]]
+        case let .renameWorkspace(workspace, label):
+            return [[["workspace", "rename", workspace, label]]]
+        case .closeWorkspace(let workspace):
+            return [[["workspace", "close", workspace]]]
+        case let .newWorkspace(directory, label):
+            return [[["workspace", "create", "--cwd", directory, "--label", label, "--no-focus"]]]
+        case .worktrees(let directory):
+            return [[["worktree", "list", "--cwd", directory]]]
+        case let .newWorktree(directory, branch):
+            return [[["worktree", "create", "--cwd", directory, "--branch", branch, "--no-focus", "--trust-repository"]]]
+        case .removeWorktree(let workspace):
+            return [[["worktree", "remove", "--workspace", workspace]]]
         }
     }
 
@@ -280,8 +351,30 @@ public enum HerdrCommand: Equatable, Sendable {
                 return "herdr waits for \(Self.waitStates.joined(separator: ", ")), not “\(state)”."
             }
             return nil
-        case .waitOutput(let pane, _, _):
+        case .waitOutput(let pane, _, _), .zoom(let pane, _), .focusNeighbor(let pane, _):
             return Self.paneRefusal(pane)
+        case let .move(pane, toTab):
+            if let refusal = Self.paneRefusal(pane) { return refusal }
+            if let toTab, !HerdrTarget.isTab(toTab) { return "“\(toTab)” is not a herdr tab id." }
+            return nil
+        case .snapshot:
+            return nil
+        case let .renameTab(tab, label):
+            return HerdrTarget.isTab(tab) ? Self.labelRefusal(label) : "“\(tab)” is not a herdr tab id."
+        case .closeTab(let tab), .focusTab(let tab):
+            return HerdrTarget.isTab(tab) ? nil : "“\(tab)” is not a herdr tab id."
+        case .focusWorkspace(let workspace), .closeWorkspace(let workspace), .removeWorktree(let workspace):
+            return HerdrTarget.isTab(workspace) ? nil : "“\(workspace)” is not a herdr workspace id."
+        case let .renameWorkspace(workspace, label):
+            return HerdrTarget.isTab(workspace) ? Self.labelRefusal(label) : "“\(workspace)” is not a herdr workspace id."
+        case let .newWorkspace(directory, label):
+            return Self.folderRefusal(directory) ?? Self.labelRefusal(label)
+        case .worktrees(let directory):
+            return Self.folderRefusal(directory)
+        case let .newWorktree(directory, branch):
+            if let refusal = Self.folderRefusal(directory) { return refusal }
+            return Self.isBranch(branch) ? nil : "“\(branch)” is not a branch name Next Term passes to herdr: letters, digits and . _ / -, 100 at most, not starting with - or ending with / or .lock."
+
         case let .rename(pane, name):
             if let refusal = Self.paneRefusal(pane) { return refusal }
             if let name, !HerdrTarget.isAgentName(name) {
@@ -349,11 +442,38 @@ public enum HerdrCommand: Equatable, Sendable {
         return (named ?? "", pane)
     }
 
+    /// A label for a herdr tab or workspace: one line of up to 60 characters that show as themselves, never one of
+    /// herdr's own options.
+    static func labelRefusal(_ label: String) -> String? {
+        let trimmed = label.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty, trimmed.count <= 60, !trimmed.hasPrefix("-"), !trimmed.unicodeScalars.contains(where: ShellQuote.isControl) else {
+            return "A herdr label is one line of up to 60 characters, not starting with -."
+        }
+        return nil
+    }
+
+    /// A branch name Next Term hands herdr for a new worktree: letters, digits and `. _ / -`, at most 100, never one
+    /// that git or herdr would read as an option.
+    public static func isBranch(_ name: String) -> Bool {
+        let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._/-")
+        guard !name.isEmpty, name.count <= 100, !name.hasPrefix("-"), !name.hasPrefix("/"), !name.hasSuffix("/"), !name.hasSuffix(".lock"),
+              !name.contains(".."), !name.contains("//"), name.unicodeScalars.allSatisfy(allowed.contains) else { return false }
+        return true
+    }
+
     /// The longest wait herdr is asked for, in milliseconds: MCP's own most (300 s).
     public static let maxWait = 300_000
 
     /// A wait's time, in milliseconds, between 1 s and `maxWait`.
     static func waitTimeout(_ milliseconds: Int) -> Int { min(maxWait, max(1000, milliseconds)) }
+
+    /// The workspace a `workspace create` or `worktree create` answer names (`"result": {"workspace": {"workspace_id"}}`).
+    public static func createdWorkspace(_ json: String) -> String? {
+        guard let object = try? JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any],
+              let result = object["result"] as? [String: Any], let id = (result["workspace"] as? [String: Any])?["workspace_id"] as? String,
+              HerdrTarget.isTab(id) else { return nil }
+        return id
+    }
 
     /// `pane split`'s answer: the new pane's id (`"result": {"pane": {"pane_id"}}`); nil when it names none herdr's rule
     /// takes.

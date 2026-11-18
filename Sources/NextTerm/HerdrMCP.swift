@@ -94,6 +94,8 @@ enum HerdrMCP {
     /// asks first; the pane tools, which refuse it by name; tools that take no tab).
     static func route(_ tool: String, _ target: HerdrTarget, _ arguments: [String: Any], caller: TerminalTab?,
                       herdrCaller: [String: String], reply: @escaping Reply) -> Bool {
+        // plan 040: herdr's tabs and workspaces, zoom and a neighbour's focus (U5, U6).
+        if routeLayout(tool, target, arguments, caller: caller, herdrCaller: herdrCaller, reply: reply) { return true }
         // plan 040: a wait for states or for output, and a plain pane's read and close, go by herdr's pane.
         if tool == "wait_for_tab", arguments["until"] != nil || arguments["match"] != nil {
             herdrWait(target, arguments, reply: reply)
@@ -167,8 +169,15 @@ enum HerdrMCP {
         // Every check that can refuse, before anything runs: the pane id stands in until herdr makes the tab.
         // Where (plan 040 U1): a new pane beside one of its panes, an existing shell pane, else a new herdr tab.
         let place = startPlace(arguments)
+        let branch: String? = (arguments["worktree"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        let ownWorkspace: Bool = arguments["new_workspace"] as? Bool ?? false
+        if branch != nil || ownWorkspace, directory == nil {
+            return reply(fail("Give directory: the folder for the new herdr workspace (for worktree, a folder in the git repository)."))
+        }
         let newTab: HerdrCommand? = place.pane != nil ? nil
             : place.split.map { HerdrCommand.split(pane: $0, direction: place.direction, directory: directory) }
+            ?? branch.map { HerdrCommand.newWorktree(directory: directory ?? "", branch: $0) }
+            ?? (ownWorkspace ? HerdrCommand.newWorkspace(directory: directory ?? "", label: name) : nil)
             ?? HerdrCommand.newTab(directory: directory, label: name)
         let start = HerdrCommand.startAgent(name: name, kind: kind, pane: place.pane ?? "w1:p1", words: words)
         if let refusal = newTab?.refusal(session: nil) ?? start.refusal(session: nil) { return reply(fail(refusal + " Nothing was started.")) }
@@ -198,6 +207,8 @@ enum HerdrMCP {
         let whereTo: String
         switch newTab {
         case .split(let pane, let direction, _)?: whereTo = "in a new pane \(direction == .down ? "below" : "beside") \(pane)"
+        case .newWorkspace?: whereTo = "in a new herdr workspace"
+        case .newWorktree(_, let branch)?: whereTo = "in a new git worktree on branch “\(branch)”, in a herdr workspace of its own (herdr trusts the repository for that request)"
         case .some: whereTo = "in a new herdr tab"
         case nil: whereTo = "in pane \(existing ?? "")"
         }
@@ -235,6 +246,11 @@ enum HerdrMCP {
                     guard case .json(let json) = made, let created = HerdrCommand.createdPane(json) else {
                         return reply(fail("herdr made no tab there that Next Term could read; read_tab on the herdr tab shows what happened."))
                     }
+                    // A workspace herdr made for it is the caller's to rename and close, as the agent is.
+                    if let workspace = HerdrCommand.createdWorkspace(json) {
+                        recordOpener(HerdrTarget.container(tabID: tab.id.uuidString, workspace: workspace), caller: caller)
+                    }
+                    if !created.tab.isEmpty { recordOpener(HerdrTarget.container(tabID: tab.id.uuidString, tab: created.tab), caller: caller) }
                     startIn(created, made: true)
                 }
             }
