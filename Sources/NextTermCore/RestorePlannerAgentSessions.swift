@@ -26,8 +26,32 @@ extension RestorePlanner {
             return Decision(outcome: .resume, line: command, noteLine: line, session: session, folder: evidence.sessionFolder,
                             leftOff: putBack.leftOff, permissions: permissions)
         }
-        return Decision(outcome: .agentOnTheLine, line: line, noteLine: line, session: session, folder: input.sessionFolder,
-                        leftOff: putBack.leftOff)
+        var held = Decision(outcome: .agentOnTheLine, line: line, noteLine: line, session: session, folder: input.sessionFolder,
+                            leftOff: putBack.leftOff)
+        held.heldBecause = heldBecause(input)
+        held.rechecks = rechecks(input, evidence: evidence, session: session)
+        return held
+    }
+
+    /// Whether a held pane is checked again once its shell is ready (RestoreRecheck): where it could have resumed by
+    /// itself, held by transient facts alone, the pane selected last of those on its session, with the exact id its
+    /// evidence holds.
+    private static func rechecks(_ input: PaneInput, evidence: SessionSnapshot.Evidence, session: NamedSession?) -> Bool {
+        guard case .onTheLine(let failed)? = input.verdict, RestoreRecheck.mayRecheck(failed),
+              mayResume(input.kind, consent: input.quitConsent, safeMode: input.safeMode), !input.selectedEarlier,
+              let session, session.naming == .exact, session.id == evidence.sessionID else { return false }
+        return true
+    }
+
+    /// What held an agent that could have resumed by itself: the gate's checks that failed, or `sessionFile` when its id
+    /// was exact, but not through its own session file, so the gate was not asked. None where no resume could follow (a
+    /// crash, safe mode, a quit without the consent, an agent that never resumes by itself), nor for a reason its note
+    /// already gives (a guessed session, another tab's session, a folder gone).
+    private static func heldBecause(_ input: PaneInput) -> [ResumeCheck] {
+        guard mayResume(input.kind, consent: input.quitConsent, safeMode: input.safeMode),
+              input.pane.agent?.agent.resumesAutomatically == true else { return [] }
+        if case .onTheLine(let failed)? = input.verdict { return failed }
+        return input.stop == .notFromFile ? [.sessionFile] : []
     }
 
     /// The command an automatic resume runs, when it may run: an update restore or a consented quit restore, the gate

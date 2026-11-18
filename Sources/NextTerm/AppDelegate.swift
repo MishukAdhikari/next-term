@@ -2401,6 +2401,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         item(shell, "Split Down", #selector(TerminalWindowController.splitDown(_:)), "d", [.command, .shift])
         shell.addItem(.separator())
         item(shell, "Rename Tab…", #selector(TerminalWindowController.renameTab(_:)), "r", [.command, .option])
+        // No default key (plan 045): the user can bind one in Settings › Keyboard Shortcuts.
+        item(shell, "Pin Tab", #selector(TerminalWindowController.togglePinTab(_:)), "")
         item(shell, "Use Option as Meta Key", #selector(toggleOptionAsMeta(_:)), "", target: self)
         shell.addItem(.separator())
         item(shell, "Close Tab", #selector(TerminalWindowController.closeTab(_:)), "w")
@@ -2544,6 +2546,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         view.addItem(withTitle: "Agent Spinner", action: nil, keyEquivalent: "").submenu = spinner
         // A native box under the terminal for writing to its agent (plan 039 U2); AgentPromptBox.swift.
         item(view, "Prompt Box", #selector(TerminalWindowController.togglePromptBox(_:)), "i", [.command, .shift])
+        item(view, "Show as Chat", #selector(TerminalWindowController.toggleLiveChat(_:)), "j", [.command, .shift]) // plan 041
         // The window's colour along its top row; also a right-click there, and Show Project Colors in Settings › General.
         view.addItem(withTitle: ProjectColorMenu.title, action: nil, keyEquivalent: "").submenu = ProjectColorMenu.submenu()
         view.addItem(.separator())

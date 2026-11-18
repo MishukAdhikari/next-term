@@ -55,11 +55,11 @@ extension MCPServer {
                     "host_changes", "list_skills", "get_skill", "list_shortcuts", "list_agent_clis", "settings_get", "list_import_sources",
                     "preview_import", "list_secrets", "list_mcp_servers",
                     "mcp_servers"] // the MCP hub's catalog (MCPHubCatalog), listed only once a server applies
-        let write = ["open_project", "new_tab", "send_to_tab", "press_keys", "answer_agent", "show_tab", "close_tab", "rename_tab", "start_agent",
+        let write = ["open_project", "new_tab", "send_to_tab", "press_keys", "answer_agent", "show_tab", "switch_view", "close_tab", "rename_tab", "start_agent",
                      "add_host", "remove_host", "edit_host", "end_session", "new_remote_tab", "install_skill", "remove_skill", "open_in_editor", "show_settings",
                      "propose_edit", "write_file", "create_file", "stage", "commit", "run_command", "focus_tab", "split_pane",
                      "close_pane", "zoom_pane", "set_layout", "settings_set", "apply_import", "undo_import", "apply_setup", "add_task",
-                     "add_mcp_server",
+                     "add_mcp_server", "forward_prompt",
                      "reopen_before_update",
                      "request_secret", "store_secret", "run_with_secrets", "import_secrets",
                      "mcp_tools", "mcp_call"] // they start the user's servers on this Mac

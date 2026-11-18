@@ -124,7 +124,7 @@ extension SelfTest {
         let titles: [String] = menu.items.map { $0.isSeparatorItem ? "—" : $0.title }
         let keys: [String] = menu.items.filter { !$0.isSeparatorItem }.map { KeyboardShortcuts.chord(of: $0)?.display ?? "" }
         let merge: String = KeyboardShortcuts.shared.chord(for: "mergeAllWindows:")?.display ?? ""
-        check(titles == [app.windowColumnExpanded ? "Unpin Window Column" : "Pin Window Column", "Collapse Window Column", "Move to the \(other) Edge", "—", "Merge All Windows", "—", "Hide Window Column"]
+        check(titles == ["Keep Window Column Open", "Collapse Window Column", "Move to the \(other) Edge", "—", "Merge All Windows", "—", "Hide Window Column"]
               && keys == ["", "⌃⌘S", "", merge, "⌃⇧⌘S"],
               "window column: its right-click menu groups Pin or Unpin, Collapse and Move to the \(other) Edge, then Merge All Windows, then Hide, with ⌃⌘S and ⌃⇧⌘S",
               "\(titles.joined(separator: " | ")); keys \(keys.joined(separator: ", "))")

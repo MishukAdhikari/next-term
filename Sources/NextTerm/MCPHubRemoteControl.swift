@@ -328,7 +328,7 @@ enum MCPHubRemoteControl {
                 kind = failure.kind
                 // Masked here too, for Settings: a key quoted back in a server's words is never shown there either.
                 let text = hidden(SecretMask.current.mask(failure.text))
-                run = MCPHubOverview.Run(failure: text, tools: 0, needsSignIn: needsSignIn)
+                run = MCPHubOverview.Run(failure: text, tools: 0, needsSignIn: needsSignIn, unreachable: failure.kind == .unreachable)
                 result = MCPServer.CallResult(text: text, isError: true)
             }
             DispatchQueue.main.async {
@@ -336,6 +336,7 @@ enum MCPHubRemoteControl {
                     if let challenge { MCPHubSignIns.challenges[at] = challenge }
                     if let signIn, let lapse { MCPHubSignIns.lapsed(signIn.id, lapse: lapse, name: need.server.name, url: need.server.url) }
                     let key = MCPHubOverview.runKey(list: need.list, server: need.server.name)
+                    MCPHubReconnectControl.noted(need, run: run) // out of reach: tried again on its own; reached: forgotten
                     if MCPHubControl.lastRuns[key] != run {
                         MCPHubControl.lastRuns[key] = run
                         NotificationCenter.default.post(name: MCPHubControl.changed, object: nil)

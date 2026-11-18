@@ -612,13 +612,19 @@ final class DiffPane: NSView, DiffSelectionHost {
     /// the left, in a diff of uncommitted changes only (another version's numbers are not the file's). Outdated ones
     /// are not marked: their lines are not where they were.
     func markComments() {
-        let comments = isUncommitted ? (ReviewDraft.existing(window)?.comments ?? []).filter { $0.path == canonicalPath(absolutePath) && !$0.outdated } : []
-        right.commented = Set(comments.filter(\.inFile).flatMap { Array($0.lines) })
-        left.commented = Set(comments.filter { !$0.inFile }.flatMap { Array($0.lines) })
+        let comments = isUncommitted ? ReviewDraft.existing(window)?.comments ?? [] : []
+        let marks = ReviewComments.marks(comments, path: canonicalPath(absolutePath))
+        right.commented = marks.new
+        right.notes = marks.newNotes
+        left.commented = marks.old
+        left.notes = marks.oldNotes
+        unified.column.mark(marks)
     }
 
     /// For the self-test: the line numbers marked as commented, on the left and the right.
     var commentedLines: (left: Set<Int>, right: Set<Int>) { (left.commented, right.commented) }
+    /// For the self-test: the notes shown after lines, on the left and the right.
+    var shownNotes: (left: [Int: String], right: [Int: String]) { (left.notes, right.notes) }
 
     var offersAsk: Bool {
         guard message.isHidden else { return false }
@@ -837,6 +843,8 @@ final class DiffColumn: NSScrollView {
     var currentHunkRow: Int? { didSet { if currentHunkRow != oldValue { textView.needsDisplay = true } } }
     /// Line numbers on this side with a review comment: a bar at the row's start and a tint.
     var commented: Set<Int> = [] { didSet { if commented != oldValue { textView.needsDisplay = true } } }
+    /// A review comment's note, shown after the line with this number (ReviewNoteDrawing).
+    var notes: [Int: String] = [:] { didSet { if notes != oldValue { textView.needsDisplay = true } } }
 
     init(side: Side) {
         self.side = side
@@ -1014,6 +1022,24 @@ final class DiffTextView: NSTextView {
             ReviewUI.addComment(from: pane, anchor: self)
         }
         return item
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        guard let column, !column.notes.isEmpty, let layout = layoutManager else { return }
+        let height = column.rowHeight
+        let top = textContainerInset.height
+        let first = max(0, Int((dirtyRect.minY - top) / height))
+        let last = min(column.rows.count - 1, Int((dirtyRect.maxY - top) / height) + 1)
+        guard first <= last else { return }
+        let limit = enclosingScrollView.map { convert($0.documentVisibleRect, from: $0.contentView).maxX } ?? bounds.maxX
+        for index in first...last {
+            guard let number = column.number(at: index), let note = column.notes[number], column.starts.indices.contains(index) else { continue }
+            let glyph = layout.glyphIndexForCharacter(at: column.starts[index])
+            let used = layout.lineFragmentUsedRect(forGlyphAt: glyph, effectiveRange: nil)
+            let band = NSRect(x: 0, y: top + CGFloat(index) * height, width: bounds.width, height: height)
+            ReviewNoteDrawing.draw(note, in: band, after: textContainerOrigin.x + used.maxX, limit: limit - 8)
+        }
     }
 
     override func mouseDown(with event: NSEvent) {

@@ -5,7 +5,7 @@ import Foundation
 /// A call on this Mac's own socket (no connection, no remote requester) is never refused here.
 public enum MCPRemoteReach {
     /// The tools only this Mac's own agents may call for now.
-    public static let localOnlyTools: Set<String> = ["edit_host", "end_session", "rename_tab", "start_agent"]
+    public static let localOnlyTools: Set<String> = ["edit_host", "end_session", "rename_tab", "start_agent", "forward_prompt"]
 
     public static let text = "Only an agent on this Mac can do that for now: calls through a remote connection reach no herdr "
         + "agent's id, and not edit_host, end_session, rename_tab or start_agent."

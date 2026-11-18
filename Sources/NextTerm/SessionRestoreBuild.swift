@@ -15,6 +15,8 @@ enum RestorePlanning {
     struct Planned {
         var plans: [PanePlan]
         var folders: [String: FolderCheck]
+        /// The planner ran out of time and planned again reading nothing more (`planBudget`).
+        var timedOut = false
 
         /// The folder was found gone. One not checked in time may still be there.
         func isGone(_ path: String) -> Bool { folders[path] == .gone }
@@ -58,7 +60,7 @@ enum RestorePlanning {
         let blind = RestorePlanner.World(home: home, checkFolder: checkFolder, resumeFacts: { _, _, _ in ResumeFacts() },
                                          sessions: empty, hostNames: hosts, agentLauncher: launcher)
         let plans = RestorePlanner.plan(snapshot, kind: kind, safeMode: safeMode, quitConsent: quitConsent, world: blind)
-        return Planned(plans: plans, folders: checks)
+        return Planned(plans: plans, folders: checks, timedOut: true)
     }
 
     /// The names the user gave hosts, by host id.
@@ -271,6 +273,7 @@ enum RestoreBuild {
             guard let focused = tabs[group.focused] ?? root.panes.first else { continue }
             let zoomed = group.zoomed.flatMap { (id: UUID) -> TerminalTab? in tabs[id] }
             let built = PaneGroup(root: root, focused: focused, zoomed: zoomed)
+            built.pinned = group.pinned
             let local: [TerminalTab] = built.panes.filter { (tab: TerminalTab) -> Bool in tab.remote == nil }
             controller.insertRestored(built, starting: local)
             if index == window.selected { selected = controller.groups.count - 1 }

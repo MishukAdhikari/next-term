@@ -89,4 +89,26 @@ import Testing
         #expect(ReviewComment(share: share, note: " fix ")?.note == "fix")
         #expect(ReviewComment(share: share, note: "fix")?.inFile == true)
     }
+
+    @Test func marksSplitBySideWithNotesAfterTheLastLine() {
+        var removed = comment(3...4, "c\nd", inFile: false)
+        removed.note = "Why was this removed?"
+        var outdated = comment(5...5, "e")
+        outdated.outdated = true
+        var other = comment(1...1, "a")
+        other.path = "/repo/src/other.swift"
+        let marks = ReviewComments.marks([comment(2...3, "b\nc"), comment(3...3, "c"), removed, outdated, other], path: "/repo/src/x.swift")
+        #expect(marks.new == [2, 3])
+        #expect(marks.old == [3, 4])
+        #expect(marks.newNotes == [3: "Rename this  ·  Rename this"])
+        #expect(marks.oldNotes == [4: "Why was this removed?"])
+        #expect(ReviewComments.marks([outdated], path: "/repo/src/x.swift").isEmpty)
+    }
+
+    @Test func aNoteShowsAsOneLine() {
+        #expect(ReviewComments.inline("  Rename this  ") == "Rename this")
+        #expect(ReviewComments.inline("\nFirst\nsecond") == "First…")
+        #expect(ReviewComments.inline("abcdef", limit: 3) == "abc…")
+        #expect(ReviewComments.inline(" \n ") == "")
+    }
 }

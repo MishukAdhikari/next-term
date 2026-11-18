@@ -1,6 +1,6 @@
 # Next Term
 
-**The missing IDE for the terminal.**
+**The missing MCP for the terminal.**
 
 A native macOS terminal and editor for the AI era. Run Claude Code, Codex, OpenCode,
 Command Code, Junie, a test suite and a dev server side by side, one per tab, and see at a glance which
@@ -46,6 +46,12 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   its full path, as dropping it does (its name in a tab on a server or logged in elsewhere: a paste never copies a
   file there). Text on the clipboard always pastes as text. A pasted image is removed a day later, at the next paste
   or launch.
+- **See an agent's session as a chat (⇧⌘J).** A tab running Claude Code, Codex or Command Code has a terminal
+  button and a chat button above its terminal. The chat is the same live session, read from the file the agent
+  writes: prompts, replies, tool rows with their output, edits with their counts, plans, and a card for a question the
+  agent asks. What you type there goes into the agent's own prompt. The agent keeps running in its terminal the whole
+  time, and its own screen is one click away. Turn it off in Settings › Agents; agents MCP can switch it with
+  `switch_view`.
 - **Send to Agent (⌥⌘K).** Select code in the editor or a diff, or files and folders in the sidebar, and send
   them to the agent in your tab: Next Term types the reference in that agent’s own syntax (`@app/User.php#L10-20`
   for Claude, `@app/User.php#10-20` for OpenCode, `app/User.php:10-20` for Codex and others) and hands you
@@ -317,7 +323,7 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   line for Return. A local OpenCode tab’s line names the session OpenCode was showing when its title
   matches exactly one of the folder’s sessions, so after `opencode -c` or a switch inside OpenCode, Return
   resumes the session you were in.
-- **Native.** Swift and AppKit, universal (Apple Silicon and Intel): about 37 MB to download, 78 MB
+- **Native.** Swift and AppKit, universal (Apple Silicon and Intel): about 37 MB to download, 80 MB
   installed. macOS 13 or later.
 
 ## Install
