@@ -102,6 +102,28 @@ public enum HerdrCommand: Equatable, Sendable {
     /// never with `--force` (U7).
     case removeWorktree(workspace: String)
 
+    /// One of herdr's sessions stopped (`session stop`), after Approve on the Mac, never one a tab here shows (U10).
+    case stopSession(name: String)
+    /// A stopped session's files deleted (`session delete`), after Approve on the Mac (U10).
+    case deleteSession(name: String)
+    /// A saved machine renamed (`machine rename --label`) (U11).
+    case renameMachine(id: String, label: String)
+    /// A saved machine enabled or disabled (`machine enable`, `machine disable`) (U11).
+    case enableMachine(id: String, enabled: Bool)
+    /// A saved machine's profile removed (`machine remove`); its remote sessions keep running (U11).
+    case removeMachine(id: String)
+    /// Which agents herdr's own integrations are installed for (`integration status`) (U12).
+    case integrations
+    /// herdr's integration for one agent installed or uninstalled (`integration install|uninstall`), which writes that
+    /// agent's hook config, after the user says so (U12).
+    case integration(kind: String, install: Bool)
+    /// herdr's update channel (`channel show`), and setting it (`channel set`) (U13).
+    case channel
+    case setChannel(preview: Bool)
+    /// herdr's config checked (`config check`), and reloaded in the running server (`server reload-config`) (U13).
+    case configCheck
+    case reloadConfig
+
     /// A neighbour's side, as herdr names it.
     public enum Neighbor: String, Sendable {
         case left, right, up, down
@@ -143,13 +165,15 @@ public enum HerdrCommand: Equatable, Sendable {
         ["tab", "create"], ["pane", "split"], ["agent", "wait"], ["pane", "wait-output"], ["agent", "rename"], ["pane", "run"],
         ["pane", "zoom"], ["pane", "focus"], ["pane", "move"], ["api", "snapshot"], ["tab", "rename"], ["tab", "close"],
         ["workspace", "focus"], ["workspace", "rename"], ["workspace", "close"], ["workspace", "create"], ["worktree", "list"],
-        ["worktree", "create"], ["worktree", "remove"],
+        ["worktree", "create"], ["worktree", "remove"], ["session", "stop"], ["session", "delete"], ["machine", "rename"],
+        ["machine", "enable"], ["machine", "disable"], ["machine", "remove"], ["integration", "status"], ["integration", "install"],
+        ["integration", "uninstall"], ["channel", "show"], ["channel", "set"], ["config", "check"], ["server", "reload-config"],
     ]
 
     /// The verbs that may go to one of herdr's saved machines (`--machine`): its agent commands, and no other.
     public static let allowedOnMachine: [[String]] = [
         ["agent", "list"], ["agent", "read"], ["agent", "prompt"], ["agent", "send-keys"], ["agent", "focus"], ["agent", "explain"],
-        ["agent", "wait"],
+        ["agent", "wait"], ["agent", "rename"], ["pane", "zoom"], ["pane", "focus"], ["api", "snapshot"],
     ]
 
     /// Stands for the text (stdin) in `attempts`.
@@ -188,10 +212,21 @@ public enum HerdrCommand: Equatable, Sendable {
         return words.prefix(words.first == "--version" ? 1 : 2).joined(separator: " ")
     }
 
+    /// It is about herdr itself or its saved profiles, not one session's server: no `--session` goes with it.
+    public var takesNoSession: Bool {
+        switch self {
+        case .machines, .stopSession, .deleteSession, .renameMachine, .enableMachine, .removeMachine, .integrations, .integration, .channel,
+             .setChannel, .configCheck:
+            return true
+        default:
+            return false
+        }
+    }
+
     /// herdr answers it with text, not JSON: a pane's, or its version.
     public var readsText: Bool {
         switch self {
-        case .read, .version, .startKinds: return true
+        case .read, .version, .startKinds, .integrations, .channel, .configCheck: return true
         default: return false
         }
     }
@@ -208,10 +243,11 @@ public enum HerdrCommand: Equatable, Sendable {
     public var changesHerdr: Bool {
         switch self {
         case .prompt, .text, .keys, .focus, .closePane, .newTab, .startAgent, .split, .rename, .run, .zoom, .focusNeighbor, .move,
-             .renameTab, .closeTab, .focusTab, .focusWorkspace, .renameWorkspace, .closeWorkspace, .newWorkspace, .newWorktree, .removeWorktree:
+             .renameTab, .closeTab, .focusTab, .focusWorkspace, .renameWorkspace, .closeWorkspace, .newWorkspace, .newWorktree, .removeWorktree,
+             .stopSession, .deleteSession, .renameMachine, .enableMachine, .removeMachine, .integration, .setChannel, .reloadConfig:
             return true
         case .list, .panes, .tabs, .sessions, .read, .version, .explain, .machines, .startKinds, .waitAgent, .waitOutput, .snapshot,
-             .worktrees:
+             .worktrees, .integrations, .channel, .configCheck:
             return false
         }
     }
@@ -219,7 +255,7 @@ public enum HerdrCommand: Equatable, Sendable {
     /// It may go to one of herdr's saved machines: one of its agent commands.
     public var goesToMachines: Bool {
         switch self {
-        case .list, .read, .prompt, .keys, .focus, .explain, .waitAgent: return true
+        case .list, .read, .prompt, .keys, .focus, .explain, .waitAgent, .rename, .zoom, .focusNeighbor, .snapshot: return true
         default: return false
         }
     }
@@ -318,6 +354,28 @@ public enum HerdrCommand: Equatable, Sendable {
             return [[["worktree", "create", "--cwd", directory, "--branch", branch, "--no-focus", "--trust-repository"]]]
         case .removeWorktree(let workspace):
             return [[["worktree", "remove", "--workspace", workspace]]]
+        case .stopSession(let name):
+            return [[["session", "stop", name, "--json"]]]
+        case .deleteSession(let name):
+            return [[["session", "delete", name, "--json"]]]
+        case let .renameMachine(id, label):
+            return [[["machine", "rename", id, "--label", label]]]
+        case let .enableMachine(id, enabled):
+            return [[["machine", enabled ? "enable" : "disable", id]]]
+        case .removeMachine(let id):
+            return [[["machine", "remove", id]]]
+        case .integrations:
+            return [[["integration", "status"]]]
+        case let .integration(kind, install):
+            return [[["integration", install ? "install" : "uninstall", kind]]]
+        case .channel:
+            return [[["channel", "show"]]]
+        case .setChannel(let preview):
+            return [[["channel", "set", preview ? "preview" : "stable"]]]
+        case .configCheck:
+            return [[["config", "check"]]]
+        case .reloadConfig:
+            return [[["server", "reload-config"]]]
         }
     }
 
@@ -357,8 +415,16 @@ public enum HerdrCommand: Equatable, Sendable {
             if let refusal = Self.paneRefusal(pane) { return refusal }
             if let toTab, !HerdrTarget.isTab(toTab) { return "“\(toTab)” is not a herdr tab id." }
             return nil
-        case .snapshot:
+        case .snapshot, .integrations, .channel, .setChannel, .configCheck, .reloadConfig:
             return nil
+        case .stopSession(let name), .deleteSession(let name):
+            return HerdrTarget.isSession(name) ? nil : "“\(name)” is not a herdr session name."
+        case let .renameMachine(id, label):
+            return HerdrTarget.isMachine(id) ? Self.labelRefusal(label) : "“\(id)” is not one of herdr's machine ids."
+        case .enableMachine(let id, _), .removeMachine(let id):
+            return HerdrTarget.isMachine(id) ? nil : "“\(id)” is not one of herdr's machine ids."
+        case .integration(let kind, _):
+            return Self.isKind(kind) ? nil : "“\(kind)” is not one of herdr's integrations."
         case let .renameTab(tab, label):
             return HerdrTarget.isTab(tab) ? Self.labelRefusal(label) : "“\(tab)” is not a herdr tab id."
         case .closeTab(let tab), .focusTab(let tab):
@@ -506,6 +572,7 @@ public enum HerdrCommand: Equatable, Sendable {
     /// `limit`: the most seconds one herdr call may take there (RemoteShell's nt_hd), just under the connection's own
     /// time limit, so a herdr that never answers leaves nothing running on the host.
     public func script(session: String?, limit: Int = 14) -> String? {
+        let session: String? = takesNoSession ? nil : session
         guard refusal(session: session) == nil else { return nil }
         var lines = [
             "C=\(RemoteShell.cacheDir)",

@@ -135,6 +135,25 @@ extension SelfTest {
         clearCalls()
         let renamedOwn = await herdrTool("rename_tab", ["tab_id": herdrTabID + "/ws:w9", "title": "login fix"])
         check(!renamedOwn.isError && read().contains("workspace rename w9 login fix|"), "herdr parity: rename_tab renames a workspace start_agent made", renamedOwn.text)
+
+        // U10: a herdr session stopped by close_tab on its id, asked first; never the one this tab shows, nor a running one deleted.
+        let shownSession = await herdrTool("close_tab", ["tab_id": herdrTabID + "/session:default"])
+        check(shownSession.isError && shownSession.text.contains("close that tab first") && !read().contains("session stop"),
+              "herdr parity: a herdr session a tab here shows is never stopped", shownSession.text)
+        let runningDelete = await herdrTool("close_tab", ["tab_id": herdrTabID + "/session:review", "delete": true])
+        check(runningDelete.isError && runningDelete.text.contains("stop it first"), "herdr parity: a running herdr session is not deleted", runningDelete.text)
+        let stopped = await approved("close_tab", ["tab_id": herdrTabID + "/session:review"])
+        check(stopped.shown.contains("herdr session stop review") && !stopped.result.isError && read().contains("session stop review --json|")
+              && !read().contains("--session review session stop"),
+              "herdr parity: close_tab on a herdr session asks, then stops it with herdr's session stop (no --session)", stopped.result.text)
+
+        // U10–U13 in the row menu: herdr's own Sessions, Machines, Integrations and Status, each a sheet.
+        let herdrMenu = HerdrAgentMenu.rowMenu(tab: tab, pane: "w2:p1").items.first { $0.title == "herdr" }?.submenu
+        let herdrTitles: [String] = herdrMenu?.items.map(\.title) ?? []
+        check(herdrTitles == ["Sessions…", "Machines…", "Integrations…", "herdr Status and Updates…"]
+              && herdrMenu?.items.first { $0.title == "Machines…" }?.isEnabled == false,
+              "herdr parity: the row menu's herdr submenu has Sessions, Machines (this Mac's herdr only), Integrations and Status",
+              herdrTitles.joined(separator: " | "))
     }
     #endif
 }

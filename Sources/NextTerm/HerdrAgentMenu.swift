@@ -398,6 +398,20 @@ enum HerdrAgentMenu {
         add("Rename herdr Tab…", #selector(Target.renameHerdrTab(_:)), agent, enabled: listed?.tabID != nil)
         add("Rename herdr Workspace…", #selector(Target.renameWorkspace(_:)), agent, enabled: listed?.workspaceID != nil)
         add("New Worktree Workspace…", #selector(Target.newWorktree(_:)), agent, enabled: listed?.directory != nil)
+        // herdr itself (U10–U13): its sessions, machines, integrations and its own state, each change confirmed first.
+        let herdr = NSMenu(title: "herdr")
+        herdr.autoenablesItems = false
+        for (title, action) in [("Sessions…", #selector(Target.sessions(_:))), ("Machines…", #selector(Target.machines(_:))),
+                                ("Integrations…", #selector(Target.integrations(_:))), ("herdr Status and Updates…", #selector(Target.status(_:)))] {
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+            item.target = Target.shared
+            item.representedObject = agent
+            item.isEnabled = title != "Machines…" || tab.remote == nil
+            herdr.addItem(item)
+        }
+        let herdrItem = NSMenuItem(title: "herdr", action: nil, keyEquivalent: "")
+        herdrItem.submenu = herdr
+        menu.addItem(herdrItem)
         menu.addItem(.separator())
         // Next Term's own flag: herdr's state stays as it is. Not for an agent at work or waiting on a decision.
         let unread = tab.herdrTracker.isUnread(pane)
@@ -467,6 +481,10 @@ enum HerdrAgentMenu {
             MainActor.assumeIsolated { HerdrAgentActions.newAgent(tab: tab, beside: choice.pane) }
         }
 
+        @objc func sessions(_ sender: NSMenuItem) { act(sender) { tab, _ in HerdrAdminSheets.sessions(tab: tab) } }
+        @objc func machines(_ sender: NSMenuItem) { act(sender) { tab, _ in HerdrAdminSheets.machines(tab: tab) } }
+        @objc func integrations(_ sender: NSMenuItem) { act(sender) { tab, _ in HerdrAdminSheets.integrations(tab: tab) } }
+        @objc func status(_ sender: NSMenuItem) { act(sender) { tab, _ in HerdrAdminSheets.status(tab: tab) } }
         @objc func zoom(_ sender: NSMenuItem) { act(sender) { HerdrAgentActions.zoom(tab: $0, pane: $1) } }
         @objc func moveToNewTab(_ sender: NSMenuItem) { act(sender) { HerdrAgentActions.moveToNewTab(tab: $0, pane: $1) } }
         @objc func renameHerdrTab(_ sender: NSMenuItem) { act(sender) { HerdrAgentActions.renameContainer(tab: $0, pane: $1, workspace: false) } }

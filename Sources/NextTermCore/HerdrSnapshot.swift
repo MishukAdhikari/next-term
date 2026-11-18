@@ -139,10 +139,15 @@ extension HerdrTarget {
     public var containerKind: (kind: Container, id: String)? {
         if pane.hasPrefix("tab:") { return (.tab, String(pane.dropFirst(4))) }
         if pane.hasPrefix("ws:") { return (.workspace, String(pane.dropFirst(3))) }
+        if pane.hasPrefix("session:") { return (.session, String(pane.dropFirst(8))) }
         return nil
     }
 
     public enum Container: String, Sendable {
-        case tab, workspace
+        case tab, workspace, session
     }
+
+    /// One of herdr's sessions' id over MCP (plan 040 U10): the Next Term tab that shows herdr there, `/session:` and
+    /// the session's name.
+    public static func container(tabID: String, session: String) -> String { tabID.lowercased() + "/session:" + session }
 }

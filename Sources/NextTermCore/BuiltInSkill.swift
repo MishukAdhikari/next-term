@@ -82,6 +82,10 @@ public struct BuiltInSkill: Sendable, Equatable {
         ## A prompt meant for another tab
 
         When the user says prompts they gave you were meant for another session ("wrong tab", "find the cs tab", "I gave you that by mistake"), call `forward_prompt` at once, before any other work. Pass only those prompts, in order and as typed (never the user's words about the mix-up), their words about where they belong as `hint`, and in `note` what you had already done on them. Next Term finds the session, asks the user when more than one fits, and types them there when that agent is idle. Then stop work on them, keep any changes you made, and tell the user where they went and what you had changed. On `not_moved`, ask the user which candidate and call again with its `session`.
+
+        ## Inside herdr
+
+        If you run in a herdr pane (`HERDR_PANE_ID` is set), herdr's own skill (`herdr --skill`) covers splitting your herdr tab and starting agents beside you there. Next Term's tools reach the same herdr from outside: `start_agent` (`split_beside`, `worktree`), `new_tab` with `split_beside` a herdr pane's id, `wait_for_tab` (`until`, `match`), and `list_tabs` with `herdr_layout`. Use Next Term's for work across windows or hosts.
         """# + "\n\n" + connectedServers, offersTabs: true,
         when: "when the user asks for work in parallel, in the background or by another agent: an explicit ask is the yes, else offer once")
 
