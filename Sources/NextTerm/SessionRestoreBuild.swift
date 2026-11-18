@@ -15,6 +15,8 @@ enum RestorePlanning {
     struct Planned {
         var plans: [PanePlan]
         var folders: [String: FolderCheck]
+        /// The planner ran out of time and planned again reading nothing more (`planBudget`).
+        var timedOut = false
 
         /// The folder was found gone. One not checked in time may still be there.
         func isGone(_ path: String) -> Bool { folders[path] == .gone }
@@ -58,7 +60,7 @@ enum RestorePlanning {
         let blind = RestorePlanner.World(home: home, checkFolder: checkFolder, resumeFacts: { _, _, _ in ResumeFacts() },
                                          sessions: empty, hostNames: hosts, agentLauncher: launcher)
         let plans = RestorePlanner.plan(snapshot, kind: kind, safeMode: safeMode, quitConsent: quitConsent, world: blind)
-        return Planned(plans: plans, folders: checks)
+        return Planned(plans: plans, folders: checks, timedOut: true)
     }
 
     /// The names the user gave hosts, by host id.

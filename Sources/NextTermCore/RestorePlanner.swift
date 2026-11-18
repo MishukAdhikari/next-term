@@ -243,6 +243,12 @@ public struct PanePlan: Equatable, Sendable {
     public var note: RestoreNote
     /// The keep-sessions sheet's words for it ("Claude Code resumes", "connection closes"), after the tab's title.
     public var listLine: String
+    /// The gate's checks that failed, when an agent that could have resumed by itself was held on the line instead
+    /// (also in its note, `RestoreNote.heldBecause`). Empty otherwise.
+    public var heldBecause: [ResumeCheck] { note.heldBecause }
+    /// Why the gate was not asked at all for the pane, when it was not (`RestorePlanner.verdict`): for the restore
+    /// report.
+    public var stop: ResumeStop?
 
     /// The action that carries it out, not yet applied.
     public var pending: SessionSnapshot.PendingAction {
@@ -302,6 +308,8 @@ public enum RestorePlanner {
         var sessionFolder: String?
         /// The gate's verdict, for an agent that may resume by itself.
         var verdict: ResumeVerdict?
+        /// Why the gate was not asked, when it was not.
+        var stop: ResumeStop?
         /// Another pane that holds the same session was selected later: only that one may resume it (R5).
         var selectedEarlier: Bool
         /// That pane resumes it.
@@ -388,9 +396,10 @@ public enum RestorePlanner {
         }
         note.reminted = pane.reminted
         note.safeMode = input.safeMode && pane.remote == nil
+        note.heldBecause = decision.outcome == .agentOnTheLine ? decision.heldBecause : []
         let reason: SessionSnapshot.RestoreKind = input.safeMode ? .safeMode : input.kind
         return PanePlan(pane: pane.id, outcome: decision.outcome, reason: reason, line: decision.line, folder: folder,
-                        session: decision.session, note: note, listLine: note.listLine)
+                        session: decision.session, note: note, listLine: note.listLine, stop: pane.remote == nil ? input.stop : nil)
     }
 
     /// The folder a local tab opens in: its own; when that is gone or was not found in time, the nearest folder above it
@@ -459,6 +468,8 @@ public enum RestorePlanner {
         var permissions: [String] = []
         /// The agent of an agent session's resume (plan 035 U7), for its note.
         var sessionAgent: RestoreAgent?
+        /// What held an agent that could have resumed by itself on the line.
+        var heldBecause: [ResumeCheck] = []
     }
 
     private static func decide(_ input: PaneInput) -> Decision {
@@ -468,7 +479,10 @@ public enum RestorePlanner {
             return Decision(outcome: kept ? .reattach : .freshConnection)
         }
         if pane.command?.check == .secret { return Decision(outcome: .notKept) }
-        let integrated = pane.command?.source == .integration
+        // Whether the restored tab's shell reports when it is ready, so a line can be typed there (KTD6): the old line
+        // came through the integration, or the pane's shell was the system zsh, which loads it. How the agent itself was
+        // started does not matter here (plan 046); a shell that never reports gets a note in place of its action.
+        let integrated = pane.command?.source == .integration || pane.systemZsh
         if let decision = decide(agentSession: input, integrated: integrated) { return decision }
         if let evidence = pane.agent { return decide(agent: evidence, input, integrated: integrated) }
         guard let command = pane.command, command.running else { return Decision(outcome: .idle) }
@@ -508,28 +522,42 @@ public enum RestorePlanner {
             input.sessionFolder = sessionFolder
         }
         input.agentLauncher = world.agentLauncher
-        input.verdict = verdict(for: pane, kind: kind, consent: consent, safeMode: safeMode, projects: place.projects, world: world)
+        switch verdict(for: pane, kind: kind, consent: consent, safeMode: safeMode, projects: place.projects, world: world) {
+        case .asked(let verdict): input.verdict = verdict
+        case .stopped(let stop): input.stop = stop
+        }
         return input
     }
 
+    /// What `verdict(for:)` came to: the gate's verdict, or the condition that stopped it before the gate.
+    enum GateAnswer: Equatable {
+        case asked(ResumeVerdict)
+        case stopped(ResumeStop)
+    }
+
     /// The gate's verdict, asked only where a resume could follow: an update restore or a consented quit restore, an
-    /// agent that resumes by itself with an exact id from its own session file, still running from a line typed in a shell
-    /// with the integration that passed every check. A fact not known asks nothing.
-    private static func verdict(for pane: SessionSnapshot.Pane, kind: SessionSnapshot.RestoreKind, consent: Bool, safeMode: Bool,
-                                projects: [String], world: World) -> ResumeVerdict? {
-        guard mayResume(kind, consent: consent, safeMode: safeMode), let command = pane.command, command.check == .kept,
-              command.line != nil else {
-            return nil
-        }
-        guard command.running, command.source == .integration else { return nil }
-        guard let evidence = pane.agent, evidence.isExact, let source = evidence.agent.fileSource, evidence.source == source else { return nil }
+    /// agent that resumes by itself with an exact id from its own session file, still running from a line that passed its
+    /// checks. Otherwise the first condition that stopped it. A fact not known asks nothing.
+    ///
+    /// How the line was typed is not one of them (plan 046): an agent started in bash or fish, by a script or by
+    /// `send_to_tab` (polled argv) is judged as one typed through the zsh integration, by its process and its session
+    /// file. The line must still have been kept (no secret in it) and running.
+    static func verdict(for pane: SessionSnapshot.Pane, kind: SessionSnapshot.RestoreKind, consent: Bool, safeMode: Bool,
+                        projects: [String], world: World) -> GateAnswer {
+        guard mayResume(kind, consent: consent, safeMode: safeMode) else { return .stopped(.restoreKind) }
+        guard let command = pane.command, command.line != nil else { return .stopped(.noCommand) }
+        guard command.check == .kept else { return .stopped(.commandNotKept) }
+        guard command.running else { return .stopped(.notRunning) }
+        guard let evidence = pane.agent else { return .stopped(.noAgent) }
+        guard evidence.isExact else { return .stopped(.notExact) }
+        guard let source = evidence.agent.fileSource, evidence.source == source else { return .stopped(.notFromFile) }
         var facts = world.resumeFacts(evidence, pane.folder, projects)
         // Whatever the facts say, what runs stays out of every project, the tab's folder and the session's (KTD5).
         let folders: [String] = projects + [pane.folder, evidence.sessionFolder].compactMap { $0 }
         for folder in folders where !facts.outside.contains(folder) {
             facts.outside.append(folder)
         }
-        return evidence.gate(facts)
+        return .asked(evidence.gate(facts))
     }
 
     /// The panes, by index, that hold a session another pane holds too and was selected after them, each with that
@@ -726,6 +754,9 @@ public struct RestoreNote: Equatable, Sendable {
     public var reminted = false
     /// Safe mode: nothing ran, and the note says what the tab held.
     public var safeMode = false
+    /// What held an agent that could have resumed by itself, its line put back instead: the gate's checks that failed,
+    /// said in plain words after the line ("Held: its launch flags.").
+    public var heldBecause: [ResumeCheck] = []
 
     public init(outcome: RestoreOutcome) {
         self.outcome = outcome
@@ -846,6 +877,7 @@ public struct RestoreNote: Equatable, Sendable {
                 return said
             }
             var said = ["\(line) \(back) Press Return to resume \(name) session \(session.id), or edit it first."]
+            said += heldText
             said += about(session, dates)
             said += sharedText
             said += leftOffText
@@ -914,6 +946,14 @@ public struct RestoreNote: Equatable, Sendable {
         }
         if let date = session.date { said.append("Last used \(dates(date)).") }
         return said
+    }
+
+    /// Why the agent did not resume by itself, in plain words: "Held: its launch flags and its folder."
+    private var heldText: [String] {
+        let words = heldBecause.map(\.heldWords)
+        guard let last = words.last else { return [] }
+        let list = words.count == 1 ? last : words.dropLast().joined(separator: ", ") + " and " + last
+        return ["Held: \(list)."]
     }
 
     /// Another tab resumes the session. In safe mode nothing has resumed yet, so it only held it.

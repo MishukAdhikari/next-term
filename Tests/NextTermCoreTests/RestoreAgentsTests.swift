@@ -592,6 +592,79 @@ import Testing
         #expect(claude.gate(facts) == .onTheLine([.sessionFile]))
     }
 
+    // MARK: plan 046: the gate judges what ran, not how it was typed
+
+    /// A pane whose agent was not typed through the zsh integration (bash, fish, a script, polled argv) has no typed line:
+    /// `ranAsTyped` false, nothing confirmed. With no permission option it resumes as one typed would.
+    @Test func noTypedLineStillResumes() {
+        for agent in Self.automatic {
+            let (base, facts) = passing(agent)
+            var evidence = base
+            evidence.ranAsTyped = false
+            evidence.launcher = nil
+            evidence.confirmed = []
+            evidence.options = agent == .claude ? [LaunchOption(["--model", "opus"])] : []
+            #expect(evidence.gate(facts) == .resume(evidence.resumeCommand ?? "none"), "\(agent)")
+        }
+        // A permission option still needs the typed line to confirm it: the flags policy holds.
+        let (base, facts) = passing(.claude)
+        var claude = base
+        claude.ranAsTyped = false
+        claude.options = [LaunchOption(["--dangerously-skip-permissions"])]
+        #expect(claude.gate(facts) == .onTheLine([.flags]))
+    }
+
+    /// Routing from the process: an agent that ran with none of its routing variables set resumes whatever the login
+    /// shell says, or when it is not known, and its resume unsets them all; one that had any set needs the shell to match.
+    @Test func routingIsJudgedByWhatTheAgentHadSet() {
+        let (base, facts) = passing(.claude)
+        var claude = base
+        claude.routingMatchesShell = false
+        claude.routingSet = []
+        let unset = (RestoreAgent.claude.autoContinueVariables + RestoreAgent.claude.routingVariables).map { "-u " + $0 }.joined(separator: " ")
+        #expect(claude.gate(facts) == .resume("/usr/bin/env \(unset) /Users/x/.local/bin/claude --resume \(uuid)"))
+        // The shell matched: nothing more is unset.
+        claude.routingMatchesShell = true
+        let plain = RestoreAgent.claude.autoContinueVariables.map { "-u " + $0 }.joined(separator: " ")
+        #expect(claude.gate(facts) == .resume("/usr/bin/env \(plain) /Users/x/.local/bin/claude --resume \(uuid)"))
+        claude.routingSet = ["CLAUDE_CONFIG_DIR"]
+        #expect(claude.gate(facts) == .resume("/usr/bin/env \(plain) /Users/x/.local/bin/claude --resume \(uuid)"))
+        claude.routingMatchesShell = false
+        #expect(claude.gate(facts) == .onTheLine([.routing]))
+        // A record from before routingSet keeps the old rule.
+        claude.routingSet = nil
+        #expect(claude.gate(facts) == .onTheLine([.routing]))
+    }
+
+    /// The program must be the one that ran: its path still leads to the file the kernel ran, or to the agent's own install
+    /// at another version (Claude Code updated itself while it ran). Another file there is held, and so is one in an
+    /// unsafe place, each with its own reason.
+    @Test func theProgramMustBeTheOneThatRan() {
+        let user = geteuid()
+        let link = "/Users/x/.local/bin/claude"
+        let versions = "/Users/x/.local/share/claude/versions/"
+        func gate(ran: String?, now: String, mode: UInt16 = 0o755) -> ResumeVerdict {
+            var (evidence, facts) = passing(.claude)
+            evidence.ranPath = ran
+            facts.files[link] = FileFacts(realPath: now, owner: user, mode: mode, isRegular: true, linksFollowed: [link])
+            return evidence.gate(facts)
+        }
+        let resumes = passing(.claude).0.resumeCommand ?? "none"
+        #expect(gate(ran: versions + "2.1.280", now: versions + "2.1.280") == .resume(resumes))
+        #expect(gate(ran: versions + "2.1.280", now: versions + "2.1.281") == .resume(resumes))
+        #expect(gate(ran: nil, now: "/Users/x/bin/other") == .resume(resumes))
+        #expect(gate(ran: versions + "2.1.280", now: "/Users/x/bin/claude-wrapper") == .onTheLine([.executableChanged]))
+        #expect(gate(ran: versions + "2.1.280", now: "/Users/x/.local/share/other/versions/2.1.281") == .onTheLine([.executableChanged]))
+        #expect(gate(ran: versions + "2.1.280", now: "/Users/x/app/node_modules/.bin/claude") == .onTheLine([.executableChanged, .location]))
+        #expect(gate(ran: "/private/tmp/claude", now: "/private/tmp/claude") == .onTheLine([.location]))
+        #expect(gate(ran: versions + "2.1.280", now: versions + "2.1.280", mode: 0o777) == .onTheLine([.ownership]))
+        // Homebrew's cask moves to its next version the same way.
+        #expect(RestoreAgent.claude.updatedItself(from: "/opt/homebrew/Caskroom/claude-code/2.1.1/claude",
+                                                  to: "/opt/homebrew/Caskroom/claude-code/2.1.2/claude")
+                == (RestoreAgent.claude.cli.version(at: ["/opt/homebrew/Caskroom/claude-code/2.1.1/claude"]) != nil))
+        #expect(!RestoreAgent.claude.updatedItself(from: versions + "2.1.280", to: versions + "2.1.280"))
+    }
+
     /// One change each, and the one check it fails.
     @Test func eachFailedCheckPutsTheLineBack() {
         typealias Change = (inout Evidence, inout ResumeFacts) -> Void
@@ -604,8 +677,17 @@ import Testing
             ("a permission option argv alone shows", .flags, { e, _ in
                 e.options = [SessionSnapshot.LaunchOption(["--dangerously-skip-permissions"])]
             }),
-            ("a function, a wrapper or an env prefix", .typedLine, { e, _ in e.ranAsTyped = false }),
-            ("another provider", .routing, { e, _ in e.routingMatchesShell = false }),
+            ("another provider, in a record from before routingSet", .routing, { e, _ in e.routingMatchesShell = false }),
+            ("another provider, set in its own environment", .routing, { e, _ in
+                e.routingMatchesShell = false
+                e.routingSet = ["ANTHROPIC_BASE_URL"]
+            }),
+            ("another program now where it ran", .executableChanged, { e, _ in e.ranPath = "/Users/x/.local/share/claude/2.1.279" }),
+            ("a script now a link elsewhere", .executableChanged, { e, f in
+                e.interpreter = "/Users/x/.local/bin/claude"
+                e.script = "/Users/x/lib/cli.js"
+                f.files["/Users/x/lib/cli.js"] = FileFacts(realPath: "/Users/x/other/cli.js", owner: user, mode: 0o644, isRegular: true)
+            }),
             ("auto-continue in the environment", .autoContinue, { e, _ in e.autoContinueOff = false }),
             ("auto-continue in settings", .autoContinue, { _, f in f.settingsAutoContinue = true }),
             ("the session is gone or open", .session, { _, f in f.sessionAvailable = false }),
