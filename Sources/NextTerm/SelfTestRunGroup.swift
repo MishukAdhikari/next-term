@@ -43,22 +43,41 @@ extension SelfTest {
               offerText ?? "\(sidebar.runGroup.offers.map(\.offer.text))")
 
         sidebar.outline.scrollRowToVisible(max(groupRow, 0))
+        // Each task's name shows whole on screen: its label is at least as wide as its text, with the file after it.
+        let cut = sidebar.runGroup.tasks.compactMap { item -> String? in
+            guard let cell = runCell(sidebar, item) else { return "\(item.task.name): no cell" }
+            let name = cell.line.name
+            let drawn = name.attributedStringValue.length > 0
+                ? (name.attributedStringValue.attribute(.font, at: 0, effectiveRange: nil) as? NSFont)?.pointSize ?? 0 : 0
+            let whole = NSAttributedString(string: item.task.name, attributes: [.font: NSFont.systemFont(ofSize: 13)]).size().width
+            guard name.frame.width + 0.5 < whole + 4 || drawn != 13
+            else { return nil }
+            return "\(item.task.name): label \(Int(name.frame.width)) for text \(Int(whole)), intrinsic \(Int(name.intrinsicContentSize.width)), "
+                + "font \(drawn)/\(name.font?.pointSize ?? 0), row \(Int(cell.bounds.width)), x \(Int(name.frame.minX)), "
+                + "detail \(Int(cell.line.detail.frame.minX))+\(Int(cell.line.detail.frame.width)), ▶ x \(Int(cell.action.frame.minX))"
+        }
+        check(cut.isEmpty, "each task's name shows whole, before its file", cut.joined(separator: "; "))
         if let window = w.window { await screenshot(window, suffix: "-run-group") }
 
         // ▶ on the script's row: a new tab in the project's folder, named after the command, running it.
         let before = Set(w.tabs.map(\.id))
+        let windowsBefore = AppDelegate.shared.controllers.count
+        var clickNote = ""
         if let item = sidebar.runGroup.tasks.first, let cell = runCell(sidebar, item) {
+            clickNote = "handler \(cell.onAction != nil), delegate \(sidebar.delegate != nil), root \(sidebar.root?.path ?? "nil")"
             cell.action.performClick(nil)
         } else {
             check(false, "the script's row has a cell to click")
         }
+        // A window whose one tab is untouched and in the project's folder runs it there (runInNewTab), as other runs do.
         let ran = await wait(20) {
-            guard let tab = w.tabs.first(where: { !before.contains($0.id) }) else { return false }
+            guard let tab = w.tabs.first(where: { !before.contains($0.id) || $0.userTitle == "npm run hello" }) else { return false }
             return tab.userTitle == "npm run hello" && tab.screenTail(12).contains { $0.contains("npm run hello") }
         }
-        let opened = w.tabs.first { !before.contains($0.id) }
+        let opened = w.tabs.first { !before.contains($0.id) || $0.userTitle == "npm run hello" }
         check(ran && opened.map { canonicalPath($0.directory) } == folder.path, "▶ runs the task in a new tab named after it",
-              "\(opened?.userTitle ?? "no tab"): " + (opened?.screenTail(4).joined(separator: " | ") ?? ""))
+              "\(opened?.userTitle ?? "no tab"): " + (opened?.screenTail(4).joined(separator: " | ") ?? "")
+                + " [\(clickNote); tabs \(before.count)→\(w.tabs.count), windows \(windowsBefore)→\(AppDelegate.shared.controllers.count)]")
 
         // ⌘P: "run" lists the same tasks; a plain search does not.
         w.goToFile(nil)

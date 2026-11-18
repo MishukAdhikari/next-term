@@ -94,7 +94,8 @@ final class RunCellView: NSTableCellView {
             addSubview(view)
         }
         imageView = icon
-        textField = line.name
+        // The name is not the cell's textField: a source list sets that label's font and colour itself after the row is
+        // configured, which would undo the offer line's quiet text and the width the line was fitted to.
         NSLayoutConstraint.activate([
             icon.leadingAnchor.constraint(equalTo: leadingAnchor),
             icon.centerYAnchor.constraint(equalTo: centerYAnchor),
@@ -112,7 +113,8 @@ final class RunCellView: NSTableCellView {
             .withSymbolConfiguration(.init(pointSize: size, weight: weight))
     }
 
-    private static let nameFont = NSFont.systemFont(ofSize: 12.5)
+    /// The size the source list gives a file's or a service's name, so Run rows match the rows around them.
+    private static let nameFont = NSFont.systemFont(ofSize: 13)
     private static let detailFont = NSFont.systemFont(ofSize: 11.5)
 
     func configure(_ item: RunItem) {
@@ -164,7 +166,7 @@ final class RunCellView: NSTableCellView {
     func configureGroup(_ group: RunGroup) {
         icon.image = Self.symbol("play.rectangle", "Run")
         icon.contentTintColor = Theme.textDim
-        let titleFont = NSFont.systemFont(ofSize: 12.5, weight: .medium)
+        let titleFont = Self.nameFont
         let countFont = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular)
         line.show(NSAttributedString(string: "Run", attributes: [.font: titleFont, .foregroundColor: Theme.text]),
                   detail: NSAttributedString(string: "\(group.tasks.count)", attributes: [.font: countFont, .foregroundColor: Theme.textDim]))
