@@ -100,9 +100,9 @@ extension SelfTest {
         let detail = place(line.detail)
         let end: CGFloat = place(badge).minX - NameDetailLine.toBadge
         let room: CGFloat = end - name.minX
-        let nameWhole: CGFloat = line.name.intrinsicContentSize.width
+        let nameWhole: CGFloat = NameDetailLine.whole(line.name)
         let hasDetail = !line.detail.stringValue.isEmpty
-        let detailWhole: CGFloat = hasDetail ? line.detail.intrinsicContentSize.width : 0
+        let detailWhole: CGFloat = hasDetail ? NameDetailLine.whole(line.detail) : 0
         let shown = hasDetail && !line.detail.isHidden
         let nameCut = name.width < nameWhole - slack
         let detailWholeShown = shown && detail.width >= detailWhole - slack

@@ -12,6 +12,10 @@ import Testing
         .focus(pane: "w2:p1", tab: "w2:t1"), .focus(pane: "w2:p1", tab: nil), .version, .explain(pane: "w1:p1"), .machines,
         .closePane(pane: "w1:p2"), .startKinds, .newTab(directory: "/srv/app", label: "fixer"),
         .startAgent(name: "fixer", kind: "codex", pane: "w1:p2", words: ["--model", "o3"]),
+        .split(pane: "w1:p1", direction: .right, directory: "/srv/app"), .split(pane: "w1:p1", direction: .down, directory: nil),
+        .waitAgent(pane: "w1:p1", states: ["idle", "blocked"], timeout: 30_000), .waitOutput(pane: "w1:p1", regex: false, timeout: 5000),
+        .waitOutput(pane: "w1:p1", regex: true, timeout: 5000), .rename(pane: "w1:p1", name: "reviewer"), .rename(pane: "w1:p1", name: nil),
+        .run(pane: "w1:p2"),
     ]
 
     /// The words of each herdr call in a script (`nt_call LABEL WORDS…`), unquoted as sh reads them.
@@ -95,11 +99,12 @@ import Testing
             }
         }
         // Nothing that makes or changes herdr's own things is in the list, nor anything that stops a session or a server, and
-        // of herdr's machines only the list. One agent is ended (pane close) only after Approve on the Mac (010a U6b).
+        // of herdr's machines only the list. One agent is ended (pane close) only after Approve on the Mac (010a U6b). Plan
+        // 040 adds, case by case: agent rename (U3) and pane run (U4, after Approve).
         let flat = HerdrCommand.allowed.map { $0.joined(separator: " ") }
-        #expect(flat.contains("pane close"))
+        #expect(flat.contains("pane close") && flat.contains("agent rename") && flat.contains("pane run"))
         #expect(!HerdrCommand.allowedOnMachine.contains(["pane", "close"]) && !HerdrCommand.closePane(pane: "w1:p1").goesToMachines)
-        for never in ["server", "session stop", "session delete", "session attach", "agent rename", "pane run",
+        for never in ["server", "session stop", "session delete", "session attach",
                       "tab close", "workspace create", "update", "integration", "plugin", "worktree",
                       "machine add", "machine remove", "machine rename", "machine enable", "machine disable", "machine status",
                       "machine reconnect"] {
@@ -474,5 +479,44 @@ import Testing
         let one = try #require(HerdrPanes.parse(#"[{"pane_id":"w1:p1","tab_id":"w1:t1"}]"#))
         #expect(one.total == 1 && one.lastPaneRefusal?.contains("last pane") == true)
         #expect(HerdrPanes.parse("not json") == nil && HerdrPanes.parse(#"{"result":{"agents":[]}}"#) == nil)
+    }
+
+    // MARK: plan 040 U1–U4
+
+    @Test func splitWaitRenameAndRunAreHerdrsOwnVerbs() throws {
+        let exe = "/x/herdr"
+        #expect(HerdrCommand.split(pane: "w1:p1", direction: .right, directory: "/srv/app").argv(executable: exe, session: nil, text: nil)
+            == [[[exe, "pane", "split", "w1:p1", "--direction", "right", "--cwd", "/srv/app", "--no-focus"]]])
+        #expect(HerdrCommand.waitAgent(pane: "w1:p1", states: ["idle", "blocked"], timeout: 999_999).argv(executable: exe, session: nil, text: nil)
+            == [[[exe, "agent", "wait", "w1:p1", "--until", "idle", "--until", "blocked", "--timeout", "300000"]]])
+        #expect(HerdrCommand.waitOutput(pane: "w1:p1", regex: true, timeout: 10).argv(executable: exe, session: nil, text: "test result")
+            == [[[exe, "pane", "wait-output", "w1:p1", "--regex", "test result", "--source", "recent", "--timeout", "1000"]]])
+        #expect(HerdrCommand.rename(pane: "w1:p1", name: nil).argv(executable: exe, session: nil, text: nil)
+            == [[[exe, "agent", "rename", "w1:p1", "--clear"]]])
+        #expect(HerdrCommand.run(pane: "w1:p2").argv(executable: exe, session: nil, text: "just test")
+            == [[[exe, "pane", "run", "w1:p2", "just test"]]])
+        // The command and the pattern come on stdin on a host, never in the script.
+        let script = try #require(HerdrCommand.run(pane: "w1:p2").script(session: nil))
+        #expect(script.contains("T=$(cat)") && script.contains("'pane' 'run' 'w1:p2' \"$T\""))
+    }
+
+    @Test func plan040RefusesWhatHerdrWouldNotTake() {
+        #expect(HerdrCommand.waitAgent(pane: "w1:p1", states: [], timeout: 1000).refusal(session: nil) != nil)
+        #expect(HerdrCommand.waitAgent(pane: "w1:p1", states: ["asleep"], timeout: 1000).refusal(session: nil)?.contains("asleep") == true)
+        #expect(HerdrCommand.rename(pane: "w1:p1", name: "Bad Name").refusal(session: nil) != nil)
+        #expect(HerdrCommand.rename(pane: "w1:p1", name: "reviewer-2").refusal(session: nil) == nil)
+        #expect(HerdrCommand.split(pane: "w1:p1", direction: .down, directory: "relative").refusal(session: nil) != nil)
+        #expect(HerdrCommand.run(pane: "w1 p1").refusal(session: nil) != nil)
+        // On a saved machine: waiting on an agent goes (an agent command); splitting, renaming and running never do.
+        #expect(HerdrCommand.waitAgent(pane: "w1:p1", states: ["idle"], timeout: 1000).refusal(session: nil, machine: "abc123") == nil)
+        for command: HerdrCommand in [.split(pane: "w1:p1", direction: .right, directory: nil), .rename(pane: "w1:p1", name: "x"), .run(pane: "w1:p1")] {
+            #expect(command.refusal(session: nil, machine: "abc123") != nil, "\(command)")
+        }
+    }
+
+    @Test func aSplitsAnswerNamesTheNewPane() {
+        #expect(HerdrCommand.splitPane(#"{"id":"cli:pane:split","result":{"type":"pane_info","pane":{"pane_id":"w1:p4","tab_id":"w1:t1"}}}"#) == "w1:p4")
+        #expect(HerdrCommand.splitPane(#"{"result":{"pane":{"pane_id":"w1 p4"}}}"#) == nil)
+        #expect(HerdrCommand.splitPane("not json") == nil)
     }
 }

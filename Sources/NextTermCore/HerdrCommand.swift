@@ -57,6 +57,27 @@ public enum HerdrCommand: Equatable, Sendable {
     /// One of herdr's kinds started in `pane`, at its shell prompt, after Approve on the Mac: herdr types the kind's
     /// command there and waits up to `startWait` for the agent.
     case startAgent(name: String, kind: String, pane: String, words: [String])
+    /// A new pane beside `pane` (`pane split --direction right|down`), not focused, in `directory` (the pane's own when
+    /// nil), after Approve on the Mac: for an agent or a command next to the one the user has (plan 040 U1, U4).
+    case split(pane: String, direction: SplitDirection, directory: String?)
+    /// Until the agent in `pane` is in one of `states` (`agent wait --until`), for at most `timeout` ms (plan 040 U2).
+    case waitAgent(pane: String, states: [String], timeout: Int)
+    /// Until `pane` shows `pattern` (`pane wait-output --match`, or `--regex` for a regular expression), for at most
+    /// `timeout` ms. The pattern comes on stdin, as text does (plan 040 U2).
+    case waitOutput(pane: String, regex: Bool, timeout: Int)
+    /// The agent in `pane` renamed (`agent rename`), or its name cleared with nil (plan 040 U3).
+    case rename(pane: String, name: String?)
+    /// A command typed and run in `pane`, at its shell prompt (`pane run`), after Approve on the Mac. The command comes
+    /// on stdin, as text does (plan 040 U4).
+    case run(pane: String)
+
+    /// Where a split puts the new pane, as herdr names it.
+    public enum SplitDirection: String, Sendable {
+        case right, down
+    }
+
+    /// The states `agent wait --until` takes.
+    public static let waitStates = ["idle", "working", "blocked", "done", "unknown"]
 
     /// What `read` reads, in herdr's words.
     public enum ReadSource: String, Sendable {
@@ -83,12 +104,13 @@ public enum HerdrCommand: Equatable, Sendable {
         ["--version"], ["agent", "list"], ["agent", "read"], ["agent", "prompt"], ["agent", "send-keys"], ["agent", "focus"],
         ["agent", "explain"], ["pane", "list"], ["pane", "read"], ["pane", "send-text"], ["pane", "send-keys"],
         ["tab", "list"], ["tab", "focus"], ["session", "list"], ["machine", "list"], ["pane", "close"], ["agent", "start"],
-        ["tab", "create"],
+        ["tab", "create"], ["pane", "split"], ["agent", "wait"], ["pane", "wait-output"], ["agent", "rename"], ["pane", "run"],
     ]
 
     /// The verbs that may go to one of herdr's saved machines (`--machine`): its agent commands, and no other.
     public static let allowedOnMachine: [[String]] = [
         ["agent", "list"], ["agent", "read"], ["agent", "prompt"], ["agent", "send-keys"], ["agent", "focus"], ["agent", "explain"],
+        ["agent", "wait"],
     ]
 
     /// Stands for the text (stdin) in `attempts`.
@@ -138,7 +160,7 @@ public enum HerdrCommand: Equatable, Sendable {
     /// It sends text, which comes on stdin.
     public var takesText: Bool {
         switch self {
-        case .prompt, .text: return true
+        case .prompt, .text, .waitOutput, .run: return true
         default: return false
         }
     }
@@ -146,16 +168,17 @@ public enum HerdrCommand: Equatable, Sendable {
     /// It changes what herdr shows (a prompt, keys, its view), so the tab checks again soon after.
     public var changesHerdr: Bool {
         switch self {
-        case .prompt, .text, .keys, .focus, .closePane, .newTab, .startAgent: return true
-        case .list, .panes, .tabs, .sessions, .read, .version, .explain, .machines, .startKinds: return false
+        case .prompt, .text, .keys, .focus, .closePane, .newTab, .startAgent, .split, .rename, .run: return true
+        case .list, .panes, .tabs, .sessions, .read, .version, .explain, .machines, .startKinds, .waitAgent, .waitOutput: return false
         }
     }
 
     /// It may go to one of herdr's saved machines: one of its agent commands.
     public var goesToMachines: Bool {
         switch self {
-        case .list, .read, .prompt, .keys, .focus, .explain: return true
-        case .panes, .tabs, .sessions, .text, .version, .machines, .closePane, .startKinds, .newTab, .startAgent: return false
+        case .list, .read, .prompt, .keys, .focus, .explain, .waitAgent: return true
+        case .panes, .tabs, .sessions, .text, .version, .machines, .closePane, .startKinds, .newTab, .startAgent, .split, .waitOutput,
+             .rename, .run: return false
         }
     }
 
@@ -211,6 +234,19 @@ public enum HerdrCommand: Equatable, Sendable {
         case let .startAgent(name, kind, pane, words):
             let rest: [String] = words.isEmpty ? [] : ["--"] + words
             return [[["agent", "start", name, "--kind", kind, "--pane", pane, "--timeout", String(Self.startWait)] + rest]]
+        case let .split(pane, direction, directory):
+            let folder: [String] = directory.map { ["--cwd", $0] } ?? []
+            return [[["pane", "split", pane, "--direction", direction.rawValue] + folder + ["--no-focus"]]]
+        case let .waitAgent(pane, states, timeout):
+            let until: [String] = states.flatMap { ["--until", $0] }
+            return [[["agent", "wait", pane] + until + ["--timeout", String(Self.waitTimeout(timeout))]]]
+        case let .waitOutput(pane, regex, timeout):
+            return [[["pane", "wait-output", pane, regex ? "--regex" : "--match", Self.textMark, "--source", "recent",
+                      "--timeout", String(Self.waitTimeout(timeout))]]]
+        case let .rename(pane, name):
+            return [[["agent", "rename", pane, name ?? "--clear"]]]
+        case .run(let pane):
+            return [[["pane", "run", pane, Self.textMark]]]
         }
     }
 
@@ -231,8 +267,27 @@ public enum HerdrCommand: Equatable, Sendable {
             return nil
         case .machines:
             return session == nil ? nil : "herdr's machines are not a session's: ask without one."
-        case .read(let pane, _, _), .prompt(let pane), .text(let pane), .explain(let pane), .closePane(let pane):
+        case .read(let pane, _, _), .prompt(let pane), .text(let pane), .explain(let pane), .closePane(let pane), .run(let pane):
             return Self.paneRefusal(pane)
+        case let .split(pane, _, directory):
+            if let refusal = Self.paneRefusal(pane) { return refusal }
+            if let directory, let refusal = Self.folderRefusal(directory) { return refusal }
+            return nil
+        case let .waitAgent(pane, states, _):
+            if let refusal = Self.paneRefusal(pane) { return refusal }
+            if states.isEmpty { return "Give at least one state to wait for." }
+            if let state = states.first(where: { !Self.waitStates.contains($0) }) {
+                return "herdr waits for \(Self.waitStates.joined(separator: ", ")), not “\(state)”."
+            }
+            return nil
+        case .waitOutput(let pane, _, _):
+            return Self.paneRefusal(pane)
+        case let .rename(pane, name):
+            if let refusal = Self.paneRefusal(pane) { return refusal }
+            if let name, !HerdrTarget.isAgentName(name) {
+                return "“\(name)” is not a name herdr takes for an agent: a lower-case letter, then up to 31 lower-case letters, digits, _ and -."
+            }
+            return nil
         case .startKinds:
             return nil
         case let .newTab(directory, label):
@@ -292,6 +347,21 @@ public enum HerdrCommand: Equatable, Sendable {
               let pane = root["pane_id"] as? String, HerdrTarget.isPane(pane) else { return nil }
         let named: String? = root["tab_id"] as? String ?? (result["tab"] as? [String: Any])?["tab_id"] as? String
         return (named ?? "", pane)
+    }
+
+    /// The longest wait herdr is asked for, in milliseconds: MCP's own most (300 s).
+    public static let maxWait = 300_000
+
+    /// A wait's time, in milliseconds, between 1 s and `maxWait`.
+    static func waitTimeout(_ milliseconds: Int) -> Int { min(maxWait, max(1000, milliseconds)) }
+
+    /// `pane split`'s answer: the new pane's id (`"result": {"pane": {"pane_id"}}`); nil when it names none herdr's rule
+    /// takes.
+    public static func splitPane(_ json: String) -> String? {
+        guard let object = try? JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any],
+              let result = object["result"] as? [String: Any], let pane = (result["pane"] as? [String: Any])?["pane_id"] as? String,
+              HerdrTarget.isPane(pane) else { return nil }
+        return pane
     }
 
     /// A folder for a new herdr tab: absolute (herdr reads it as it is, with no shell to expand `~`), one line.

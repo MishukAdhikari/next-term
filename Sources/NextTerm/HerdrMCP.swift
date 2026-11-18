@@ -94,6 +94,21 @@ enum HerdrMCP {
     /// asks first; the pane tools, which refuse it by name; tools that take no tab).
     static func route(_ tool: String, _ target: HerdrTarget, _ arguments: [String: Any], caller: TerminalTab?,
                       herdrCaller: [String: String], reply: @escaping Reply) -> Bool {
+        // plan 040: a wait for states or for output, and a plain pane's read and close, go by herdr's pane.
+        if tool == "wait_for_tab", arguments["until"] != nil || arguments["match"] != nil {
+            herdrWait(target, arguments, reply: reply)
+            return true
+        }
+        if tool == "read_tab" || tool == "close_tab", isPlainPane(target) {
+            MainActor.assumeIsolated {
+                if tool == "read_tab" {
+                    readPane(target, lines: arguments["lines"] as? Int ?? 80, reply: reply)
+                } else {
+                    closePlainPane(target, arguments, caller: caller, herdrCaller: herdrCaller, reply: reply)
+                }
+            }
+            return true
+        }
         switch tool {
         case "read_tab", "wait_for_tab", "send_to_tab", "press_keys", "answer_agent", "show_tab":
             let typing = ["send_to_tab", "press_keys", "answer_agent"].contains(tool)
@@ -117,7 +132,7 @@ enum HerdrMCP {
             MainActor.assumeIsolated { closeAgent(target, arguments, caller: caller, herdrCaller: herdrCaller, reply: reply) }
             return true
         case "rename_tab":
-            reply(fail(TabRename.agentRefusal))
+            MainActor.assumeIsolated { renameAgent(target, arguments, caller: caller, herdrCaller: herdrCaller, reply: reply) }
             return true
         default:
             return false
@@ -150,9 +165,13 @@ enum HerdrMCP {
         let words: [String] = given as? [String] ?? []
         let begun = Date()
         // Every check that can refuse, before anything runs: the pane id stands in until herdr makes the tab.
-        let newTab = HerdrCommand.newTab(directory: directory, label: name)
-        let start = HerdrCommand.startAgent(name: name, kind: kind, pane: "w1:p1", words: words)
-        if let refusal = newTab.refusal(session: nil) ?? start.refusal(session: nil) { return reply(fail(refusal + " Nothing was started.")) }
+        // Where (plan 040 U1): a new pane beside one of its panes, an existing shell pane, else a new herdr tab.
+        let place = startPlace(arguments)
+        let newTab: HerdrCommand? = place.pane != nil ? nil
+            : place.split.map { HerdrCommand.split(pane: $0, direction: place.direction, directory: directory) }
+            ?? HerdrCommand.newTab(directory: directory, label: name)
+        let start = HerdrCommand.startAgent(name: name, kind: kind, pane: place.pane ?? "w1:p1", words: words)
+        if let refusal = newTab?.refusal(session: nil) ?? start.refusal(session: nil) { return reply(fail(refusal + " Nothing was started.")) }
         HerdrRunner.run(.startKinds, for: tab) { result in
             MainActor.assumeIsolated {
                 if let problem = problem(result, pane: "", sent: false) { return reply(fail(problem)) }
@@ -162,37 +181,61 @@ enum HerdrMCP {
                     let listed = kinds.isEmpty ? "none" : kinds.joined(separator: ", ")
                     return reply(fail("herdr there starts these kinds: \(listed). Nothing was started."))
                 }
-                askToStart(tab, name: name, kind: kind, words: words, newTab: newTab, begun: begun, arguments, caller: caller, reply: reply)
+                askToStart(tab, name: name, kind: kind, words: words, newTab: newTab, existing: place.pane, begun: begun, arguments,
+                           caller: caller, reply: reply)
             }
         }
     }
 
     @MainActor
-    private static func askToStart(_ tab: TerminalTab, name: String, kind: String, words: [String], newTab: HerdrCommand,
-                                   begun: Date, _ arguments: [String: Any], caller: TerminalTab?, reply: @escaping Reply) {
+    /// `newTab`: what makes the pane (a new herdr tab, or a split beside a pane: plan 040 U1); nil starts the agent in
+    /// `existing`, a shell pane at its prompt.
+    private static func askToStart(_ tab: TerminalTab, name: String, kind: String, words: [String], newTab: HerdrCommand?,
+                                   existing: String? = nil, begun: Date, _ arguments: [String: Any], caller: TerminalTab?,
+                                   reply: @escaping Reply) {
         let place: String = tab.remote.map { "on \($0.host.name)" } ?? "on this Mac"
         let session: String? = tab.remote?.herdrSession ?? tab.localHerdr?.session
+        let whereTo: String
+        switch newTab {
+        case .split(let pane, let direction, _)?: whereTo = "in a new pane \(direction == .down ? "below" : "beside") \(pane)"
+        case .some: whereTo = "in a new herdr tab"
+        case nil: whereTo = "in pane \(existing ?? "")"
+        }
         let ask = MCPWriteControl.Ask(title: "An agent asks to start an agent in herdr",
-                                      details: "\(kind), named “\(name)”, in a new herdr tab of herdr \(place) (\(session ?? "its default session")): it runs there until it ends. Next Term runs: \(shownCommands(newTab, name: name, kind: kind, words: words, session: session))")
+                                      details: "\(kind), named “\(name)”, \(whereTo) of herdr \(place) (\(session ?? "its default session")): it runs there until it ends. Next Term runs: \(shownCommands(newTab, name: name, kind: kind, words: words, session: session, existing: existing))")
         let context = MCPWriteControl.context(arguments, caller: caller, approval: .askOnMac, requester: nil, connection: nil)
         MCPWriteControl.approve(ask, context, reply: reply) { approved, window in
             window?.finish()
             guard tab.followsHerdr else { return reply(fail("That tab stopped showing herdr while you were asked. Nothing was started.")) }
+            @MainActor func startIn(_ created: (tab: String, pane: String), made: Bool) {
+                let start = HerdrCommand.startAgent(name: name, kind: kind, pane: created.pane, words: words)
+                startWhenReady(tab, start, created: created, begun: begun, firstTry: Date()) { started in
+                    let id = tab.id.uuidString.lowercased() + "/" + created.pane
+                    if let problem = problem(started, pane: created.pane) {
+                        let stays: String = made ? " The pane stays; close_tab with \(id) closes it while herdr lists it; otherwise close it in herdr." : ""
+                        return reply(fail("\(kind) did not start in pane \(created.pane): \(problem)\(stays)"))
+                    }
+                    driven.insert(id)
+                    recordOpener(id, caller: caller)
+                    var info: [String: Any] = ["id": id, "pane": created.pane, "kind": kind, "name": name, "approved": approved]
+                    if !created.tab.isEmpty { info["herdr_tab"] = created.tab }
+                    reply(ok(info))
+                }
+            }
+            guard let newTab else { return startIn(("", existing ?? ""), made: false) }
             HerdrRunner.run(newTab, for: tab) { made in
                 MainActor.assumeIsolated {
                     if let problem = problem(made, pane: "", sent: false) { return reply(fail(problem + " Nothing was started.")) }
+                    if case .split = newTab {
+                        guard case .json(let json) = made, let pane = HerdrCommand.splitPane(json) else {
+                            return reply(fail("herdr made no pane there that Next Term could read. Nothing was started."))
+                        }
+                        return startIn(("", pane), made: true)
+                    }
                     guard case .json(let json) = made, let created = HerdrCommand.createdPane(json) else {
                         return reply(fail("herdr made no tab there that Next Term could read; read_tab on the herdr tab shows what happened."))
                     }
-                    let start = HerdrCommand.startAgent(name: name, kind: kind, pane: created.pane, words: words)
-                    startWhenReady(tab, start, created: created, begun: begun, firstTry: Date()) { started in
-                        let id = tab.id.uuidString.lowercased() + "/" + created.pane
-                        if let problem = problem(started, pane: created.pane) {
-                            return reply(fail("herdr made tab \(created.tab) (pane \(created.pane)), but \(kind) did not start in it: \(problem) The tab stays; close_tab with \(id) closes that pane, and the tab with it, while herdr lists it; otherwise close it in herdr."))
-                        }
-                        driven.insert(id)
-                        reply(ok(["id": id, "pane": created.pane, "herdr_tab": created.tab, "kind": kind, "name": name, "approved": approved]))
-                    }
+                    startIn(created, made: true)
                 }
             }
         }
@@ -200,14 +243,16 @@ enum HerdrMCP {
 
     /// The commands as the window shows them: herdr's own argument lists, each word shell-quoted, the new pane's id
     /// named for what it is.
-    private static func shownCommands(_ newTab: HerdrCommand, name: String, kind: String, words: [String], session: String?) -> String {
+    private static func shownCommands(_ newTab: HerdrCommand?, name: String, kind: String, words: [String], session: String?,
+                                      existing: String? = nil) -> String {
         let quote: (String) -> String = { ShellQuote.quote($0) }
-        let create: [String]? = newTab.argv(executable: "herdr", session: session, text: nil)?.first?.first
+        let create: [String]? = newTab?.argv(executable: "herdr", session: session, text: nil)?.first?.first
         // A valid pane id stands in, then shows as <its pane>: argv refuses an id herdr would not take.
-        let start: [String]? = HerdrCommand.startAgent(name: name, kind: kind, pane: "w1:p1", words: words)
+        let start: [String]? = HerdrCommand.startAgent(name: name, kind: kind, pane: existing ?? "w1:p1", words: words)
             .argv(executable: "herdr", session: session, text: nil)?.first?.first
-        guard let create, let start else { return "herdr tab create, then herdr agent start" }
+        guard let start else { return "herdr agent start" }
         var shown: [String] = start.map(quote)
+        guard let create else { return shown.joined(separator: " ") }
         if let at = start.firstIndex(of: "--pane"), at + 1 < shown.count { shown[at + 1] = "<its pane>" }
         return create.map(quote).joined(separator: " ") + ", then " + shown.joined(separator: " ")
     }

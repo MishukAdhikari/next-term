@@ -886,15 +886,35 @@ import Testing
         let (project, start) = (home + "/Code/app", try ownStart())
         try write(json(["pid": Int(getpid()), "sessionId": uuid, "cwd": project, "procStart": AgentEvidence.procStartText(start)]),
                   to: home + "/other/sessions/\(getpid()).json")
-        let moved = try process(["claude"], environment: ["CLAUDE_CONFIG_DIR": home + "/other"])
-        let evidence = try #require(capture(moved, typed: "CLAUDE_CONFIG_DIR=\(home)/other claude", home: home))
-        #expect(evidence.source == .sessionFile && !evidence.ranAsTyped && !evidence.routingMatchesShell)
+        // The process shows the folder in its own environment, as ProcessInspector reads it (by value and as a digest),
+        // with or without a typed line: the gate judges the process, not the line (plan 046).
+        let config = ["CLAUDE_CONFIG_DIR": home + "/other"]
+        let moved = try process(["claude"], environment: config, routing: config)
         let facts = ResumeFacts(sessionAvailable: true, projectConfigChanged: false, settingsAutoContinue: false)
-        guard case .onTheLine(let failed) = evidence.gate(facts) else {
-            Issue.record("resumed with another config folder")
-            return
+        for typed in ["CLAUDE_CONFIG_DIR=\(home)/other claude", nil] {
+            let evidence = try #require(capture(moved, typed: typed, home: home))
+            #expect(evidence.source == .sessionFile && !evidence.routingMatchesShell && evidence.routingSet == ["CLAUDE_CONFIG_DIR"])
+            #expect(evidence.ranAsTyped == false)
+            guard case .onTheLine(let failed) = evidence.gate(facts) else {
+                Issue.record("resumed with another config folder")
+                return
+            }
+            #expect(failed.contains(.routing) && failed.contains(.storeGone))
         }
-        #expect(failed.contains(.typedLine) && failed.contains(.routing))
+    }
+
+    /// Plan 046: capture reads what ran from the process alone, with no typed line (bash, fish, a script, polled argv):
+    /// which routing variables it had set, by name, and the real path of the file the kernel ran.
+    @Test func captureReadsRoutingAndWhatRanFromTheProcessAlone() throws {
+        let home = try makeHome().home
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let plain = try #require(capture(try process(["claude"], executable: "/usr/bin/true"), home: home))
+        #expect(plain.agent == .claude && plain.routingSet == [] && !plain.ranAsTyped && plain.confirmed.isEmpty)
+        #expect(plain.ranPath == canonicalPath("/usr/bin/true"))
+        let routed = try #require(capture(try process(["claude"], routing: ["ANTHROPIC_BASE_URL": "https://a.example.com"]), home: home))
+        #expect(routed.routingSet == ["ANTHROPIC_BASE_URL"])
+        // What the kernel ran no longer there: not known.
+        #expect(routed.ranPath == nil)
     }
 
     /// KTD5: the agent's routing variables are compared with the login shell's, the environment a restored tab starts

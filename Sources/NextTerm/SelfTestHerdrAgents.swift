@@ -60,6 +60,8 @@ extension SelfTest {
               'pane close') echo '{"id":"cli:pane:close","result":{"type":"ok"}}' ;;
               'agent start') if [ "$3" = --help ]; then echo '          [possible values: claude, codex, opencode]'; else echo '{"id":"cli:agent:start","result":{"type":"ok"}}'; fi ;;
               'tab create') echo '{"id":"cli:tab:create","result":{"root_pane":{"pane_id":"w2:p9","tab_id":"w2:t9"},"tab":{"tab_id":"w2:t9"},"type":"tab_created"}}' ;;
+              'pane split') echo '{"id":"cli:pane:split","result":{"type":"pane_info","pane":{"pane_id":"w2:p7","tab_id":"w2:t1"}}}' ;;
+              'agent rename'|'agent wait'|'pane wait-output'|'pane run') echo '{"id":"cli:ok","result":{"type":"ok"}}' ;;
             esac
             exit 0
             """
@@ -368,8 +370,8 @@ extension SelfTest {
         }
         clearCalls()
         let renamedAgent = await herdrTool("rename_tab", ["tab_id": id, "title": "x"])
-        check(renamedAgent.isError && renamedAgent.text == TabRename.agentRefusal && !read().contains("rename"),
-              "herdr MCP: rename_tab refuses an agent's id, and herdr is asked nothing", renamedAgent.text)
+        check(renamedAgent.isError && renamedAgent.text == HerdrMCP.renameRefusal && !read().contains("rename"),
+              "herdr MCP: rename_tab refuses an agent the caller did not start, and herdr is asked nothing", renamedAgent.text)
         let split = await herdrTool("split_pane", ["tab_id": id])
         check(split.isError && c.tabs.contains { $0 === tab }, "herdr MCP: split_pane refuses an agent's id, and the herdr tab stays", split.text)
         // start_agent (010a U5b): a kind herdr does not list is refused before asking; asked on the Mac, naming herdr's
@@ -395,6 +397,7 @@ extension SelfTest {
                   approve ? "herdr MCP: start_agent, approved, makes a herdr tab and starts the agent in its pane" : "herdr MCP: start_agent, declined, runs nothing",
                   result.text)
         }
+        await herdrParityChecks(tab: tab, id: id, herdrTabID: herdrTabID, read: read, clearCalls: clearCalls, write: write)
         c.show(other)
         let waiting = Task { await herdrTool("wait_for_tab", ["tab_id": id, "timeout_seconds": 20]) }
         await pause(1)

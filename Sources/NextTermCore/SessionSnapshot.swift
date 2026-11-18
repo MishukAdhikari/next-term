@@ -337,8 +337,7 @@ extension SessionSnapshot {
 
         /// The line as a file keeps it for a pane that runs `agent`: its checks and state as they are, and the agent's
         /// program alone in place of the words typed, which hold its prompt (R8). Nothing reads them back: the put-back
-        /// line and the automatic resume come from the agent's evidence, and the gate asks only that a kept line was
-        /// typed. An agent the matrix does not know keeps no line.
+        /// line and the automatic resume come from the agent's evidence, and the gate asks nothing of the line. An agent the matrix does not know keeps no line.
         public func programOnly(of agent: Agent) -> Command {
             var kept = self
             if line != nil { kept.line = agent.program }
@@ -410,12 +409,21 @@ extension SessionSnapshot {
         /// The agent's provider and config-location variables matched the login shell's when captured.
         /// Compared in memory: no value is saved.
         public var routingMatchesShell: Bool
+        /// Which of the agent's routing variables (RestoreAgent.routingVariables) its process had set, by name only, read
+        /// from the process's own environment: none set lets it resume whatever the login shell sets (`routingHolds`).
+        /// Nil when not known: a file from before it was kept, or a variable whose value capture may not read.
+        public var routingSet: [String]?
         /// No auto-continue variable was set for the agent when captured.
         public var autoContinueOff: Bool
-        /// The typed line ran as typed (KTD5): its command's first word was the agent's program, or an alias whose
-        /// expansion is the agent's program and options, with no assignment, wrapper or function in between. Compared in
-        /// memory: the expanded line is not saved.
+        /// The typed line ran as typed: its command's first word was the agent's program, or an alias whose expansion is
+        /// the agent's program and options, with no assignment, wrapper or function in between. Compared in memory: the
+        /// expanded line is not saved. Only the start watch's fallback reads it (StartWatch.Start); the automatic-resume
+        /// gate judges what ran, not how it was typed (plan 046).
         public var ranAsTyped: Bool
+        /// The real path of the file the kernel ran: the executable, or a script agent's interpreter. A resume runs only
+        /// when its path still leads there, or to the agent's own install at another version (`codeChanged`). Nil when
+        /// not known: a file from before it was kept.
+        public var ranPath: String?
         /// The options it ran with, from its argv in order, each with its values as argv gave them (U2). Never a prompt
         /// word, a form or a one-shot option. A restore reads them again with the running build's table, which says what
         /// a line keeps, what a resume carries and what is left off (`launch`, KTD20). Nil when not known: no argv, a file
@@ -433,8 +441,8 @@ extension SessionSnapshot {
         /// Each fact not known reads as the answer that resumes nothing: nil, or false.
         public init(agent: Agent, sessionID: String? = nil, source: IDSource = .guess, sessionFolder: String? = nil, store: String? = nil,
                     executable: String? = nil, interpreter: String? = nil, script: String? = nil, startedAt: Date? = nil,
-                    sessionDate: Date? = nil, routingMatchesShell: Bool = false, autoContinueOff: Bool = false,
-                    ranAsTyped: Bool = false, options: [LaunchOption]? = nil, launcher: Launcher? = nil, confirmed: [LaunchOption] = [],
+                    sessionDate: Date? = nil, routingMatchesShell: Bool = false, routingSet: [String]? = nil, autoContinueOff: Bool = false,
+                    ranAsTyped: Bool = false, ranPath: String? = nil, options: [LaunchOption]? = nil, launcher: Launcher? = nil, confirmed: [LaunchOption] = [],
                     version: String? = nil) {
             self.agent = agent
             self.sessionID = sessionID
@@ -447,8 +455,10 @@ extension SessionSnapshot {
             self.startedAt = startedAt
             self.sessionDate = sessionDate
             self.routingMatchesShell = routingMatchesShell
+            self.routingSet = routingSet
             self.autoContinueOff = autoContinueOff
             self.ranAsTyped = ranAsTyped
+            self.ranPath = ranPath
             self.options = options
             self.launcher = launcher
             self.confirmed = confirmed
@@ -1063,6 +1073,12 @@ extension SessionSnapshot.Evidence {
         fixed.executable = SnapshotText.plainPath(executable, max: limits.path)
         fixed.interpreter = SnapshotText.plainPath(interpreter, max: limits.path)
         fixed.script = SnapshotText.plainPath(script, max: limits.path)
+        fixed.ranPath = SnapshotText.plainPath(ranPath, max: limits.path)
+        // Names only, each one of this agent's routing variables, once: anything else and it is not known.
+        if let set = routingSet {
+            let known = agent.routingVariables
+            fixed.routingSet = set.count <= known.count && Set(set).count == set.count && set.allSatisfy(known.contains) ? set : nil
+        }
         // An option that breaks its rule drops its whole list: a line or a resume never carries part of what ran.
         fixed.options = options.flatMap(SessionSnapshot.LaunchOption.kept)
         fixed.confirmed = SessionSnapshot.LaunchOption.kept(confirmed) ?? []
@@ -1540,7 +1556,7 @@ extension SessionSnapshot.Command: Codable {
 extension SessionSnapshot.Evidence: Codable {
     private enum Keys: String, CodingKey {
         case agent, sessionID, source, sessionFolder, store, executable, interpreter, script, startedAt, sessionDate
-        case routingMatchesShell, autoContinueOff, ranAsTyped
+        case routingMatchesShell, routingSet, autoContinueOff, ranAsTyped, ranPath
         case options, launcher, confirmed, version
     }
 
@@ -1558,6 +1574,9 @@ extension SessionSnapshot.Evidence: Codable {
         routingMatchesShell = c.flag(.routingMatchesShell)
         autoContinueOff = c.flag(.autoContinueOff)
         ranAsTyped = c.flag(.ranAsTyped)
+        // Added with plan 046: a file without them reads as not knowing either.
+        routingSet = c.optional([String].self, .routingSet)
+        ranPath = c.optional(String.self, .ranPath)
         // Added after schema 1 shipped: a file without them reads as having none.
         if c.contains(.options) { options = c.launchOptions(.options, budget: decoder.snapshotBudget) }
         confirmed = c.launchOptions(.confirmed, budget: decoder.snapshotBudget) ?? []
@@ -1578,8 +1597,10 @@ extension SessionSnapshot.Evidence: Codable {
         try c.encodeIfPresent(startedAt.map(Millis.of), forKey: .startedAt)
         try c.encodeIfPresent(sessionDate.map(Millis.of), forKey: .sessionDate)
         try c.encode(routingMatchesShell, forKey: .routingMatchesShell)
+        try c.encodeIfPresent(routingSet, forKey: .routingSet)
         try c.encode(autoContinueOff, forKey: .autoContinueOff)
         try c.encode(ranAsTyped, forKey: .ranAsTyped)
+        try c.encodeIfPresent(ranPath, forKey: .ranPath)
         try c.encodeIfPresent(options, forKey: .options)
         try c.encodeIfPresent(launcher, forKey: .launcher)
         if !confirmed.isEmpty { try c.encode(confirmed, forKey: .confirmed) }

@@ -388,6 +388,10 @@ enum HerdrAgentMenu {
         add("Peek", #selector(Target.peekRow(_:)), agent)
         add("Why This State?", #selector(Target.explain(_:)), agent)
         menu.addItem(.separator())
+        // herdr's own verbs (plan 040): its name (agent rename), a new agent beside it (pane split, agent start).
+        add("Rename…", #selector(Target.rename(_:)), agent)
+        add("New Agent Beside…", #selector(Target.newBeside(_:)), agent)
+        menu.addItem(.separator())
         // Next Term's own flag: herdr's state stays as it is. Not for an agent at work or waiting on a decision.
         let unread = tab.herdrTracker.isUnread(pane)
         let keepable = row.map { $0.status != .working && $0.status != .blocked } ?? false
@@ -444,6 +448,16 @@ enum HerdrAgentMenu {
         @objc func show(_ sender: NSMenuItem) {
             guard let choice = sender.representedObject as? AgentChoice, let tab = choice.tab, !tab.exited else { return NSSound.beep() }
             HerdrAgentMenu.show(tab: tab, pane: choice.pane)
+        }
+
+        @objc func rename(_ sender: NSMenuItem) {
+            guard let choice = sender.representedObject as? AgentChoice, let tab = choice.tab, !tab.exited else { return NSSound.beep() }
+            MainActor.assumeIsolated { HerdrAgentActions.rename(tab: tab, pane: choice.pane) }
+        }
+
+        @objc func newBeside(_ sender: NSMenuItem) {
+            guard let choice = sender.representedObject as? AgentChoice, let tab = choice.tab, !tab.exited else { return NSSound.beep() }
+            MainActor.assumeIsolated { HerdrAgentActions.newAgent(tab: tab, beside: choice.pane) }
         }
 
         @objc func keepUnread(_ sender: NSMenuItem) {

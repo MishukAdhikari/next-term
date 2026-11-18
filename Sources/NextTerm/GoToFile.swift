@@ -2,10 +2,13 @@ import AppKit
 import NextTermCore
 
 /// ⌘P: open any file in the project by typing a few letters of its name or path. The list follows each
-/// keystroke; ↑ ↓ choose, Return opens, Esc closes. `name:42` opens at line 42.
+/// keystroke; ↑ ↓ choose, Return opens, Esc closes. `name:42` opens at line 42. "run" lists the Run group's tasks
+/// first (RunTasks.matching): Return runs the chosen one in a new tab.
 final class GoToFileController: NSObject, NSTextFieldDelegate, NSTableViewDataSource, NSTableViewDelegate, NSWindowDelegate {
     /// Opens a file (absolute path) at a 1-based line and column.
     var onOpen: ((_ path: String, _ line: Int?, _ column: Int) -> Void)?
+    /// Runs a Run group's task.
+    var onRun: ((RunTask) -> Void)?
 
     private let panel: GoToFilePanel
     private let field = NSTextField()
@@ -13,10 +16,14 @@ final class GoToFileController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     private let footer = NSTextField(labelWithString: "")
     private var root = ""
     private var recent: [String] = []
+    /// The project's Run tasks, listed when the search starts with "run".
+    private var tasks: [RunTask] = []
 
     private struct Row {
         let path: String // relative to root
         let positions: [Int]
+        /// A Run line instead of a file.
+        var task: RunTask?
     }
     private var rows: [Row] = []
 
@@ -56,9 +63,10 @@ final class GoToFileController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     // MARK: showing
 
     /// `query`: text to start with (the selection); it is selected, so typing replaces it.
-    func show(root: String, recent: [String], query: String? = nil, over parent: NSWindow) {
+    func show(root: String, recent: [String], query: String? = nil, tasks: [RunTask] = [], over parent: NSWindow) {
         self.root = canonicalPath(root)
         self.recent = recent
+        self.tasks = tasks
         field.stringValue = query ?? ""
         last = nil
         catalog = Self.catalogs[self.root]
@@ -133,8 +141,12 @@ final class GoToFileController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     private func refreshRows() {
         generation += 1
         let token = generation
+        let taskRows = RunTasks.matching(tasks, query: field.stringValue).map { (task: RunTask) -> Row in
+            Row(path: task.file, positions: [], task: task)
+        }
+        let hasTasks = !tasks.isEmpty
         guard let catalog else {
-            rows = []
+            rows = taskRows
             table.reloadData()
             footer.stringValue = "Listing the project’s files…"
             return
@@ -190,7 +202,7 @@ final class GoToFileController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
             DispatchQueue.main.async {
                 guard let self, self.generation == token else { return }
                 self.last = query.isEmpty ? nil : (query, catalog, matches)
-                self.rows = rows
+                self.rows = taskRows + rows
                 self.table.reloadData()
                 if !rows.isEmpty {
                     self.table.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
@@ -198,7 +210,8 @@ final class GoToFileController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
                 }
                 let total = NumberFormatter.localizedString(from: NSNumber(value: index.paths.count + extraCount), number: .decimal)
                 if query.isEmpty {
-                    self.footer.stringValue = rows.isEmpty ? "\(total) files" : "Recently opened · \(total) files"
+                    let files = rows.isEmpty ? "\(total) files" : "Recently opened · \(total) files"
+                    self.footer.stringValue = files + (hasTasks ? " · Type “run” for tasks" : "")
                 } else {
                     let found = NumberFormatter.localizedString(from: NSNumber(value: matches.count + extraFound), number: .decimal)
                     let listed = NumberFormatter.localizedString(from: NSNumber(value: index.paths.count), number: .decimal)
@@ -233,6 +246,11 @@ final class GoToFileController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     @objc private func openSelected() {
         let row = table.clickedRow >= 0 ? table.clickedRow : table.selectedRow
         guard rows.indices.contains(row) else { return NSSound.beep() }
+        if let task = rows[row].task {
+            close()
+            onRun?(task)
+            return
+        }
         let (_, line, column) = Self.parse(field.stringValue)
         let path = (root as NSString).appendingPathComponent(rows[row].path)
         close()
@@ -241,7 +259,7 @@ final class GoToFileController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     }
 
     /// For the self-test: what the list shows now.
-    var shownPaths: [String] { rows.map(\.path) }
+    var shownPaths: [String] { rows.map { $0.task?.paletteTitle ?? $0.path } }
     var query: String {
         get { field.stringValue }
         set { field.stringValue = newValue; refreshRows() }
@@ -357,7 +375,11 @@ final class GoToFileController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         let cell = tableView.makeView(withIdentifier: GoToFileCell.identifier, owner: self) as? GoToFileCell ?? GoToFileCell()
         let item = rows[row]
-        cell.show(path: item.path, positions: item.positions, root: root)
+        if let task = item.task {
+            cell.show(task: task)
+        } else {
+            cell.show(path: item.path, positions: item.positions, root: root)
+        }
         return cell
     }
 
@@ -420,14 +442,38 @@ final class GoToFileCell: NSTableCellView {
     required init?(coder: NSCoder) { fatalError("not used") }
 
     private var shown: (path: String, positions: [Int], root: String)?
+    private var shownTask: RunTask?
 
     /// On the chosen row the picked-out letters turn white: blue on the blue highlight would not read.
     override var backgroundStyle: NSView.BackgroundStyle {
-        didSet { if let shown, backgroundStyle != oldValue { show(path: shown.path, positions: shown.positions, root: shown.root) } }
+        didSet {
+            guard backgroundStyle != oldValue else { return }
+            if let shownTask { return show(task: shownTask) }
+            if let shown { show(path: shown.path, positions: shown.positions, root: shown.root) }
+        }
+    }
+
+    /// A Run line: "Run: npm run dev", and the file that names the task below it.
+    func show(task: RunTask) {
+        shownTask = task
+        shown = nil
+        name.attributedStringValue = NSAttributedString(string: task.paletteTitle, attributes: [
+            .font: NSFont.systemFont(ofSize: 13), .foregroundColor: backgroundStyle == .emphasized ? NSColor.white : Theme.text,
+        ])
+        folder.attributedStringValue = NSAttributedString(string: task.file, attributes: [
+            .font: NSFont.systemFont(ofSize: 11), .foregroundColor: Theme.textDim,
+        ])
+        icon.image = NSImage(systemSymbolName: "play.fill", accessibilityDescription: "Run")?
+            .withSymbolConfiguration(.init(pointSize: 11, weight: .regular))
+        icon.contentTintColor = Theme.textDim
+        toolTip = task.command
+        setAccessibilityLabel(task.paletteTitle)
     }
 
     func show(path: String, positions: [Int], root: String) {
         shown = (path, positions, root)
+        shownTask = nil
+        icon.contentTintColor = nil
         let chosen = backgroundStyle == .emphasized
         let utf8 = Array(path.utf8)
         let nameStart = (utf8.lastIndex(of: UInt8(ascii: "/")).map { $0 + 1 }) ?? 0

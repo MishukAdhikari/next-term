@@ -431,6 +431,7 @@ final class AllFilesView: NSView, DiffSelectionHost {
                 self.selectionMayHaveChanged()
             }
             block.column = column
+            markComments(entry, in: column) // entry.block is set once the block is made
         case let .note(text, action):
             let note = AllFilesNote(frame: NSRect(x: 0, y: Self.headerHeight, width: block.bounds.width, height: Self.noteHeight))
             note.autoresizingMask = [.width]
@@ -467,6 +468,7 @@ final class AllFilesView: NSView, DiffSelectionHost {
         scroll.backgroundColor = Theme.background
         scroll.contentView.postsBoundsChangedNotifications = true
         NotificationCenter.default.addObserver(self, selector: #selector(pageScrolled), name: NSView.boundsDidChangeNotification, object: scroll.contentView)
+        NotificationCenter.default.addObserver(self, selector: #selector(reviewChanged(_:)), name: ReviewDraft.changed, object: nil)
         message.textColor = Theme.textDim
         message.alignment = .center
         message.isHidden = true
@@ -504,6 +506,36 @@ final class AllFilesView: NSView, DiffSelectionHost {
         if view.selectedRange().length > 0 || window?.firstResponder === view { selectedColumn = column }
         selectionMayHaveChanged()
     }
+
+    @objc private func reviewChanged(_ notification: Notification) {
+        guard notification.object as? NSWindow === window else { return }
+        entries.forEach { markComments($0) }
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        entries.forEach { markComments($0) }
+    }
+
+    /// The window's review comments on a file shown here: every one for uncommitted changes; for the branch's changes
+    /// (All), those on the file's lines now, as the new side is the file on disk (the old side is the base's, not
+    /// HEAD's); none for a commit's.
+    private func markComments(_ entry: Entry, in made: UnifiedColumn? = nil) {
+        guard let column = made ?? entry.block?.column else { return }
+        let all = ReviewDraft.existing(window)?.comments ?? []
+        let comments: [ReviewComment]
+        if isUncommitted(entry.file.path) {
+            comments = all
+        } else if case .all = scope {
+            comments = all.filter(\.inFile)
+        } else {
+            comments = []
+        }
+        column.mark(ReviewComments.marks(comments, path: canonicalPath((root as NSString).appendingPathComponent(entry.file.path))))
+    }
+
+    /// For the self-test: the rows marked as commented in a file's column, by its path in the repository.
+    func commentedRows(of path: String) -> [Int] { entries.first { $0.file.path == path }?.block?.column?.commentedRows ?? [] }
 
     /// The column whose selection counts (`selectedColumn`), and its file.
     private var selected: (column: UnifiedColumn, entry: Entry)? {
