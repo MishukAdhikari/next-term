@@ -344,6 +344,7 @@ enum MCPControl {
             if let gone = MainActor.assumeIsolated({ CommandPaneAutoClose.closedAnswer(arguments["tab_id"]) }) { return reply(gone) }
             guard let tab = findTab(arguments["tab_id"]) else { return reply(fail("No tab with that id; list_tabs shows them.")) }
             let seconds = min(300, max(1, arguments["timeout_seconds"] as? Int ?? 50))
+            if arguments["match"] != nil { return MCPWaitMatch.wait(tab, arguments, until: TerminalTab.now + Double(seconds), reply: reply) } // plan 040 U2
             waitFor(tab, until: TerminalTab.now + Double(seconds), sawWork: false, reply: reply)
         case "get_editor_selection": reply(editorSelection(caller: caller))
         case "get_open_files": reply(openFiles())
@@ -641,6 +642,7 @@ enum MCPControl {
     }
 
     private static func newTab(_ arguments: [String: Any], caller: TerminalTab?, reply: @escaping Reply) {
+        if let raw = arguments["split_beside"] as? String, let herdr = HerdrTarget.parse(raw) { return MainActor.assumeIsolated { HerdrMCP.runBeside(herdr, arguments, caller: caller, reply: reply) } } // plan 040 U4: its folder is on herdr's side
         guard let directory = absolute(arguments["directory"]), isFolder(directory) else {
             return reply(fail("Not a folder (give an absolute path): \(arguments["directory"] as? String ?? "")"))
         }
