@@ -357,6 +357,7 @@ enum MCPControl {
         case "answer_agent": answerAgent(arguments, caller: caller, reply: reply)
         case "read_file", "find_in_files", "git_status", "get_diff": projectTool(tool, arguments, caller: caller, reply: reply)
         case "show_tab": reply(withTab(arguments) { tab in showTab(tab) })
+        case "switch_view": reply(withTab(arguments) { tab in MainActor.assumeIsolated { LiveChatMCP.switchView(tab, arguments) } }) // plan 041
         case "close_tab": closeTab(arguments, caller: caller, approval: approval, requester: requester, connection: connection, reply: reply)
         case "rename_tab": reply(renameTab(arguments, caller: caller))
         case "start_agent": MainActor.assumeIsolated { HerdrMCP.startAgent(arguments, caller: caller, reply: reply) }
@@ -462,6 +463,7 @@ enum MCPControl {
         info.merge(MainActor.assumeIsolated { AgentSessionSocket.listFields(tab) }) { $1 }
         if let code = tab.status.exitCode, tab.status.state == .failed { info["exit_code"] = Int(code) }
         if MCPRegistration.needsRestart(tab) { info["needs_restart"] = true } // its agent started before Next Term's tools reached it
+        info.merge(MainActor.assumeIsolated { LiveChatMCP.listFields(tab) }) { $1 } // its view: chat or terminal (plan 041)
         if tab === caller { info["you"] = true }
         if let openedBy = tab.openedBy {
             info["opened_by"] = openedBy.uuidString.lowercased()
