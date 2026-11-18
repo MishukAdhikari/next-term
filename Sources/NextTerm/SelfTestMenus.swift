@@ -225,7 +225,7 @@ extension SelfTest {
     private static func tabMenuChecks(_ w: TerminalWindowController, folder: URL) async {
         guard let window = w.window, let first = w.tabs.first, let firstGroup = w.group(of: first) else { return }
         let alone = w.terminalTabMenu(at: 0) ?? NSMenu()
-        check(titles(alone) == ["Rename…", "Split Right", "Split Down", "Duplicate Tab", "Close Tab", "Close Other Tabs", "Close Tabs to the Right"],
+        check(titles(alone) == ["Rename…", "Split Right", "Split Down", "Duplicate Tab", "Pin Tab", "Close Tab", "Close Other Tabs", "Close Tabs to the Right"],
               "menus: a terminal tab's menu", titles(alone).joined(separator: ", "))
         let others = alone.items.first { $0.title == "Close Other Tabs" }
         let right = alone.items.first { $0.title == "Close Tabs to the Right" }
