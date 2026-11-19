@@ -267,6 +267,13 @@ final class AgentSessionRunner {
     }
 
     private func send(_ text: String) {
+        // Typed before the agent is ready (the chat's composer shows from the first report, plan 047): held, and sent as
+        // the first prompt is, the moment it is. Never dropped.
+        guard driver.isReady else {
+            firstPrompt = firstPrompt.map { $0 + "\n\n" + text } ?? text
+            session.note("Sent once \(agent.name) is ready.")
+            return draw()
+        }
         driver.send(text)
     }
 

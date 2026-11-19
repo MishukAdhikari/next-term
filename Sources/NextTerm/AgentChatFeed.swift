@@ -179,8 +179,9 @@ extension LiveChatView {
 
     /// The tab's chat view closed: whichever feed it read stops.
     static func release(_ tab: TerminalTab) {
+        // A session's feed stays while its tab does (AgentChatWatch.closed ends it): the chat comes back at once, whole,
+        // with no read from the journal's start.
         LiveChatWatch.release(tab)
-        AgentChatWatch.release(tab.id)
     }
 }
 

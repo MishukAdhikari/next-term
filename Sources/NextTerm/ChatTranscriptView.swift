@@ -110,9 +110,14 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
 
     /// The column's widest, for the body size: 90 of the body font's average letters.
     static func cap(body: Double) -> Double {
+        // Measured once a size: layout runs often (each scroll that lays out more text), the font's alphabet never changes.
+        if let known = caps[body] { return known }
         let alphabet = NSAttributedString(string: "abcdefghijklmnopqrstuvwxyz", attributes: [.font: NSFont.systemFont(ofSize: CGFloat(body))])
-        return ChatColumn.cap(alphabetWidth: Double(alphabet.size().width))
+        let cap = ChatColumn.cap(alphabetWidth: Double(alphabet.size().width))
+        caps[body] = cap
+        return cap
     }
+    private static var caps: [Double: Double] = [:]
 
     /// The column for the view's width now, at the renderer's body size.
     var column: ChatColumn { ChatColumn.layout(width: Double(bounds.width), cap: Self.cap(body: renderer.sizes.body)) }

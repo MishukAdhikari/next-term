@@ -59,25 +59,26 @@ extension SelfTest {
         check(tip.contains("without Gemini CLI\u{2019}s own screen") && tip.contains("text view"),
               "agent chat: the terminal button says the session has no screen of its agent's own", tip)
 
-        // A prompt from the composer: typed into the session's input line, and the reply shows.
+        // A prompt from the composer, as soon as the chat shows (the agent may not be ready yet: it is held, never lost):
+        // typed into the session's input line, and the reply shows.
         func says(_ words: String) -> Bool { chat.shownBlocks.contains { "\($0.content)".contains(words) } }
         chat.composer.textView.string = "hello there"
         chat.composer.submit()
-        let started = CACurrentMediaTime()
-        let replied = await wait(5) { says("You said: hello there") }
-        let seconds = CACurrentMediaTime() - started
+        let replied = await wait(15) { says("You said: hello there") }
         check(replied && says("hello there") && says("Read README.md"),
-              "agent chat: the composer's prompt runs a turn; the prompt, the tool call and the reply show",
+              "agent chat: the composer's prompt runs a turn, held until the agent is ready if it wasn't; the prompt, the tool call and the reply show",
               chat.shownBlocks.map { "\($0.content)" }.joined(separator: " | "))
-        check(replied && seconds < 2, "agent chat: the reply shows within a second or so of the agent writing it",
-              String(format: "%.2f s", seconds))
         await pause(0.4)
         check(!chat.showsStateRows, "agent chat: with the turn over, no working row or card shows")
 
         // A permission: the card from the session's own request; a choice answers the session's menu.
         chat.composer.textView.string = "please rm it"
         chat.composer.submit()
+        let started = CACurrentMediaTime()
         let carded = await wait(8) { chat.showsCard }
+        let seconds = CACurrentMediaTime() - started
+        check(carded && seconds < 2, "agent chat: what the agent writes shows within a second or so (the prompt's paste, its Return, the turn, the card)",
+              String(format: "%.2f s", seconds))
         let names: [String] = chat.card.decision?.choices.map { $0.name } ?? []
         check(carded && names == ["Allow once", "Always allow", "Reject"] && chat.card.decision?.title == "Run rm -rf build",
               "agent chat: the permission is the card, with the agent's options and its action",
@@ -105,6 +106,7 @@ extension SelfTest {
               String(flatScreen(tab).suffix(200)))
         pane.chatStrip.onPick?(true)
         let back = await wait(3) { pane.showsChat }
+        // Shown at once: the session's feed stayed while the terminal showed.
         check(back && pane.liveChat.map { chat in chat.shownBlocks.contains { "\($0.content)".contains("Permission answer: no") } } == true,
               "agent chat: the chat button brings the chat back, the whole session in it")
 
