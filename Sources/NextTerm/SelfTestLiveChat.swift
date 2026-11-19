@@ -236,6 +236,9 @@ extension SelfTest {
                 let started = CACurrentMediaTime()
                 clip.scroll(to: NSPoint(x: 0, y: y))
                 transcript.scrollView.reflectScrolledClipView(clip)
+                // The layout and drawing the step causes, inside the timing.
+                window.contentView?.layoutSubtreeIfNeeded()
+                transcript.textView.displayIfNeeded()
                 window.displayIfNeeded()
                 CATransaction.flush()
                 steps.append((CACurrentMediaTime() - started) * 1000)
@@ -282,6 +285,14 @@ extension SelfTest {
                                                                                  added: index % 9 + 1, removed: index % 4, created: false))))
             blocks.append(ChatBlock(id: "n\(index)", content: .note(text: "Note \(index): the cache was warm.", tone: .info)))
         }
+        // The session's own blocks first, then the feed is set aside, so the 300 blocks stay what the chat shows
+        // (a feed arriving late would replace them with the session's few, and the timing would scroll nothing).
+        _ = await wait(3) { chat.shownBlocks.count >= 6 }
+        chat.feed.onChange = nil
+        defer {
+            chat.feed.onChange = { [weak chat] _, _ in chat?.refresh() }
+            chat.refresh()
+        }
         let transcript = chat.transcript
         var started = CACurrentMediaTime()
         transcript.show(blocks, sizes: LiveChatView.sizes, offersTerminal: true)
@@ -296,6 +307,9 @@ extension SelfTest {
             let median = steps[steps.count / 2], p95 = steps[Int(Double(steps.count) * 0.95)], worst = steps.last ?? 0
             return (p95, String(format: "median %.2f ms, 95th %.2f ms, worst %.2f ms", median, p95, worst))
         }
+        let room = transcript.textView.frame.height - clip.bounds.height
+        check(room > 150 * 14 && transcript.textView.string.count > 20_000,
+              "live chat: the timing has 300 blocks to scroll through", "room \(room), characters \(transcript.textView.string.count)")
         let idle = summary(scrollSteps(transcript, window: window))
 
         // The agent prints a line every 50 ms behind the chat.

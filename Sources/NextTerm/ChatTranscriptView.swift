@@ -112,6 +112,9 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
         let side = CGFloat(ChatColumn.layout(width: Double(bounds.width)).leading)
         if textView.textContainerInset.width != side { textView.textContainerInset = NSSize(width: side, height: Self.endMargin) }
         super.layout()
+        // The view got shorter (a row showed under it, the window shrank): a user at the end stays at it. One who
+        // scrolled up stays where they are.
+        if followsEnd, !userScrolling, !isAtBottom { scrollToEnd() }
     }
 
     // MARK: updating
@@ -260,6 +263,8 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
 
     /// Whether a scroll gesture (or its momentum) is under way.
     private var userScrolling = false
+    /// Whether the view was at the end when it last scrolled: a change of the view's own height keeps it there.
+    private var followsEnd = true
 
     @objc private func liveScrollStarted() { userScrolling = true }
 
@@ -297,7 +302,8 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
     }
 
     @objc private func scrolled() {
-        if isAtBottom { jump.isHidden = true }
+        followsEnd = isAtBottom
+        if followsEnd { jump.isHidden = true }
     }
 
     #if DEBUG
