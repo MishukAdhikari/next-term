@@ -87,7 +87,9 @@ final class AgentPromptBox: NSView, NSTextViewDelegate {
 
     /// "Message Claude Code", or "Type a command" with no agent in the tab.
     func refreshPlaceholder() {
-        let words = tab?.localAgent.map { "Message \($0.name)" } ?? "Type to the terminal"
+        // An agent session (nxtrm agent) names its own agent, as its chat does (plan 047).
+        let session = tab.flatMap { AgentSessionSocket.reports[$0.id]?.agent }.flatMap { $0.isEmpty ? nil : $0 }
+        let words = tab?.localAgent.map { "Message \($0.name)" } ?? session.map { "Message \($0)" } ?? "Type to the terminal"
         let placeholder = words + "  ·  Return sends, ⇧Return adds a line"
         if textView.placeholder != placeholder {
             textView.placeholder = placeholder

@@ -174,6 +174,7 @@ final class LiveChatView: NSView {
         case .session(let feed): blocks = ChatTranscript.blocks(from: feed.session, expanded: expanded, thoughtTimes: [:])
         }
         transcript.show(blocks, sizes: Self.sizes, offersTerminal: true)
+        composer.refreshPlaceholder() // a session names its agent once it reports
         refreshState()
     }
 

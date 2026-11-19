@@ -31,7 +31,6 @@ extension SelfTest {
         var journal: String?
         defer {
             pane.setChat(shown: false)
-            window.appearance = nil
             LiveChatView.isOn = savedSetting
             window.close()
             try? fm.removeItem(at: folder)
@@ -59,6 +58,8 @@ extension SelfTest {
         check(tip.contains("without Gemini CLI\u{2019}s own screen") && tip.contains("text view"),
               "agent chat: the terminal button says the session has no screen of its agent's own", tip)
 
+        check(chat.composer.textView.placeholder.hasPrefix("Message Gemini CLI"), "agent chat: the composer names the session's agent",
+              chat.composer.textView.placeholder)
         // A prompt from the composer, as soon as the chat shows (the agent may not be ready yet: it is held, never lost):
         // typed into the session's input line, and the reply shows.
         func says(_ words: String) -> Bool { chat.shownBlocks.contains { "\($0.content)".contains(words) } }
@@ -91,12 +92,8 @@ extension SelfTest {
         check(rejected && tab.status.state != TabState.attention, "agent chat: Reject on the card answers the session's menu",
               chat.shownBlocks.suffix(3).map { "\($0.content)" }.joined(separator: " | "))
 
-        for (name, suffix) in [(NSAppearance.Name.aqua, "agent-chat-light"), (.darkAqua, "agent-chat-dark")] {
-            window.appearance = NSAppearance(named: name)
-            await pause(0.3)
-            await screenshot(window, suffix: suffix)
-        }
-        window.appearance = nil
+        // Next Term's windows are dark (TerminalWindowController): one appearance to see.
+        await screenshot(window, suffix: "agent-chat")
 
         // The terminal button: Next Term's text view of the same session, and back.
         pane.chatStrip.onPick?(false)
