@@ -424,13 +424,7 @@ final class AgentSessionRunner {
     private(set) var journalPath: String?
 
     private func openJournal() {
-        guard let socket = appSocket else { return }
-        let path = ACPSessionJournal.newPath(socket: socket, pid: getpid())
-        let folder = ACPSessionJournal.folder(socket: socket)
-        try? FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-        let fd = open(path, O_WRONLY | O_CREAT | O_EXCL | O_APPEND | O_CLOEXEC, 0o600)
-        guard fd >= 0 else { return }
-        let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+        guard let socket = appSocket, let (path, handle) = ACPSessionJournal.create(socket: socket, pid: getpid()) else { return }
         journalPath = path
         session.recorder = ACPSessionJournal.Recorder { data in try? handle.write(contentsOf: data) }
     }

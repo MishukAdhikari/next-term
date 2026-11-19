@@ -266,6 +266,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     func startAgentControl() {
         SecretsStore.marksLoadedBeforeSocket = SecretsStore.marksLoaded
         MCPControlServer.shared.start(path: SelfTest.isRequested ? SelfTest.mcpSocketPath : nil)
+        AgentChatWatch.removeLeftovers(socket: MCPControlServer.shared.path) // plan 047: journals of an earlier run
         MCPRegistration.update(on: true)
     }
 

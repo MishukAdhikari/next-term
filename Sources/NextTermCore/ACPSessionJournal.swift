@@ -169,3 +169,20 @@ extension ACPSessionJournal {
         }
     }
 }
+
+extension ACPSessionJournal {
+    /// Creates a new journal for process `pid`: the folder (0700) if missing, then the file (0600), never one that exists
+    /// already and never through a link. Nil when the folder is a link or isn't the user's own, or the file can't be made.
+    public static func create(socket: String, pid: Int32) -> (path: String, handle: FileHandle)? {
+        let folder = folder(socket: socket)
+        try? FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        var info = stat()
+        guard lstat(folder, &info) == 0, (info.st_mode & S_IFMT) == S_IFDIR, info.st_uid == getuid() else { return nil }
+        let path = newPath(socket: socket, pid: pid)
+        guard isJournal(path, socket: socket) else { return nil }
+        let fd = open(path, O_WRONLY | O_CREAT | O_EXCL | O_APPEND | O_CLOEXEC | O_NOFOLLOW, 0o600)
+        guard fd >= 0 else { return nil }
+        fchmod(fd, 0o600)
+        return (path, FileHandle(fileDescriptor: fd, closeOnDealloc: true))
+    }
+}

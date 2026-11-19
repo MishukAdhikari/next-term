@@ -148,7 +148,7 @@ enum AgentChatWatch {
     }
 
     /// At launch: journals left by sessions of an earlier run (nothing replays them) are removed.
-    static func removeLeftovers(socket: String) {
+    nonisolated static func removeLeftovers(socket: String) {
         let folder = ACPSessionJournal.folder(socket: socket)
         for name in (try? FileManager.default.contentsOfDirectory(atPath: folder)) ?? [] where name.hasSuffix(".jsonl") {
             try? FileManager.default.removeItem(atPath: (folder as NSString).appendingPathComponent(name))

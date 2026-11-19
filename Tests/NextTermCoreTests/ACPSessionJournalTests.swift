@@ -182,3 +182,53 @@ extension ACPSessionJournalTests {
         #expect(ACPSessionJournal.masked(.chose(1), mask) == .chose(1))
     }
 }
+
+/// Where a journal is written and which paths the app reads as one (plan 047): only a file of its own, 0600, in the
+/// `agent-chat` folder beside the socket.
+@Suite struct ACPSessionJournalPathTests {
+    private func temp() -> String {
+        let folder = (NSTemporaryDirectory() as NSString).appendingPathComponent("journal-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: true)
+        return (folder as NSString).resolvingSymlinksInPath
+    }
+
+    @Test func aNewJournalIsAPrivateFileInTheFolderBesideTheSocket() throws {
+        let base = temp()
+        defer { try? FileManager.default.removeItem(atPath: base) }
+        let socket = (base as NSString).appendingPathComponent("mcp.sock")
+        let made = try #require(ACPSessionJournal.create(socket: socket, pid: 42))
+        try made.handle.write(contentsOf: ACPSessionJournal.line(.note("hi")))
+        #expect((made.path as NSString).deletingLastPathComponent == (base as NSString).appendingPathComponent("agent-chat"))
+        #expect(ACPSessionJournal.isJournal(made.path, socket: socket))
+        let attributes = try FileManager.default.attributesOfItem(atPath: made.path)
+        #expect((attributes[.posixPermissions] as? Int) == 0o600)
+        let folder = try FileManager.default.attributesOfItem(atPath: ACPSessionJournal.folder(socket: socket))
+        #expect((folder[.posixPermissions] as? Int) == 0o700)
+        // Only that folder holds anything new.
+        #expect(try FileManager.default.contentsOfDirectory(atPath: base).sorted() == ["agent-chat"])
+        #expect(ACPSessionJournal.session(from: try Data(contentsOf: URL(fileURLWithPath: made.path))).items == [.note("hi")])
+    }
+
+    @Test func aLinkedFolderGetsNoJournal() throws {
+        let base = temp(), elsewhere = temp()
+        defer { try? FileManager.default.removeItem(atPath: base); try? FileManager.default.removeItem(atPath: elsewhere) }
+        let socket = (base as NSString).appendingPathComponent("mcp.sock")
+        try FileManager.default.createSymbolicLink(atPath: ACPSessionJournal.folder(socket: socket), withDestinationPath: elsewhere)
+        #expect(ACPSessionJournal.create(socket: socket, pid: 42) == nil)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: elsewhere).isEmpty)
+    }
+
+    @Test func onlyAJournalInTheFolderIsReadAsOne() {
+        let socket = "/Users/u/Library/Application Support/Next Term/mcp.sock"
+        let folder = "/Users/u/Library/Application Support/Next Term/agent-chat"
+        #expect(ACPSessionJournal.isJournal(folder + "/12-ab.jsonl", socket: socket))
+        #expect(ACPSessionJournal.isJournal(ACPSessionJournal.newPath(socket: socket, pid: 7), socket: socket))
+        #expect(!ACPSessionJournal.isJournal(folder + "/../mcp.json", socket: socket))
+        #expect(!ACPSessionJournal.isJournal(folder + "/../secrets.jsonl", socket: socket))
+        #expect(!ACPSessionJournal.isJournal(folder + "/sub/12.jsonl", socket: socket))
+        #expect(!ACPSessionJournal.isJournal(folder + "/.hidden.jsonl", socket: socket))
+        #expect(!ACPSessionJournal.isJournal(folder + "/12.txt", socket: socket))
+        #expect(!ACPSessionJournal.isJournal("/Users/u/.ssh/id.jsonl", socket: socket))
+        #expect(!ACPSessionJournal.isJournal("agent-chat/12.jsonl", socket: socket))
+    }
+}
