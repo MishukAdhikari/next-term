@@ -3,13 +3,19 @@ import NextTermCore
 
 /// The terminal and chat buttons of an agent tab with a live chat (plan 041 D6): a small floating control in the pane's
 /// top-right corner, over the terminal and over the chat, so neither gives up a row for it. Two borderless symbols on
-/// the system's translucent material, inset from the corner, the one showing marked.
+/// the system's translucent material, inset from the corner, the one showing marked. Over the chat it always shows;
+/// over the terminal it never sits on the agent's own text: it fades in while the pointer is in the pane's top-right
+/// corner (`hoverRegion`) and out when it leaves. VoiceOver reaches it either way, and ⇧⌘J and View › Show as Chat
+/// switch without it.
 final class LiveChatStrip: NSView {
     /// The control's size, and its inset from the pane's top-right corner.
     static let size = NSSize(width: 52, height: 22)
     static let inset: CGFloat = 6
     /// Kept clear at the right for the terminal's and the transcript's scroller.
     static let scrollerRoom: CGFloat = 6
+    /// Over the terminal, the corner whose hover shows the control.
+    static let hoverRegion = NSSize(width: 120, height: 44)
+    private static let fade: TimeInterval = 0.15
     let terminalButton = LiveChatStrip.button("terminal", help: "Show the agent's own terminal screen")
     let chatButton = LiveChatStrip.button("bubble.left.and.text.bubble.right", help: "Show this session as a chat (\u{21E7}\u{2318}J)")
     private let material = NSVisualEffectView()
@@ -87,7 +93,9 @@ final class LiveChatStrip: NSView {
             button.layer?.backgroundColor = on ? Theme.accent.withAlphaComponent(0.16).cgColor : NSColor.clear.cgColor
             button.setAccessibilityValue(on ? "selected" : "")
         }
+        let changed = isShowingChat != chat
         isShowingChat = chat
+        reveal(animated: changed && !chat)
         // A hairline that holds the control's edge on any background; stronger with Increase Contrast.
         let contrast = NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
         effectiveAppearance.performAsCurrentDrawingAppearance {
@@ -96,6 +104,40 @@ final class LiveChatStrip: NSView {
     }
 
     private(set) var isShowingChat = false
+    /// Whether the pointer is in the pane's top-right corner (the pane's tracking area reports it here).
+    private(set) var isPointerNear = false
+
+    /// Whether the control is meant to be seen: always over the chat, over the terminal only with the pointer near.
+    var isRevealed: Bool { isShowingChat || isPointerNear }
+
+    /// The pointer came into the pane's corner, or left it.
+    func pointerNear(_ near: Bool) {
+        guard near != isPointerNear else { return }
+        isPointerNear = near
+        reveal(animated: true)
+    }
+
+    override func mouseEntered(with event: NSEvent) { pointerNear(true) }
+    override func mouseExited(with event: NSEvent) { pointerNear(false) }
+
+    /// Fades to what `isRevealed` says; at once with Reduce Motion.
+    private func reveal(animated: Bool) {
+        let alpha: CGFloat = isRevealed ? 1 : 0
+        guard alphaValue != alpha else { return }
+        if animated, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion, window != nil {
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = Self.fade
+                animator().alphaValue = alpha
+            }
+        } else {
+            alphaValue = alpha
+        }
+    }
+
+    /// Faded out, clicks go through to the terminal under it.
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        alphaValue < 0.01 ? nil : super.hitTest(point)
+    }
 
     @objc private func pickTerminal() { onPick?(false) }
     @objc private func pickChat() { onPick?(true) }

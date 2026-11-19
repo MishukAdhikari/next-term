@@ -256,7 +256,8 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
         layout.ensureLayout(for: container)
         textView.sizeToFit()
         let clip = scrollView.contentView
-        let y = max(0, textView.frame.height - clip.bounds.height)
+        // A short conversation rests at its top, under any top inset (the chat's floating buttons).
+        let y = max(-scrollView.contentInsets.top, textView.frame.height - clip.bounds.height)
         clip.scroll(to: NSPoint(x: 0, y: y))
         scrollView.reflectScrolledClipView(clip)
         jump.isHidden = true

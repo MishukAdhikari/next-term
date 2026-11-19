@@ -66,6 +66,9 @@ final class LiveChatView: NSView {
         rows.detachesHiddenViews = true
         rows.setClippingResistancePriority(.defaultLow, for: .horizontal)
         rows.setHuggingPriority(.defaultHigh, for: .vertical)
+        // The first line starts under the floating terminal and chat buttons, not beside them.
+        transcript.scrollView.automaticallyAdjustsContentInsets = false
+        transcript.scrollView.contentInsets = NSEdgeInsets(top: Self.toggleRoom, left: 0, bottom: 0, right: 0)
         for view in [transcript, rows] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             addSubview(view)
@@ -100,6 +103,8 @@ final class LiveChatView: NSView {
     static let rowGap: CGFloat = 6
     /// Under the composer.
     static let bottomMargin: CGFloat = 10
+    /// Above the conversation, with its own 16 pt: the first line sits 34 pt down, clear of the floating buttons.
+    static let toggleRoom: CGFloat = 18
     private static var margin: CGFloat { CGFloat(ChatColumn.margin) }
 
     required init?(coder: NSCoder) { fatalError("not used") }

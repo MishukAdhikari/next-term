@@ -78,6 +78,22 @@ final class PaneView: NSView {
         ])
     }
 
+    /// The corner whose hover shows the terminal and chat buttons over the terminal (LiveChatStrip).
+    private var chatCorner: NSTrackingArea?
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let chatCorner { removeTrackingArea(chatCorner) }
+        let size = LiveChatStrip.hoverRegion
+        let top = bounds.maxY - (showsHeader ? PaneHeaderView.height : 0)
+        let corner = NSRect(x: bounds.maxX - size.width, y: top - size.height, width: size.width, height: size.height)
+            .intersection(bounds)
+        guard !corner.isEmpty else { chatCorner = nil; return }
+        let area = NSTrackingArea(rect: corner, options: [.mouseEnteredAndExited, .activeInActiveApp], owner: chatStrip)
+        addTrackingArea(area)
+        chatCorner = area
+    }
+
     /// Whether the prompt box shows under the terminal.
     var showsPromptBox: Bool { promptBox?.isHidden == false }
 
@@ -215,6 +231,7 @@ final class PaneView: NSView {
             guard showsHeader != oldValue else { return }
             header.isHidden = !showsHeader
             headerHeight?.constant = showsHeader ? PaneHeaderView.height : 0
+            updateTrackingAreas()
             if showsHeader { header.update() }
         }
     }

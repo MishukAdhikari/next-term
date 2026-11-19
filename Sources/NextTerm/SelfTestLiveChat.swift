@@ -47,8 +47,8 @@ extension SelfTest {
             cat > \(ShellQuote.quote(session)) <<'NT_EOF'
             \(lines.joined())NT_EOF
             cols=$(tput cols 2>/dev/null || echo 80)
-            printf '\033[2J\033[H%s\r\n' "$(printf '%*s' "$cols" '' | tr ' ' '-')"
-            printf '\033[2;%dHstatus 42%%\r\n' $((cols - 9))
+            printf '\\033[2J\\033[H%s\\r\\n' "$(printf '%*s' "$cols" '' | tr ' ' '-')"
+            printf '\\033[2;%dHstatus 42%%\\r\\n' $((cols - 9))
             stty raw -echo
             printf '\\033[?2004h'
             exec cat > \(ShellQuote.quote(got))
@@ -150,10 +150,21 @@ extension SelfTest {
         pane.chatStrip.terminalButton.performClick(nil)
         check(await wait(3) { !pane.showsChat } && window.firstResponder === tab.view,
               "live chat: the terminal button brings the terminal back with the keyboard")
+        // Over the terminal the buttons stay out of the agent's text until the pointer comes to the corner.
+        pane.chatStrip.pointerNear(false)
+        check(await wait(1) { pane.chatStrip.alphaValue < 0.01 } && !pane.chatStrip.isRevealed,
+              "live chat: over the terminal, the buttons are hidden with the pointer away", "alpha \(pane.chatStrip.alphaValue)")
         await screenshot(window, suffix: "-toggle-terminal")
+        pane.chatStrip.pointerNear(true)
+        check(await wait(1) { pane.chatStrip.alphaValue > 0.99 } && pane.chatStrip.isRevealed,
+              "live chat: over the terminal, the buttons fade in with the pointer in the corner", "alpha \(pane.chatStrip.alphaValue)")
+        await screenshot(window, suffix: "-toggle-terminal-hover")
+        pane.chatStrip.pointerNear(false)
 
         holder.toggleLiveChat(nil)
         check(await wait(3) { pane.showsChat }, "live chat: View › Show as Chat (⇧⌘J) shows it again")
+        check(await wait(1) { pane.chatStrip.alphaValue > 0.99 } && pane.chatStrip.isRevealed,
+              "live chat: over the chat, the buttons always show, the pointer away", "alpha \(pane.chatStrip.alphaValue)")
         LiveChatView.isOn = false
         holder.liveChatSettingChanged()
         check(await wait(3) { !pane.showsChat && pane.chatStrip.isHidden }, "live chat: turned off in Settings, the chat and its buttons go")
