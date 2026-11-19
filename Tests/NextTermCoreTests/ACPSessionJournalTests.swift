@@ -163,3 +163,22 @@ import Testing
         }
     }
 }
+
+extension ACPSessionJournalTests {
+    @Test func maskingChangesTextsButKeepsIdsAndKinds() {
+        let mask: (String) -> String = { $0.replacingOccurrences(of: "sk-secret", with: "•••") }
+        let op = ACPSessionJournal.Op.update(.object(["update": .object([
+            "sessionUpdate": .string("tool_call"), "toolCallId": .string("sk-secret-id"), "kind": .string("execute"),
+            "title": .string("echo sk-secret"), "content": .array([.object(["type": .string("text"), "text": .string("sk-secret")])]),
+        ])]))
+        guard case .update(let params) = ACPSessionJournal.masked(op, mask), let update = params["update"] else {
+            Issue.record("not an update"); return
+        }
+        #expect(update["toolCallId"]?.string == "sk-secret-id")
+        #expect(update["kind"]?.string == "execute")
+        #expect(update["title"]?.string == "echo •••")
+        #expect(update["content"]?.array?.first?["text"]?.string == "•••")
+        #expect(ACPSessionJournal.masked(.prompted("use sk-secret"), mask) == .prompted("use •••"))
+        #expect(ACPSessionJournal.masked(.chose(1), mask) == .chose(1))
+    }
+}

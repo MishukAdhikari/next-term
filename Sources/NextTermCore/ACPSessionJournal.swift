@@ -145,3 +145,27 @@ extension ACPSessionJournal {
             && standard.hasSuffix(".jsonl") && !(standard as NSString).lastPathComponent.hasPrefix(".")
     }
 }
+
+extension ACPSessionJournal {
+    /// `op` with every text in it passed through `mask` (MCPRedaction's, in the app): what the chat shows of a key pasted
+    /// into the session. Ids and option ids are kept, so a card still answers the request it shows.
+    public static func masked(_ op: Op, _ mask: (String) -> String) -> Op {
+        func value(_ v: ACPWire.Value, key: String? = nil) -> ACPWire.Value {
+            switch v {
+            case .string(let text):
+                return ["toolCallId", "optionId", "sessionUpdate", "kind", "status", "type"].contains(key ?? "") ? v : .string(mask(text))
+            case .array(let items): return .array(items.map { value($0, key: key) })
+            case .object(let fields): return .object(Dictionary(uniqueKeysWithValues: fields.map { ($0.key, value($0.value, key: $0.key)) }))
+            default: return v
+            }
+        }
+        switch op {
+        case .prompted(let text): return .prompted(mask(text))
+        case .turnFailed(let text): return .turnFailed(mask(text))
+        case .note(let text): return .note(mask(text))
+        case .update(let params): return .update(value(params))
+        case .requested(let id, let params, let question): return .requested(id: id, params: value(params), question: question)
+        default: return op
+        }
+    }
+}
