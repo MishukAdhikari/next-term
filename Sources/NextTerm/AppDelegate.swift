@@ -596,6 +596,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // launch writes any of the keys that tell the two apart (SidebarClick.usedInstallKeys). Not in the self-test,
         // whose defaults look new at every run: its clicks part sets the setting itself.
         if !SelfTest.isRequested { SidebarClick.settleDefault(in: .standard) }
+        // "How do you like to work?": a new install's first launch only, read before the launch writes any of the keys that
+        // tell a new install from one used before. Never in a self-test.
+        if !SelfTest.isRequested { layoutPickerDue = LayoutPicker.isDue(in: .standard) }
         // Secrets' marks first, with no crypto, so the first MCP answer and IDE message are already masked; then the
         // load check, off the main thread.
         MainActor.assumeIsolated { SecretsStore.shared.loadMarks() }
@@ -725,14 +728,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private func openAtLaunch(kind: LaunchKind, restore: LaunchRestoreResult, settings: LaunchSettings, mayOfferImport: Bool) {
         let input = LaunchInput(kind: kind, restore: restore, terminalWindowOpen: !controllers.isEmpty, settings: settings,
                                 sessionProjects: sessionProjects, recentProjects: recent.paths, mayOfferImport: mayOfferImport)
+        // The layout picker comes only over the Welcome window this launch shows, never over a restore.
+        let offersLayouts = layoutPickerDue
+        layoutPickerDue = false
         switch LaunchDecision.opening(input, exists: isFolder) {
         case .nothing: break
         case .reopen(let paths):
             windowColumns.holdsOffers = true // the last session's projects, not windows the user opens now
             defer { windowColumns.holdsOffers = false }
             for path in paths { openWindow(directory: path, project: path) }
-        case .welcome: showWelcome(nil)
-        case .importThenWelcome: offerImportThenWelcome()
+        case .welcome:
+            showWelcome(nil)
+            if offersLayouts { offerLayoutPicker() }
+        case .importThenWelcome: offerImportThenWelcome(thenLayouts: offersLayouts)
         case .newTerminal: openWindow(directory: newWindowDirectory) // where Settings › Terminal › New tabs says, as ⌘N
         }
     }
@@ -917,13 +925,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     /// The first run: "Coming from another app?" when an app to import from is found (only once), then the Welcome
     /// window, which lists the projects brought over and their agents' sessions.
-    private func offerImportThenWelcome() {
-        guard !ImportSources.detect().isEmpty else { return showWelcome(nil) }
+    private func offerImportThenWelcome(thenLayouts: Bool) {
+        guard !ImportSources.detect().isEmpty else {
+            showWelcome(nil)
+            if thenLayouts { offerLayoutPicker() }
+            return
+        }
         UserDefaults.standard.set(true, forKey: "importOffered")
         ImportWindowController.shared.showChooser(firstRun: true) { [weak self] _ in
             // Not when a window opened meanwhile (`nxtrm`, a folder dropped on the Dock icon).
             guard let self, self.controllers.isEmpty else { return }
             self.showWelcome(nil)
+            if thenLayouts { self.offerLayoutPicker() }
+        }
+    }
+
+    /// "How do you like to work?" over the Welcome window, once it is up: shown once, then never again by itself.
+    private func offerLayoutPicker() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            guard let self, self.controllers.isEmpty, let window = self.welcome?.window, window.isVisible, window.attachedSheet == nil else { return }
+            LayoutPicker.markShown(in: .standard)
+            LayoutPickerSheet.present(over: window)
         }
     }
 
@@ -1403,6 +1425,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     private var welcome: WelcomeWindowController?
+    /// This launch shows the layout picker over its Welcome window: a new install's first launch (LayoutPicker.isDue).
+    private var layoutPickerDue = false
     /// For the self-test, and the card that says Next Term added its tools to the user's agents (MCPRegistrationAnnouncer).
     var welcomeController: WelcomeWindowController? { welcome }
 
