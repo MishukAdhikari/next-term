@@ -84,6 +84,9 @@ public indirect enum Signal: Sendable, Hashable {
     case scheme(String, String)
     /// A key whose value starts so: Convex's `dev:` and `prod:` deployments.
     case textPrefix(String, [String])
+    /// Any key ending so (`_BASE_URL`) whose value is an address on this Mac at this port: an OpenAI-compatible client
+    /// pointed at Ollama's 11434 or LM Studio's 1234. Local.
+    case loopbackPort(String, Int)
     /// Every one of them.
     case all([Signal])
     /// Any one of them.
@@ -135,6 +138,8 @@ public struct OriginRule: Sendable, Hashable {
         case langsmithSite
         /// W&B's API host to its app, as wandb maps it: `api.wandb.ai` to `wandb.ai`, another `api.` host to `app.`.
         case wandbApp
+        /// A server's bind address as the place to reach it: `0.0.0.0` (Ollama's `OLLAMA_HOST`) is `localhost`.
+        case bindAddress
     }
 
     /// The keys that may name it, most preferred first.
@@ -347,10 +352,12 @@ public struct ServiceEntry: Sendable, Hashable, Identifiable {
     /// Main links first, in order, then extras.
     public let links: [LinkTemplate]
     public let notes: [ServiceNote]
+    /// A model server on this Mac: how its row starts it, pulls a model and gives its base URL.
+    public let runtime: RuntimeSpec?
 
     public init(_ id: String, _ name: String, cloudName: String? = nil, kind: ServiceKind, rank: Int,
                 place: ServicePlace?, signals: [Signal], routes: [String] = [], values: [String: KeyRole] = [:],
-                links: [LinkTemplate], notes: [ServiceNote] = []) {
+                links: [LinkTemplate], notes: [ServiceNote] = [], runtime: RuntimeSpec? = nil) {
         self.id = id
         self.name = name
         self.cloudName = cloudName
@@ -362,6 +369,7 @@ public struct ServiceEntry: Sendable, Hashable, Identifiable {
         self.values = values
         self.links = links
         self.notes = notes
+        self.runtime = runtime
     }
 }
 
@@ -369,7 +377,8 @@ public struct ServiceEntry: Sendable, Hashable, Identifiable {
 public enum ServiceCatalog {
     /// Every entry, kind by kind in the order the Services section lists them.
     public static let all: [ServiceEntry] = {
-        let kinds: [[ServiceEntry]] = [aiModels, vectorStores, tracing, agents, localServers, backends, hosting]
+        let kinds: [[ServiceEntry]] = [aiModels + localModels, vectorStores, tracing, agents, localServers, backends,
+                                       hosting]
         return kinds.flatMap { (entries: [ServiceEntry]) -> [ServiceEntry] in entries }
     }()
 

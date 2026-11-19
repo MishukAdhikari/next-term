@@ -75,6 +75,26 @@ public enum Ecosystem: String, Sendable, Hashable, CaseIterable {
     case rubygems
     /// Elixir: `mix.exs`.
     case hex
+    /// Rust: `Cargo.toml`'s dependency tables, the workspace's too.
+    case cargo
+}
+
+/// Keys read by the shape of their name rather than one by one: any `*_BASE_URL` as a URL, `OLLAMA_*MODEL` as a name.
+/// A key whose name marks a secret is never read, whatever its shape.
+public struct KeyPattern: Sendable, Hashable {
+    public let prefix: String
+    public let suffix: String
+    public let role: KeyRole
+
+    public init(prefix: String = "", suffix: String, role: KeyRole) {
+        self.prefix = prefix
+        self.suffix = suffix
+        self.role = role
+    }
+
+    public func matches(_ key: String) -> Bool {
+        key.count >= prefix.count + suffix.count && key.hasPrefix(prefix) && key.hasSuffix(suffix)
+    }
 }
 
 /// The dependency names one manifest lists, in file order, each once. Versions, URLs and paths are never kept.
@@ -260,10 +280,13 @@ extension ProjectFacts {
     /// What the project's files say. `valueKeys` names the keys whose values may be read, each with its role; a key
     /// whose name marks a secret is never read, whatever its role. `startWords` are the commands that run a tool
     /// (`next dev`), and `markerFiles` the files whose presence counts (`langgraph.json`, `mlruns/`, `*.ipynb`).
-    public static func read(root: String, valueKeys: [String: KeyRole], startWords: [String] = [],
-                            markerFiles: [String] = []) -> ProjectFacts {
+    /// `valuePatterns` names more keys by the shape of their name, each with its role; a key `valueKeys` names keeps
+    /// the role given there.
+    public static func read(root: String, valueKeys: [String: KeyRole], valuePatterns: [KeyPattern] = [],
+                            startWords: [String] = [], markerFiles: [String] = []) -> ProjectFacts {
         var reader = FactReader(root: canonicalPath(root))
-        return run(&reader, valueKeys: valueKeys, startWords: startWords, markerFiles: markerFiles)
+        return run(&reader, valueKeys: valueKeys, valuePatterns: valuePatterns, startWords: startWords,
+                   markerFiles: markerFiles)
     }
 
     /// The files the readers look at, relative to the project, and `markerFiles`: where a change can change what
@@ -279,10 +302,10 @@ extension ProjectFacts {
         return log.paths
     }
 
-    static func run(_ reader: inout FactReader, valueKeys: [String: KeyRole], startWords: [String],
-                    markerFiles: [String]) -> ProjectFacts {
+    static func run(_ reader: inout FactReader, valueKeys: [String: KeyRole], valuePatterns: [KeyPattern] = [],
+                    startWords: [String], markerFiles: [String]) -> ProjectFacts {
         var facts = ProjectFacts()
-        let rootEnv = facts.readEnv(&reader, valueKeys: valueKeys)
+        let rootEnv = facts.readEnv(&reader, valueKeys: valueKeys, valuePatterns: valuePatterns)
         facts.readCompose(&reader, rootEnv: rootEnv)
         facts.readManifests(&reader, startWords: startWords)
         facts.readScripts(&reader, startWords: startWords)
@@ -295,12 +318,15 @@ extension ProjectFacts {
     /// Names from every env file, and the values `valueKeys` allows; `.env.example`'s names when no env file exists
     /// (a fresh clone), not merely when none could be read. Values are read as written, never interpolated. Returns
     /// the root `.env`'s entries, for Compose's variables.
-    mutating func readEnv(_ reader: inout FactReader, valueKeys: [String: KeyRole]) -> [EnvEntry] {
+    mutating func readEnv(_ reader: inout FactReader, valueKeys: [String: KeyRole],
+                          valuePatterns: [KeyPattern] = []) -> [EnvEntry] {
         var rootEnv: [EnvEntry] = []
         for file in Self.envFiles {
             guard let text = reader.text(file) else { continue }
             let entries = EnvFile.parse(text, interpolating: false)
-            envNames.append(EnvNames(file: file, names: Self.uniqueKeys(entries)))
+            let names = Self.uniqueKeys(entries)
+            envNames.append(EnvNames(file: file, names: names))
+            let valueKeys = Self.withPatterns(valueKeys, valuePatterns, names: names)
             envValues += Self.facts(entries, file: file, valueKeys: valueKeys)
             refused.formUnion(Self.refusedKeys(entries, valueKeys: valueKeys))
             if file == ".env" { rootEnv = entries }
@@ -310,6 +336,18 @@ extension ProjectFacts {
             envNames.append(EnvNames(file: example, names: Self.uniqueKeys(EnvFile.parse(text, interpolating: false))))
         }
         return rootEnv
+    }
+
+    /// `valueKeys`, and each of `names` a pattern matches that it does not name, with that pattern's role.
+    static func withPatterns(_ valueKeys: [String: KeyRole], _ patterns: [KeyPattern], names: [String]) -> [String: KeyRole] {
+        guard !patterns.isEmpty else { return valueKeys }
+        var keys = valueKeys
+        for name in names where keys[name] == nil {
+            if let pattern = patterns.first(where: { (pattern: KeyPattern) -> Bool in pattern.matches(name) }) {
+                keys[name] = pattern.role
+            }
+        }
+        return keys
     }
 
     static func uniqueKeys(_ entries: [EnvEntry]) -> [String] {

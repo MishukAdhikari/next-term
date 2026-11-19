@@ -56,6 +56,15 @@ extension ServiceCatalogTests {
         EntryCase("fireworks", [".env": "FIREWORKS_API_KEY=NOT-A-KEY\n"],
                   name: "Fireworks", badge: "Console", url: "https://app.fireworks.ai/settings/users/api-keys",
                   not: [".env": "FIREWORKS_MODEL=llama\n"]),
+        EntryCase("ollama", [".env": "OLLAMA_HOST=http://localhost:11434\n"],
+                  name: "Ollama", badge: ":11434", url: "http://localhost:11434/api/tags",
+                  not: [".env": "OPENAI_BASE_URL=http://localhost:8080/v1\n"]),
+        EntryCase("lm-studio", [".env": "OPENAI_BASE_URL=http://localhost:1234/v1\n"],
+                  name: "LM Studio", badge: ":1234", url: "http://localhost:1234/v1/models",
+                  not: [".env": "OPENAI_BASE_URL=https://api.example.com:1234/v1\n"]),
+        EntryCase("vllm", ["Makefile": "serve:\n\tvllm serve Qwen/Qwen3-8B --port 8100\n"],
+                  name: "vLLM", badge: ":8100", url: "http://localhost:8100/v1/models",
+                  not: ["requirements.txt": "vllm\n"]),
     ]
 }
 

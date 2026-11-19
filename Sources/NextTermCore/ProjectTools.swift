@@ -24,6 +24,8 @@ public struct ProjectTool: Sendable, Equatable, Hashable, Identifiable {
     public let requires: String?
     /// Where to get it by hand.
     public let page: String
+    /// Apps whose presence counts as a copy, `~/` for the home folder: `/Applications/Ollama.app`.
+    public var apps: [String] = []
 
     /// uv, for a pyproject.toml with a uv.lock or a `[tool.uv]` table: Astral's installer, into `~/.local/bin`.
     public static let uv = ProjectTool(
@@ -43,7 +45,19 @@ public struct ProjectTool: Sendable, Equatable, Hashable, Identifiable {
         installFolders: ["/Library/Java/JavaVirtualMachines", "~/Library/Java/JavaVirtualMachines"],
         installer: "brew install --cask temurin", requires: "brew", page: "https://adoptium.net/")
 
-    public static let catalog: [ProjectTool] = [uv, cargo, jdk]
+    /// Ollama, for a project that names a local Ollama server: Homebrew's formula. The ollama.com app counts as a copy.
+    public static let ollama = ProjectTool(
+        id: "ollama", name: "Ollama", programs: ["ollama"], stubs: [], ownFolders: [], installFolders: [],
+        installer: "brew install ollama", requires: "brew", page: "https://ollama.com/download",
+        apps: ["/Applications/Ollama.app", "~/Applications/Ollama.app"])
+
+    /// LM Studio, for a project that names its local server: Homebrew's cask, which brings `lms`. The app counts.
+    public static let lmStudio = ProjectTool(
+        id: "lm-studio", name: "LM Studio", programs: ["lms"], stubs: [], ownFolders: ["~/.lmstudio/bin"],
+        installFolders: [], installer: "brew install --cask lm-studio", requires: "brew",
+        page: "https://lmstudio.ai/download", apps: ["/Applications/LM Studio.app", "~/Applications/LM Studio.app"])
+
+    public static let catalog: [ProjectTool] = [uv, cargo, jdk, ollama, lmStudio]
 }
 
 /// One offer line: the tool, what the line says, and what Install… does.
@@ -101,10 +115,16 @@ public enum ProjectTools {
         }
     }
 
-    /// Whether this Mac has a copy of `tool`: on PATH (not a stub), in its installer's own folder, or installed where
-    /// its installs go.
+    /// Whether this Mac has a copy of `tool`: on PATH (not a stub), in its installer's own folder, installed where
+    /// its installs go, or as its app.
     public static func isInstalled(_ tool: ProjectTool, _ look: Look) -> Bool {
         if tool.programs.contains(where: { look.finds($0, stubs: tool.stubs, extra: tool.ownFolders) }) { return true }
+        let app = tool.apps.contains { (path: String) -> Bool in
+            let full = look.expand(path)
+            let folder = (full as NSString).deletingLastPathComponent
+            return look.entries(folder).contains((full as NSString).lastPathComponent)
+        }
+        if app { return true }
         return tool.installFolders.contains { (folder: String) -> Bool in
             look.entries(look.expand(folder)).contains { (name: String) -> Bool in !name.hasPrefix(".") }
         }

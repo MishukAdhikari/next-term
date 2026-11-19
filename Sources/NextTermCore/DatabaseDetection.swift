@@ -22,7 +22,8 @@ public enum Databases {
         var all = env + others(context)
         applyHints(&all, context.hints)
         // Read here once, not in Context, which every hand-off builds again for its password.
-        let facts = ProjectFacts.read(root: context.root, valueKeys: factValueKeys, startWords: ServiceCatalog.startWords,
+        let facts = ProjectFacts.read(root: context.root, valueKeys: factValueKeys,
+                                      valuePatterns: ServiceCatalog.valuePatterns, startWords: ServiceCatalog.startWords,
                                       markerFiles: ServiceCatalog.markerFiles)
         let databases = merge(all).map { (group: CandidateGroup) -> DetectedDatabase in
             var database = group.public

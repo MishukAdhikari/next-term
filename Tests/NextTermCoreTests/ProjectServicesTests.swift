@@ -71,8 +71,11 @@ import Testing
     }
 
     @Test func aLoopbackBaseURLNamesNoCloudProvider() {
-        let project = FixtureProject(["requirements.txt": "openai\n", ".env": "OPENAI_BASE_URL=http://localhost:11434/v1\n"])
+        let project = FixtureProject(["requirements.txt": "openai\n", ".env": "OPENAI_BASE_URL=http://localhost:8080/v1\n"])
         #expect(project.services().rows.isEmpty)
+        // On Ollama's port it is Ollama's, on this Mac.
+        let ollama = FixtureProject(["requirements.txt": "openai\n", ".env": "OPENAI_BASE_URL=http://localhost:11434/v1\n"])
+        #expect(ollama.services().rows.map(\.id) == ["ollama.local"])
     }
 
     @Test func theSDKsOwnHostKeepsItsProvider() {
