@@ -169,6 +169,11 @@ struct ChatBlockRenderer {
         style.codeInset = 12
         style.codeAttributes = [.chatPanel: ChatPanel(.code)]
         let text = MarkdownBlocksRenderer.message(markdown, style: style, quoteAttributes: [.chatPanel: ChatPanel(.quote)])
+        // Code wraps by character: a long command or path breaks at the column's edge, never past it.
+        text.enumerateAttribute(.chatPanel, in: NSRange(location: 0, length: text.length)) { value, range, _ in
+            guard (value as? ChatPanel)?.kind == .code else { return }
+            Self.charWrap(text, in: range)
+        }
         // Web links read as links; Next Term's own rows set their own colours.
         text.enumerateAttribute(.link, in: NSRange(location: 0, length: text.length)) { value, range, _ in
             guard value != nil else { return }
@@ -225,7 +230,9 @@ struct ChatBlockRenderer {
             row.addAttribute(.toolTip, value: tool.expanded ? "Hide the output" : "Show the output", range: NSRange(location: 0, length: row.length))
         }
         row.append(NSAttributedString(string: "\n", attributes: [.font: font]))
-        row.addAttribute(.paragraphStyle, value: rowParagraph(), range: NSRange(location: 0, length: row.length))
+        let rowStyle = rowParagraph()
+        rowStyle.lineBreakMode = .byCharWrapping
+        row.addAttribute(.paragraphStyle, value: rowStyle, range: NSRange(location: 0, length: row.length))
         out.append(row)
         guard tool.expanded, opens else { return }
         // Lines, line length and characters are all capped before Show all (ChatTool.shownOutput).
@@ -241,6 +248,7 @@ struct ChatBlockRenderer {
             style.firstLineHeadIndent = rowIndent + 10
             style.headIndent = style.firstLineHeadIndent
             style.tailIndent = -10
+            style.lineBreakMode = .byCharWrapping
             out.append(NSAttributedString(string: line + "\n", attributes: [.font: detail, .foregroundColor: NSColor.labelColor,
                                                                            .paragraphStyle: style, .chatPanel: panel]))
         }
@@ -273,6 +281,7 @@ struct ChatBlockRenderer {
         let style = paragraph(before: 0, after: 0, lineSpacing: 2)
         style.firstLineHeadIndent = rowIndent
         style.headIndent = rowIndent * 2
+        style.lineBreakMode = .byCharWrapping
         row.addAttribute(.paragraphStyle, value: style, range: NSRange(location: 0, length: row.length))
         out.append(row)
     }
@@ -381,6 +390,16 @@ struct ChatBlockRenderer {
         let imageSize = image.size
         attachment.bounds = NSRect(x: 0, y: ((font.capHeight - imageSize.height) / 2).rounded(), width: imageSize.width, height: imageSize.height)
         return NSAttributedString(attachment: attachment)
+    }
+
+    /// The paragraphs in `range` wrap by character (code, paths, tool output).
+    static func charWrap(_ text: NSMutableAttributedString, in range: NSRange) {
+        text.enumerateAttribute(.paragraphStyle, in: range, options: []) { value, part, _ in
+            let current = value as? NSParagraphStyle ?? NSParagraphStyle.default
+            guard current.lineBreakMode != .byCharWrapping, let style = current.mutableCopy() as? NSMutableParagraphStyle else { return }
+            style.lineBreakMode = .byCharWrapping
+            text.addAttribute(.paragraphStyle, value: style, range: part)
+        }
     }
 
     /// The block's first paragraph keeps `gap` above itself.

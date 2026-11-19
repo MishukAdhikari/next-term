@@ -3,11 +3,12 @@ import NextTermCore
 
 /// A chat tab's transcript (plan 037 KTD4): one read-only, selectable text view holding every block as attributed
 /// paragraphs, a range per block id. An update replaces only the blocks that changed, so a streaming message touches
-/// its own range. The content column caps at 760 points and centres. It stays at the bottom while the user hasn't
-/// scrolled up; scrolled up, a Jump to Latest pill shows. Main thread.
+/// its own range. The text sits in the reading column (ChatColumn): the width less a calm margin, capped and centred
+/// only in a very wide view. Lines wrap, code and paths by character, so nothing is ever wider than the view and it
+/// never scrolls sideways. It stays at the bottom while the user hasn't scrolled up; scrolled up, a Jump to Latest pill
+/// shows. Main thread.
 final class ChatTranscriptView: NSView, NSTextViewDelegate {
-    static let columnWidth: CGFloat = 760
-    static let sideMargin: CGFloat = 20
+    static var sideMargin: CGFloat { CGFloat(ChatColumn.margin) }
     /// The room above the first block and below the last.
     private static let endMargin: CGFloat = 16
 
@@ -29,6 +30,8 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
         renderer = ChatBlockRenderer(sizes: sizes)
         let storage = NSTextStorage()
         let layout = NSLayoutManager()
+        // Contiguous layout on purpose: an edit at the end lays out only the new text either way, and non-contiguous
+        // layout estimates the height above, so the scroller and the content shift as the user scrolls up.
         storage.addLayoutManager(layout)
         let container = NSTextContainer(size: NSSize(width: 400, height: CGFloat.greatestFiniteMagnitude))
         container.widthTracksTextView = true
@@ -59,6 +62,8 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
 
         scrollView.documentView = textView
         scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = false
+        scrollView.horizontalScrollElasticity = .none
         scrollView.autohidesScrollers = true
         scrollView.drawsBackground = false
         scrollView.borderType = .noBorder
@@ -89,17 +94,27 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
         ])
         NotificationCenter.default.addObserver(self, selector: #selector(scrolled), name: NSView.boundsDidChangeNotification,
                                                object: scrollView.contentView)
+        NotificationCenter.default.addObserver(self, selector: #selector(liveScrollStarted), name: NSScrollView.willStartLiveScrollNotification,
+                                               object: scrollView)
+        NotificationCenter.default.addObserver(self, selector: #selector(liveScrollEnded), name: NSScrollView.didEndLiveScrollNotification,
+                                               object: scrollView)
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
 
     deinit { NotificationCenter.default.removeObserver(self) }
 
+    /// Where the column starts, from the view's leading edge: the composer lines up with it.
+    var columnLeading: CGFloat { textView.textContainerOrigin.x }
+
     override func layout() {
-        super.layout()
-        // The column: at most 760 points, centred, with a margin either side.
-        let side = max(Self.sideMargin, ((bounds.width - Self.columnWidth) / 2).rounded(.down))
+        // The column first, so the text is laid out once at its new width.
+        let side = CGFloat(ChatColumn.layout(width: Double(bounds.width)).leading)
         if textView.textContainerInset.width != side { textView.textContainerInset = NSSize(width: side, height: Self.endMargin) }
+        super.layout()
+        // The view got shorter (a row showed under it, the window shrank): a user at the end stays at it. One who
+        // scrolled up stays where they are.
+        if followsEnd, !userScrolling, !isAtBottom { scrollToEnd() }
     }
 
     // MARK: updating
@@ -107,7 +122,8 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
     /// Shows `new`: only the blocks whose value changed are drawn again. `sizes` or `offersTerminal` changing draws
     /// everything again (View › Bigger and Smaller).
     func show(_ new: [ChatBlock], sizes: ChatTextSizes, offersTerminal: Bool) {
-        let pinned = isAtBottom
+        // Follows the end only while the user is at it and not scrolling: never pulled back mid-gesture.
+        let pinned = isAtBottom && !userScrolling
         let restyled = sizes != renderer.sizes || offersTerminal != renderer.offersTerminal
         if restyled {
             renderer = ChatBlockRenderer(sizes: sizes, showAll: showAll, offersTerminal: offersTerminal)
@@ -245,23 +261,49 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
         return clip.bounds.maxY >= textView.frame.height - 24
     }
 
-    func scrollToEnd() {
-        guard let layout = textView.layoutManager, let container = textView.textContainer else { return }
-        layout.ensureLayout(for: container)
-        textView.sizeToFit()
+    /// Whether a scroll gesture (or its momentum) is under way.
+    private var userScrolling = false
+    /// Whether the view was at the end when it last scrolled: a change of the view's own height keeps it there.
+    private var followsEnd = true
+
+    @objc private func liveScrollStarted() { userScrolling = true }
+
+    @objc private func liveScrollEnded() {
+        userScrolling = false
+        jump.isHidden = isAtBottom
+    }
+
+    /// To the end: at once (a new block while at the end), or with the clip view's own animated scroll (Jump to
+    /// Latest; at once with Reduce Motion).
+    func scrollToEnd(animated: Bool = false) {
+        guard let layout = textView.layoutManager, let storage = textView.textStorage else { return }
+        // Only the end is laid out: the text view's height follows, and nothing above is touched.
+        let tail = max(0, storage.length - 1)
+        layout.ensureLayout(forCharacterRange: NSRange(location: tail, length: storage.length - tail))
         let clip = scrollView.contentView
-        let y = max(0, textView.frame.height - clip.bounds.height)
-        clip.scroll(to: NSPoint(x: 0, y: y))
-        scrollView.reflectScrolledClipView(clip)
+        // A short conversation rests at its top, under any top inset (the chat's floating buttons).
+        let y = max(-scrollView.contentInsets.top, textView.frame.height - clip.bounds.height)
         jump.isHidden = true
+        let end = NSPoint(x: 0, y: y)
+        guard animated, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion, window != nil else {
+            clip.scroll(to: end)
+            scrollView.reflectScrolledClipView(clip)
+            return
+        }
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.3
+            context.allowsImplicitAnimation = true
+            clip.animator().setBoundsOrigin(end)
+        }
     }
 
     @objc private func jumpToLatest() {
-        scrollToEnd()
+        scrollToEnd(animated: true)
     }
 
     @objc private func scrolled() {
-        if isAtBottom { jump.isHidden = true }
+        followsEnd = isAtBottom
+        if followsEnd { jump.isHidden = true }
     }
 
     #if DEBUG
@@ -329,7 +371,9 @@ final class ChatTextView: NSTextView {
             guard let panel = value as? ChatPanel else { return }
             draw(panel, characters: range, layout: layout, container: container)
         }
-        if hasKeyboard, let block = blockAt?(selectedRange().location), let range = blockRange?(block.id) {
+        if hasKeyboard, let block = blockAt?(selectedRange().location), let whole = blockRange?(block.id),
+           case let range = NSIntersectionRange(whole, paragraphs), range.length > 0 {
+            // Only the part near the rect: a long block's outline costs no layout off screen.
             var box = lineBox(range, layout: layout, container: container)
             box = box.insetBy(dx: -6, dy: -3)
             NSColor.keyboardFocusIndicatorColor.withAlphaComponent(0.5).setStroke()
