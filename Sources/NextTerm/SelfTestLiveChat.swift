@@ -8,7 +8,10 @@ import NextTermCore
 /// - the composer types into the agent as one paste and Return;
 /// - the agent keeps running under the chat, and the terminal comes back with the keyboard;
 /// - the setting off takes the buttons and the chat away;
-/// - a screenshot of the chat.
+/// - the layout (plan 041 follow-up): nothing wider than the view and no sideways scroller, even with a 400-character
+///   unbroken line; the conversation and the composer share their leading edge; hidden rows leave no gap above the
+///   composer; the floating terminal and chat buttons take no room;
+/// - screenshots of the chat, narrow and wide, and of the terminal with the floating buttons.
 extension SelfTest {
     static func liveChatChecks() async {
         guard let app = AppDelegate.shared else { return }
@@ -43,6 +46,9 @@ extension SelfTest {
             #!/bin/sh
             cat > \(ShellQuote.quote(session)) <<'NT_EOF'
             \(lines.joined())NT_EOF
+            cols=$(tput cols 2>/dev/null || echo 80)
+            printf '\033[2J\033[H%s\r\n' "$(printf '%*s' "$cols" '' | tr ' ' '-')"
+            printf '\033[2;%dHstatus 42%%\r\n' $((cols - 9))
             stty raw -echo
             printf '\\033[?2004h'
             exec cat > \(ShellQuote.quote(got))
@@ -73,7 +79,7 @@ extension SelfTest {
         tab.view.send(txt: ShellQuote.quote(bin + "/command-code") + "\r")
         _ = await wait(10) { fm.fileExists(atPath: got) && tab.view.getTerminal().bracketedPasteMode }
         check(await wait(5) { holder.refreshPaneHeaders(); return !pane.chatStrip.isHidden },
-              "live chat: a Command Code tab shows the terminal and chat buttons above its terminal",
+              "live chat: a Command Code tab shows the terminal and chat buttons, floating in its corner",
               "agent \(String(describing: tab.localAgent)), program \(tab.status.program)")
         let terminalTop = tab.view.frame.maxY
 
@@ -97,6 +103,42 @@ extension SelfTest {
               "live chat: a line the agent appends shows within a second or two")
         await screenshot(window, suffix: "live-chat")
 
+        // Layout: a 400-character unbroken line, as code and as a word, wraps inside the view at any width.
+        let unbroken = String(repeating: "abcdefghij/", count: 37).prefix(400)
+        if let handle = FileHandle(forWritingAtPath: session) {
+            handle.seekToEndOfFile()
+            handle.write(Data(line(["type": "message", "message": ["role": "assistant", "content": [
+                ["type": "text", "text": "A long one: \(unbroken)\n\n```\n\(unbroken)\n```"]]]]).utf8))
+            try? handle.close()
+        }
+        _ = await wait(3) { chat.shownBlocks.contains { "\($0.content)".contains(String(unbroken.prefix(40))) } }
+        let savedFrame = window.frame
+        for (width, suffix) in [(520.0, "chat-narrow"), (1400.0, "chat-wide")] {
+            window.setContentSize(NSSize(width: width, height: window.contentLayoutRect.height))
+            window.contentView?.layoutSubtreeIfNeeded()
+            chat.transcript.scrollToEnd()
+            await pause(0.3)
+            let fits = liveChatFits(chat)
+            check(fits.ok, "live chat: at \(Int(width)) pt nothing is wider than the view and no sideways scroller shows", fits.detail)
+            await screenshot(window, suffix: "-" + suffix)
+        }
+        window.setFrame(savedFrame, display: true)
+        window.contentView?.layoutSubtreeIfNeeded()
+
+        let composerX = chat.composer.convert(chat.composer.bounds, to: chat).minX
+        let textX = chat.transcript.convert(NSPoint(x: chat.transcript.columnLeading, y: 0), to: chat).x
+        check(abs(composerX - textX) <= 1, "live chat: the conversation and the composer share their leading edge",
+              "text \(textX), composer \(composerX)")
+        if !chat.showsStateRows {
+            let composerTop = chat.composer.convert(chat.composer.bounds, to: chat).maxY
+            let gap = chat.transcript.frame.minY - composerTop
+            check(gap >= 0 && gap <= 12, "live chat: with no rows showing, the composer sits right under the conversation",
+                  "gap \(gap)")
+        }
+        check(abs(chat.frame.maxY - pane.header.frame.minY) < 0.5 && !pane.chatStrip.isHidden,
+              "live chat: the floating terminal and chat buttons take no room; the chat starts at the pane's top",
+              "chat top \(chat.frame.maxY), content top \(pane.header.frame.minY)")
+
         // The composer types into the agent's own prompt: one paste, then Return.
         chat.composer.text = "Also fix the title"
         chat.composer.submit()
@@ -108,6 +150,7 @@ extension SelfTest {
         pane.chatStrip.terminalButton.performClick(nil)
         check(await wait(3) { !pane.showsChat } && window.firstResponder === tab.view,
               "live chat: the terminal button brings the terminal back with the keyboard")
+        await screenshot(window, suffix: "-toggle-terminal")
 
         holder.toggleLiveChat(nil)
         check(await wait(3) { pane.showsChat }, "live chat: View › Show as Chat (⇧⌘J) shows it again")
@@ -135,5 +178,32 @@ extension SelfTest {
             let refused = await call("switch_view", ["tab_id": other.id.uuidString.lowercased(), "view": "chat"])
             check(refused.isError, "live chat: switch_view refuses a tab with no chat view", refused.text)
         }
+    }
+}
+
+extension SelfTest {
+    /// Whether the chat's content stays inside it: the transcript's text no wider than its clip view, and no visible
+    /// sideways scroller anywhere in the chat. The detail names what is wider, for a failure.
+    @MainActor static func liveChatFits(_ chat: LiveChatView) -> (ok: Bool, detail: String) {
+        var problems: [String] = []
+        let clip = chat.transcript.scrollView.contentView.bounds.width
+        let document = chat.transcript.textView.frame.width
+        if document > clip + 0.5 { problems.append("transcript document \(document) > clip \(clip)") }
+        if let layout = chat.transcript.textView.layoutManager, let container = chat.transcript.textView.textContainer {
+            let used = layout.usedRect(for: container).maxX + chat.transcript.textView.textContainerOrigin.x
+            if used > clip + 0.5 { problems.append("text reaches \(used) > clip \(clip)") }
+        }
+        func walk(_ view: NSView) {
+            if let scroll = view as? NSScrollView, scroll.hasHorizontalScroller, scroll.horizontalScroller?.isHidden == false {
+                problems.append("sideways scroller in \(type(of: scroll.documentView as Any))")
+            }
+            let frame = view.convert(view.bounds, to: chat)
+            if view !== chat, !(view.superview is NSClipView), frame.maxX > chat.bounds.maxX + 0.5 || frame.minX < -0.5 {
+                problems.append("\(type(of: view)) spans \(frame.minX)–\(frame.maxX) of \(chat.bounds.width)")
+            }
+            view.subviews.forEach(walk)
+        }
+        walk(chat)
+        return (problems.isEmpty, problems.prefix(6).joined(separator: "; "))
     }
 }
