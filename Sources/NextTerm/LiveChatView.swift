@@ -94,18 +94,19 @@ final class LiveChatView: NSView {
             addSubview(view)
         }
         // The column (ChatColumn), as constraints that move with the view and so can never make it, its pane or the
-        // window wider: centred, the width less both margins, at most the cap.
+        // window wider: from the leading margin, the width less both margins, at most the measure.
         let fill = rows.widthAnchor.constraint(equalTo: widthAnchor, constant: -2 * Self.margin)
         fill.priority = .init(999)
+        let cap = rows.widthAnchor.constraint(lessThanOrEqualToConstant: CGFloat(ChatTranscriptView.cap(body: Self.sizes.body)))
+        capConstraint = cap
         NSLayoutConstraint.activate([
             transcript.topAnchor.constraint(equalTo: topAnchor),
             transcript.leadingAnchor.constraint(equalTo: leadingAnchor),
             transcript.trailingAnchor.constraint(equalTo: trailingAnchor),
             rows.topAnchor.constraint(equalTo: transcript.bottomAnchor, constant: Self.composerGap),
             rows.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -Self.bottomMargin),
-            rows.centerXAnchor.constraint(equalTo: centerXAnchor),
-            rows.widthAnchor.constraint(lessThanOrEqualToConstant: CGFloat(ChatColumn.cap)),
-            rows.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor),
+            rows.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Self.margin),
+            cap,
             fill,
         ] + [working, elsewhereRow, card, composer].map { $0.widthAnchor.constraint(equalTo: rows.widthAnchor) })
         self.elsewhereRow = elsewhereRow
@@ -120,6 +121,8 @@ final class LiveChatView: NSView {
     }
 
     private var elsewhereRow: NSStackView?
+    /// The rows' widest: the measure at the body size, again when the size changes (View › Bigger and Smaller).
+    private var capConstraint: NSLayoutConstraint?
     /// Between the conversation and the first row under it.
     static let composerGap: CGFloat = 8
     /// Between the rows under the conversation.
@@ -163,6 +166,8 @@ final class LiveChatView: NSView {
 
     /// The transcript from the feed's items, then the state rows.
     func refresh() {
+        let measure = CGFloat(ChatTranscriptView.cap(body: Self.sizes.body))
+        if let capConstraint, capConstraint.constant != measure { capConstraint.constant = measure }
         let blocks: [ChatBlock]
         switch source {
         case .live(let feed): blocks = LiveChat.blocks(feed.items, expanded: expanded)
