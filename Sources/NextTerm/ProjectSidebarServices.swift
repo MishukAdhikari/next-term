@@ -25,6 +25,7 @@ extension ProjectSidebarView {
         let item = row >= 0 ? outline.item(atRow: row) : nil
         if let service = item as? ServiceItem { return serviceMenu(for: service.row) }
         if item is ServicesGroup { return servicesGroupMenu() }
+        if item is RunOfferItem, outline.parent(forItem: item) as AnyObject? === servicesGroup { return servicesGroupMenu() }
         return nil
     }
 
@@ -33,6 +34,7 @@ extension ProjectSidebarView {
     func serviceMenu(for row: ServiceRow) -> NSMenu {
         let menu = NSMenu(title: "Service")
         addServicePages(row.links, to: menu)
+        if let runtime = row.runtime { addRuntimeItems(runtime, to: menu) }
         let copy = addServiceItem(to: menu, "Copy Service Name", #selector(copyServiceName(_:)), "sidebar.copyName")
         copy.representedObject = row.name
         if let file = row.sourceFile {
@@ -40,6 +42,126 @@ extension ProjectSidebarView {
             reveal.representedObject = file
         }
         return menu
+    }
+
+    /// A model server's: Start Server in a Tab, Pull Model (the models the files name, each typed for your Return; or
+    /// Pull Model…, which types the start of the command for you to finish), and Copy Base URL.
+    func addRuntimeItems(_ runtime: LocalRuntime, to menu: NSMenu) {
+        if let start = runtime.start {
+            let item = menu.addItem(withTitle: "Start Server in a Tab", action: #selector(startServiceServer(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = start
+            item.toolTip = "Runs “\(start)” in a new tab in the project’s folder"
+        }
+        if let pull = runtime.pull {
+            if runtime.models.isEmpty {
+                let item = menu.addItem(withTitle: "Pull Model…", action: #selector(typeServiceCommand(_:)), keyEquivalent: "")
+                item.target = self
+                item.representedObject = pull + " "
+                item.toolTip = "Types “\(pull) ” in a new tab, for you to name the model"
+            } else {
+                let parent = menu.addItem(withTitle: "Pull Model", action: nil, keyEquivalent: "")
+                let models = NSMenu(title: "Pull Model")
+                for model in runtime.models {
+                    guard let command = runtime.pullCommand(model) else { continue }
+                    let item = models.addItem(withTitle: model, action: #selector(typeServiceCommand(_:)), keyEquivalent: "")
+                    item.target = self
+                    item.representedObject = command
+                    item.toolTip = "Types “\(command)” in a new tab, for you to run"
+                }
+                models.addItem(.separator())
+                let other = models.addItem(withTitle: "Other Model…", action: #selector(typeServiceCommand(_:)), keyEquivalent: "")
+                other.target = self
+                other.representedObject = pull + " "
+                parent.submenu = models
+            }
+        }
+        let copy = menu.addItem(withTitle: "Copy Base URL", action: #selector(copyServiceBaseURL(_:)), keyEquivalent: "")
+        copy.target = self
+        copy.representedObject = runtime.baseURL
+        copy.toolTip = runtime.baseURL
+    }
+
+    /// Runs a model server's start command in a new tab in the project's folder, then looks at its port again shortly
+    /// after: the server prints no address a tab would notice.
+    @objc func startServiceServer(_ sender: Any?) {
+        guard let command = (sender as? NSMenuItem)?.representedObject as? String, let root else { return }
+        delegate?.sidebar(self, command: command, in: root.path, submit: true)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in self?.checkServicePorts() }
+    }
+
+    /// Types a command (`ollama pull llama3.2`) in a new tab in the project's folder, without Return.
+    @objc func typeServiceCommand(_ sender: Any?) {
+        guard let command = (sender as? NSMenuItem)?.representedObject as? String, let root else { return }
+        delegate?.sidebar(self, command: command, in: root.path, submit: false)
+    }
+
+    @objc func copyServiceBaseURL(_ sender: Any?) {
+        guard let url = (sender as? NSMenuItem)?.representedObject as? String else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(url, forType: .string)
+    }
+
+    // MARK: is it up
+
+    /// One look at the ports of the local rows (LoopbackPorts), off the main thread, when the group shows: after a
+    /// scan, when it opens, when the window comes forward, when a tab's served address changes. Never on a timer. A row
+    /// whose port answers gets a green dot; one that does not, nothing.
+    func checkServicePorts() {
+        guard let root, !browsingOnly else { return }
+        let group = servicesGroup
+        let rows = group.items.map(\.row)
+        guard !LoopbackPorts.ports(rows).isEmpty else { return }
+        guard window != nil, !isHiddenOrHasHiddenAncestor, outline.row(forItem: group) >= 0,
+              outline.isItemExpanded(group) else { return }
+        group.portLook += 1
+        let look = group.portLook
+        let path = root.path
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let up = LoopbackPorts.check(rows)
+            DispatchQueue.main.async {
+                guard let self, self.root?.path == path, self.servicesGroup.portLook == look else { return }
+                self.showRunning(up)
+            }
+        }
+    }
+
+    /// Redraws the rows whose running state changed.
+    func showRunning(_ up: Set<String>) {
+        let changed = servicesGroup.update(running: up)
+        guard !changed.isEmpty else { return }
+        for item in changed where outline.row(forItem: item) >= 0 { outline.reloadItem(item) }
+        refreshToolTips()
+    }
+
+    // MARK: offers
+
+    /// Looks for the model servers the rows name (Ollama, LM Studio), off the main thread, and shows a quiet line for
+    /// each one this Mac lacks, as the Run group does. Nothing is looked for while no row names one.
+    func lookForServiceTools() {
+        guard let root, !browsingOnly else { return }
+        let needs = servicesGroup.scan.tools
+        let path = root.path
+        guard !needs.isEmpty else {
+            if servicesGroup.update(offers: []) { reloadServicesGroup() }
+            return
+        }
+        let look = Self.runToolLook
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let offers = ProjectTools.offers(for: needs, look())
+            DispatchQueue.main.async {
+                guard let self, self.root?.path == path, self.servicesGroup.scan.tools == needs else { return }
+                if self.servicesGroup.update(offers: offers) { self.reloadServicesGroup() }
+            }
+        }
+    }
+
+    private func reloadServicesGroup() {
+        guard let root else { return }
+        invalidateRows(of: root)
+        invalidateRows(of: servicesGroup)
+        if outline.row(forItem: servicesGroup) >= 0 { outline.reloadItem(servicesGroup, reloadChildren: true) }
+        refreshToolTips()
     }
 
     /// The group's own row: Refresh Services, the sidebar's one scan of the project's files.
@@ -94,7 +216,10 @@ extension ProjectSidebarView {
         let group = servicesGroup
         let opened = name == NSOutlineView.itemDidExpandNotification
         if item is ServicesGroup {
-            if opened { group.expansion.groupOpened(in: root.path) }
+            if opened {
+                group.expansion.groupOpened(in: root.path)
+                checkServicePorts()
+            }
             if name == NSOutlineView.itemDidCollapseNotification {
                 group.expansion.groupClosed(in: root.path, rootIsOpen: outline.isItemExpanded(root))
             }

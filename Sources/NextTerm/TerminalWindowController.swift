@@ -2100,6 +2100,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     /// The file that was in front last time we looked, so moving the caret doesn't reveal it again.
     private var frontFile: String?
+    /// The tabs' served addresses at the last look, so the Services rows' ports are looked at only when one changes.
+    private var lastServedURLs = Set<String>()
 
     /// The sidebar follows the file in front when another one comes forward (a tab, a closed tab).
     private func followActiveFile() {
@@ -2588,6 +2590,12 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     /// A Run offer's Install…: the installer typed in a new tab in the home folder, not run: the user's Return is the
     /// yes, as Settings › Agents' Install… does. An installer this Mac can't run opens its page instead.
+    /// A Services row's Start Server in a Tab (run) or Pull Model (typed, for the user's Return), in a new tab in the
+    /// project's folder, named after the command.
+    func sidebar(_ sidebar: ProjectSidebarView, command: String, in directory: String, submit: Bool) {
+        runInNewTab(directory: directory, command: command, title: command.trimmingCharacters(in: .whitespaces), submit: submit)
+    }
+
     func sidebar(_ sidebar: ProjectSidebarView, install offer: ToolOffer) {
         switch offer.action {
         case .type(let command):
@@ -3045,6 +3053,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         sidebar.retryDenied() // back from System Settings, perhaps, with a folder allowed
         sidebar.scheduleSessionsReload() // agents in other terminals may have kept new ones
         sidebar.lookForRunTools() // a tool the Run group offered may have been installed since
+        sidebar.lookForServiceTools() // so may a model server the Services group offered
+        sidebar.checkServicePorts() // a local service may have started or stopped meanwhile
         if let view = activeTab?.view, window?.firstResponder !== view, !(window?.firstResponder is NSTextView), !terminalCollapsed {
             window?.makeFirstResponder(view)
         }
@@ -3212,7 +3222,17 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         // Events (command end, bell) can land between ticks; post their notices straight away.
         if let notice = tab.status.takeNotice() { AppDelegate.shared.post(notice, tab: tab, in: self) }
         AppDelegate.shared.updateCopilotFolders() // a new folder for Copilot CLI to connect from
+        noticeServedURLs()
         refresh()
+    }
+
+    /// A tab's served address came or went (a dev server started or stopped): the Services rows' ports are looked at
+    /// again, once.
+    private func noticeServedURLs() {
+        let served = Set(tabs.compactMap { $0.servedURL?.absoluteString })
+        guard served != lastServedURLs else { return }
+        lastServedURLs = served
+        sidebar.checkServicePorts()
     }
 
     func tabDidExit(_ tab: TerminalTab) {
