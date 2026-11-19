@@ -268,7 +268,9 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
         jump.isHidden = isAtBottom
     }
 
-    func scrollToEnd() {
+    /// To the end: at once (a new block while at the end), or with the clip view's own animated scroll (Jump to
+    /// Latest; at once with Reduce Motion).
+    func scrollToEnd(animated: Bool = false) {
         guard let layout = textView.layoutManager, let storage = textView.textStorage else { return }
         // Only the end is laid out: the text view's height follows, and nothing above is touched.
         let tail = max(0, storage.length - 1)
@@ -276,13 +278,22 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
         let clip = scrollView.contentView
         // A short conversation rests at its top, under any top inset (the chat's floating buttons).
         let y = max(-scrollView.contentInsets.top, textView.frame.height - clip.bounds.height)
-        clip.scroll(to: NSPoint(x: 0, y: y))
-        scrollView.reflectScrolledClipView(clip)
         jump.isHidden = true
+        let end = NSPoint(x: 0, y: y)
+        guard animated, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion, window != nil else {
+            clip.scroll(to: end)
+            scrollView.reflectScrolledClipView(clip)
+            return
+        }
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.3
+            context.allowsImplicitAnimation = true
+            clip.animator().setBoundsOrigin(end)
+        }
     }
 
     @objc private func jumpToLatest() {
-        scrollToEnd()
+        scrollToEnd(animated: true)
     }
 
     @objc private func scrolled() {

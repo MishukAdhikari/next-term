@@ -1,5 +1,6 @@
 import AppKit
 import NextTermCore
+import SwiftTerm
 
 /// The live chat view of an agent tab (plan 041), with a stand-in Command Code in a home of the test's own: a script named
 /// command-code that writes a session file, turns bracketed paste on and writes what it reads to a file. Checks:
@@ -49,6 +50,10 @@ extension SelfTest {
             cols=$(tput cols 2>/dev/null || echo 80)
             printf '\\033[2J\\033[H%s\\r\\n' "$(printf '%*s' "$cols" '' | tr ' ' '-')"
             printf '\\033[2;%dHstatus 42%%\\r\\n' $((cols - 9))
+            ( i=0; while [ -d \(ShellQuote.quote(base)) ]; do
+                if [ -e \(ShellQuote.quote(base + "/tick")) ]; then i=$((i+1)); printf 'tick %d\\r\\n' "$i"; fi
+                sleep 0.05
+            done ) &
             stty raw -echo
             printf '\\033[?2004h'
             exec cat > \(ShellQuote.quote(got))
@@ -189,21 +194,76 @@ extension SelfTest {
             let refused = await call("switch_view", ["tab_id": other.id.uuidString.lowercased(), "view": "chat"])
             check(refused.isError, "live chat: switch_view refuses a tab with no chat view", refused.text)
         }
-        await liveChatScrollChecks()
+        await liveChatQuietAndSmooth(pane: pane, tab: tab, window: window, tickFlag: base + "/tick")
     }
 
-    /// Smooth scrolling (the owner's "not smooth"): about 300 blocks, scrolled in small steps, each step's main-thread
-    /// time measured (the scroll, then the drawing it causes). Budget: under 8 ms a step at the 95th percentile, so a
-    /// 120 Hz display keeps up. Also: a block appended at the end follows while at the bottom, and never while the
-    /// user is scrolled up.
-    @MainActor static func liveChatScrollChecks() async {
-        let window = NSWindow(contentRect: NSRect(x: 120, y: 120, width: 820, height: 700), styleMask: [.titled, .resizable],
-                              backing: .buffered, defer: false)
-        window.isReleasedWhenClosed = false
-        let transcript = ChatTranscriptView(sizes: LiveChatView.sizes)
-        window.contentView = transcript
-        window.orderFront(nil)
-        defer { window.close() }
+    /// Draws of one terminal view, counted while a self-test watches it (`countDraws`).
+    nonisolated(unsafe) private static var drawsCounted = 0
+    nonisolated(unsafe) private static weak var drawsOf: NSView?
+    nonisolated(unsafe) private static var drawCounterInstalled = false
+
+    /// Counts `view`'s draws from now on: NextTermView gets a draw(_:) of its own that counts and then draws as
+    /// SwiftTerm does. For the self-test only; nothing in the app calls it.
+    @MainActor static func countDraws(of view: NextTermView) {
+        drawsOf = view
+        drawsCounted = 0
+        guard !drawCounterInstalled else { return }
+        drawCounterInstalled = true
+        let selector = #selector(NSView.draw(_:))
+        guard let inherited = class_getInstanceMethod(TerminalView.self, selector) else { return }
+        typealias Draw = @convention(c) (AnyObject, Selector, NSRect) -> Void
+        let draw = unsafeBitCast(method_getImplementation(inherited), to: Draw.self)
+        let counting: @convention(block) (AnyObject, NSRect) -> Void = { object, rect in
+            if object === drawsOf { drawsCounted += 1 }
+            draw(object, selector, rect)
+        }
+        class_addMethod(NextTermView.self, selector, imp_implementationWithBlock(counting), method_getTypeEncoding(inherited))
+    }
+
+    /// Small scroll steps over the chat's transcript, up from the end and back: each step's main-thread time (the
+    /// scroll and the drawing it causes), in ms, sorted.
+    @MainActor static func scrollSteps(_ transcript: ChatTranscriptView, window: NSWindow) -> [Double] {
+        let clip = transcript.scrollView.contentView
+        let document = transcript.textView
+        transcript.scrollToEnd()
+        window.displayIfNeeded()
+        var steps: [Double] = []
+        var y = clip.bounds.origin.y
+        let top = -transcript.scrollView.contentInsets.top
+        for direction in [-1.0, 1.0] {
+            for _ in 0..<150 {
+                y = max(top, min(document.frame.height - clip.bounds.height, y + direction * 14))
+                let started = CACurrentMediaTime()
+                clip.scroll(to: NSPoint(x: 0, y: y))
+                transcript.scrollView.reflectScrolledClipView(clip)
+                window.displayIfNeeded()
+                CATransaction.flush()
+                steps.append((CACurrentMediaTime() - started) * 1000)
+            }
+        }
+        return steps.sorted()
+    }
+
+    /// The chat as the owner asked for it: smooth and doing no work nobody sees.
+    /// - With the chat over it, the terminal view is out of drawing: no draws for 2 s while the stand-in agent prints a
+    ///   line every 50 ms behind the chat, its buffer still growing; back on the terminal, it draws and shows the
+    ///   latest line.
+    /// - Scrolling about 300 blocks in 14 pt steps, idle and with the agent printing behind: each step's main-thread
+    ///   time, budget under 8 ms at the 95th percentile, the numbers noted for both runs.
+    /// - A new block never pulls back a user who scrolled up, and is followed at the end.
+    @MainActor static func liveChatQuietAndSmooth(pane: PaneView, tab: TerminalTab, window: NSWindow, tickFlag: String) async {
+        let fm = FileManager.default
+        func screen() -> String {
+            let terminal = tab.view.getTerminal()
+            return (0..<terminal.rows).compactMap { terminal.getLine(row: $0)?.translateToString(trimRight: true) }.joined(separator: "\n")
+        }
+        func lastTick() -> Int {
+            screen().components(separatedBy: "tick ").dropFirst().compactMap { Int($0.prefix { $0.isNumber }) }.max() ?? 0
+        }
+        pane.setChat(shown: true)
+        guard await wait(3, { pane.showsChat }), let chat = pane.liveChat else { return check(false, "live chat: the chat shows for the timing") }
+        check(await wait(2) { tab.view.isHidden }, "live chat: under the chat the terminal view is out of drawing, as in a background tab")
+
         var blocks: [ChatBlock] = []
         for index in 0..<75 {
             blocks.append(ChatBlock(id: "p\(index)", content: .prompt(text: "Question \(index): why does the build take so long on the second run?")))
@@ -222,40 +282,44 @@ extension SelfTest {
                                                                                  added: index % 9 + 1, removed: index % 4, created: false))))
             blocks.append(ChatBlock(id: "n\(index)", content: .note(text: "Note \(index): the cache was warm.", tone: .info)))
         }
+        let transcript = chat.transcript
         var started = CACurrentMediaTime()
         transcript.show(blocks, sizes: LiveChatView.sizes, offersTerminal: true)
         window.displayIfNeeded()
         let loadMs = (CACurrentMediaTime() - started) * 1000
         await pause(0.3)
-
         let clip = transcript.scrollView.contentView
-        let document = transcript.textView
-        func atBottom() -> Bool { clip.bounds.maxY >= document.frame.height - 24 }
-        check(atBottom(), "live chat: 300 blocks load scrolled to the end", "clip \(clip.bounds), document \(document.frame.height)")
+        func atBottom() -> Bool { clip.bounds.maxY >= transcript.textView.frame.height - 24 }
+        check(atBottom(), "live chat: 300 blocks load scrolled to the end", "clip \(clip.bounds), document \(transcript.textView.frame.height)")
 
-        // Small steps up from the end, then down again: the trackpad's pace.
-        var steps: [Double] = []
-        var y = clip.bounds.origin.y
-        let top = -transcript.scrollView.contentInsets.top
-        for direction in [-1.0, 1.0] {
-            for _ in 0..<150 {
-                y = max(top, min(document.frame.height - clip.bounds.height, y + direction * 14))
-                started = CACurrentMediaTime()
-                clip.scroll(to: NSPoint(x: 0, y: y))
-                transcript.scrollView.reflectScrolledClipView(clip)
-                window.displayIfNeeded()
-                steps.append((CACurrentMediaTime() - started) * 1000)
-            }
+        func summary(_ steps: [Double]) -> (p95: Double, words: String) {
+            let median = steps[steps.count / 2], p95 = steps[Int(Double(steps.count) * 0.95)], worst = steps.last ?? 0
+            return (p95, String(format: "median %.2f ms, 95th %.2f ms, worst %.2f ms", median, p95, worst))
         }
-        let sorted = steps.sorted()
-        let median = sorted[sorted.count / 2], p95 = sorted[Int(Double(sorted.count) * 0.95)], worst = sorted.last ?? 0
-        let numbers = String(format: "%d steps of 14 pt: median %.2f ms, 95th %.2f ms, worst %.2f ms; 300 blocks loaded in %.1f ms",
-                             steps.count, median, p95, worst, loadMs)
+        let idle = summary(scrollSteps(transcript, window: window))
+
+        // The agent prints a line every 50 ms behind the chat.
+        countDraws(of: tab.view)
+        let ticksBefore = lastTick()
+        fm.createFile(atPath: tickFlag, contents: nil)
+        let busyStarted = Date()
+        _ = await wait(3) { lastTick() > ticksBefore }
+        let busy = summary(scrollSteps(transcript, window: window))
+        await pause(max(0, 2 - Date().timeIntervalSince(busyStarted)))
+        let ticksAfter = lastTick()
+        let drawsHidden = drawsCounted
+
+        let numbers = String(format: "300 blocks loaded in %.1f ms; 300 steps of 14 pt; idle: ", loadMs) + idle.words
+            + "; agent printing every 50 ms: " + busy.words
         note("live chat scrolling: " + numbers)
-        check(p95 < 8, "live chat: scrolling 300 blocks stays under 8 ms a step (95th percentile)", numbers)
+        check(idle.p95 < 8, "live chat: scrolling 300 blocks stays under 8 ms a step (95th percentile), idle", numbers)
+        check(busy.p95 < 8, "live chat: scrolling 300 blocks stays under 8 ms a step (95th percentile) with the agent printing", numbers)
+        check(drawsHidden == 0 && ticksAfter >= ticksBefore + 20,
+              "live chat: under the chat the terminal draws nothing for 2 s while its screen keeps up with the agent",
+              "draws \(drawsHidden), ticks \(ticksBefore) → \(ticksAfter)")
 
         // Scrolled up, a new block never pulls the view back; at the end it follows.
-        clip.scroll(to: NSPoint(x: 0, y: top))
+        clip.scroll(to: NSPoint(x: 0, y: -transcript.scrollView.contentInsets.top))
         transcript.scrollView.reflectScrolledClipView(clip)
         let before = clip.bounds.origin.y
         blocks.append(ChatBlock(id: "late1", content: .message(markdown: "One more, while you read above.", streaming: false)))
@@ -268,6 +332,17 @@ extension SelfTest {
         transcript.show(blocks, sizes: LiveChatView.sizes, offersTerminal: true)
         let appendMs = (CACurrentMediaTime() - started) * 1000
         check(atBottom(), "live chat: at the end, a new block is followed", String(format: "append %.2f ms", appendMs))
+
+        // Back on the terminal: it draws at once and shows the agent's latest line.
+        try? fm.removeItem(atPath: tickFlag)
+        await pause(0.2)
+        let latest = lastTick()
+        pane.setChat(shown: false)
+        check(await wait(2) { !tab.view.isHidden && drawsCounted > drawsHidden } && screen().contains("tick \(latest)"),
+              "live chat: back on the terminal it draws at once, showing the agent's latest line",
+              "hidden \(tab.view.isHidden), draws \(drawsCounted - drawsHidden), latest tick \(latest)")
+        drawsOf = nil
+        await screenshot(window, suffix: "-terminal-after-chat")
     }
 }
 
