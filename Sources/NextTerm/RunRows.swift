@@ -1,7 +1,7 @@
 import AppKit
 import NextTermCore
 
-/// "Run" under Services (plan 044): the project's own tasks (RunTasks), each typed and run in a new tab in the project's
+/// "Run" under Agent Sessions (plan 044): the project's own tasks (RunTasks), each typed and run in a new tab in the project's
 /// folder, and above them a quiet line for a tool the project needs that this Mac lacks (ProjectTools). The group shows
 /// only when the project has tasks.
 final class RunGroup {
