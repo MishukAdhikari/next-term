@@ -30,6 +30,9 @@ protocol ProjectSidebarDelegate: AnyObject {
     func sidebar(_ sidebar: ProjectSidebarView, run task: RunTask)
     /// A Run offer's Install…: the tool's installer typed in a new tab for the user's Return, or its page opened.
     func sidebar(_ sidebar: ProjectSidebarView, install offer: ToolOffer)
+    /// A Services row's command (`ollama serve`, `ollama pull llama3.2`) in a new tab in this folder, named after it:
+    /// run, or typed for the user's Return.
+    func sidebar(_ sidebar: ProjectSidebarView, command: String, in directory: String, submit: Bool)
 }
 
 /// What a Databases row can do beyond copying and revealing.
@@ -582,6 +585,8 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         }
         if !hadRows, hasRows { servicesGroupAppeared() }
         updateToolTips()
+        lookForServiceTools()
+        checkServicePorts()
     }
 
     // MARK: agent sessions
@@ -970,7 +975,7 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         } else if item === databasesGroup {
             rows = databasesGroup.items
         } else if item === servicesGroup {
-            rows = servicesGroup.items
+            rows = servicesGroup.rows
         } else if item === runGroup {
             rows = runGroup.items
         } else if item === sessionsGroup {

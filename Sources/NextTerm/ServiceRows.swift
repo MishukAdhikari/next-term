@@ -5,7 +5,11 @@ import NextTermCore
 /// stores, tracing, agents, local servers, backends, hosting), each with a badge that opens its page.
 final class ServicesGroup {
     var items: [ServiceItem] = []
+    /// A quiet line for a model server the project names that this Mac lacks (Ollama, LM Studio), above the rows.
+    private(set) var offers: [RunOfferItem] = []
     private(set) var scan = ServiceScan()
+    /// The latest "is it up" look's number: an older look's answer is dropped.
+    var portLook = 0
     /// Open or closed, project by project: one you closed stays closed for that project, and a wait for a folder to
     /// open is that project's alone, so a switch between projects changes neither.
     var expansion = SidebarGroupExpansion()
@@ -25,10 +29,41 @@ final class ServicesGroup {
         return true
     }
 
+    /// The group's rows in the outline: the offers, then the services. None while there is no service.
+    var rows: [AnyObject] { items.isEmpty ? [] : (offers as [AnyObject]) + (items as [AnyObject]) }
+
+    /// Takes a look's offers, keeping each line's object by its tool. False when they are the ones shown.
+    func update(offers new: [ToolOffer]) -> Bool {
+        guard new != offers.map(\.offer) else { return false }
+        let old = Dictionary(offers.map { (item: RunOfferItem) -> (String, RunOfferItem) in (item.offer.id, item) },
+                             uniquingKeysWith: { (first: RunOfferItem, _: RunOfferItem) -> RunOfferItem in first })
+        offers = new.map { (offer: ToolOffer) -> RunOfferItem in
+            guard let item = old[offer.id] else { return RunOfferItem(offer) }
+            item.offer = offer
+            return item
+        }
+        return true
+    }
+
+    /// Marks the rows whose port answered as running, and the others not. Returns the rows that changed.
+    func update(running up: Set<String>) -> [ServiceItem] {
+        var changed: [ServiceItem] = []
+        for item in items {
+            let running = up.contains(item.row.id)
+            if item.running != running {
+                item.running = running
+                changed.append(item)
+            }
+        }
+        return changed
+    }
+
     /// Empties the group without touching the outline: on a project switch, before the new project's tree loads, so the
     /// old project's rows never sit in it.
     func clear() {
         _ = update(ServiceScan())
+        _ = update(offers: [])
+        portLook += 1
     }
 
     /// The group's own row or one of its rows: the outline asks these the same questions.
@@ -38,6 +73,8 @@ final class ServicesGroup {
 /// One service row. A class, so the outline keeps it (and its place) across rescans.
 final class ServiceItem {
     var row: ServiceRow
+    /// Its port answered at the last look: the row shows a small green dot.
+    var running = false
     init(_ row: ServiceRow) { self.row = row }
 }
 
@@ -72,6 +109,8 @@ final class ServiceCellView: NSTableCellView {
     /// The name and the dimmed detail; the self-test reads their places.
     let line = NameDetailLine()
     let badge = LinkBadgeStack()
+    /// A small green dot on the icon's corner while the service's port answers; nothing when it does not.
+    let runningDot = NSView()
     private(set) lazy var more = MoreButton(toolTip: "Service actions") { [weak self] in self?.onMenu?() ?? NSMenu() }
     /// The ⋯ menu for this row (set by the sidebar each time the cell is configured).
     var onMenu: (() -> NSMenu)?
@@ -89,12 +128,34 @@ final class ServiceCellView: NSTableCellView {
         }
         imageView = icon
         textField = line.name
+        runningDot.wantsLayer = true
+        runningDot.layer?.cornerRadius = 3
+        runningDot.layer?.backgroundColor = NSColor.systemGreen.cgColor
+        runningDot.isHidden = true
+        runningDot.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(runningDot)
         NSLayoutConstraint.activate([
             icon.leadingAnchor.constraint(equalTo: leadingAnchor),
             icon.centerYAnchor.constraint(equalTo: centerYAnchor),
             icon.widthAnchor.constraint(equalToConstant: 15),
             icon.heightAnchor.constraint(equalToConstant: 15),
+            runningDot.widthAnchor.constraint(equalToConstant: 6),
+            runningDot.heightAnchor.constraint(equalToConstant: 6),
+            runningDot.trailingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 1),
+            runningDot.bottomAnchor.constraint(equalTo: icon.bottomAnchor, constant: 1),
         ] + line.place(in: self, badge: badge, more: more))
+    }
+
+    /// The dot's green as this appearance draws it.
+    private func colourDot() {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            runningDot.layer?.backgroundColor = NSColor.systemGreen.cgColor
+        }
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        colourDot()
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
@@ -111,8 +172,11 @@ final class ServiceCellView: NSTableCellView {
         line.show(title, detail: kindAndFile)
         badge.show(row.badges)
         more.isHidden = false
-        tipText = row.tooltip
-        setAccessibilityLabel(row.accessibilityLabel)
+        runningDot.isHidden = !item.running
+        colourDot()
+        runningDot.toolTip = item.running ? "Running" : nil
+        tipText = row.tooltip(running: item.running)
+        setAccessibilityLabel(row.accessibilityLabel(running: item.running))
         line.fit(in: self, badge: badge)
     }
 
@@ -128,6 +192,7 @@ final class ServiceCellView: NSTableCellView {
         line.show(title, detail: count)
         badge.show([])
         more.isHidden = true
+        runningDot.isHidden = true
         tipText = group.scan.tooltip
         setAccessibilityLabel("Services, \(group.items.count)")
         line.fit(in: self, badge: badge)
