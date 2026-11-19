@@ -189,6 +189,85 @@ extension SelfTest {
             let refused = await call("switch_view", ["tab_id": other.id.uuidString.lowercased(), "view": "chat"])
             check(refused.isError, "live chat: switch_view refuses a tab with no chat view", refused.text)
         }
+        await liveChatScrollChecks()
+    }
+
+    /// Smooth scrolling (the owner's "not smooth"): about 300 blocks, scrolled in small steps, each step's main-thread
+    /// time measured (the scroll, then the drawing it causes). Budget: under 8 ms a step at the 95th percentile, so a
+    /// 120 Hz display keeps up. Also: a block appended at the end follows while at the bottom, and never while the
+    /// user is scrolled up.
+    @MainActor static func liveChatScrollChecks() async {
+        let window = NSWindow(contentRect: NSRect(x: 120, y: 120, width: 820, height: 700), styleMask: [.titled, .resizable],
+                              backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let transcript = ChatTranscriptView(sizes: LiveChatView.sizes)
+        window.contentView = transcript
+        window.orderFront(nil)
+        defer { window.close() }
+        var blocks: [ChatBlock] = []
+        for index in 0..<75 {
+            blocks.append(ChatBlock(id: "p\(index)", content: .prompt(text: "Question \(index): why does the build take so long on the second run?")))
+            blocks.append(ChatBlock(id: "m\(index)", content: .message(markdown: """
+                The second run reuses the cache, **but** the module map is rebuilt each time, so the compiler checks every \
+                header again. Here is what to change, in `Package.swift` number \(index):
+
+                ```swift
+                let settings: [SwiftSetting] = [.unsafeFlags(["-Xfrontend", "-warn-long-function-bodies=200"])]
+                ```
+
+                - Keep the flags in one place.
+                - Run it twice and compare.
+                """, streaming: false)))
+            blocks.append(ChatBlock(id: "c\(index)", content: .change(ChatChange(toolID: "c\(index)", path: "Sources/App/File\(index).swift",
+                                                                                 added: index % 9 + 1, removed: index % 4, created: false))))
+            blocks.append(ChatBlock(id: "n\(index)", content: .note(text: "Note \(index): the cache was warm.", tone: .info)))
+        }
+        var started = CACurrentMediaTime()
+        transcript.show(blocks, sizes: LiveChatView.sizes, offersTerminal: true)
+        window.displayIfNeeded()
+        let loadMs = (CACurrentMediaTime() - started) * 1000
+        await pause(0.3)
+
+        let clip = transcript.scrollView.contentView
+        let document = transcript.textView
+        func atBottom() -> Bool { clip.bounds.maxY >= document.frame.height - 24 }
+        check(atBottom(), "live chat: 300 blocks load scrolled to the end", "clip \(clip.bounds), document \(document.frame.height)")
+
+        // Small steps up from the end, then down again: the trackpad's pace.
+        var steps: [Double] = []
+        var y = clip.bounds.origin.y
+        let top = -transcript.scrollView.contentInsets.top
+        for direction in [-1.0, 1.0] {
+            for _ in 0..<150 {
+                y = max(top, min(document.frame.height - clip.bounds.height, y + direction * 14))
+                started = CACurrentMediaTime()
+                clip.scroll(to: NSPoint(x: 0, y: y))
+                transcript.scrollView.reflectScrolledClipView(clip)
+                window.displayIfNeeded()
+                steps.append((CACurrentMediaTime() - started) * 1000)
+            }
+        }
+        let sorted = steps.sorted()
+        let median = sorted[sorted.count / 2], p95 = sorted[Int(Double(sorted.count) * 0.95)], worst = sorted.last ?? 0
+        let numbers = String(format: "%d steps of 14 pt: median %.2f ms, 95th %.2f ms, worst %.2f ms; 300 blocks loaded in %.1f ms",
+                             steps.count, median, p95, worst, loadMs)
+        note("live chat scrolling: " + numbers)
+        check(p95 < 8, "live chat: scrolling 300 blocks stays under 8 ms a step (95th percentile)", numbers)
+
+        // Scrolled up, a new block never pulls the view back; at the end it follows.
+        clip.scroll(to: NSPoint(x: 0, y: top))
+        transcript.scrollView.reflectScrolledClipView(clip)
+        let before = clip.bounds.origin.y
+        blocks.append(ChatBlock(id: "late1", content: .message(markdown: "One more, while you read above.", streaming: false)))
+        transcript.show(blocks, sizes: LiveChatView.sizes, offersTerminal: true)
+        check(abs(clip.bounds.origin.y - before) < 0.5, "live chat: a new block leaves a user who scrolled up where they are",
+              "from \(before) to \(clip.bounds.origin.y)")
+        transcript.scrollToEnd()
+        blocks.append(ChatBlock(id: "late2", content: .message(markdown: "And one at the end.", streaming: false)))
+        started = CACurrentMediaTime()
+        transcript.show(blocks, sizes: LiveChatView.sizes, offersTerminal: true)
+        let appendMs = (CACurrentMediaTime() - started) * 1000
+        check(atBottom(), "live chat: at the end, a new block is followed", String(format: "append %.2f ms", appendMs))
     }
 }
 

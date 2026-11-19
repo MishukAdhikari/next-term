@@ -30,6 +30,8 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
         renderer = ChatBlockRenderer(sizes: sizes)
         let storage = NSTextStorage()
         let layout = NSLayoutManager()
+        // Contiguous layout on purpose: an edit at the end lays out only the new text either way, and non-contiguous
+        // layout estimates the height above, so the scroller and the content shift as the user scrolls up.
         storage.addLayoutManager(layout)
         let container = NSTextContainer(size: NSSize(width: 400, height: CGFloat.greatestFiniteMagnitude))
         container.widthTracksTextView = true
@@ -92,6 +94,10 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
         ])
         NotificationCenter.default.addObserver(self, selector: #selector(scrolled), name: NSView.boundsDidChangeNotification,
                                                object: scrollView.contentView)
+        NotificationCenter.default.addObserver(self, selector: #selector(liveScrollStarted), name: NSScrollView.willStartLiveScrollNotification,
+                                               object: scrollView)
+        NotificationCenter.default.addObserver(self, selector: #selector(liveScrollEnded), name: NSScrollView.didEndLiveScrollNotification,
+                                               object: scrollView)
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
@@ -113,7 +119,8 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
     /// Shows `new`: only the blocks whose value changed are drawn again. `sizes` or `offersTerminal` changing draws
     /// everything again (View › Bigger and Smaller).
     func show(_ new: [ChatBlock], sizes: ChatTextSizes, offersTerminal: Bool) {
-        let pinned = isAtBottom
+        // Follows the end only while the user is at it and not scrolling: never pulled back mid-gesture.
+        let pinned = isAtBottom && !userScrolling
         let restyled = sizes != renderer.sizes || offersTerminal != renderer.offersTerminal
         if restyled {
             renderer = ChatBlockRenderer(sizes: sizes, showAll: showAll, offersTerminal: offersTerminal)
@@ -251,10 +258,21 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
         return clip.bounds.maxY >= textView.frame.height - 24
     }
 
+    /// Whether a scroll gesture (or its momentum) is under way.
+    private var userScrolling = false
+
+    @objc private func liveScrollStarted() { userScrolling = true }
+
+    @objc private func liveScrollEnded() {
+        userScrolling = false
+        jump.isHidden = isAtBottom
+    }
+
     func scrollToEnd() {
-        guard let layout = textView.layoutManager, let container = textView.textContainer else { return }
-        layout.ensureLayout(for: container)
-        textView.sizeToFit()
+        guard let layout = textView.layoutManager, let storage = textView.textStorage else { return }
+        // Only the end is laid out: the text view's height follows, and nothing above is touched.
+        let tail = max(0, storage.length - 1)
+        layout.ensureLayout(forCharacterRange: NSRange(location: tail, length: storage.length - tail))
         let clip = scrollView.contentView
         // A short conversation rests at its top, under any top inset (the chat's floating buttons).
         let y = max(-scrollView.contentInsets.top, textView.frame.height - clip.bounds.height)
@@ -336,7 +354,9 @@ final class ChatTextView: NSTextView {
             guard let panel = value as? ChatPanel else { return }
             draw(panel, characters: range, layout: layout, container: container)
         }
-        if hasKeyboard, let block = blockAt?(selectedRange().location), let range = blockRange?(block.id) {
+        if hasKeyboard, let block = blockAt?(selectedRange().location), let whole = blockRange?(block.id),
+           case let range = NSIntersectionRange(whole, paragraphs), range.length > 0 {
+            // Only the part near the rect: a long block's outline costs no layout off screen.
             var box = lineBox(range, layout: layout, container: container)
             box = box.insetBy(dx: -6, dy: -3)
             NSColor.keyboardFocusIndicatorColor.withAlphaComponent(0.5).setStroke()

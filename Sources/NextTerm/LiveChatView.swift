@@ -153,28 +153,33 @@ final class LiveChatView: NSView {
                 if case .tool(let tool) = block.content, tool.status == .inProgress { return tool.shownTitle }
                 return nil
             }
-            working.stringValue = "\(TerminalWindowController.agentName(of: tab)) is working\u{2026}" + (tool.map { "  \u{00B7}  " + $0 } ?? "")
-            working.isHidden = false
-        } else {
+            // Set only when it changes: this runs twice a second, and a label set again lays the view out again.
+            let words = "\(TerminalWindowController.agentName(of: tab)) is working\u{2026}" + (tool.map { "  \u{00B7}  " + $0 } ?? "")
+            if working.stringValue != words { working.stringValue = words }
+            if working.isHidden { working.isHidden = false }
+        } else if !working.isHidden {
             working.isHidden = true
         }
         if let question = status.question {
             if let menu = MCPControl.fieldMenu(tab, question: question), !menu.choices.isEmpty {
                 let decision = ChatDecision.from(question: question, choices: menu.choices, highlighted: menu.highlighted ?? 0,
                                                  escape: menu.escape)
-                card.show(decision, agent: TerminalWindowController.agentName(of: tab), sizes: Self.sizes, draftWaits: false)
-                card.isHidden = false
-                elsewhereRow?.isHidden = true
+                if card.decision != decision || card.isHidden {
+                    card.show(decision, agent: TerminalWindowController.agentName(of: tab), sizes: Self.sizes, draftWaits: false)
+                }
+                if card.isHidden { card.isHidden = false }
+                if elsewhereRow?.isHidden == false { elsewhereRow?.isHidden = true }
                 if shownQuestion != question { card.announceOnce(agent: TerminalWindowController.agentName(of: tab)) }
             } else {
-                card.isHidden = true
-                elsewhere.stringValue = "\(TerminalWindowController.agentName(of: tab)) asks something in its own screen."
-                elsewhereRow?.isHidden = false
+                if !card.isHidden { card.isHidden = true }
+                let words = "\(TerminalWindowController.agentName(of: tab)) asks something in its own screen."
+                if elsewhere.stringValue != words { elsewhere.stringValue = words }
+                if elsewhereRow?.isHidden == true { elsewhereRow?.isHidden = false }
             }
             shownQuestion = question
         } else {
-            card.isHidden = true
-            elsewhereRow?.isHidden = true
+            if !card.isHidden { card.isHidden = true }
+            if elsewhereRow?.isHidden == false { elsewhereRow?.isHidden = true }
             shownQuestion = nil
         }
     }
