@@ -30,6 +30,9 @@ protocol ProjectSidebarDelegate: AnyObject {
     func sidebar(_ sidebar: ProjectSidebarView, run task: RunTask)
     /// A Run offer's Install…: the tool's installer typed in a new tab for the user's Return, or its page opened.
     func sidebar(_ sidebar: ProjectSidebarView, install offer: ToolOffer)
+    /// A Services row's command (`ollama serve`, `ollama pull llama3.2`) in a new tab in this folder, named after it:
+    /// run, or typed for the user's Return.
+    func sidebar(_ sidebar: ProjectSidebarView, command: String, in directory: String, submit: Bool)
 }
 
 /// What a Databases row can do beyond copying and revealing.
@@ -187,10 +190,10 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     /// "Services" under Databases: what else the project's files say it uses, each opening its page (ProjectServices).
     let servicesGroup = ServicesGroup()
 
-    /// "Run" under Services: the project's own tasks, each run in a new tab (RunTasks), and the tools they need.
+    /// "Run" under Agent Sessions: the project's own tasks, each run in a new tab (RunTasks), and the tools they need.
     let runGroup = RunGroup()
 
-    /// "Agent Sessions" under it: the newest sessions any agent kept for this folder.
+    /// "Agent Sessions" under Services: the newest sessions any agent kept for this folder.
     let sessionsGroup = SessionsGroup()
 
     /// Trees of recently shown roots, so switching between tabs in different projects keeps
@@ -582,6 +585,8 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         }
         if !hadRows, hasRows { servicesGroupAppeared() }
         updateToolTips()
+        lookForServiceTools()
+        checkServicePorts()
     }
 
     // MARK: agent sessions
@@ -963,14 +968,15 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
                 }.map(\.item)
             }
             if let hidden = hiddenRows[id] { rows.append(hidden) }
-            if node === root, !sessionsGroup.items.isEmpty { rows.insert(sessionsGroup, at: 0) }
+            // At the top of the project: Databases, Services, Agent Sessions, Run, then the files.
             if node === root, !runGroup.items.isEmpty { rows.insert(runGroup, at: 0) }
+            if node === root, !sessionsGroup.items.isEmpty { rows.insert(sessionsGroup, at: 0) }
             if node === root, !servicesGroup.items.isEmpty { rows.insert(servicesGroup, at: 0) }
             if node === root, !databasesGroup.items.isEmpty { rows.insert(databasesGroup, at: 0) }
         } else if item === databasesGroup {
             rows = databasesGroup.items
         } else if item === servicesGroup {
-            rows = servicesGroup.items
+            rows = servicesGroup.rows
         } else if item === runGroup {
             rows = runGroup.items
         } else if item === sessionsGroup {

@@ -42,10 +42,28 @@ extension ServiceReader {
             let links = draft.links.enumerated().map { (pair: (offset: Int, element: LinkDraft)) -> ServiceLink in
                 pair.element.link(entry: entry, rowName: name, index: pair.offset)
             }
+            let runtime: LocalRuntime? = draft.links[0].isLocal ? self.runtime(entry, links[0].url) : nil
             return ServiceRow(id: entry.id + "." + draft.place.rawValue, entryID: entry.id, name: name, kind: entry.kind,
                               place: draft.place, sources: Self.sources(found, in: draft.place), notes: notes,
-                              links: links, isLocal: draft.links[0].isLocal)
+                              links: links, isLocal: draft.links[0].isLocal, runtime: runtime)
         }
+    }
+
+    /// A model server's start and pull commands, the models its files name, and its base URL: the main link's origin
+    /// and the spec's path.
+    func runtime(_ entry: ServiceEntry, _ main: URL) -> LocalRuntime? {
+        guard let spec = entry.runtime, let scheme = main.scheme, let host = main.host else { return nil }
+        let origin = scheme + "://" + (host.contains(":") ? "[" + host + "]" : host)
+            + (main.port.map { (port: Int) -> String in ":\(port)" } ?? "")
+        var models: [String] = []
+        if let keys = spec.modelKeys {
+            for fact in facts.envValues where keys.matches(fact.key) {
+                guard let name = fact.text, LocalRuntime.isModelName(name), !models.contains(name) else { continue }
+                models.append(name)
+            }
+        }
+        return LocalRuntime(start: spec.start, pull: spec.pull, models: models, baseURL: origin + spec.basePath,
+                            tool: spec.tool)
     }
 
     static func isHost(_ signal: Signal) -> Bool {

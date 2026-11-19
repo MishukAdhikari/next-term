@@ -15,10 +15,9 @@ final class PaneView: NSView {
     private var boxAreaHeight: NSLayoutConstraint?
     /// The prompt box, made the first time it shows.
     private(set) var promptBox: AgentPromptBox?
-    /// Above the terminal while its agent has a live chat (plan 041): the terminal and chat buttons, never over the
-    /// agent's text. No room while it is hidden.
+    /// While its agent has a live chat (plan 041): the terminal and chat buttons, floating small in the pane's top-right
+    /// corner over the terminal and the chat. It takes no row of its own.
     let chatStrip = LiveChatStrip()
-    private var chatStripHeight: NSLayoutConstraint?
     /// The live chat over the terminal, made the first time it shows. The terminal keeps running under it.
     private(set) var liveChat: LiveChatView?
 
@@ -41,15 +40,12 @@ final class PaneView: NSView {
         headerHeight = height
         chatStrip.isHidden = true
         chatStrip.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(chatStrip)
-        let stripHeight = chatStrip.heightAnchor.constraint(equalToConstant: 0)
-        chatStripHeight = stripHeight
+        // Over the terminal and the chat, under the veil.
+        addSubview(chatStrip, positioned: .below, relativeTo: veil)
         chatStrip.onPick = { [weak self] chat in self?.setChat(shown: chat) }
         NSLayoutConstraint.activate([
-            chatStrip.topAnchor.constraint(equalTo: header.bottomAnchor),
-            chatStrip.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
-            chatStrip.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
-            stripHeight,
+            chatStrip.topAnchor.constraint(equalTo: header.bottomAnchor, constant: LiveChatStrip.inset),
+            chatStrip.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -LiveChatStrip.inset - LiveChatStrip.scrollerRoom),
             boxArea.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
             boxArea.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
             boxArea.bottomAnchor.constraint(equalTo: bottomAnchor),
@@ -73,13 +69,31 @@ final class PaneView: NSView {
         guard view.superview !== self else { return }
         view.removeFromSuperview()
         view.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(view, positioned: .below, relativeTo: veil)
+        addSubview(view, positioned: .below, relativeTo: chatStrip)
+        // Covered by this pane's chat, it stays out of drawing (see setChat); anywhere else it shows.
+        view.isHidden = showsChat
         NSLayoutConstraint.activate([
-            view.topAnchor.constraint(equalTo: chatStrip.bottomAnchor, constant: 4),
+            view.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 4),
             view.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
             view.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -2),
             view.bottomAnchor.constraint(equalTo: boxArea.topAnchor, constant: -2),
         ])
+    }
+
+    /// The corner whose hover shows the terminal and chat buttons over the terminal (LiveChatStrip).
+    private var chatCorner: NSTrackingArea?
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let chatCorner { removeTrackingArea(chatCorner) }
+        let size = LiveChatStrip.hoverRegion
+        let top = bounds.maxY - (showsHeader ? PaneHeaderView.height : 0)
+        let corner = NSRect(x: bounds.maxX - size.width, y: top - size.height, width: size.width, height: size.height)
+            .intersection(bounds)
+        guard !corner.isEmpty else { chatCorner = nil; return }
+        let area = NSTrackingArea(rect: corner, options: [.mouseEnteredAndExited, .activeInActiveApp], owner: chatStrip)
+        addTrackingArea(area)
+        chatCorner = area
     }
 
     /// Whether the prompt box shows under the terminal.
@@ -122,15 +136,19 @@ final class PaneView: NSView {
     func updateChatStrip() {
         let offered = LiveChatView.isOn && LiveChatWatch.offers(tab)
         if !offered, showsChat { setChat(shown: false) }
-        if chatStrip.isHidden == offered {
-            chatStrip.isHidden = !offered
-            chatStripHeight?.constant = offered ? LiveChatStrip.height : 0
-        }
+        if chatStrip.isHidden == offered { chatStrip.isHidden = !offered }
         chatStrip.showing(chat: showsChat)
     }
 
-    /// Shows the chat over the terminal, its composer with the keyboard; or the terminal again, with the keyboard. The
-    /// terminal, its scrollback and its program are never touched.
+    /// The crossfade between the terminal and the chat; none with Reduce Motion.
+    static let chatFade: TimeInterval = 0.2
+
+    private static var fades: Bool { !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
+
+    /// Shows the chat over the terminal, its composer with the keyboard; or the terminal again, with the keyboard, in a
+    /// short crossfade. The terminal, its scrollback and its program are never touched. While the chat covers it, the
+    /// terminal view is hidden, as a terminal in a background tab is: it reads its program and keeps its screen as
+    /// ever, it only draws nothing nobody could see, and it draws its screen as it is the moment it shows again.
     func setChat(shown: Bool) {
         if shown {
             guard LiveChatView.isOn, let feed = LiveChatWatch.feed(for: tab) else { return NSSound.beep() }
@@ -144,9 +162,9 @@ final class PaneView: NSView {
             } else {
                 chat = LiveChatView(tab: tab, feed: feed)
                 chat.translatesAutoresizingMaskIntoConstraints = false
-                addSubview(chat, positioned: .below, relativeTo: veil)
+                addSubview(chat, positioned: .below, relativeTo: chatStrip)
                 NSLayoutConstraint.activate([
-                    chat.topAnchor.constraint(equalTo: chatStrip.bottomAnchor),
+                    chat.topAnchor.constraint(equalTo: header.bottomAnchor),
                     chat.leadingAnchor.constraint(equalTo: leadingAnchor),
                     chat.trailingAnchor.constraint(equalTo: trailingAnchor),
                     chat.bottomAnchor.constraint(equalTo: bottomAnchor),
@@ -154,16 +172,41 @@ final class PaneView: NSView {
                 chat.onShowTerminal = { [weak self] in self?.setChat(shown: false) }
                 liveChat = chat
             }
+            let appearing = chat.isHidden || chat.alphaValue < 1
             chat.isHidden = false
             chat.refresh()
             window?.makeFirstResponder(chat.composer.textView)
+            let coverTerminal = { [weak self, weak chat] in
+                guard let self, let chat, self.liveChat === chat, !chat.isHidden else { return }
+                self.tab.view.isHidden = true
+            }
+            if appearing, Self.fades, window != nil {
+                chat.alphaValue = 0
+                NSAnimationContext.runAnimationGroup({ context in
+                    context.duration = Self.chatFade
+                    chat.animator().alphaValue = 1
+                }, completionHandler: { MainActor.assumeIsolated { coverTerminal() } })
+            } else {
+                chat.alphaValue = 1
+                coverTerminal()
+            }
         } else {
             guard let chat = liveChat else { return }
             let had = chat.window != nil && !chat.isHidden
-            chat.removeFromSuperview()
             liveChat = nil
             LiveChatWatch.release(tab)
+            // The terminal first, drawn as its screen is now, then the chat fades away above it.
+            tab.view.isHidden = false
+            tab.view.needsDisplay = true
             if had { window?.makeFirstResponder(tab.view) }
+            if had, Self.fades {
+                NSAnimationContext.runAnimationGroup({ context in
+                    context.duration = Self.chatFade
+                    chat.animator().alphaValue = 0
+                }, completionHandler: { MainActor.assumeIsolated { chat.removeFromSuperview() } })
+            } else {
+                chat.removeFromSuperview()
+            }
         }
         chatStrip.showing(chat: showsChat)
     }
@@ -222,6 +265,7 @@ final class PaneView: NSView {
             guard showsHeader != oldValue else { return }
             header.isHidden = !showsHeader
             headerHeight?.constant = showsHeader ? PaneHeaderView.height : 0
+            updateTrackingAreas()
             if showsHeader { header.update() }
         }
     }

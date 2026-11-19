@@ -57,6 +57,8 @@ struct ServiceReader {
                 let text = fact.text ?? ""
                 return prefixes.contains { (prefix: String) -> Bool in text.hasPrefix(prefix) }
             }.map { (fact: ServiceFact) -> ServiceHit in ServiceHit(file: fact.file, name: key, place: nil) }
+        case .loopbackPort(let suffix, let port):
+            return loopbackHits(suffix, port)
         case .all(let signals):
             var found: [ServiceHit] = []
             for signal in signals {
@@ -68,6 +70,18 @@ struct ServiceReader {
         case .any(let signals):
             return signals.flatMap { (signal: Signal) -> [ServiceHit] in hits(signal) }
         }
+    }
+
+    /// The values of keys ending so that name an address on this Mac at this port, each key once.
+    func loopbackHits(_ suffix: String, _ port: Int) -> [ServiceHit] {
+        var found: [ServiceHit] = []
+        for fact in facts.envValues where fact.key.hasSuffix(suffix) {
+            guard let origin = fact.origin, origin.port == port,
+                  DatabaseEnvironment.classify(host: origin.host) == .local else { continue }
+            let hit = ServiceHit(file: fact.file, name: fact.key, place: .local)
+            if !found.contains(hit) { found.append(hit) }
+        }
+        return found
     }
 
     /// The URL and host values the catalog reads whose host matches: a provider's own, so its cloud. Only a value in

@@ -31,9 +31,12 @@ public struct ServiceRow: Sendable, Equatable, Identifiable, CustomStringConvert
     public let links: [ServiceLink]
     /// Whether the main link opens a tool on this Mac, which answers only while it runs.
     public let isLocal: Bool
+    /// A model server on this Mac: what its menu starts, pulls and copies.
+    public let runtime: LocalRuntime?
 
     public init(id: String, entryID: String, name: String, kind: ServiceKind, place: ServicePlace,
-                sources: [ServiceSource], notes: [String], links: [ServiceLink], isLocal: Bool) {
+                sources: [ServiceSource], notes: [String], links: [ServiceLink], isLocal: Bool,
+                runtime: LocalRuntime? = nil) {
         self.id = id
         self.entryID = entryID
         self.name = name
@@ -43,6 +46,7 @@ public struct ServiceRow: Sendable, Equatable, Identifiable, CustomStringConvert
         self.notes = notes
         self.links = links
         self.isLocal = isLocal
+        self.runtime = runtime
     }
 
     /// The badge's link, and the one Open and a double-click open.
@@ -66,15 +70,22 @@ public struct ServiceRow: Sendable, Equatable, Identifiable, CustomStringConvert
     }
 
     /// What VoiceOver reads for the row: "Qdrant, vector store, on this Mac". The badge reads its own page, as a link.
-    public var accessibilityLabel: String {
-        let parts: [String] = [name, kind.title] + (isLocal ? ["on this Mac"] : [])
+    public var accessibilityLabel: String { accessibilityLabel(running: false) }
+
+    /// With ", running" when a look found its port answering.
+    public func accessibilityLabel(running: Bool) -> String {
+        let parts: [String] = [name, kind.title] + (isLocal ? ["on this Mac"] : []) + (running ? ["running"] : [])
         return parts.joined(separator: ", ")
     }
 
     /// The page the badge opens (and, for a tool on this Mac, that it must be running), the notes, then what named
     /// it, by file and key name only.
-    public var tooltip: String {
-        var lines: [String] = [link.tooltip + (isLocal ? ", if it is running" : "")]
+    public var tooltip: String { tooltip(running: false) }
+
+    /// As `tooltip`, saying "running now" instead of "if it is running" when a look found its port answering.
+    public func tooltip(running: Bool) -> String {
+        let state: String = isLocal ? (running ? ", running now" : ", if it is running") : ""
+        var lines: [String] = [link.tooltip + state]
         lines += notes
         let from = sources.map { (source: ServiceSource) -> String in
             source.names.isEmpty ? source.file : source.file + ": " + source.names.joined(separator: ", ")
@@ -98,6 +109,16 @@ public struct ServiceScan: Sendable, Equatable, CustomStringConvertible, CustomD
     }
 
     public var isEmpty: Bool { rows.isEmpty }
+
+    /// The tools the rows' model servers need, each once, in the rows' order: what an offer may be made for when no
+    /// copy is found (ProjectTools.offers).
+    public var tools: [ProjectTool] {
+        var tools: [ProjectTool] = []
+        for row in rows {
+            if let tool = row.runtime?.tool, !tools.contains(tool) { tools.append(tool) }
+        }
+        return tools
+    }
 
     /// The kinds the rows are, each once, in the section's order.
     public var kinds: [ServiceKind] {

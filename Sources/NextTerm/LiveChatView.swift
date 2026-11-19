@@ -47,34 +47,47 @@ final class LiveChatView: NSView {
         elsewhereButton.bezelStyle = .rounded
         elsewhereButton.target = self
         elsewhereButton.action = #selector(showTerminal)
+        // The labels give way to the column; they never widen it.
+        for label in [working, elsewhere] {
+            label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        }
         let elsewhereRow = NSStackView(views: [elsewhere, elsewhereButton])
         elsewhereRow.orientation = .horizontal
         elsewhereRow.spacing = 8
         elsewhereRow.isHidden = true
         card.isHidden = true
 
-        for view in [transcript, working, elsewhereRow, card, composer] as [NSView] {
+        // Under the conversation, in the same column: the working row, the note, the card and the composer. A hidden
+        // row takes no room and no gap, so with nothing to say the composer sits right under the conversation.
+        let rows = NSStackView(views: [working, elsewhereRow, card, composer])
+        rows.orientation = .vertical
+        rows.alignment = .leading
+        rows.spacing = Self.rowGap
+        rows.detachesHiddenViews = true
+        rows.setClippingResistancePriority(.defaultLow, for: .horizontal)
+        rows.setHuggingPriority(.defaultHigh, for: .vertical)
+        // The first line starts under the floating terminal and chat buttons, not beside them.
+        transcript.scrollView.automaticallyAdjustsContentInsets = false
+        transcript.scrollView.contentInsets = NSEdgeInsets(top: Self.toggleRoom, left: 0, bottom: 0, right: 0)
+        for view in [transcript, rows] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             addSubview(view)
         }
-        let column = ChatTranscriptView.columnWidth
-        func centred(_ view: NSView) -> [NSLayoutConstraint] {
-            let wide = view.widthAnchor.constraint(equalToConstant: column)
-            wide.priority = .defaultHigh
-            return [view.centerXAnchor.constraint(equalTo: centerXAnchor), wide,
-                    view.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 16),
-                    view.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -16)]
-        }
+        // The column (ChatColumn), as constraints that move with the view and so can never make it, its pane or the
+        // window wider: centred, the width less both margins, at most the cap.
+        let fill = rows.widthAnchor.constraint(equalTo: widthAnchor, constant: -2 * Self.margin)
+        fill.priority = .init(999)
         NSLayoutConstraint.activate([
             transcript.topAnchor.constraint(equalTo: topAnchor),
             transcript.leadingAnchor.constraint(equalTo: leadingAnchor),
             transcript.trailingAnchor.constraint(equalTo: trailingAnchor),
-            working.topAnchor.constraint(equalTo: transcript.bottomAnchor, constant: 4),
-            elsewhereRow.topAnchor.constraint(equalTo: working.bottomAnchor, constant: 4),
-            card.topAnchor.constraint(equalTo: elsewhereRow.bottomAnchor, constant: 4),
-            composer.topAnchor.constraint(equalTo: card.bottomAnchor, constant: 6),
-            composer.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -10),
-        ] + centred(working) + centred(elsewhereRow) + centred(card) + centred(composer))
+            rows.topAnchor.constraint(equalTo: transcript.bottomAnchor, constant: Self.composerGap),
+            rows.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -Self.bottomMargin),
+            rows.centerXAnchor.constraint(equalTo: centerXAnchor),
+            rows.widthAnchor.constraint(lessThanOrEqualToConstant: CGFloat(ChatColumn.cap)),
+            rows.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor),
+            fill,
+        ] + [working, elsewhereRow, card, composer].map { $0.widthAnchor.constraint(equalTo: rows.widthAnchor) })
         self.elsewhereRow = elsewhereRow
 
         transcript.onLink = { [weak self] link in self?.follow(link) }
@@ -84,6 +97,15 @@ final class LiveChatView: NSView {
     }
 
     private var elsewhereRow: NSStackView?
+    /// Between the conversation and the first row under it.
+    static let composerGap: CGFloat = 8
+    /// Between the rows under the conversation.
+    static let rowGap: CGFloat = 6
+    /// Under the composer.
+    static let bottomMargin: CGFloat = 10
+    /// Above the conversation, with its own 16 pt: the first line sits 34 pt down, clear of the floating buttons.
+    static let toggleRoom: CGFloat = 18
+    private static var margin: CGFloat { CGFloat(ChatColumn.margin) }
 
     required init?(coder: NSCoder) { fatalError("not used") }
 
@@ -110,6 +132,8 @@ final class LiveChatView: NSView {
         transcript.redrawAll()
     }
 
+    override var wantsUpdateLayer: Bool { true }
+
     override func updateLayer() {
         layer?.backgroundColor = Theme.background.cgColor
     }
@@ -129,28 +153,33 @@ final class LiveChatView: NSView {
                 if case .tool(let tool) = block.content, tool.status == .inProgress { return tool.shownTitle }
                 return nil
             }
-            working.stringValue = "\(TerminalWindowController.agentName(of: tab)) is working\u{2026}" + (tool.map { "  \u{00B7}  " + $0 } ?? "")
-            working.isHidden = false
-        } else {
+            // Set only when it changes: this runs twice a second, and a label set again lays the view out again.
+            let words = "\(TerminalWindowController.agentName(of: tab)) is working\u{2026}" + (tool.map { "  \u{00B7}  " + $0 } ?? "")
+            if working.stringValue != words { working.stringValue = words }
+            if working.isHidden { working.isHidden = false }
+        } else if !working.isHidden {
             working.isHidden = true
         }
         if let question = status.question {
             if let menu = MCPControl.fieldMenu(tab, question: question), !menu.choices.isEmpty {
                 let decision = ChatDecision.from(question: question, choices: menu.choices, highlighted: menu.highlighted ?? 0,
                                                  escape: menu.escape)
-                card.show(decision, agent: TerminalWindowController.agentName(of: tab), sizes: Self.sizes, draftWaits: false)
-                card.isHidden = false
-                elsewhereRow?.isHidden = true
+                if card.decision != decision || card.isHidden {
+                    card.show(decision, agent: TerminalWindowController.agentName(of: tab), sizes: Self.sizes, draftWaits: false)
+                }
+                if card.isHidden { card.isHidden = false }
+                if elsewhereRow?.isHidden == false { elsewhereRow?.isHidden = true }
                 if shownQuestion != question { card.announceOnce(agent: TerminalWindowController.agentName(of: tab)) }
             } else {
-                card.isHidden = true
-                elsewhere.stringValue = "\(TerminalWindowController.agentName(of: tab)) asks something in its own screen."
-                elsewhereRow?.isHidden = false
+                if !card.isHidden { card.isHidden = true }
+                let words = "\(TerminalWindowController.agentName(of: tab)) asks something in its own screen."
+                if elsewhere.stringValue != words { elsewhere.stringValue = words }
+                if elsewhereRow?.isHidden == true { elsewhereRow?.isHidden = false }
             }
             shownQuestion = question
         } else {
-            card.isHidden = true
-            elsewhereRow?.isHidden = true
+            if !card.isHidden { card.isHidden = true }
+            if elsewhereRow?.isHidden == false { elsewhereRow?.isHidden = true }
             shownQuestion = nil
         }
     }
@@ -192,4 +221,6 @@ final class LiveChatView: NSView {
     /// For the self-test: the blocks shown, and whether the card shows.
     var shownBlocks: [ChatBlock] { transcript.blocks }
     var showsCard: Bool { !card.isHidden }
+    /// The rows under the conversation that show (working, the note, the card).
+    var showsStateRows: Bool { !working.isHidden || elsewhereRow?.isHidden == false || !card.isHidden }
 }
