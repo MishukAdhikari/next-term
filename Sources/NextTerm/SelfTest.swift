@@ -911,7 +911,9 @@ enum SelfTest {
         await placeChecks(c)
         await promptBoxChecks()
         await liveChatChecks()
+        #if DEBUG
         await agentChatChecks() // plan 047
+        #endif
         await contextGaugeChecks()
         await reviewCommentsChecks()
         await sessionPreviewChecks()
