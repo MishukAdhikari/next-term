@@ -55,7 +55,7 @@ extension SelfTest {
 
         // The menu.
         let menu = sidebar.serviceMenu(for: row)
-        let titles = menu.items.map(\.title)
+        let titles = menu.items.filter { !$0.isSeparatorItem }.map(\.title)
         check(titles == ["Open Ollama Models", "Start Server in a Tab", "Pull Model", "Copy Base URL", "Copy Service Name",
                          "Reveal Source File"], "local models: the row's menu", "\(titles)")
         let start = menu.items.first { $0.title == "Start Server in a Tab" }
