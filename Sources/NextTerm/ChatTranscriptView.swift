@@ -3,11 +3,12 @@ import NextTermCore
 
 /// A chat tab's transcript (plan 037 KTD4): one read-only, selectable text view holding every block as attributed
 /// paragraphs, a range per block id. An update replaces only the blocks that changed, so a streaming message touches
-/// its own range. The content column caps at 760 points and centres. It stays at the bottom while the user hasn't
-/// scrolled up; scrolled up, a Jump to Latest pill shows. Main thread.
+/// its own range. The text sits in the reading column (ChatColumn): the width less a calm margin, capped and centred
+/// only in a very wide view. Lines wrap, code and paths by character, so nothing is ever wider than the view and it
+/// never scrolls sideways. It stays at the bottom while the user hasn't scrolled up; scrolled up, a Jump to Latest pill
+/// shows. Main thread.
 final class ChatTranscriptView: NSView, NSTextViewDelegate {
-    static let columnWidth: CGFloat = 760
-    static let sideMargin: CGFloat = 20
+    static var sideMargin: CGFloat { CGFloat(ChatColumn.margin) }
     /// The room above the first block and below the last.
     private static let endMargin: CGFloat = 16
 
@@ -59,6 +60,8 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
 
         scrollView.documentView = textView
         scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = false
+        scrollView.horizontalScrollElasticity = .none
         scrollView.autohidesScrollers = true
         scrollView.drawsBackground = false
         scrollView.borderType = .noBorder
@@ -95,11 +98,14 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
 
     deinit { NotificationCenter.default.removeObserver(self) }
 
+    /// Where the column starts, from the view's leading edge: the composer lines up with it.
+    var columnLeading: CGFloat { textView.textContainerOrigin.x }
+
     override func layout() {
-        super.layout()
-        // The column: at most 760 points, centred, with a margin either side.
-        let side = max(Self.sideMargin, ((bounds.width - Self.columnWidth) / 2).rounded(.down))
+        // The column first, so the text is laid out once at its new width.
+        let side = CGFloat(ChatColumn.layout(width: Double(bounds.width)).leading)
         if textView.textContainerInset.width != side { textView.textContainerInset = NSSize(width: side, height: Self.endMargin) }
+        super.layout()
     }
 
     // MARK: updating

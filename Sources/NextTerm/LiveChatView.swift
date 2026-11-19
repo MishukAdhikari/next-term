@@ -47,34 +47,44 @@ final class LiveChatView: NSView {
         elsewhereButton.bezelStyle = .rounded
         elsewhereButton.target = self
         elsewhereButton.action = #selector(showTerminal)
+        // The labels give way to the column; they never widen it.
+        for label in [working, elsewhere] {
+            label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        }
         let elsewhereRow = NSStackView(views: [elsewhere, elsewhereButton])
         elsewhereRow.orientation = .horizontal
         elsewhereRow.spacing = 8
         elsewhereRow.isHidden = true
         card.isHidden = true
 
-        for view in [transcript, working, elsewhereRow, card, composer] as [NSView] {
+        // Under the conversation, in the same column: the working row, the note, the card and the composer. A hidden
+        // row takes no room and no gap, so with nothing to say the composer sits right under the conversation.
+        let rows = NSStackView(views: [working, elsewhereRow, card, composer])
+        rows.orientation = .vertical
+        rows.alignment = .leading
+        rows.spacing = Self.rowGap
+        rows.detachesHiddenViews = true
+        rows.setClippingResistancePriority(.defaultLow, for: .horizontal)
+        rows.setHuggingPriority(.defaultHigh, for: .vertical)
+        for view in [transcript, rows] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             addSubview(view)
         }
-        let column = ChatTranscriptView.columnWidth
-        func centred(_ view: NSView) -> [NSLayoutConstraint] {
-            let wide = view.widthAnchor.constraint(equalToConstant: column)
-            wide.priority = .defaultHigh
-            return [view.centerXAnchor.constraint(equalTo: centerXAnchor), wide,
-                    view.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 16),
-                    view.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -16)]
-        }
+        // The column (ChatColumn), as constraints that move with the view and so can never make it, its pane or the
+        // window wider: centred, the width less both margins, at most the cap.
+        let fill = rows.widthAnchor.constraint(equalTo: widthAnchor, constant: -2 * Self.margin)
+        fill.priority = .init(999)
         NSLayoutConstraint.activate([
             transcript.topAnchor.constraint(equalTo: topAnchor),
             transcript.leadingAnchor.constraint(equalTo: leadingAnchor),
             transcript.trailingAnchor.constraint(equalTo: trailingAnchor),
-            working.topAnchor.constraint(equalTo: transcript.bottomAnchor, constant: 4),
-            elsewhereRow.topAnchor.constraint(equalTo: working.bottomAnchor, constant: 4),
-            card.topAnchor.constraint(equalTo: elsewhereRow.bottomAnchor, constant: 4),
-            composer.topAnchor.constraint(equalTo: card.bottomAnchor, constant: 6),
-            composer.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -10),
-        ] + centred(working) + centred(elsewhereRow) + centred(card) + centred(composer))
+            rows.topAnchor.constraint(equalTo: transcript.bottomAnchor, constant: Self.composerGap),
+            rows.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -Self.bottomMargin),
+            rows.centerXAnchor.constraint(equalTo: centerXAnchor),
+            rows.widthAnchor.constraint(lessThanOrEqualToConstant: CGFloat(ChatColumn.cap)),
+            rows.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor),
+            fill,
+        ] + [working, elsewhereRow, card, composer].map { $0.widthAnchor.constraint(equalTo: rows.widthAnchor) })
         self.elsewhereRow = elsewhereRow
 
         transcript.onLink = { [weak self] link in self?.follow(link) }
@@ -84,6 +94,13 @@ final class LiveChatView: NSView {
     }
 
     private var elsewhereRow: NSStackView?
+    /// Between the conversation and the first row under it.
+    static let composerGap: CGFloat = 8
+    /// Between the rows under the conversation.
+    static let rowGap: CGFloat = 6
+    /// Under the composer.
+    static let bottomMargin: CGFloat = 10
+    private static var margin: CGFloat { CGFloat(ChatColumn.margin) }
 
     required init?(coder: NSCoder) { fatalError("not used") }
 
@@ -109,6 +126,8 @@ final class LiveChatView: NSView {
         layer?.backgroundColor = Theme.background.cgColor
         transcript.redrawAll()
     }
+
+    override var wantsUpdateLayer: Bool { true }
 
     override func updateLayer() {
         layer?.backgroundColor = Theme.background.cgColor
@@ -192,4 +211,6 @@ final class LiveChatView: NSView {
     /// For the self-test: the blocks shown, and whether the card shows.
     var shownBlocks: [ChatBlock] { transcript.blocks }
     var showsCard: Bool { !card.isHidden }
+    /// The rows under the conversation that show (working, the note, the card).
+    var showsStateRows: Bool { !working.isHidden || elsewhereRow?.isHidden == false || !card.isHidden }
 }
