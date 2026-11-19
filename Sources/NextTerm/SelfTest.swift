@@ -686,7 +686,7 @@ enum SelfTest {
               "a self-test's tabs read its own zsh config, never the user's", "test config \(ownConfig): " + zdotTab.screenTail(4).joined(separator: " | "))
         c.remove(zdotTab)
         #if DEBUG
-        // One part on the project set up so far (NEXTTERM_SELFTEST_ONLY=gitAndViewKeys, import, rollback, held, closeWorktree, worktrees, markdown, mcpWrite, parallel (with scrollback), skills, notifications, services, runGroup, localModels, secrets, agentSession, mcpHub, mcpHubSettings, mcpHubOAuth (only when asked), opencode, tasks, welcome, tabList, terminalPosition, completion, ghostText, gitRefresh, clicks, mouse, remote, mcp, newTerminal, cellSnap, projectColor, windowNav, windowColumn, hints, settingsSections, agentsSettings, agentScratch or database), for its own failures
+        // One part on the project set up so far (NEXTTERM_SELFTEST_ONLY=gitAndViewKeys, import, rollback, held, closeWorktree, worktrees, markdown, mcpWrite, parallel (with scrollback), skills, notifications, services, runGroup, localModels, secrets, agentSession, mcpHub, mcpHubSettings, mcpHubOAuth (only when asked), opencode, tasks, welcome, tabList, terminalPosition, completion, ghostText, gitRefresh, clicks, mouse, remote, mcp, newTerminal, cellSnap, projectColor, windowNav, windowColumn, hints, settingsSections, agentsSettings, agentScratch, layoutPicker or database), for its own failures
         // without the whole run's 25 minutes.
         switch ProcessInfo.processInfo.environment["NEXTTERM_SELFTEST_ONLY"] {
         case "gitAndViewKeys": return await gitAndViewKeyChecks(c, proj: proj)
@@ -746,6 +746,7 @@ enum SelfTest {
         case "tabHover": return await tabHoverChecks(c) // a tab's whole name under it in the title strip
         case "agentScratch": return await agentScratchChecks(c) // an agent's scratch window: kept out of the lists, closed once quiet
         case "firstRun": return await firstRunChecks() // the first run's agent setup: the cards and the apply_setup window
+        case "layoutPicker": return await layoutPickerChecks(c, proj: proj) // "How do you like to work?": its sheet, Skip, each card's layout
         case "windowTabs": return await windowTabsChecks(c) // a system tab bar over a project window: everything moves below it
         case "database": // the SQLite viewer and the data head view: their cells, the value pane, editing a SQLite file
             await databaseChecks(c, proj: proj)
