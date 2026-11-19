@@ -15,10 +15,9 @@ final class PaneView: NSView {
     private var boxAreaHeight: NSLayoutConstraint?
     /// The prompt box, made the first time it shows.
     private(set) var promptBox: AgentPromptBox?
-    /// Above the terminal while its agent has a live chat (plan 041): the terminal and chat buttons, never over the
-    /// agent's text. No room while it is hidden.
+    /// While its agent has a live chat (plan 041): the terminal and chat buttons, floating small in the pane's top-right
+    /// corner over the terminal and the chat. It takes no row of its own.
     let chatStrip = LiveChatStrip()
-    private var chatStripHeight: NSLayoutConstraint?
     /// The live chat over the terminal, made the first time it shows. The terminal keeps running under it.
     private(set) var liveChat: LiveChatView?
 
@@ -41,15 +40,12 @@ final class PaneView: NSView {
         headerHeight = height
         chatStrip.isHidden = true
         chatStrip.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(chatStrip)
-        let stripHeight = chatStrip.heightAnchor.constraint(equalToConstant: 0)
-        chatStripHeight = stripHeight
+        // Over the terminal and the chat, under the veil.
+        addSubview(chatStrip, positioned: .below, relativeTo: veil)
         chatStrip.onPick = { [weak self] chat in self?.setChat(shown: chat) }
         NSLayoutConstraint.activate([
-            chatStrip.topAnchor.constraint(equalTo: header.bottomAnchor),
-            chatStrip.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
-            chatStrip.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
-            stripHeight,
+            chatStrip.topAnchor.constraint(equalTo: header.bottomAnchor, constant: LiveChatStrip.inset),
+            chatStrip.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -LiveChatStrip.inset - LiveChatStrip.scrollerRoom),
             boxArea.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
             boxArea.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
             boxArea.bottomAnchor.constraint(equalTo: bottomAnchor),
@@ -73,9 +69,9 @@ final class PaneView: NSView {
         guard view.superview !== self else { return }
         view.removeFromSuperview()
         view.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(view, positioned: .below, relativeTo: veil)
+        addSubview(view, positioned: .below, relativeTo: chatStrip)
         NSLayoutConstraint.activate([
-            view.topAnchor.constraint(equalTo: chatStrip.bottomAnchor, constant: 4),
+            view.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 4),
             view.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
             view.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -2),
             view.bottomAnchor.constraint(equalTo: boxArea.topAnchor, constant: -2),
@@ -122,10 +118,7 @@ final class PaneView: NSView {
     func updateChatStrip() {
         let offered = LiveChatView.isOn && LiveChatWatch.offers(tab)
         if !offered, showsChat { setChat(shown: false) }
-        if chatStrip.isHidden == offered {
-            chatStrip.isHidden = !offered
-            chatStripHeight?.constant = offered ? LiveChatStrip.height : 0
-        }
+        if chatStrip.isHidden == offered { chatStrip.isHidden = !offered }
         chatStrip.showing(chat: showsChat)
     }
 
@@ -144,9 +137,9 @@ final class PaneView: NSView {
             } else {
                 chat = LiveChatView(tab: tab, feed: feed)
                 chat.translatesAutoresizingMaskIntoConstraints = false
-                addSubview(chat, positioned: .below, relativeTo: veil)
+                addSubview(chat, positioned: .below, relativeTo: chatStrip)
                 NSLayoutConstraint.activate([
-                    chat.topAnchor.constraint(equalTo: chatStrip.bottomAnchor),
+                    chat.topAnchor.constraint(equalTo: header.bottomAnchor),
                     chat.leadingAnchor.constraint(equalTo: leadingAnchor),
                     chat.trailingAnchor.constraint(equalTo: trailingAnchor),
                     chat.bottomAnchor.constraint(equalTo: bottomAnchor),

@@ -1,17 +1,32 @@
 import AppKit
 import NextTermCore
 
-/// The strip above an agent's terminal while it has a live chat (plan 041 D6): a terminal button and a chat button at
-/// its right end, the one showing marked. It takes its own 22 points, so it never covers the agent's text.
+/// The terminal and chat buttons of an agent tab with a live chat (plan 041 D6): a small floating control in the pane's
+/// top-right corner, over the terminal and over the chat, so neither gives up a row for it. Two borderless symbols on
+/// the system's translucent material, inset from the corner, the one showing marked.
 final class LiveChatStrip: NSView {
-    static let height: CGFloat = 22
+    /// The control's size, and its inset from the pane's top-right corner.
+    static let size = NSSize(width: 52, height: 22)
+    static let inset: CGFloat = 6
+    /// Kept clear at the right for the terminal's and the transcript's scroller.
+    static let scrollerRoom: CGFloat = 6
     let terminalButton = LiveChatStrip.button("terminal", help: "Show the agent's own terminal screen")
     let chatButton = LiveChatStrip.button("bubble.left.and.text.bubble.right", help: "Show this session as a chat (\u{21E7}\u{2318}J)")
+    private let material = NSVisualEffectView()
     /// A click: true for the chat, false for the terminal.
     var onPick: ((Bool) -> Void)?
 
     override init(frame: NSRect) {
         super.init(frame: frame)
+        material.material = .menu
+        material.blendingMode = .withinWindow
+        material.state = .active
+        material.wantsLayer = true
+        material.layer?.cornerRadius = 6
+        material.layer?.masksToBounds = true
+        material.layer?.borderWidth = 0.5
+        material.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(material)
         terminalButton.setAccessibilityLabel("Terminal view")
         chatButton.setAccessibilityLabel("Chat view")
         terminalButton.target = self
@@ -20,17 +35,31 @@ final class LiveChatStrip: NSView {
         chatButton.action = #selector(pickChat)
         let pair = NSStackView(views: [terminalButton, chatButton])
         pair.orientation = .horizontal
-        pair.spacing = 2
+        pair.spacing = 0
         pair.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(pair)
+        material.addSubview(pair)
         NSLayoutConstraint.activate([
-            pair.trailingAnchor.constraint(equalTo: trailingAnchor),
-            pair.centerYAnchor.constraint(equalTo: centerYAnchor),
+            material.topAnchor.constraint(equalTo: topAnchor),
+            material.leadingAnchor.constraint(equalTo: leadingAnchor),
+            material.trailingAnchor.constraint(equalTo: trailingAnchor),
+            material.bottomAnchor.constraint(equalTo: bottomAnchor),
+            pair.centerXAnchor.constraint(equalTo: material.centerXAnchor),
+            pair.centerYAnchor.constraint(equalTo: material.centerYAnchor),
+            widthAnchor.constraint(equalToConstant: Self.size.width),
+            heightAnchor.constraint(equalToConstant: Self.size.height),
         ])
+        setAccessibilityElement(true)
+        setAccessibilityRole(.group)
+        setAccessibilityLabel("Terminal or chat")
         showing(chat: false)
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        showing(chat: isShowingChat)
+    }
 
     private static func button(_ symbol: String, help: String) -> NSButton {
         let button = NSButton()
@@ -45,7 +74,7 @@ final class LiveChatStrip: NSView {
         button.wantsLayer = true
         button.layer?.cornerRadius = 4
         NSLayoutConstraint.activate([
-            button.widthAnchor.constraint(equalToConstant: 26),
+            button.widthAnchor.constraint(equalToConstant: 24),
             button.heightAnchor.constraint(equalToConstant: 18),
         ])
         return button
@@ -59,6 +88,11 @@ final class LiveChatStrip: NSView {
             button.setAccessibilityValue(on ? "selected" : "")
         }
         isShowingChat = chat
+        // A hairline that holds the control's edge on any background; stronger with Increase Contrast.
+        let contrast = NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            material.layer?.borderColor = NSColor.separatorColor.withAlphaComponent(contrast ? 1 : 0.6).cgColor
+        }
     }
 
     private(set) var isShowingChat = false
@@ -96,7 +130,7 @@ extension TerminalWindowController {
         return (LiveChatView.isOn && LiveChatWatch.offers(pane.tab), pane.showsChat)
     }
 
-    /// Settings turned the chat view off: every pane goes back to its terminal and loses its strip.
+    /// Settings turned the chat view off: every pane goes back to its terminal and loses its buttons.
     func liveChatSettingChanged() {
         refreshPaneHeaders()
     }
