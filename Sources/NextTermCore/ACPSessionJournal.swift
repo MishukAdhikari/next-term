@@ -126,3 +126,22 @@ public enum ACPSessionJournal {
         return session
     }
 }
+
+extension ACPSessionJournal {
+    /// The folder journals are kept in: `agent-chat` beside the app's socket, so a self-test's app and CLI use their own.
+    public static func folder(socket: String) -> String {
+        ((socket as NSString).deletingLastPathComponent as NSString).appendingPathComponent("agent-chat")
+    }
+
+    /// A new journal's path for a session of process `pid`.
+    public static func newPath(socket: String, pid: Int32, id: UUID = UUID()) -> String {
+        (folder(socket: socket) as NSString).appendingPathComponent("\(pid)-\(id.uuidString.lowercased()).jsonl")
+    }
+
+    /// Whether `path`, as a session reported it, is a journal in that folder: nothing else is ever read as one.
+    public static func isJournal(_ path: String, socket: String) -> Bool {
+        let standard = (path as NSString).standardizingPath
+        return (standard as NSString).deletingLastPathComponent == (folder(socket: socket) as NSString).standardizingPath
+            && standard.hasSuffix(".jsonl") && !(standard as NSString).lastPathComponent.hasPrefix(".")
+    }
+}

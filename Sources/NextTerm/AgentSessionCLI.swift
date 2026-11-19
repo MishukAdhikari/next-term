@@ -200,6 +200,7 @@ final class AgentSessionRunner {
 
     func start() {
         rawTerminal()
+        openJournal()
         write("\u{1b}]2;\(agent.name)\u{07}") // the tab's title
         session.note("Starting \(agent.name) (\(driver.startWords))\u{2026}")
         draw()
@@ -392,6 +393,7 @@ final class AgentSessionRunner {
         if let stop = session.lastStop { update["stop_reason"] = stop.rawValue }
         update["agent_id"] = agent.id
         update["folder"] = FileManager.default.currentDirectoryPath
+        if let journalPath { update["journal"] = journalPath }
         if let agentVersion { update["agent_version"] = agentVersion }
         if let model { update["model"] = model }
         if let sessionID { update["session_id"] = sessionID }
@@ -411,9 +413,26 @@ final class AgentSessionRunner {
     /// id above all, which an update would otherwise resume). The tab's state isn't touched: no OSC 7501 yet.
     private func reportStart() {
         guard appSocket != nil else { return }
-        let update: [String: Any] = ["op": "report", "agent": agent.name, "state": "idle", "turns": 0, "last_message": "",
+        var update: [String: Any] = ["op": "report", "agent": agent.name, "state": "idle", "turns": 0, "last_message": "",
                                      "agent_id": agent.id, "folder": FileManager.default.currentDirectoryPath]
+        if let journalPath { update["journal"] = journalPath }
         callApp(update, timeout: 2) { _ in }
+    }
+
+    /// The session's journal (plan 047 D2): every change to `session` as a line, which the app replays into its chat
+    /// view. Only in a Next Term tab; it is the app's to remove once the tab closes.
+    private(set) var journalPath: String?
+
+    private func openJournal() {
+        guard let socket = appSocket else { return }
+        let path = ACPSessionJournal.newPath(socket: socket, pid: getpid())
+        let folder = ACPSessionJournal.folder(socket: socket)
+        try? FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        let fd = open(path, O_WRONLY | O_CREAT | O_EXCL | O_APPEND | O_CLOEXEC, 0o600)
+        guard fd >= 0 else { return }
+        let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+        journalPath = path
+        session.recorder = ACPSessionJournal.Recorder { data in try? handle.write(contentsOf: data) }
     }
 
     /// The version change was told: once a session.
