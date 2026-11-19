@@ -124,7 +124,7 @@ final class AgentChatFeed {
 /// The feeds of the agent session tabs whose chat view is open, and the journals the app removes.
 @MainActor
 enum AgentChatWatch {
-    private static var feeds: [UUID: AgentChatFeed] = [:]
+    fileprivate static var feeds: [UUID: AgentChatFeed] = [:]
 
     /// Whether `tab` can show a native chat: an agent session tab whose session reported its journal.
     static func offers(_ tab: TerminalTab) -> Bool {
@@ -144,6 +144,7 @@ enum AgentChatWatch {
     /// The tab closed: its feed stops and its session's journal is removed.
     static func closed(_ tabID: UUID) {
         feeds.removeValue(forKey: tabID)?.stop()
+        forgetStart(tabID)
         if let journal = AgentSessionSocket.reports[tabID]?.journal { try? FileManager.default.removeItem(atPath: journal) }
     }
 
@@ -154,4 +155,64 @@ enum AgentChatWatch {
             try? FileManager.default.removeItem(atPath: (folder as NSString).appendingPathComponent(name))
         }
     }
+}
+
+extension AgentChatWatch {
+    /// The tab's chat view closed: its feed stops; the journal stays for the next time it opens.
+    static func release(_ tabID: UUID) {
+        feeds.removeValue(forKey: tabID)?.stop()
+    }
+}
+
+extension LiveChatView {
+    /// Whether `tab` can show a chat: an agent's own screen with its session file (plan 041), or an agent session that
+    /// reports its journal (plan 047).
+    static func offers(_ tab: TerminalTab) -> Bool {
+        AgentChatWatch.offers(tab) || LiveChatWatch.offers(tab)
+    }
+
+    /// What `tab`'s chat reads, started when first asked for; nil for a tab that offers none.
+    static func source(for tab: TerminalTab) -> Source? {
+        if AgentChatWatch.offers(tab) { return .session(AgentChatWatch.feed(for: tab)) }
+        return LiveChatWatch.feed(for: tab).map(Source.live)
+    }
+
+    /// The tab's chat view closed: whichever feed it read stops.
+    static func release(_ tab: TerminalTab) {
+        LiveChatWatch.release(tab)
+        AgentChatWatch.release(tab.id)
+    }
+}
+
+/// Starting a session as a chat (plan 047 D5): the New Agent Session sheet's "Show as chat", and new_tab's `view`. The
+/// tab shows its chat once its session reports its journal (Panes.updateChatStrip), without taking the keyboard.
+extension AgentChatWatch {
+    private static var startAsChat: Set<UUID> = []
+    /// The sheet's last choice; off until the user turns it on.
+    static let sheetKey = "agentSessionShowsChat"
+
+    static var sheetChoice: Bool {
+        get { UserDefaults.standard.bool(forKey: sheetKey) }
+        set { UserDefaults.standard.set(newValue, forKey: sheetKey) }
+    }
+
+    /// new_tab's `view`, checked before any tab opens: nil when it is fine or not given.
+    static func viewRefusal(_ arguments: [String: Any]) -> String? {
+        guard let view = arguments["view"] else { return nil }
+        guard let text = view as? String, text == "chat" || text == "terminal" else { return "view must be \"chat\" or \"terminal\"." }
+        if arguments["agent_session"] == nil { return "view goes with agent_session: it says how that session first shows." }
+        return nil
+    }
+
+    /// `tab` was started with this view.
+    static func started(_ tab: TerminalTab, asChat: Bool) {
+        if asChat { startAsChat.insert(tab.id) } else { startAsChat.remove(tab.id) }
+    }
+
+    /// Whether `tab` waits to show its chat; true once, then forgotten.
+    static func takeStartAsChat(_ tab: TerminalTab) -> Bool {
+        startAsChat.remove(tab.id) != nil
+    }
+
+    static func forgetStart(_ tabID: UUID) { startAsChat.remove(tabID) }
 }

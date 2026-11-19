@@ -694,6 +694,7 @@ enum SelfTest {
         case "rollback": return await rollbackChecks(c)
         case "promptBox": return await promptBoxChecks() // the prompt box under a tab's terminal
         case "liveChat": return await liveChatChecks() // an agent tab's live chat view (plan 041)
+        case "agentChat": return await agentChatChecks() // an agent session as a chat, from its journal (plan 047)
         case "pinnedTabs": return await pinnedTabsChecks() // pinned tabs: first, the pin, bulk closes leave them, ⌘W asks
         case "contextGauge": return await contextGaugeChecks() // an agent tab's context gauge and tooltip line
         case "reviewComments": return await reviewCommentsChecks() // review comments in a diff, sent to the agent as one prompt
@@ -910,6 +911,7 @@ enum SelfTest {
         await placeChecks(c)
         await promptBoxChecks()
         await liveChatChecks()
+        await agentChatChecks() // plan 047
         await contextGaugeChecks()
         await reviewCommentsChecks()
         await sessionPreviewChecks()

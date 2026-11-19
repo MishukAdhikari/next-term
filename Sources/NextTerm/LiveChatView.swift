@@ -10,9 +10,29 @@ import NextTermCore
 ///   the terminal.
 ///
 /// Claude Code writes whole messages, so a reply appears when its message ends; tool calls show as they are made.
+///
+/// An agent session Next Term runs itself (`nxtrm agent`, plan 047) is drawn from its journal instead (AgentChatFeed):
+/// its replies stream, its permission is the card from the session's own request, and a choice is the digit (or the
+/// arrows and Return) its menu takes in the tab. Its terminal is Next Term's text view of the same session.
 final class LiveChatView: NSView {
+    /// Where the chat is read from.
+    enum Source {
+        /// The file a Claude Code, Codex or Command Code in the tab writes (plan 041).
+        case live(LiveChatFeed)
+        /// The journal of an agent session in the tab (plan 047).
+        case session(AgentChatFeed)
+
+        /// The feed, for telling a view of it from a view of another.
+        var object: AnyObject {
+            switch self {
+            case .live(let feed): return feed
+            case .session(let feed): return feed
+            }
+        }
+    }
+
     let tab: TerminalTab
-    let feed: LiveChatFeed
+    let source: Source
     let transcript: ChatTranscriptView
     let card = ChatDecisionCard()
     let composer: AgentPromptBox
@@ -27,9 +47,9 @@ final class LiveChatView: NSView {
     /// The terminal button: the pane goes back to the agent's own screen.
     var onShowTerminal: (() -> Void)?
 
-    init(tab: TerminalTab, feed: LiveChatFeed) {
+    init(tab: TerminalTab, source: Source) {
         self.tab = tab
-        self.feed = feed
+        self.source = source
         transcript = ChatTranscriptView(sizes: Self.sizes)
         composer = AgentPromptBox(tab: tab)
         super.init(frame: NSRect(x: 0, y: 0, width: 600, height: 400))
@@ -92,7 +112,10 @@ final class LiveChatView: NSView {
 
         transcript.onLink = { [weak self] link in self?.follow(link) }
         card.onChoose = { [weak self] index in self?.answer(index) }
-        feed.onChange = { [weak self] _, _ in self?.refresh() }
+        switch source {
+        case .live(let feed): feed.onChange = { [weak self] _, _ in self?.refresh() }
+        case .session(let feed): feed.onChange = { [weak self] _ in self?.refresh() }
+        }
         refresh()
     }
 
@@ -140,39 +163,67 @@ final class LiveChatView: NSView {
 
     /// The transcript from the feed's items, then the state rows.
     func refresh() {
-        transcript.show(LiveChat.blocks(feed.items, expanded: expanded), sizes: Self.sizes, offersTerminal: true)
+        let blocks: [ChatBlock]
+        switch source {
+        case .live(let feed): blocks = LiveChat.blocks(feed.items, expanded: expanded)
+        case .session(let feed): blocks = ChatTranscript.blocks(from: feed.session, expanded: expanded, thoughtTimes: [:])
+        }
+        transcript.show(blocks, sizes: Self.sizes, offersTerminal: true)
         refreshState()
+    }
+
+    /// The agent's name as the chat says it: the session's own agent, or the tab's.
+    private var agentName: String {
+        if case .session = source, let agent = AgentSessionSocket.reports[tab.id]?.agent, !agent.isEmpty { return agent }
+        return TerminalWindowController.agentName(of: tab)
+    }
+
+    /// What the session waits on now: its own request (a session), or what the agent's screen asks (a live chat).
+    private func decision() -> (decision: ChatDecision?, asksElsewhere: Bool, question: String?) {
+        if case .session(let feed) = source {
+            guard let pending = feed.session.pending else { return (nil, false, nil) }
+            let decision = ChatDecision.from(permission: pending, agent: agentName)
+            return (decision, false, decision.question)
+        }
+        guard let question = tab.status.question else { return (nil, false, nil) }
+        guard let menu = MCPControl.fieldMenu(tab, question: question), !menu.choices.isEmpty else { return (nil, true, question) }
+        return (ChatDecision.from(question: question, choices: menu.choices, highlighted: menu.highlighted ?? 0, escape: menu.escape),
+                false, question)
+    }
+
+    private var isWorking: Bool {
+        if case .session(let feed) = source { return feed.session.working }
+        return tab.status.state == .working
     }
 
     /// The working row, the card, and the note when the screen asks something the card can't show.
     private func refreshState() {
-        let status = tab.status
         let blocks = transcript.blocks
-        if status.state == .working {
+        let agent = agentName
+        if isWorking {
             let tool: String? = blocks.last.flatMap { block -> String? in
                 if case .tool(let tool) = block.content, tool.status == .inProgress { return tool.shownTitle }
                 return nil
             }
             // Set only when it changes: this runs twice a second, and a label set again lays the view out again.
-            let words = "\(TerminalWindowController.agentName(of: tab)) is working\u{2026}" + (tool.map { "  \u{00B7}  " + $0 } ?? "")
+            let words = "\(agent) is working\u{2026}" + (tool.map { "  \u{00B7}  " + $0 } ?? "")
             if working.stringValue != words { working.stringValue = words }
             if working.isHidden { working.isHidden = false }
         } else if !working.isHidden {
             working.isHidden = true
         }
-        if let question = status.question {
-            if let menu = MCPControl.fieldMenu(tab, question: question), !menu.choices.isEmpty {
-                let decision = ChatDecision.from(question: question, choices: menu.choices, highlighted: menu.highlighted ?? 0,
-                                                 escape: menu.escape)
+        let asked = decision()
+        if let question = asked.question {
+            if let decision = asked.decision {
                 if card.decision != decision || card.isHidden {
-                    card.show(decision, agent: TerminalWindowController.agentName(of: tab), sizes: Self.sizes, draftWaits: false)
+                    card.show(decision, agent: agent, sizes: Self.sizes, draftWaits: false)
                 }
                 if card.isHidden { card.isHidden = false }
                 if elsewhereRow?.isHidden == false { elsewhereRow?.isHidden = true }
-                if shownQuestion != question { card.announceOnce(agent: TerminalWindowController.agentName(of: tab)) }
+                if shownQuestion != question { card.announceOnce(agent: agent) }
             } else {
                 if !card.isHidden { card.isHidden = true }
-                let words = "\(TerminalWindowController.agentName(of: tab)) asks something in its own screen."
+                let words = "\(agent) asks something in its own screen."
                 if elsewhere.stringValue != words { elsewhere.stringValue = words }
                 if elsewhereRow?.isHidden == true { elsewhereRow?.isHidden = false }
             }
@@ -186,6 +237,20 @@ final class LiveChatView: NSView {
 
     /// A choice on the card: answered as answer_agent answers, if the question is still the one shown.
     private func answer(_ index: Int) {
+        if case .session(let feed) = source {
+            // The session's menu, as its keys pick: the digit, or past nine the arrows from the highlight and Return.
+            guard let pending = feed.session.pending, pending.options.indices.contains(index), MCPControl.canType(tab) else {
+                return NSSound.beep()
+            }
+            tab.view.onKeyboard?()
+            if index < 9 {
+                tab.view.send(txt: String(index + 1))
+            } else {
+                let step = index - pending.highlighted
+                tab.view.send(txt: String(repeating: step < 0 ? "\u{1b}[A" : "\u{1b}[B", count: abs(step)) + "\r")
+            }
+            return
+        }
         guard let id = MCPControl.questionID(tab) else { return NSSound.beep() }
         MCPControl.call("answer_agent", ["tab_id": tab.id.uuidString.lowercased(), "question_id": id, "choice": index + 1],
                         caller: nil) { [weak self] result in
@@ -205,8 +270,14 @@ final class LiveChatView: NSView {
             refresh()
         case .diff(let id):
             let toolID = id.hasSuffix("#change") ? String(id.dropLast(7)) : id
-            guard let item = feed.items.first(where: { $0.id == toolID }), case .tool(let call) = item.kind,
-                  let path = call.diff?.path, !path.isEmpty else { return NSSound.beep() }
+            let found: String?
+            switch source {
+            case .live(let feed):
+                if let item = feed.items.first(where: { $0.id == toolID }), case .tool(let call) = item.kind { found = call.diff?.path } else { found = nil }
+            case .session(let feed):
+                found = feed.session.tools[toolID]?.changes.first?.path
+            }
+            guard let path = found, !path.isEmpty else { return NSSound.beep() }
             let url = URL(fileURLWithPath: path.hasPrefix("/") ? path : (tab.directory as NSString).appendingPathComponent(path))
             (window?.windowController as? TerminalWindowController)?.showChanges(of: url)
         case .showAll:

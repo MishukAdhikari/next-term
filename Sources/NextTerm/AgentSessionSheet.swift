@@ -73,7 +73,11 @@ extension TerminalWindowController {
         note.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         note.textColor = .secondaryLabelColor
         note.preferredMaxLayoutWidth = 320
-        let stack = NSStackView(views: [picker, note, prompt])
+        // Plan 047: the session as a chat from the start, with the setting on; the last choice is kept, off at first.
+        let asChat = NSButton(checkboxWithTitle: "Show as chat", target: nil, action: nil)
+        asChat.state = AgentChatWatch.sheetChoice ? .on : .off
+        asChat.isHidden = !LiveChatView.isOn
+        let stack = NSStackView(views: [picker, note, prompt, asChat])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 8
@@ -91,7 +95,11 @@ extension TerminalWindowController {
             guard let self, response == .alertFirstButtonReturn else { return }
             let agent = agents[max(picker.indexOfSelectedItem, 0)]
             let line = agent.sessionLine(launcher: ACPSessionTabs.launcher, prompt: prompt.stringValue)
-            self.runInNewTab(directory: folder, command: line, title: agent.name)
+            let tab = self.runInNewTab(directory: folder, command: line, title: agent.name)
+            if !asChat.isHidden {
+                AgentChatWatch.sheetChoice = asChat.state == .on
+                AgentChatWatch.started(tab, asChat: asChat.state == .on)
+            }
         }
         if let window { alert.beginSheetModal(for: window, completionHandler: start) } else { start(alert.runModal()) }
     }

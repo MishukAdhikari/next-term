@@ -96,7 +96,7 @@ extension TerminalWindowController {
             menu.addItem(.separator())
             menu.addCommand("Keep Open", nil) { CommandPaneAutoClose.keep(tab) }
         }
-        if LiveChatView.isOn, LiveChatWatch.offers(tab), let group = groups.first(where: { $0.contains(tab) }) {
+        if LiveChatView.isOn, LiveChatView.offers(tab), let group = groups.first(where: { $0.contains(tab) }) {
             menu.addItem(.separator())
             menu.addCommand("Show as Chat", "toggleLiveChat:") { group.paneView(tab).setChat(shown: true) } // plan 041
         }
@@ -183,7 +183,7 @@ extension TerminalWindowController {
         }
         // The tab's pane with the keyboard shows its agent's session as a chat, or its terminal again (plan 041).
         if let tab = group.panes.first(where: { $0 === activeTab }) ?? group.panes.first,
-           LiveChatView.isOn, LiveChatWatch.offers(tab) {
+           LiveChatView.isOn, LiveChatView.offers(tab) {
             let pane = group.paneView(tab)
             menu.addCommand(pane.showsChat ? "Show Terminal" : "Show as Chat", "toggleLiveChat:") { pane.setChat(shown: !pane.showsChat) }
         }

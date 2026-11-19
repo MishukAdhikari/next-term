@@ -288,9 +288,10 @@ extension SelfTest {
         // The session's own blocks first, then the feed is set aside, so the 300 blocks stay what the chat shows
         // (a feed arriving late would replace them with the session's few, and the timing would scroll nothing).
         _ = await wait(3) { chat.shownBlocks.count >= 6 }
-        chat.feed.onChange = nil
+        guard case .live(let feed) = chat.source else { return }
+        feed.onChange = nil
         defer {
-            chat.feed.onChange = { [weak chat] _, _ in chat?.refresh() }
+            feed.onChange = { [weak chat] _, _ in chat?.refresh() }
             chat.refresh()
         }
         let transcript = chat.transcript

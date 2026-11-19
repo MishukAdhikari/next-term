@@ -13,7 +13,7 @@ enum LiveChatMCP {
 
     /// list_tabs: `view` (chat or terminal) for a tab whose agent has a live chat while the setting is on; nothing else.
     static func listFields(_ tab: TerminalTab) -> [String: Any] {
-        guard LiveChatView.isOn, LiveChatWatch.offers(tab), let pane = pane(of: tab) else { return [:] }
+        guard LiveChatView.isOn, LiveChatView.offers(tab), let pane = pane(of: tab) else { return [:] }
         return ["view": pane.showsChat ? "chat" : "terminal"]
     }
 
@@ -25,8 +25,8 @@ enum LiveChatMCP {
         guard LiveChatView.isOn else {
             return MCPControl.fail("The chat view is off (Settings › Agents › Chat view for agent tabs); the tab shows its terminal.")
         }
-        guard LiveChatWatch.offers(tab) else {
-            return MCPControl.fail("That tab offers no chat view: only a local tab running Claude Code, Codex or Command Code does.")
+        guard LiveChatView.offers(tab) else {
+            return MCPControl.fail("That tab offers no chat view: only a local tab running Claude Code, Codex or Command Code, or an agent session Next Term started (new_tab agent_session), does.")
         }
         guard let pane = pane(of: tab) else { return MCPControl.fail("That tab is gone.") }
         pane.setChat(shown: view == "chat")
