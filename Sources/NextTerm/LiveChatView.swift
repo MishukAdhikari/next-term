@@ -218,7 +218,7 @@ final class LiveChatView: NSView {
         }
         let parts = ChatUsageLine.parts(usage)
         let font = NSFont.monospacedDigitSystemFont(ofSize: CGFloat(Self.sizes.secondary), weight: .regular)
-        let line = NSMutableAttributedString(string: parts.tokens + "  \u{00B7}  ", attributes: [.font: font, .foregroundColor: Theme.textDim])
+        let line = NSMutableAttributedString(string: parts.tokens + " \u{00B7} ", attributes: [.font: font, .foregroundColor: Theme.textDim])
         line.append(NSAttributedString(string: parts.percent, attributes: [
             .font: font, .foregroundColor: parts.nearLimit ? NSColor.systemOrange : Theme.textDim,
         ]))

@@ -79,7 +79,7 @@ extension SelfTest {
         chat.usageLine.attributedStringValue.enumerateAttribute(.foregroundColor, in: NSRange(location: 0, length: chat.usageLine.attributedStringValue.length)) { value, _, _ in
             if (value as? NSColor) == NSColor.systemOrange { tinted = true }
         }
-        check(usageShown && usageWords == "184k tokens  \u{00B7}  92\u{2009}% of context" && tinted
+        check(usageShown && usageWords == "184k tokens \u{00B7} 92% of context" && tinted
               && chat.usageLine.toolTip?.hasPrefix("Context: 184,000 of 200,000 tokens") == true,
               "agent chat: the agent's own usage shows as one line under the composer, the percent tinted near the limit",
               "\(usageWords) — \(chat.usageLine.toolTip ?? "no tip")")

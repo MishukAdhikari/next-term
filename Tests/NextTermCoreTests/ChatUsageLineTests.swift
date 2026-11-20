@@ -6,19 +6,19 @@ import Testing
 @Suite struct ChatUsageLineTests {
     @Test func theLineGivesTokensAndThePercentOfContext() {
         let usage = AgentUsage(used: 190_000, window: 200_000)
-        #expect(ChatUsageLine.text(usage) == "190k tokens  \u{00B7}  95\u{2009}% of context")
+        #expect(ChatUsageLine.text(usage) == "190k tokens \u{00B7} 95% of context")
         #expect(ChatUsageLine.parts(usage).nearLimit)
         #expect(!ChatUsageLine.parts(AgentUsage(used: 84_000, window: 200_000)).nearLimit)
-        #expect(ChatUsageLine.text(AgentUsage(used: 950, window: 200_000)) == "950 tokens  \u{00B7}  0\u{2009}% of context")
+        #expect(ChatUsageLine.text(AgentUsage(used: 950, window: 200_000)) == "950 tokens \u{00B7} 0% of context")
     }
 
     @Test func theTooltipBreaksTheLastRequestDown() {
         let usage = AgentUsage(used: 189_200, window: 200_000, model: "claude-opus-5-5",
                                breakdown: .init(input: 1_200, cacheRead: 180_000, cacheWritten: 8_000, output: 800))
         let tip = ChatUsageLine.tooltip(usage, locale: Locale(identifier: "en_US"))
-        #expect(tip == "Context: 189,200 of 200,000 tokens (95\u{2009}%)\nLast request: input 1,200, cache read 180,000, cache written 8,000, output 800\nModel: claude-opus-5-5")
+        #expect(tip == "Context: 189,200 of 200,000 tokens (95%)\nLast request: input 1,200, cache read 180,000, cache written 8,000, output 800\nModel: claude-opus-5-5")
         // No breakdown, no model: the context alone.
-        #expect(ChatUsageLine.tooltip(AgentUsage(used: 5_000, window: 200_000), locale: Locale(identifier: "en_US")) == "Context: 5,000 of 200,000 tokens (3\u{2009}%)")
+        #expect(ChatUsageLine.tooltip(AgentUsage(used: 5_000, window: 200_000), locale: Locale(identifier: "en_US")) == "Context: 5,000 of 200,000 tokens (3%)")
     }
 
     @Test func claudeAndCodexTranscriptsGiveTheBreakdown() {

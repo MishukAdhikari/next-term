@@ -7,13 +7,13 @@ import Foundation
 public enum ChatUsageLine {
     /// "190k tokens", "95% of context", and whether the percent is near the limit.
     public static func parts(_ usage: AgentUsage) -> (tokens: String, percent: String, nearLimit: Bool) {
-        ("\(AgentUsage.tokens(usage.used)) tokens", "\(usage.percent)\u{2009}% of context", usage.percent >= AgentUsage.warnPercent)
+        ("\(AgentUsage.tokens(usage.used)) tokens", "\(usage.percent)% of context", usage.percent >= AgentUsage.warnPercent)
     }
 
-    /// The line as one string: "190k tokens · 95 % of context".
+    /// The line as one string: "190k tokens · 95% of context".
     public static func text(_ usage: AgentUsage) -> String {
         let parts = parts(usage)
-        return parts.tokens + "  \u{00B7}  " + parts.percent
+        return parts.tokens + " \u{00B7} " + parts.percent
     }
 
     /// The tooltip: the context in full figures, the last request by kind, and the model.
@@ -22,7 +22,7 @@ public enum ChatUsageLine {
         number.numberStyle = .decimal
         number.locale = locale
         func n(_ value: Int) -> String { number.string(from: NSNumber(value: value)) ?? String(value) }
-        var lines = ["Context: \(n(usage.used)) of \(n(usage.window)) tokens (\(usage.percent)\u{2009}%)"]
+        var lines = ["Context: \(n(usage.used)) of \(n(usage.window)) tokens (\(usage.percent)%)"]
         if let parts = usage.breakdown {
             var kinds = ["input \(n(parts.input))"]
             if parts.cacheRead > 0 { kinds.append("cache read \(n(parts.cacheRead))") }
