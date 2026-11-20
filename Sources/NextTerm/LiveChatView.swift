@@ -94,11 +94,9 @@ final class LiveChatView: NSView {
             addSubview(view)
         }
         // The column (ChatColumn), as constraints that move with the view and so can never make it, its pane or the
-        // window wider: from the leading margin, the width less both margins, at most the measure.
+        // window wider: from the leading margin, the width less both margins.
         let fill = rows.widthAnchor.constraint(equalTo: widthAnchor, constant: -2 * Self.margin)
         fill.priority = .init(999)
-        let cap = rows.widthAnchor.constraint(lessThanOrEqualToConstant: CGFloat(ChatTranscriptView.cap(body: Self.sizes.body)))
-        capConstraint = cap
         NSLayoutConstraint.activate([
             transcript.topAnchor.constraint(equalTo: topAnchor),
             transcript.leadingAnchor.constraint(equalTo: leadingAnchor),
@@ -106,7 +104,6 @@ final class LiveChatView: NSView {
             rows.topAnchor.constraint(equalTo: transcript.bottomAnchor, constant: Self.composerGap),
             rows.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -Self.bottomMargin),
             rows.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Self.margin),
-            cap,
             fill,
         ] + [working, elsewhereRow, card, composer].map { $0.widthAnchor.constraint(equalTo: rows.widthAnchor) })
         self.elsewhereRow = elsewhereRow
@@ -121,8 +118,6 @@ final class LiveChatView: NSView {
     }
 
     private var elsewhereRow: NSStackView?
-    /// The rows' widest: the measure at the body size, again when the size changes (View › Bigger and Smaller).
-    private var capConstraint: NSLayoutConstraint?
     /// Between the conversation and the first row under it.
     static let composerGap: CGFloat = 8
     /// Between the rows under the conversation.
@@ -166,8 +161,6 @@ final class LiveChatView: NSView {
 
     /// The transcript from the feed's items, then the state rows.
     func refresh() {
-        let measure = CGFloat(ChatTranscriptView.cap(body: Self.sizes.body))
-        if let capConstraint, capConstraint.constant != measure { capConstraint.constant = measure }
         let blocks: [ChatBlock]
         switch source {
         case .live(let feed): blocks = LiveChat.blocks(feed.items, expanded: expanded)

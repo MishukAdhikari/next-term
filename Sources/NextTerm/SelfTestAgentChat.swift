@@ -84,7 +84,9 @@ extension SelfTest {
         check(carded && names == ["Allow once", "Always allow", "Reject"] && chat.card.decision?.title == "Run rm -rf build",
               "agent chat: the permission is the card, with the agent's options and its action",
               "\(names), \(chat.card.decision?.title ?? "no card")")
-        check(tab.status.state == TabState.attention, "agent chat: the tab asks, as answer_agent and notifications see it",
+        // The tab's state follows the session's report, a moment after the journal line the card is drawn from.
+        let asking = await wait(3) { tab.status.state == TabState.attention }
+        check(asking, "agent chat: the tab asks, as answer_agent and notifications see it",
               tab.status.state.rawValue)
         await screenshot(window, suffix: "agent-chat-card")
         chat.card.onChoose?(2)

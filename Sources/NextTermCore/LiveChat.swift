@@ -443,7 +443,7 @@ public enum LiveChat {
     // MARK: Masking
 
     static func masked(_ kind: Kind) -> Kind {
-        func m(_ text: String) -> String { MCPRedaction.redact(text).text }
+        func m(_ text: String) -> String { MCPRedaction.redactSparingPaths(text) }
         switch kind {
         case .user(let text): return .user(m(text))
         case .text(let text): return .text(m(text))

@@ -3,8 +3,8 @@ import NextTermCore
 
 /// A chat tab's transcript (plan 037 KTD4): one read-only, selectable text view holding every block as attributed
 /// paragraphs, a range per block id. An update replaces only the blocks that changed, so a streaming message touches
-/// its own range. The text sits in the reading column (ChatColumn): from a calm margin on the leading side, at most 90
-/// characters wide, ragged right. Lines wrap, code and paths by character, so nothing is ever wider than the view and it
+/// its own range. The text sits in the reading column (ChatColumn): the pane's width less a calm margin either side, as
+/// the terminal fills it. Lines wrap, code and paths by character, so nothing is ever wider than the view and it
 /// never scrolls sideways. It stays at the bottom while the user hasn't scrolled up; scrolled up, a Jump to Latest pill
 /// shows. Main thread.
 final class ChatTranscriptView: NSView, NSTextViewDelegate {
@@ -34,8 +34,7 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
         // layout estimates the height above, so the scroller and the content shift as the user scrolls up.
         storage.addLayoutManager(layout)
         let container = NSTextContainer(size: NSSize(width: 400, height: CGFloat.greatestFiniteMagnitude))
-        // The column's own width (ChatColumn), set in layout: the text stops at the measure, ragged right.
-        container.widthTracksTextView = false
+        container.widthTracksTextView = true
         container.lineFragmentPadding = 0
         layout.addTextContainer(container)
         textView = ChatTextView(frame: NSRect(x: 0, y: 0, width: 400, height: 300), textContainer: container)
@@ -108,29 +107,16 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
     /// Where the column starts, from the view's leading edge: the composer lines up with it.
     var columnLeading: CGFloat { textView.textContainerOrigin.x }
 
-    /// The column's widest, for the body size: 90 of the body font's average letters.
-    static func cap(body: Double) -> Double {
-        // Measured once a size: layout runs often (each scroll that lays out more text), the font's alphabet never changes.
-        if let known = caps[body] { return known }
-        let alphabet = NSAttributedString(string: "abcdefghijklmnopqrstuvwxyz", attributes: [.font: NSFont.systemFont(ofSize: CGFloat(body))])
-        let cap = ChatColumn.cap(alphabetWidth: Double(alphabet.size().width))
-        caps[body] = cap
-        return cap
-    }
-    private static var caps: [Double: Double] = [:]
-
-    /// The column for the view's width now, at the renderer's body size.
-    var column: ChatColumn { ChatColumn.layout(width: Double(bounds.width), cap: Self.cap(body: renderer.sizes.body)) }
-
     override func layout() {
         // The column first, so the text is laid out once at its new width.
-        let column = self.column
-        let side = CGFloat(column.leading)
+        let side = CGFloat(ChatColumn.layout(width: Double(bounds.width)).leading)
         if textView.textContainerInset.width != side { textView.textContainerInset = NSSize(width: side, height: Self.endMargin) }
-        if let container = textView.textContainer, container.size.width != CGFloat(column.width) {
-            container.size = NSSize(width: CGFloat(column.width), height: CGFloat.greatestFiniteMagnitude)
-        }
         super.layout()
+        // Exactly the visible width, always: autoresizing only adds the clip view's changes, so a pane squeezed to
+        // nothing (a column or the sidebar opening) and grown again left the text wider than the pane, running under its
+        // edge with a scroller along the bottom.
+        let visible = scrollView.contentSize.width
+        if visible > 0, textView.frame.width != visible { textView.setFrameSize(NSSize(width: visible, height: textView.frame.height)) }
         // The view got shorter (a row showed under it, the window shrank): a user at the end stays at it. One who
         // scrolled up stays where they are.
         if followsEnd, !userScrolling, !isAtBottom { scrollToEnd() }
