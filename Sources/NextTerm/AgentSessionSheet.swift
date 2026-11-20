@@ -73,9 +73,8 @@ extension TerminalWindowController {
         note.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         note.textColor = .secondaryLabelColor
         note.preferredMaxLayoutWidth = 320
-        // Plan 047: the session as a chat from the start, with the setting on; the last choice is kept, off at first.
+        // Plan 047: the session as a chat from the start; it follows the picked agent's Opens as (Settings › Agents).
         let asChat = NSButton(checkboxWithTitle: "Show as chat", target: nil, action: nil)
-        asChat.state = AgentChatWatch.sheetChoice ? .on : .off
         asChat.isHidden = !LiveChatView.isOn
         let stack = NSStackView(views: [picker, note, prompt, asChat])
         stack.orientation = .vertical
@@ -85,7 +84,7 @@ extension TerminalWindowController {
         alert.accessoryView = stack
         alert.addButton(withTitle: "Start")
         alert.addButton(withTitle: "Cancel")
-        let follower = AgentNoteFollower(agents: agents, note: note) { [weak alert] in DialogFit.fitAccessory(stack, width: 320, in: alert) }
+        let follower = AgentNoteFollower(agents: agents, note: note, asChat: asChat) { [weak alert] in DialogFit.fitAccessory(stack, width: 320, in: alert) }
         picker.target = follower
         picker.action = #selector(AgentNoteFollower.picked(_:))
         follower.show(0)
@@ -96,10 +95,7 @@ extension TerminalWindowController {
             let agent = agents[max(picker.indexOfSelectedItem, 0)]
             let line = agent.sessionLine(launcher: ACPSessionTabs.launcher, prompt: prompt.stringValue)
             let tab = self.runInNewTab(directory: folder, command: line, title: agent.name)
-            if !asChat.isHidden {
-                AgentChatWatch.sheetChoice = asChat.state == .on
-                AgentChatWatch.started(tab, asChat: asChat.state == .on)
-            }
+            if !asChat.isHidden { AgentChatWatch.started(tab, asChat: asChat.state == .on) }
         }
         if let window { alert.beginSheetModal(for: window, completionHandler: start) } else { start(alert.runModal()) }
     }
@@ -110,15 +106,18 @@ extension TerminalWindowController {
 private final class AgentNoteFollower: NSObject {
     private let agents: [ACPAgent]
     private let note: NSTextField
+    private let asChat: NSButton
     private let refit: () -> Void
 
-    init(agents: [ACPAgent], note: NSTextField, refit: @escaping () -> Void) {
+    init(agents: [ACPAgent], note: NSTextField, asChat: NSButton, refit: @escaping () -> Void) {
         self.agents = agents
         self.note = note
+        self.asChat = asChat
         self.refit = refit
     }
 
     func show(_ index: Int) {
+        if agents.indices.contains(index) { asChat.state = ChatFirst.opensAsChat(agents[index].id) ? .on : .off }
         let words = agents.indices.contains(index) ? agents[index].terminalNote : nil
         note.stringValue = words ?? ""
         note.isHidden = words == nil

@@ -185,22 +185,15 @@ extension LiveChatView {
     }
 }
 
-/// How an agent tab first shows (plan 047 D5): Settings › Agents › "Open agent tabs as chat" (on unless turned off),
-/// unless the tab was started with a view of its own (the New Agent Session sheet's "Show as chat", new_tab's `view`).
-/// The tab shows its chat once it can (Panes.updateChatStrip), without taking the keyboard, and only that once: the user's
-/// own switch to the terminal stays.
+/// How an agent tab first shows (plan 047 D5): its agent's "Opens as" in Settings › Agents (ChatFirst), unless the tab
+/// was started with a view of its own (the New Agent Session sheet's "Show as chat", new_tab's `view`). New sessions
+/// only: a tab brought back at launch keeps its terminal. The tab shows its chat once it can (Panes.updateChatStrip),
+/// without taking the keyboard, and only that once: the user's own switch to the terminal stays.
 extension AgentChatWatch {
     /// The view a tab was started with, by tab id; a tab not in it follows the setting.
     private static var startViews: [UUID: Bool] = [:]
     /// Tabs whose first view was given already.
     private static var decided: Set<UUID> = []
-    /// The sheet's last choice; the setting's until the user picks one.
-    static let sheetKey = "agentSessionShowsChat"
-
-    static var sheetChoice: Bool {
-        get { UserDefaults.standard.object(forKey: sheetKey) as? Bool ?? LiveChatView.opensAsChat }
-        set { UserDefaults.standard.set(newValue, forKey: sheetKey) }
-    }
 
     /// new_tab's `view`, checked before any tab opens: nil when it is fine or not given.
     static func viewRefusal(_ arguments: [String: Any]) -> String? {
@@ -220,7 +213,8 @@ extension AgentChatWatch {
     static func firstView(_ tab: TerminalTab) -> Bool? {
         guard !decided.contains(tab.id) else { return nil }
         decided.insert(tab.id)
-        return startViews.removeValue(forKey: tab.id) ?? LiveChatView.opensAsChat
+        if let given = startViews.removeValue(forKey: tab.id) { return given }
+        return tab.restoredRecord == nil && LiveChatView.opensAsChat(tab)
     }
 
     static func forgetStart(_ tabID: UUID) {

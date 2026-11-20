@@ -160,13 +160,15 @@ extension LiveChatView {
         set { UserDefaults.standard.set(newValue, forKey: settingKey) }
     }
 
-    static let opensAsChatKey = "agentTabsOpenAsChat"
+    /// The catalog id of `tab`'s agent: a session's own (plan 047), or the live chat's (plan 041).
+    static func agentID(of tab: TerminalTab) -> String? {
+        if let id = AgentSessionSocket.reports[tab.id]?.agentID { return id }
+        return tab.localAgent.flatMap(LiveChat.Agent.init).map(ChatFirst.id(of:))
+    }
 
-    /// Settings › Agents › "Open agent tabs as chat": an agent tab shows its chat first, the terminal one click away. On
-    /// unless turned off.
-    static var opensAsChat: Bool {
-        get { UserDefaults.standard.object(forKey: opensAsChatKey) as? Bool ?? true }
-        set { UserDefaults.standard.set(newValue, forKey: opensAsChatKey) }
+    /// Settings › Agents › the agent's "Opens as": whether a new session of `tab`'s agent shows its chat first.
+    static func opensAsChat(_ tab: TerminalTab) -> Bool {
+        agentID(of: tab).map { ChatFirst.opensAsChat($0) } ?? false
     }
 }
 

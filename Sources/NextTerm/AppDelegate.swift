@@ -597,6 +597,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // launch writes any of the keys that tell the two apart (SidebarClick.usedInstallKeys). Not in the self-test,
         // whose defaults look new at every run: its clicks part sets the setting itself.
         if !SelfTest.isRequested { SidebarClick.settleDefault(in: .standard) }
+        if !SelfTest.isRequested { ChatFirst.settleDefault(in: .standard) } // agents' Opens as: chat on a new install (plan 047)
         // Secrets' marks first, with no crypto, so the first MCP answer and IDE message are already masked; then the
         // load check, off the main thread.
         MainActor.assumeIsolated { SecretsStore.shared.loadMarks() }

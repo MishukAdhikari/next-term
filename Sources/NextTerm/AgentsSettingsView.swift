@@ -22,8 +22,6 @@ final class AgentsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
     let showAll = NSButton(checkboxWithTitle: "Show agents you don\u{2019}t have", target: nil, action: nil)
     /// Plan 041 D7: the terminal and chat buttons on Claude Code, Codex and Command Code tabs.
     let chatView = NSButton(checkboxWithTitle: "Chat view for agent tabs", target: nil, action: nil)
-    /// Agent tabs show their chat first.
-    let opensAsChat = NSButton(checkboxWithTitle: "Open agent tabs as chat", target: nil, action: nil)
     let status = NSTextField(labelWithString: "")
     let emptyTitle = NSTextField(labelWithString: "No coding agents on your PATH")
     let emptyText = NSTextField(wrappingLabelWithString: "Agents you install with npm, Homebrew or their own installers show here.")
@@ -70,7 +68,8 @@ final class AgentsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
             label.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         }
         let columns: [(String, String, CGFloat)] = [("agent", "Agent", 112), ("version", "Version", 128), ("method", "Installed by", 108),
-                                                    ("latest", "Latest", 92), ("schedule", "Auto-update", 116)]
+                                                    ("latest", "Latest", 92), ("schedule", "Auto-update", 116),
+                                                    ("opens", "Opens as", 96)]
         for (id, title, width) in columns {
             let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(id))
             column.title = title
@@ -104,12 +103,7 @@ final class AgentsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
         chatView.toolTip = "Claude Code, Codex and Command Code tabs show a terminal and a chat button: the chat is the same live session, and the terminal stays one click away."
         chatView.target = self
         chatView.action = #selector(toggleChatView)
-        opensAsChat.state = LiveChatView.opensAsChat ? .on : .off
-        opensAsChat.isEnabled = LiveChatView.isOn
-        opensAsChat.toolTip = "A new agent tab shows its chat first; the terminal stays one click away."
-        opensAsChat.target = self
-        opensAsChat.action = #selector(toggleOpensAsChat)
-        let checks = NSStackView(views: [showAll, chatView, opensAsChat])
+        let checks = NSStackView(views: [showAll, chatView])
         checks.spacing = 24
         for view in [intro, scroll, detail, buttons, checks] as [NSView] { content.addArrangedSubview(view) }
         content.setCustomSpacing(14, after: buttons)
@@ -263,12 +257,15 @@ final class AgentsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
     /// Chat view for agent tabs: off, every pane goes back to its terminal and loses its buttons.
     @objc private func toggleChatView() {
         LiveChatView.isOn = chatView.state == .on
-        opensAsChat.isEnabled = LiveChatView.isOn
+        table.reloadData() // Opens as follows the chat view setting
         AppDelegate.shared?.controllers.forEach { $0.liveChatSettingChanged() }
     }
 
-    @objc private func toggleOpensAsChat() {
-        LiveChatView.opensAsChat = opensAsChat.state == .on
+    /// An agent's Opens as: its new sessions show their chat or their terminal first.
+    @objc private func opensAsChanged(_ sender: NSPopUpButton) {
+        let index = sender.tag
+        guard index >= 0, index < rows.count else { return }
+        ChatFirst.set(rows[index].agent.id, asChat: sender.indexOfSelectedItem == 1)
     }
 
     @objc private func showMissing() {
@@ -305,6 +302,22 @@ final class AgentsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
             popup.target = self
             popup.action = #selector(scheduleChanged(_:))
             popup.setAccessibilityLabel("Auto-update \(status.agent.name)")
+            return popup
+        }
+        if id == "opens", status.copy != nil, ChatFirst.agentIDs.contains(status.agent.id) {
+            // Beside Auto-update, the same control: a new session of this agent shows its chat or its terminal first.
+            let popup = NSPopUpButton(frame: .zero, pullsDown: false)
+            popup.controlSize = .regular
+            popup.font = .systemFont(ofSize: NSFont.systemFontSize)
+            popup.isBordered = false
+            popup.addItems(withTitles: ["Terminal", "Chat"])
+            popup.selectItem(at: ChatFirst.opensAsChat(status.agent.id) ? 1 : 0)
+            popup.isEnabled = LiveChatView.isOn
+            popup.tag = row
+            popup.target = self
+            popup.action = #selector(opensAsChanged(_:))
+            popup.toolTip = "How a new \(status.agent.name) session first shows; the other view is one click away."
+            popup.setAccessibilityLabel("\(status.agent.name) opens as")
             return popup
         }
         let cell = NSTableCellView()
