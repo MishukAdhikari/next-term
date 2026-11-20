@@ -153,7 +153,7 @@ extension SelfTest {
         let oneEdge = abs(radiosX - askX) < 0.5 && abs(radiosX - scrollbackX) < 0.5 && abs(radiosX - colorsX) < 0.5 && abs(radiosX - columnX) < 0.5
             && abs(radiosX - tipsX) < 0.5 && radiosX > labelEnd
         let readOnce = !launch.isAccessibilityElement()
-        // The notes' rows, and the window column's under Show project colors, start with an empty label in the column, which
+        // The notes’ rows (the Layout row’s too), and the window column’s under Show project colors, start with an empty label in the column, which
         // VoiceOver never reaches.
         var blanks: [NSTextField] = []
         var views: [NSView] = [view]
@@ -161,7 +161,7 @@ extension SelfTest {
             if let field = next as? NSTextField, field.stringValue.isEmpty { blanks.append(field) }
             views.append(contentsOf: next.subviews)
         }
-        let silent = blanks.count == 10 && blanks.allSatisfy { !$0.isAccessibilityElement() }
+        let silent = blanks.count == 11 && blanks.allSatisfy { !$0.isAccessibilityElement() }
         let beside = besideRadios && besideAsk && besideScrollback
         check(titles && column && beside && oneEdge && readOnce && silent,
               "Settings › General: At launch, At quit, Sessions, Windows, Projects, Tips and Privacy beside their controls, in a 110 pt label column as in the other tabs",
