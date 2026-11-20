@@ -112,6 +112,11 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
         let side = CGFloat(ChatColumn.layout(width: Double(bounds.width)).leading)
         if textView.textContainerInset.width != side { textView.textContainerInset = NSSize(width: side, height: Self.endMargin) }
         super.layout()
+        // Exactly the visible width, always: autoresizing only adds the clip view's changes, so a pane squeezed to
+        // nothing (a column or the sidebar opening) and grown again left the text wider than the pane, running under its
+        // edge with a scroller along the bottom.
+        let visible = scrollView.contentSize.width
+        if visible > 0, textView.frame.width != visible { textView.setFrameSize(NSSize(width: visible, height: textView.frame.height)) }
         // The view got shorter (a row showed under it, the window shrank): a user at the end stays at it. One who
         // scrolled up stays where they are.
         if followsEnd, !userScrolling, !isAtBottom { scrollToEnd() }

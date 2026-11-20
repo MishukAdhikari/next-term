@@ -133,8 +133,18 @@ extension SelfTest {
                   "leading \(lead), line \(lineWidth)")
             await screenshot(window, suffix: "-" + suffix)
         }
+        // Squeezed to almost nothing (a column or the sidebar opening) and grown again: the text is the visible width,
+        // never wider, so nothing runs under the pane's edge and no scroller shows along the bottom.
+        window.setContentSize(NSSize(width: 120, height: window.contentLayoutRect.height))
+        window.contentView?.layoutSubtreeIfNeeded()
+        await pause(0.2)
         window.setFrame(savedFrame, display: true)
         window.contentView?.layoutSubtreeIfNeeded()
+        await pause(0.2)
+        let clipWidth = chat.transcript.scrollView.contentView.bounds.width
+        check(abs(chat.transcript.textView.frame.width - clipWidth) <= 1 && liveChatFits(chat).ok,
+              "live chat: squeezed to nothing and grown again, the text is the pane's width, never wider",
+              "text \(chat.transcript.textView.frame.width), visible \(clipWidth)")
 
         let composerX = chat.composer.convert(chat.composer.bounds, to: chat).minX
         let textX = chat.transcript.convert(NSPoint(x: chat.transcript.columnLeading, y: 0), to: chat).x
