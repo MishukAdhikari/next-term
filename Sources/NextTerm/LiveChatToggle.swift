@@ -179,7 +179,7 @@ extension TerminalWindowController {
         return group.paneView(tab)
     }
 
-    /// View › Show as Chat (no key until the user gives it one in Keyboard Shortcuts): the tab with the keyboard shows its agent's session as a chat, or its terminal again.
+    /// View › Show as Chat (⇧⌘J, or the key the user gives it in Keyboard Shortcuts): the tab with the keyboard shows its agent's session as a chat, or its terminal again.
     @objc func toggleLiveChat(_ sender: Any?) {
         guard let pane = activeChatPane, LiveChatView.isOn, LiveChatView.offers(pane.tab) else { return NSSound.beep() }
         pane.setChat(shown: !pane.showsChat)

@@ -597,7 +597,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // launch writes any of the keys that tell the two apart (SidebarClick.usedInstallKeys). Not in the self-test,
         // whose defaults look new at every run: its clicks part sets the setting itself.
         if !SelfTest.isRequested { SidebarClick.settleDefault(in: .standard) }
-        if !SelfTest.isRequested { ChatFirst.settleDefault(in: .standard) } // agents' Opens as: chat on a new install (plan 047)
         // Secrets' marks first, with no crypto, so the first MCP answer and IDE message are already masked; then the
         // load check, off the main thread.
         MainActor.assumeIsolated { SecretsStore.shared.loadMarks() }
@@ -2548,7 +2547,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         view.addItem(withTitle: "Agent Spinner", action: nil, keyEquivalent: "").submenu = spinner
         // A native box under the terminal for writing to its agent (plan 039 U2); AgentPromptBox.swift.
         item(view, "Prompt Box", #selector(TerminalWindowController.togglePromptBox(_:)), "i", [.command, .shift])
-        item(view, "Show as Chat", #selector(TerminalWindowController.toggleLiveChat(_:)), "") // plan 041: no key until the user gives one
+        item(view, "Show as Chat", #selector(TerminalWindowController.toggleLiveChat(_:)), "j", [.command, .shift]) // plan 041
         // The window's colour along its top row; also a right-click there, and Show Project Colors in Settings › General.
         view.addItem(withTitle: ProjectColorMenu.title, action: nil, keyEquivalent: "").submenu = ProjectColorMenu.submenu()
         view.addItem(.separator())

@@ -1,14 +1,12 @@
 import Foundation
 
 /// Settings › Agents › each agent's "Opens as" (plan 047 D5, the owner's per-agent choice beside Auto-update): whether a
-/// new session of that agent shows its chat first or its terminal. New sessions only: a tab open already, or brought
-/// back at launch, keeps its view. Chat for a new install, Terminal for one used before (decided once at the first
-/// launch with this code, as single clicks in the sidebar are), so updating changes nothing.
+/// new session of that agent shows its chat first or its terminal. Terminal unless the user picks Chat, in Settings or
+/// by asking an agent (settings_set agents_open_as_chat). New sessions only: a tab open already, or brought back at
+/// launch, keeps its view.
 public enum ChatFirst {
     /// Each agent's choice, by its catalog id (`AgentCLIs.Agent.id`): true for chat.
     public static let settingKey = "agentsOpenAsChat"
-    /// The choice of an agent that has none of its own: settled at the first launch.
-    public static let defaultKey = "agentsOpenAsChatDefault"
 
     /// The agents whose sessions can show as a chat: Command Code's own screen, and every agent a session runs
     /// (Claude Code, Codex, and the ACP agents).
@@ -23,10 +21,21 @@ public enum ChatFirst {
         }
     }
 
+    /// An agent's name, as Settings › Agents shows it.
+    public static func name(of id: String) -> String {
+        if id == "commandcode" { return "Command Code" }
+        return ACPAgent.known.first { $0.id == id }?.name ?? id
+    }
+
     /// Whether a new session of agent `id` opens as its chat.
     public static func opensAsChat(_ id: String, in defaults: UserDefaults = .standard) -> Bool {
         let choices = defaults.dictionary(forKey: settingKey) as? [String: Bool] ?? [:]
-        return choices[id] ?? defaults.bool(forKey: defaultKey)
+        return choices[id] ?? false
+    }
+
+    /// The agents whose new sessions open as chat, sorted.
+    public static func chatAgents(in defaults: UserDefaults = .standard) -> [String] {
+        agentIDs.filter { opensAsChat($0, in: defaults) }.sorted()
     }
 
     public static func set(_ id: String, asChat: Bool, in defaults: UserDefaults = .standard) {
@@ -34,14 +43,5 @@ public enum ChatFirst {
         choices[id] = asChat
         defaults.set(choices, forKey: settingKey)
     }
-
-    /// Stores the default for a new install (chat) or one used before (terminal), once; nil when one is stored already.
-    /// Runs before the launch writes any of `SidebarClick.usedInstallKeys`.
-    @discardableResult
-    public static func settleDefault(in defaults: UserDefaults) -> Bool? {
-        guard defaults.object(forKey: defaultKey) == nil else { return nil }
-        let usedBefore = SidebarClick.usedInstallKeys.contains { defaults.object(forKey: $0) != nil }
-        defaults.set(!usedBefore, forKey: defaultKey)
-        return !usedBefore
-    }
 }
+

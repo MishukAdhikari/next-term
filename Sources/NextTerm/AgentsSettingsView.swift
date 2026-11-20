@@ -39,7 +39,11 @@ final class AgentsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
         super.init(frame: frame)
         build()
         NotificationCenter.default.addObserver(self, selector: #selector(changed), name: AgentCLIManager.changed, object: nil)
+        // Opens as, changed by an agent (settings_set agents_open_as_chat): the rows show it.
+        NotificationCenter.default.addObserver(self, selector: #selector(opensAsSettingChanged), name: ImportCoordinator.changed, object: nil)
     }
+
+    @objc private func opensAsSettingChanged() { table.reloadData() }
 
     required init?(coder: NSCoder) { fatalError("not used") }
 

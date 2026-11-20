@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import NextTermCore
 
-/// Each agent's "Opens as": chat for a new install, terminal for one used before, each agent's own choice kept.
+/// Each agent's "Opens as": terminal unless the user picks chat, each agent's own choice kept.
 @Suite struct ChatFirstTests {
     private func fresh() -> UserDefaults {
         let name = "nt-chatfirst-\(UUID().uuidString)"
@@ -11,37 +11,21 @@ import Testing
         return defaults
     }
 
-    @Test func aNewInstallOpensAsChat() {
+    @Test func everyAgentOpensAsItsTerminalUntilTheUserPicks() {
         let defaults = fresh()
-        #expect(ChatFirst.settleDefault(in: defaults) == true)
-        #expect(ChatFirst.opensAsChat("claude", in: defaults))
-        #expect(ChatFirst.opensAsChat("commandcode", in: defaults))
-    }
-
-    @Test func anInstallUsedBeforeKeepsTheTerminal() {
-        let defaults = fresh()
-        defaults.set([String](), forKey: "sessionProjects")
-        #expect(ChatFirst.settleDefault(in: defaults) == false)
-        #expect(!ChatFirst.opensAsChat("codex", in: defaults))
-    }
-
-    @Test func theDefaultIsSettledOnce() {
-        let defaults = fresh()
-        ChatFirst.settleDefault(in: defaults)
-        defaults.set([String](), forKey: "sessionProjects")
-        #expect(ChatFirst.settleDefault(in: defaults) == nil)
-        #expect(ChatFirst.opensAsChat("claude", in: defaults))
+        #expect(ChatFirst.agentIDs.allSatisfy { !ChatFirst.opensAsChat($0, in: defaults) })
+        #expect(ChatFirst.chatAgents(in: defaults).isEmpty)
     }
 
     @Test func eachAgentKeepsItsOwnChoice() {
         let defaults = fresh()
-        defaults.set([String](), forKey: "sessionProjects")
-        ChatFirst.settleDefault(in: defaults)
         ChatFirst.set("claude", asChat: true, in: defaults)
         #expect(ChatFirst.opensAsChat("claude", in: defaults))
         #expect(!ChatFirst.opensAsChat("codex", in: defaults))
+        ChatFirst.set("codex", asChat: true, in: defaults)
+        #expect(ChatFirst.chatAgents(in: defaults) == ["claude", "codex"])
         ChatFirst.set("claude", asChat: false, in: defaults)
-        #expect(!ChatFirst.opensAsChat("claude", in: defaults))
+        #expect(ChatFirst.chatAgents(in: defaults) == ["codex"])
     }
 
     @Test func chatAgentsAreTheSessionAgentsAndCommandCode() {

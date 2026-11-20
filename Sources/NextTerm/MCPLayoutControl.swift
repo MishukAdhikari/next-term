@@ -391,6 +391,7 @@ extension MCPWriteControl {
         case "at_launch": return .choice(LaunchSettings(defaults: .standard).opens.mcpName)
         case "sidebar_single_click": return .flag(app.sidebarSingleClickOpens)
         case "shortcut_set": return .choice(KeyboardShortcuts.shared.preset.mcpName)
+        case "agents_open_as_chat": return .choice(ChatFirst.chatAgents().joined(separator: ","))
         default: return .flag(false)
         }
     }
@@ -459,6 +460,10 @@ extension MCPWriteControl {
         case ("shortcut_set", .choice(let name)):
             // As Settings › Keyboard Shortcuts switches it: the preset under the user's own keys, which stay.
             if let preset = KeymapPreset(mcpName: name) { KeyboardShortcuts.shared.preset = preset }
+        case ("agents_open_as_chat", .choice(let list)):
+            // Each agent's Opens as (Settings › Agents): the listed ones Chat, the others Terminal. New sessions only.
+            let chat = Set(list.split(separator: ",").map(String.init))
+            for id in ChatFirst.agentIDs { ChatFirst.set(id, asChat: chat.contains(id)) }
         default: return
         }
         NotificationCenter.default.post(name: ImportCoordinator.changed, object: nil)

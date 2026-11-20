@@ -189,7 +189,7 @@ public enum AgentSetup {
         "notify_threshold_seconds": "Notify for finished work after", "agent_spinner": "Agent spinner",
         "agents_offer_tabs": "Agents offer tabs for parallel work", "agents_bring_tabs_forward": "When an agent opens a tab",
         "open_projects_in": "Open projects in", "at_launch": "At launch", "sidebar_single_click": "Single click opens in the sidebar",
-        "shortcut_set": "Shortcut set", "terminal_position": "Terminal position",
+        "shortcut_set": "Shortcut set", "terminal_position": "Terminal position", "agents_open_as_chat": "Agents that open as chat",
     ]
 
     /// A setting's value in a row, in words: “on”, “14”, “the home folder”, “Next Term’s own”.
@@ -234,6 +234,10 @@ public enum AgentSetup {
             return Row(id: id, title: "Shortcuts: \(to) set", detail: from)
         case ("terminal_position", .choice(let side)):
             return Row(id: id, title: terminalPlace(side))
+        case ("agents_open_as_chat", .choice(let list)):
+            let names = list.split(separator: ",").map { ChatFirst.name(of: String($0)) }
+            return Row(id: id, title: names.isEmpty ? "Every agent opens as its terminal" : "Open as chat: " + joined(names),
+                       detail: "New sessions only; the other view is one click away")
         default:
             let title = rowTitles[setting.name] ?? setting.title
             let from = words(now, of: setting.name, home: home), to = words(new, of: setting.name, home: home)
