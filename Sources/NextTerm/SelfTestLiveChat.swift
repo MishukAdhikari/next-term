@@ -16,6 +16,7 @@ import SwiftTerm
 extension SelfTest {
     static func liveChatChecks() async {
         guard let app = AppDelegate.shared else { return }
+        toolRowChecks()
         let fm = FileManager.default
         let base = canonicalPath(NSTemporaryDirectory()) + "/nt-livechat-\(getpid())"
         let home = base + "/home", project = base + "/project", bin = base + "/bin"
@@ -413,5 +414,49 @@ extension SelfTest {
         }
         walk(chat)
         return (problems.isEmpty, problems.prefix(6).joined(separator: "; "))
+    }
+
+    /// Tool rows are one line each, cut with an ellipsis, their text on one edge whatever the symbol; terminal colour
+    /// codes never show in an unfolded output.
+    @MainActor static func toolRowChecks() {
+        let renderer = ChatBlockRenderer(sizes: ChatTextSizes(base: 13))
+        let long = "Bash(cd /private/tmp/scratchpad/wt-bfcm3 && grep -rln \"LIVE_AT_OPTION\\|bfcm_2026_live_at\" app database; git log --oneline -1 --format=%h)"
+        func lines(_ text: NSAttributedString, width: CGFloat) -> (count: Int, textX: [CGFloat]) {
+            let storage = NSTextStorage(attributedString: text)
+            let layout = NSLayoutManager()
+            let container = NSTextContainer(size: NSSize(width: width, height: .greatestFiniteMagnitude))
+            container.lineFragmentPadding = 0
+            layout.addTextContainer(container)
+            storage.addLayoutManager(layout)
+            layout.ensureLayout(for: container)
+            var count = 0
+            layout.enumerateLineFragments(forGlyphRange: layout.glyphRange(for: container)) { _, _, _, _, _ in count += 1 }
+            // Where each row's text starts: the first glyph after the tab.
+            var starts: [CGFloat] = []
+            let string = storage.string as NSString
+            var search = NSRange(location: 0, length: string.length)
+            while true {
+                let tab = string.range(of: "\t", options: [], range: search)
+                guard tab.location != NSNotFound, tab.location + 1 < string.length else { break }
+                let glyph = layout.glyphIndexForCharacter(at: tab.location + 1)
+                starts.append(layout.location(forGlyphAt: glyph).x + layout.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil).minX)
+                search = NSRange(location: tab.location + 1, length: string.length - tab.location - 1)
+            }
+            return (count, starts)
+        }
+        let rows = NSMutableAttributedString()
+        for (index, status) in [ACPSession.ToolCall.Status.completed, .inProgress, .failed].enumerated() {
+            let tool = ChatTool(callID: "c\(index)", title: long, kind: "execute", status: status, output: "ok", expanded: false)
+            rows.append(renderer.render(ChatBlock(id: "t\(index)", content: .tool(tool)), after: nil))
+        }
+        let laid = lines(rows, width: 420)
+        check(laid.count == 3, "live chat: a long tool title stays on one line, cut at the edge", "\(laid.count) lines for 3 rows")
+        check(laid.textX.count == 3 && Set(laid.textX.map { Int($0.rounded()) }).count == 1,
+              "live chat: every row's text starts on the same edge, whatever its status symbol", "\(laid.textX)")
+        let colours = ChatTool(callID: "x", title: "Bash(npm test)", kind: "execute", status: .completed,
+                               output: "[90mTests:[39m    [32;1m52 passed[39;22m\n\u{1B}[2mDuration\u{1B}[0m 7.35s", expanded: true)
+        let unfolded = renderer.render(ChatBlock(id: "x", content: .tool(colours)), after: nil).string
+        check(unfolded.contains("Tests:    52 passed") && unfolded.contains("Duration 7.35s") && !unfolded.contains("[39m") && !unfolded.contains("\u{1B}"),
+              "live chat: an unfolded output shows no terminal colour codes", unfolded)
     }
 }

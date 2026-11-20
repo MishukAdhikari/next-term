@@ -64,6 +64,15 @@ public struct ChatTool: Equatable, Sendable {
     public let output: String
     public let expanded: Bool
 
+    public init(callID: String, title: String, kind: String, status: ACPSession.ToolCall.Status, output: String, expanded: Bool) {
+        self.callID = callID
+        self.title = title
+        self.kind = kind
+        self.status = status
+        self.output = output
+        self.expanded = expanded
+    }
+
     /// The title the row shows: the kind when the agent sent no title.
     public var shownTitle: String { title.isEmpty ? kind : title }
 
@@ -86,7 +95,7 @@ public struct ChatTool: Equatable, Sendable {
 
     /// The output's lines as the view draws them; `all` (Show all) gives them whole.
     public func shownOutput(all: Bool) -> ShownOutput {
-        var lines = output.components(separatedBy: "\n")
+        var lines = Self.withoutStyleCodes(output).components(separatedBy: "\n")
         while lines.count > 1, lines.last?.isEmpty == true { lines.removeLast() }
         let total = lines.count
         guard !all else { return ShownOutput(lines: lines, totalLines: total, capped: false) }
@@ -109,6 +118,15 @@ public struct ChatTool: Equatable, Sendable {
             }
         }
         return ShownOutput(lines: shown, totalLines: total, capped: capped)
+    }
+
+    /// `text` without terminal style codes: whole escape sequences (ESC [ ... letter), and the colour codes an agent's
+    /// transcript keeps after dropping their ESC ("[90mTests:[39m" from a test runner), which would show as noise.
+    public static func withoutStyleCodes(_ text: String) -> String {
+        guard text.contains("[") else { return text }
+        var out = text.replacingOccurrences(of: "\u{1B}\\[[0-9;?]*[A-Za-z]", with: "", options: .regularExpression)
+        out = out.replacingOccurrences(of: "\u{1B}", with: "")
+        return out.replacingOccurrences(of: "\\[[0-9]{1,3}(;[0-9]{1,3}){0,4}m", with: "", options: .regularExpression)
     }
 
     /// The status in words, as the session tab's transcript and VoiceOver say it.

@@ -67,6 +67,8 @@ enum ChatLink: Equatable {
 /// block ends in a line break. Sizes follow the editor's (`ChatTextSizes`); every colour is semantic.
 struct ChatBlockRenderer {
     let sizes: ChatTextSizes
+    /// A tool title longer than this (in characters) is shown whole above its unfolded output.
+    static let wholeCommandAfter = 60
     /// Tools whose whole output is drawn, past the cap.
     var showAll: Set<String> = []
     /// The handoff exists for this chat (Claude Code or Codex): a terminal-only note links to it.
@@ -112,10 +114,27 @@ struct ChatBlockRenderer {
     /// Where a row's text starts after its status symbol, and where its wrapped lines line up.
     private var rowIndent: CGFloat { secondary + 8 }
 
-    /// A row's paragraph: no space of its own, wrapped lines under the text after the symbol.
+    /// A row's height: one line, at about 1.45 times the row's own size (Practical Typography's 120–145%), so a run of
+    /// tool rows reads as a calm list rather than a wall.
+    private var rowLine: CGFloat { (max(mono, secondary) * 1.45).rounded() }
+
+    /// A row's paragraph: no space of its own, the text after the symbol at one tab stop so every row's text starts on
+    /// the same edge, whatever its symbol's width.
     private func rowParagraph(after: CGFloat = 0) -> NSMutableParagraphStyle {
-        let style = paragraph(before: 0, after: after, lineSpacing: 2)
+        let style = paragraph(before: 0, after: after, lineSpacing: 0)
         style.headIndent = rowIndent
+        style.tabStops = [NSTextTab(textAlignment: .left, location: rowIndent)]
+        style.defaultTabInterval = rowIndent
+        return style
+    }
+
+    /// A compact row's paragraph: one line, cut with an ellipsis at the column's edge (the whole text is the row's
+    /// tooltip, and an unfolded tool shows its whole command above the output).
+    private func singleLineRow() -> NSMutableParagraphStyle {
+        let style = rowParagraph()
+        style.minimumLineHeight = rowLine
+        style.maximumLineHeight = rowLine
+        style.lineBreakMode = .byTruncatingTail
         return style
     }
 
@@ -187,11 +206,11 @@ struct ChatBlockRenderer {
         let font = NSFontManager.shared.convert(.systemFont(ofSize: secondary), toHaveTrait: .italicFontMask)
         let row = NSMutableAttributedString()
         row.append(symbol(thought.folded ? "chevron.right" : "chevron.down", size: secondary - 2, color: .tertiaryLabelColor,
-                          label: thought.folded ? "Folded" : "Unfolded", weight: .semibold))
-        row.append(NSAttributedString(string: "  " + thought.title, attributes: [.font: font, .foregroundColor: NSColor.secondaryLabelColor]))
+                          label: thought.folded ? "Folded" : "Unfolded", weight: .semibold, on: font))
+        row.append(NSAttributedString(string: "\t" + thought.title, attributes: [.font: font, .foregroundColor: NSColor.secondaryLabelColor]))
         row.addAttribute(.link, value: ChatLink.toggle(id).url, range: NSRange(location: 0, length: row.length))
         row.append(NSAttributedString(string: "\n", attributes: [.font: font]))
-        row.addAttribute(.paragraphStyle, value: paragraph(before: 0, after: 0), range: NSRange(location: 0, length: row.length))
+        row.addAttribute(.paragraphStyle, value: singleLineRow(), range: NSRange(location: 0, length: row.length))
         out.append(row)
         guard !thought.folded, !thought.text.isEmpty else { return }
         let text = NSFont.systemFont(ofSize: secondary)
@@ -199,8 +218,8 @@ struct ChatBlockRenderer {
         let panel = ChatPanel(.quote)
         for (index, line) in lines.enumerated() {
             let style = paragraph(before: index == 0 ? 6 : 0, after: index == lines.count - 1 ? 4 : 0, lineSpacing: 2)
-            style.firstLineHeadIndent = 16
-            style.headIndent = 16
+            style.firstLineHeadIndent = rowIndent
+            style.headIndent = rowIndent
             out.append(NSAttributedString(string: line + "\n", attributes: [.font: text, .foregroundColor: NSColor.secondaryLabelColor,
                                                                            .paragraphStyle: style, .chatPanel: panel]))
         }
@@ -217,22 +236,21 @@ struct ChatBlockRenderer {
         case .failed: color = .systemRed
         }
         // VoiceOver reads the symbol's description first: "Done, Bash(npm test)".
-        row.append(symbol(tool.symbolName, size: secondary, color: color, label: tool.statusWord.capitalized + ","))
-        let title = tool.shownTitle.replacingOccurrences(of: "\n", with: " ")
-        row.append(NSAttributedString(string: "  " + title, attributes: [.font: font,
+        row.append(symbol(tool.symbolName, size: secondary, color: color, label: tool.statusWord.capitalized + ",", on: font))
+        let title = ChatTool.withoutStyleCodes(tool.shownTitle).replacingOccurrences(of: "\n", with: " ")
+        row.append(NSAttributedString(string: "\t" + title, attributes: [.font: font,
                                                                         .foregroundColor: tool.status == .failed ? NSColor.systemRed : NSColor.labelColor]))
+        // One line, the whole command in the tooltip; a click unfolds the output (with the whole command above it).
         let opens = !tool.output.isEmpty
+        let whole = NSRange(location: 0, length: row.length)
         if opens {
-            row.append(NSAttributedString(string: "  ", attributes: [.font: font]))
-            row.append(symbol(tool.expanded ? "chevron.down" : "chevron.right", size: secondary - 3, color: .tertiaryLabelColor,
-                              label: tool.expanded ? "output shown" : "output folded", weight: .semibold))
-            row.addAttribute(.link, value: ChatLink.toggle(id).url, range: NSRange(location: 0, length: row.length))
-            row.addAttribute(.toolTip, value: tool.expanded ? "Hide the output" : "Show the output", range: NSRange(location: 0, length: row.length))
+            row.addAttribute(.link, value: ChatLink.toggle(id).url, range: whole)
+            row.addAttribute(.toolTip, value: title + "\n\n" + (tool.expanded ? "Click to hide the output" : "Click to show the output"), range: whole)
+        } else {
+            row.addAttribute(.toolTip, value: title, range: whole)
         }
         row.append(NSAttributedString(string: "\n", attributes: [.font: font]))
-        let rowStyle = rowParagraph()
-        rowStyle.lineBreakMode = .byCharWrapping
-        row.addAttribute(.paragraphStyle, value: rowStyle, range: NSRange(location: 0, length: row.length))
+        row.addAttribute(.paragraphStyle, value: singleLineRow(), range: NSRange(location: 0, length: row.length))
         out.append(row)
         guard tool.expanded, opens else { return }
         // Lines, line length and characters are all capped before Show all (ChatTool.shownOutput).
@@ -242,9 +260,20 @@ struct ChatBlockRenderer {
         let capped = shown.capped
         let panel = ChatPanel(.detail)
         let detail = NSFont.monospacedSystemFont(ofSize: mono, weight: .regular)
+        // The row shows one line of the command: the panel opens with all of it, in secondary text.
+        if title.count > Self.wholeCommandAfter {
+            let style = paragraph(before: 10, after: 6, lineSpacing: 1)
+            style.firstLineHeadIndent = rowIndent + 10
+            style.headIndent = style.firstLineHeadIndent
+            style.tailIndent = -10
+            style.lineBreakMode = .byCharWrapping
+            out.append(NSAttributedString(string: title + "\n", attributes: [.font: detail, .foregroundColor: NSColor.secondaryLabelColor,
+                                                                              .paragraphStyle: style, .chatPanel: panel]))
+        }
+        let opened = title.count > Self.wholeCommandAfter
         for (index, line) in lines.enumerated() {
             let last = index == lines.count - 1 && !capped
-            let style = paragraph(before: index == 0 ? 10 : 0, after: last ? 10 : 0, lineSpacing: 1)
+            let style = paragraph(before: index == 0 && !opened ? 10 : 0, after: last ? 10 : 0, lineSpacing: 1)
             style.firstLineHeadIndent = rowIndent + 10
             style.headIndent = style.firstLineHeadIndent
             style.tailIndent = -10
@@ -269,8 +298,8 @@ struct ChatBlockRenderer {
         let small = NSFont.systemFont(ofSize: secondary)
         let row = NSMutableAttributedString()
         row.append(symbol(change.created ? "doc.badge.plus" : "pencil", size: secondary, color: .secondaryLabelColor,
-                          label: change.created ? "Created" : "Edited"))
-        row.append(NSAttributedString(string: "  " + change.path, attributes: [.font: font, .foregroundColor: NSColor.labelColor]))
+                          label: change.created ? "Created" : "Edited", on: font))
+        row.append(NSAttributedString(string: "\t" + change.path, attributes: [.font: font, .foregroundColor: NSColor.labelColor]))
         row.append(NSAttributedString(string: "  +\(change.added)", attributes: [.font: font, .foregroundColor: NSColor.systemGreen]))
         row.append(NSAttributedString(string: " \u{2212}\(change.removed)", attributes: [.font: font, .foregroundColor: NSColor.systemRed]))
         row.append(NSAttributedString(string: "   ", attributes: [.font: small]))
@@ -278,9 +307,8 @@ struct ChatBlockRenderer {
                                                                        .link: ChatLink.diff(id).url,
                                                                        .toolTip: "Show this file\u{2019}s changes in the editor"]))
         row.append(NSAttributedString(string: "\n", attributes: [.font: font]))
-        let style = paragraph(before: 0, after: 0, lineSpacing: 2)
-        style.firstLineHeadIndent = rowIndent
-        style.headIndent = rowIndent * 2
+        let style = rowParagraph()
+        style.minimumLineHeight = rowLine
         style.lineBreakMode = .byCharWrapping
         row.addAttribute(.paragraphStyle, value: style, range: NSRange(location: 0, length: row.length))
         out.append(row)
@@ -327,8 +355,8 @@ struct ChatBlockRenderer {
         case .answered: name = "text.bubble"; color = .secondaryLabelColor
         }
         let row = NSMutableAttributedString()
-        row.append(symbol(name, size: secondary, color: color, label: nil))
-        row.append(NSAttributedString(string: "  " + ChatTranscript.answerLine(action: action, answer: answer) + "\n",
+        row.append(symbol(name, size: secondary, color: color, label: nil, on: NSFont.systemFont(ofSize: secondary)))
+        row.append(NSAttributedString(string: "\t" + ChatTranscript.answerLine(action: action, answer: answer) + "\n",
                                       attributes: [.font: NSFont.systemFont(ofSize: secondary), .foregroundColor: NSColor.secondaryLabelColor]))
         row.addAttribute(.paragraphStyle, value: rowParagraph(), range: NSRange(location: 0, length: row.length))
         out.append(row)
@@ -377,7 +405,8 @@ struct ChatBlockRenderer {
 
     /// An SF Symbol as an inline image in `color`, centred on the text's capital letters. `label` is what VoiceOver
     /// reads for it; nil keeps it silent.
-    func symbol(_ name: String, size: CGFloat, color: NSColor, label: String?, weight: NSFont.Weight = .regular) -> NSAttributedString {
+    func symbol(_ name: String, size: CGFloat, color: NSColor, label: String?, weight: NSFont.Weight = .regular,
+                on rowFont: NSFont? = nil) -> NSAttributedString {
         let configuration = NSImage.SymbolConfiguration(pointSize: size, weight: weight)
             .applying(NSImage.SymbolConfiguration(paletteColors: [color]))
         guard let image = NSImage(systemSymbolName: name, accessibilityDescription: label)?.withSymbolConfiguration(configuration) else {
@@ -386,9 +415,10 @@ struct ChatBlockRenderer {
         image.accessibilityDescription = label
         let attachment = NSTextAttachment()
         attachment.image = image
-        let font = NSFont.systemFont(ofSize: body)
+        // Centred on the capitals of the text it sits beside (the row's own font), so a symbol lines up with its text.
+        let font = rowFont ?? NSFont.systemFont(ofSize: body)
         let imageSize = image.size
-        attachment.bounds = NSRect(x: 0, y: ((font.capHeight - imageSize.height) / 2).rounded(), width: imageSize.width, height: imageSize.height)
+        attachment.bounds = NSRect(x: 0, y: (font.capHeight - imageSize.height) / 2, width: imageSize.width, height: imageSize.height)
         return NSAttributedString(attachment: attachment)
     }
 
