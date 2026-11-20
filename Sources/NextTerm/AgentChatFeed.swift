@@ -96,7 +96,7 @@ final class AgentChatFeed {
             }
             let ops = reader.feed(data)
             for op in ops {
-                ACPSessionJournal.apply(ACPSessionJournal.masked(op) { MCPRedaction.redact($0).text }, to: &session)
+                ACPSessionJournal.apply(ACPSessionJournal.masked(op) { MCPRedaction.redactSparingPaths($0) }, to: &session)
             }
             let read = data.count
             DispatchQueue.main.async {
