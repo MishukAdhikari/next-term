@@ -127,8 +127,9 @@ extension SelfTest {
             check(fits.ok, "live chat: at \(Int(width)) pt nothing is wider than the view and no sideways scroller shows", fits.detail)
             let lead = chat.transcript.columnLeading
             let lineWidth = chat.transcript.textView.textContainer?.size.width ?? 0
-            check(abs(lead - CGFloat(ChatColumn.margin)) <= 1 && lineWidth <= CGFloat(ChatTranscriptView.cap(body: LiveChatView.sizes.body)) + 1,
-                  "live chat: at \(Int(width)) pt the text starts at the leading margin, ragged right, at most 90 characters a line",
+            let room = chat.transcript.bounds.width - 2 * CGFloat(ChatColumn.margin)
+            check(abs(lead - CGFloat(ChatColumn.margin)) <= 1 && abs(lineWidth - room) <= 2,
+                  "live chat: at \(Int(width)) pt the chat fills the pane's width less a margin either side, as the terminal does",
                   "leading \(lead), line \(lineWidth)")
             await screenshot(window, suffix: "-" + suffix)
         }
