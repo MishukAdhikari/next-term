@@ -596,9 +596,9 @@ final class NextTermView: LocalProcessTerminalView {
         while row < rows {
             guard let first = terminal.getLine(row: row) else { row += 1; continue }
             var end = row
-            var text = first.translateToString(trimRight: false)
+            var text = first.screenText(trimRight: false)
             while let next = terminal.getLine(row: end + 1), next.isWrapped {
-                text += next.translateToString(trimRight: false)
+                text += next.screenText(trimRight: false)
                 end += 1
             }
             if text.contains(link) {
@@ -1238,12 +1238,11 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     /// right of them, the right part trimmed, then the whole.
     private func rowText(_ row: Int, excluding ghost: [GhostScreen.Span]) -> String {
         guard let line = view.getTerminal().getScrollInvariantLine(row: row) else { return "" }
-        guard let cut = ghost.first(where: { $0.row == row }) else { return line.translateToString(trimRight: true) }
+        guard let cut = ghost.first(where: { $0.row == row }) else { return line.screenText() }
         let end = min(cut.columns.upperBound, line.count)
-        let left = line.translateToString(trimRight: false, startCol: 0, endCol: min(cut.columns.lowerBound, line.count))
-        let right = end < line.count ? line.translateToString(trimRight: true, startCol: end) : ""
-        let text = left + right
-        return String(text.reversed().drop { $0 == " " || $0 == "\u{0}" }.reversed())
+        let left = line.screenText(trimRight: false, endCol: min(cut.columns.lowerBound, line.count))
+        let right = end < line.count ? line.screenText(startCol: end) : ""
+        return ScreenText.trimmedLine(left + right)
     }
 
     /// `screenTail`, with the scroll-invariant row of its first line.
@@ -1251,7 +1250,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         let terminal = view.getTerminal()
         guard let last = lastTextRow() else { return (0, []) }
         let first = max(terminal.buffer.totalLinesTrimmed, last - count + 1)
-        return (first, (first...last).map { terminal.getScrollInvariantLine(row: $0)?.translateToString(trimRight: true) ?? "" })
+        return (first, (first...last).map { terminal.getScrollInvariantLine(row: $0)?.screenText() ?? "" })
     }
 
     /// The last line that exists, in scroll-invariant rows, found by bisection (SwiftTerm keeps the line count internal).
@@ -1287,7 +1286,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         // Skip blank rows at the bottom (at most one screen of them).
         var last = low
         while last > top, low - last < terminal.rows,
-              terminal.getScrollInvariantLine(row: last)?.translateToString(trimRight: true).isEmpty ?? true {
+              terminal.getScrollInvariantLine(row: last)?.screenText().isEmpty ?? true {
             last -= 1
         }
         return last
@@ -1349,11 +1348,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             guard let line = terminal.getScrollInvariantLine(row: span.row) else { break }
             let end = min(span.columns.upperBound, line.count)
             guard span.columns.lowerBound < end else { break }
-            read += line.translateToString(trimRight: false, startCol: span.columns.lowerBound, endCol: end,
-                                           skipNullCellsFollowingWide: true) { cell in
-                let character = cell.getCharacter()
-                return character == "\u{0}" ? " " : character
-            }
+            read += line.screenText(trimRight: false, startCol: span.columns.lowerBound, endCol: end)
             shown.append(GhostScreen.Span(row: span.row, columns: span.columns.lowerBound..<end))
         }
         let width = shown.reduce(0) { $0 + $1.columns.count }
@@ -1457,7 +1452,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         var lines: [String] = []
         for row in max(start, last - 60)...last {
             guard let line = terminal.getScrollInvariantLine(row: row) else { continue }
-            let text = line.translateToString(trimRight: true)
+            let text = line.screenText()
             if line.isWrapped, !lines.isEmpty { lines[lines.count - 1] += text } else { lines.append(text) }
         }
         guard let held = GitOutput.heldBranch(lines.joined(separator: "\n")) else { return }
@@ -1508,7 +1503,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         let terminal = view.getTerminal()
         let command = status.command.trimmingCharacters(in: .whitespaces)
         for row in first...last {
-            guard let text = terminal.getScrollInvariantLine(row: row)?.translateToString(trimRight: true), !text.isEmpty else { continue }
+            guard let text = terminal.getScrollInvariantLine(row: row)?.screenText(), !text.isEmpty else { continue }
             if command.count >= 6 && text.contains(command) { continue } // a URL typed in the command line is not served
             if let url = ServedURL.find(in: text) {
                 servedURL = url
@@ -1594,15 +1589,15 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
 
     /// The last screen read and what it says, with the masks it was read with: an agent that drew nothing new since
     /// (most of them, most of the time) is not parsed again 4 times a second. AgentScreen.activity is a function of the
-    /// lines and the masks alone (and whether they are OpenCode's), and TabStatus takes the same activity again as it did.
-    private var lastAgentRead: (lines: [String], mask: ObjectIdentifier, opencode: Bool, activity: AgentActivity)?
+    /// lines and the masks alone (and the agent whose shapes it reads), and TabStatus takes the same activity again as it did.
+    private var lastAgentRead: (lines: [String], mask: ObjectIdentifier, agent: AgentKind?, activity: AgentActivity)?
 
     private func agentActivity(_ lines: [String]) -> AgentActivity {
         let mask = ObjectIdentifier(SecretMask.current)
-        let opencode = isOpencodeScreen
-        if let last = lastAgentRead, last.mask == mask, last.opencode == opencode, last.lines == lines { return last.activity }
-        let activity = AgentScreen.activity(screenLines: lines, opencode: opencode)
-        lastAgentRead = (lines, mask, opencode, activity)
+        let agent = screenAgent
+        if let last = lastAgentRead, last.mask == mask, last.agent == agent, last.lines == lines { return last.activity }
+        let activity = AgentScreen.activity(screenLines: lines, agent: agent)
+        lastAgentRead = (lines, mask, agent, activity)
         return activity
     }
 

@@ -547,7 +547,7 @@ final class StartWatcher {
         var lines: [String] = []
         for row in from...last {
             guard let line = terminal.getScrollInvariantLine(row: row) else { continue }
-            let text = line.translateToString(trimRight: true)
+            let text = line.screenText()
             if line.isWrapped, !lines.isEmpty {
                 lines[lines.count - 1] += text
             } else {

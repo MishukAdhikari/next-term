@@ -144,10 +144,7 @@ extension TerminalTab {
         let atBottom = !view.canScroll || view.scrollPosition >= 1
         guard atBottom, let line = terminal.getLine(row: cursor.y) else { return nil }
         func text(_ line: BufferLine, to end: Int) -> String {
-            line.translateToString(trimRight: false, startCol: 0, endCol: end, skipNullCellsFollowingWide: true) { cell in
-                let character = cell.getCharacter()
-                return character == "\u{0}" ? " " : character
-            }
+            line.screenText(trimRight: false, endCol: end)
         }
         var left = text(line, to: min(cursor.x, terminal.cols))
         var row = cursor.y
