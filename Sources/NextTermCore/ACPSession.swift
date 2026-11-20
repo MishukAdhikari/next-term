@@ -106,6 +106,8 @@ public struct ACPSession: Sendable {
     public private(set) var commands: [String] = []
     /// The context used and its size, and the cost so far, when the agent sends them.
     public private(set) var usage: String?
+    /// The context the last request used and the model's window, when the agent sends them: the chat's usage line.
+    public private(set) var contextUsage: AgentUsage?
 
     public init() {}
 
@@ -193,6 +195,9 @@ public struct ACPSession: Sendable {
             commands = (update["availableCommands"]?.array ?? []).compactMap { $0["name"]?.string }
         case "usage_update":
             usage = Self.usage(update)
+            if let used = update["used"]?.int, let size = update["size"]?.int, used > 0, size > 0 {
+                contextUsage = AgentUsage(used: used, window: size)
+            }
         default:
             break
         }

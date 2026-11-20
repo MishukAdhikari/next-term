@@ -22,6 +22,8 @@ final class AgentsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
     let showAll = NSButton(checkboxWithTitle: "Show agents you don\u{2019}t have", target: nil, action: nil)
     /// Plan 041 D7: the terminal and chat buttons on Claude Code, Codex and Command Code tabs.
     let chatView = NSButton(checkboxWithTitle: "Chat view for agent tabs", target: nil, action: nil)
+    /// The chat's token usage line.
+    let tokenUsage = NSButton(checkboxWithTitle: "Show token usage in chat", target: nil, action: nil)
     let status = NSTextField(labelWithString: "")
     let emptyTitle = NSTextField(labelWithString: "No coding agents on your PATH")
     let emptyText = NSTextField(wrappingLabelWithString: "Agents you install with npm, Homebrew or their own installers show here.")
@@ -43,7 +45,14 @@ final class AgentsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
         NotificationCenter.default.addObserver(self, selector: #selector(opensAsSettingChanged), name: ImportCoordinator.changed, object: nil)
     }
 
-    @objc private func opensAsSettingChanged() { table.reloadData() }
+    @objc private func opensAsSettingChanged() {
+        table.reloadData()
+        tokenUsage.state = LiveChatView.showsTokenUsage ? .on : .off
+    }
+
+    @objc private func toggleTokenUsage() {
+        LiveChatView.showsTokenUsage = tokenUsage.state == .on
+    }
 
     required init?(coder: NSCoder) { fatalError("not used") }
 
@@ -107,7 +116,12 @@ final class AgentsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
         chatView.toolTip = "Claude Code, Codex and Command Code tabs show a terminal and a chat button: the chat is the same live session, and the terminal stays one click away."
         chatView.target = self
         chatView.action = #selector(toggleChatView)
-        let checks = NSStackView(views: [showAll, chatView])
+        tokenUsage.state = LiveChatView.showsTokenUsage ? .on : .off
+        tokenUsage.isEnabled = LiveChatView.isOn
+        tokenUsage.toolTip = "One quiet line under the chat's composer: the tokens the agent recorded for its last request and how full its context is."
+        tokenUsage.target = self
+        tokenUsage.action = #selector(toggleTokenUsage)
+        let checks = NSStackView(views: [showAll, chatView, tokenUsage])
         checks.spacing = 24
         for view in [intro, scroll, detail, buttons, checks] as [NSView] { content.addArrangedSubview(view) }
         content.setCustomSpacing(14, after: buttons)
@@ -261,6 +275,7 @@ final class AgentsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
     /// Chat view for agent tabs: off, every pane goes back to its terminal and loses its buttons.
     @objc private func toggleChatView() {
         LiveChatView.isOn = chatView.state == .on
+        tokenUsage.isEnabled = LiveChatView.isOn
         table.reloadData() // Opens as follows the chat view setting
         AppDelegate.shared?.controllers.forEach { $0.liveChatSettingChanged() }
     }

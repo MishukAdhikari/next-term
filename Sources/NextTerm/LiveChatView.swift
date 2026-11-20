@@ -41,6 +41,9 @@ final class LiveChatView: NSView {
     /// "The terminal shows something the chat can't" with Open Terminal, when the screen asks what the card can't map.
     private let elsewhere = NSTextField(labelWithString: "")
     private let elsewhereButton = NSButton(title: "Open Terminal", target: nil, action: nil)
+    /// The tokens the agent itself recorded for its last request, and how full its context is (ChatUsageLine).
+    let usageLine = NSTextField(labelWithString: "")
+    private var shownUsage: AgentUsage?
     private var expanded: Set<String> = []
     private var timer: Timer?
     private var shownQuestion: String?
@@ -79,7 +82,13 @@ final class LiveChatView: NSView {
 
         // Under the conversation, in the same column: the working row, the note, the card and the composer. A hidden
         // row takes no room and no gap, so with nothing to say the composer sits right under the conversation.
-        let rows = NSStackView(views: [working, elsewhereRow, card, composer])
+        usageLine.font = .monospacedDigitSystemFont(ofSize: CGFloat(Self.sizes.secondary), weight: .regular)
+        usageLine.textColor = Theme.textDim
+        usageLine.lineBreakMode = .byTruncatingTail
+        usageLine.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        usageLine.isHidden = true
+        usageLine.setAccessibilityLabel("Token usage")
+        let rows = NSStackView(views: [working, elsewhereRow, card, composer, usageLine])
         rows.orientation = .vertical
         rows.alignment = .leading
         rows.spacing = Self.rowGap
@@ -105,7 +114,7 @@ final class LiveChatView: NSView {
             rows.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -Self.bottomMargin),
             rows.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Self.margin),
             fill,
-        ] + [working, elsewhereRow, card, composer].map { $0.widthAnchor.constraint(equalTo: rows.widthAnchor) })
+        ] + [working, elsewhereRow, card, composer, usageLine].map { $0.widthAnchor.constraint(equalTo: rows.widthAnchor) })
         self.elsewhereRow = elsewhereRow
 
         transcript.onLink = { [weak self] link in self?.follow(link) }
@@ -190,6 +199,35 @@ final class LiveChatView: NSView {
                 false, question)
     }
 
+    /// What the agent recorded: its transcript's last request (the context gauge's reader), or a session's usage_update.
+    private var usage: AgentUsage? {
+        switch source {
+        case .live: return tab.contextUsage
+        case .session(let feed): return feed.session.contextUsage
+        }
+    }
+
+    /// The usage line, set only when what it shows changes: the agent records usage once a request, not every frame.
+    private func refreshUsage() {
+        let usage = Self.showsTokenUsage ? self.usage : nil
+        guard usage != shownUsage || usageLine.isHidden != (usage == nil) else { return }
+        shownUsage = usage
+        guard let usage else {
+            usageLine.isHidden = true
+            return
+        }
+        let parts = ChatUsageLine.parts(usage)
+        let font = NSFont.monospacedDigitSystemFont(ofSize: CGFloat(Self.sizes.secondary), weight: .regular)
+        let line = NSMutableAttributedString(string: parts.tokens + " \u{00B7} ", attributes: [.font: font, .foregroundColor: Theme.textDim])
+        line.append(NSAttributedString(string: parts.percent, attributes: [
+            .font: font, .foregroundColor: parts.nearLimit ? NSColor.systemOrange : Theme.textDim,
+        ]))
+        usageLine.attributedStringValue = line
+        usageLine.toolTip = ChatUsageLine.tooltip(usage)
+        usageLine.setAccessibilityValue(ChatUsageLine.text(usage))
+        usageLine.isHidden = false
+    }
+
     private var isWorking: Bool {
         if case .session(let feed) = source { return feed.session.working }
         return tab.status.state == .working
@@ -197,6 +235,7 @@ final class LiveChatView: NSView {
 
     /// The working row, the card, and the note when the screen asks something the card can't show.
     private func refreshState() {
+        refreshUsage()
         let blocks = transcript.blocks
         let agent = agentName
         if isWorking {

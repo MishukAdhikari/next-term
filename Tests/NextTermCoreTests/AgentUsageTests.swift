@@ -11,7 +11,8 @@ import Testing
         let side = #"{"type":"assistant","isSidechain":true,"message":{"model":"claude-haiku","usage":{"input_tokens":5000}}}"#
         let user = #"{"type":"user","message":{"content":"hi"}}"#
         let usage = AgentUsage.read(tail: tail([claudeLine, side, user]), kind: .claude)
-        #expect(usage == AgentUsage(used: 84_000, window: 200_000, model: "claude-opus-5-5"))
+        #expect(usage == AgentUsage(used: 84_000, window: 200_000, model: "claude-opus-5-5",
+                                    breakdown: .init(input: 2, cacheRead: 80221, cacheWritten: 3777, output: 810)))
         #expect(usage?.percent == 42)
         #expect(usage?.short == "42%")
         #expect(usage?.lines == ["Context 84k of 200k (42%)"])
@@ -43,7 +44,7 @@ import Testing
     @Test func codexNullLimits() {
         let line = #"{"payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":1000,"output_tokens":24},"model_context_window":272000},"rate_limits":{"primary":null,"secondary":null}}}"#
         let usage = AgentUsage.read(tail: tail([line]), kind: .codex)
-        #expect(usage == AgentUsage(used: 1024, window: 272_000))
+        #expect(usage == AgentUsage(used: 1024, window: 272_000, breakdown: .init(input: 1000, cacheRead: 0, cacheWritten: 0, output: 24)))
     }
 
     @Test func tokenFormat() {

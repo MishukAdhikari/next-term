@@ -104,6 +104,7 @@ extension SelfTest {
         check(chat.shownBlocks.contains { if case .change(let change) = $0.content { return change.added == 2 && change.removed == 1 }; return false },
               "live chat: the edit shows as a change with its counts")
         check(window.firstResponder === chat.composer.textView, "live chat: the composer has the keyboard")
+        check(chat.usageLine.isHidden, "live chat: an agent that records no usage Next Term reads shows no usage line, never an estimate")
 
         // Appended by the agent as it works: shown within a second or two.
         if let handle = FileHandle(forWritingAtPath: session) {

@@ -189,7 +189,7 @@ public enum AgentSetup {
         "notify_threshold_seconds": "Notify for finished work after", "agent_spinner": "Agent spinner",
         "agents_offer_tabs": "Agents offer tabs for parallel work", "agents_bring_tabs_forward": "When an agent opens a tab",
         "open_projects_in": "Open projects in", "at_launch": "At launch", "sidebar_single_click": "Single click opens in the sidebar",
-        "shortcut_set": "Shortcut set", "terminal_position": "Terminal position", "agents_open_as_chat": "Agents that open as chat",
+        "shortcut_set": "Shortcut set", "terminal_position": "Terminal position", "agents_open_as_chat": "Agents that open as chat", "chat_token_usage": "Token usage in chat",
     ]
 
     /// A setting's value in a row, in words: “on”, “14”, “the home folder”, “Next Term’s own”.
