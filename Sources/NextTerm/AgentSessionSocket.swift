@@ -38,6 +38,8 @@ enum AgentSessionSocket {
         /// The session's id (Claude Code's session, Codex's thread) and the folder it runs in: what a restore resumes.
         var sessionID: String? = nil
         var folder: String? = nil
+        /// The session's journal, which its chat view replays (plan 047): only a path in the app's own journal folder.
+        var journal: String? = nil
     }
 
     /// Each session tab's last report, by tab id. Main thread.
@@ -168,6 +170,9 @@ enum AgentSessionSocket {
         report.model = (arguments["model"] as? String).map { ACPSession.oneLine($0, limit: 120) }.flatMap { $0.isEmpty ? nil : $0 }
         report.sessionID = (arguments["session_id"] as? String).flatMap { AgentSessionVersion.isSessionID($0) ? $0 : nil }
         report.folder = (arguments["folder"] as? String).flatMap { $0.hasPrefix("/") ? $0 : nil }
+        report.journal = (arguments["journal"] as? String).flatMap {
+            ACPSessionJournal.isJournal($0, socket: MCPControlServer.shared.path) ? $0 : nil
+        }
         reports[tab.id] = report
         guard let agentID, let version = report.version else { return nil }
         let stored = versionStore.dictionary(forKey: versionsKey) as? [String: String] ?? [:]

@@ -658,6 +658,7 @@ enum MCPControl {
         // An agent session (plan 030): `nxtrm agent ID` instead of a command, checked before any tab opens.
         var sessionLine: String?
         var sessionName: String?
+        if let refusal = MainActor.assumeIsolated({ AgentChatWatch.viewRefusal(arguments) }) { return reply(fail(refusal)) } // plan 047
         if let name = arguments["agent_session"] as? String {
             if let command = arguments["command"] as? String, !command.trimmingCharacters(in: .whitespaces).isEmpty {
                 return reply(fail("Give command or agent_session, not both."))
@@ -702,6 +703,7 @@ enum MCPControl {
         // A pane beside another tab: its window, as the tab beside it is already there.
         let arrived = controller.presentForAgent(arguments["split_beside"] == nil ? tab : nil)
         driven.insert(tab.id)
+        if sessionLine != nil { MainActor.assumeIsolated { AgentChatWatch.started(tab, asChat: arguments["view"] as? String == "chat") } } // plan 047
         // An agent's worker: it opens no tabs of its own unless the user asks it to. A hand-off carries on the user's own
         // conversation (next-term-worktrees), so it is nobody's worker.
         if arguments["hand_off"] as? Bool != true { tab.openedBy = caller?.id }

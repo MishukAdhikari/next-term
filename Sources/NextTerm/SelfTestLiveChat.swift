@@ -125,6 +125,11 @@ extension SelfTest {
             await pause(0.3)
             let fits = liveChatFits(chat)
             check(fits.ok, "live chat: at \(Int(width)) pt nothing is wider than the view and no sideways scroller shows", fits.detail)
+            let lead = chat.transcript.columnLeading
+            let lineWidth = chat.transcript.textView.textContainer?.size.width ?? 0
+            check(abs(lead - CGFloat(ChatColumn.margin)) <= 1 && lineWidth <= CGFloat(ChatTranscriptView.cap(body: LiveChatView.sizes.body)) + 1,
+                  "live chat: at \(Int(width)) pt the text starts at the leading margin, ragged right, at most 90 characters a line",
+                  "leading \(lead), line \(lineWidth)")
             await screenshot(window, suffix: "-" + suffix)
         }
         window.setFrame(savedFrame, display: true)
@@ -288,9 +293,10 @@ extension SelfTest {
         // The session's own blocks first, then the feed is set aside, so the 300 blocks stay what the chat shows
         // (a feed arriving late would replace them with the session's few, and the timing would scroll nothing).
         _ = await wait(3) { chat.shownBlocks.count >= 6 }
-        chat.feed.onChange = nil
+        guard case .live(let feed) = chat.source else { return }
+        feed.onChange = nil
         defer {
-            chat.feed.onChange = { [weak chat] _, _ in chat?.refresh() }
+            feed.onChange = { [weak chat] _, _ in chat?.refresh() }
             chat.refresh()
         }
         let transcript = chat.transcript

@@ -22,6 +22,14 @@ final class LiveChatStrip: NSView {
     /// A click: true for the chat, false for the terminal.
     var onPick: ((Bool) -> Void)?
 
+    /// The terminal button's tip: an agent session (plan 047, D4) has no screen of its agent's own, only Next Term's
+    /// text view of it.
+    func describe(sessionAgent: String?) {
+        let tip = sessionAgent.map { "This session runs without \($0)\u{2019}s own screen. Terminal shows Next Term\u{2019}s text view of it." }
+            ?? "Show the agent's own terminal screen"
+        if terminalButton.toolTip != tip { terminalButton.toolTip = tip }
+    }
+
     override init(frame: NSRect) {
         super.init(frame: frame)
         material.material = .menu
@@ -162,14 +170,14 @@ extension TerminalWindowController {
 
     /// View › Show as Chat (⇧⌘J): the tab with the keyboard shows its agent's session as a chat, or its terminal again.
     @objc func toggleLiveChat(_ sender: Any?) {
-        guard let pane = activeChatPane, LiveChatView.isOn, LiveChatWatch.offers(pane.tab) else { return NSSound.beep() }
+        guard let pane = activeChatPane, LiveChatView.isOn, LiveChatView.offers(pane.tab) else { return NSSound.beep() }
         pane.setChat(shown: !pane.showsChat)
     }
 
     /// Whether the active tab can show a live chat, and whether it does.
     func liveChatState() -> (offered: Bool, shown: Bool) {
         guard let pane = activeChatPane else { return (false, false) }
-        return (LiveChatView.isOn && LiveChatWatch.offers(pane.tab), pane.showsChat)
+        return (LiveChatView.isOn && LiveChatView.offers(pane.tab), pane.showsChat)
     }
 
     /// Settings turned the chat view off: every pane goes back to its terminal and loses its buttons.

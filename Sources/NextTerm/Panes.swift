@@ -134,10 +134,13 @@ final class PaneView: NSView {
     /// The strip follows the tab: shown while its agent has a live chat and the setting is on; gone (and the chat with
     /// it) when the agent ends or the setting goes off.
     func updateChatStrip() {
-        let offered = LiveChatView.isOn && LiveChatWatch.offers(tab)
+        let offered = LiveChatView.isOn && LiveChatView.offers(tab)
         if !offered, showsChat { setChat(shown: false) }
+        // A session started as a chat (plan 047) shows it once it reports its journal; the keyboard stays where it is.
+        if offered, !showsChat, AgentChatWatch.offers(tab), AgentChatWatch.takeStartAsChat(tab) { setChat(shown: true, focus: false) }
         if chatStrip.isHidden == offered { chatStrip.isHidden = !offered }
         chatStrip.showing(chat: showsChat)
+        chatStrip.describe(sessionAgent: AgentChatWatch.offers(tab) ? AgentSessionSocket.reports[tab.id]?.agent : nil)
     }
 
     /// The crossfade between the terminal and the chat; none with Reduce Motion.
@@ -149,10 +152,10 @@ final class PaneView: NSView {
     /// short crossfade. The terminal, its scrollback and its program are never touched. While the chat covers it, the
     /// terminal view is hidden, as a terminal in a background tab is: it reads its program and keeps its screen as
     /// ever, it only draws nothing nobody could see, and it draws its screen as it is the moment it shows again.
-    func setChat(shown: Bool) {
+    func setChat(shown: Bool, focus: Bool = true) {
         if shown {
-            guard LiveChatView.isOn, let feed = LiveChatWatch.feed(for: tab) else { return NSSound.beep() }
-            if let old = liveChat, old.feed !== feed {
+            guard LiveChatView.isOn, let source = LiveChatView.source(for: tab) else { return NSSound.beep() }
+            if let old = liveChat, old.source.object !== source.object {
                 old.removeFromSuperview()
                 liveChat = nil
             }
@@ -160,7 +163,7 @@ final class PaneView: NSView {
             if let kept = liveChat {
                 chat = kept
             } else {
-                chat = LiveChatView(tab: tab, feed: feed)
+                chat = LiveChatView(tab: tab, source: source)
                 chat.translatesAutoresizingMaskIntoConstraints = false
                 addSubview(chat, positioned: .below, relativeTo: chatStrip)
                 NSLayoutConstraint.activate([
@@ -175,7 +178,7 @@ final class PaneView: NSView {
             let appearing = chat.isHidden || chat.alphaValue < 1
             chat.isHidden = false
             chat.refresh()
-            window?.makeFirstResponder(chat.composer.textView)
+            if focus || window?.firstResponder === tab.view { window?.makeFirstResponder(chat.composer.textView) }
             let coverTerminal = { [weak self, weak chat] in
                 guard let self, let chat, self.liveChat === chat, !chat.isHidden else { return }
                 self.tab.view.isHidden = true
@@ -194,7 +197,7 @@ final class PaneView: NSView {
             guard let chat = liveChat else { return }
             let had = chat.window != nil && !chat.isHidden
             liveChat = nil
-            LiveChatWatch.release(tab)
+            LiveChatView.release(tab)
             // The terminal first, drawn as its screen is now, then the chat fades away above it.
             tab.view.isHidden = false
             tab.view.needsDisplay = true

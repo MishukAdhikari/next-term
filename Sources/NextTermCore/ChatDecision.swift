@@ -47,6 +47,21 @@ public struct ChatDecision: Equatable, Sendable {
                             defaultIndex: shown, isQuestion: isQuestion, question: question)
     }
 
+    /// The card for an agent session's own request (plan 047): its options as the agent gave them, their kinds, and the
+    /// highlight the session's menu has. Allow always is asked on the Mac by the session before it answers.
+    public static func from(permission: ACPSession.Permission, agent: String) -> ChatDecision {
+        let choices = permission.options.enumerated().map { index, option in
+            Choice(name: option.name, kind: option.kind, needsMac: option.kind == "allow_always", number: index + 1)
+        }
+        let reject = choices.firstIndex { $0.kind.hasPrefix("reject") }
+        let preferred = choices.firstIndex { $0.kind == "allow_once" } ?? 0
+        let shown = choices.isEmpty ? 0 : min(max(permission.highlighted, 0), choices.count - 1)
+        return ChatDecision(title: permission.isQuestion ? permission.action + "?" : permission.action,
+                            lead: permission.isQuestion ? nil : "\(agent) asks to:", choices: choices, highlighted: shown,
+                            rejectIndex: reject, defaultIndex: preferred, isQuestion: permission.isQuestion,
+                            question: ACPTranscript.question(permission))
+    }
+
     /// The card as the menu MCP and notifications read (MCPControl.fieldMenu): a list, the choices' names, the
     /// highlight, and Esc's reject choice. `question` is the tab's question it answers.
     public func menu(question: String) -> AgentMenu {

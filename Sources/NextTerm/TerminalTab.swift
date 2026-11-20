@@ -922,6 +922,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         runEnded(exit: nil)
         SecretRequests.tabRunChanged(id, tab: nil) // the tab goes: its agent's session grants end
         MCPControl.forget(self)
+        MainActor.assumeIsolated { AgentChatWatch.closed(id) } // plan 047: its session's journal goes with it
         AppDelegate.shared?.withdrawHerdrNotices(of: self)
         if localHerdr != nil { LocalHerdrWatch.shared.follow(self, false) }
         guard !exited else { return [] }

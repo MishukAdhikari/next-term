@@ -109,6 +109,9 @@ public struct ACPSession: Sendable {
 
     public init() {}
 
+    /// Where each change below is also written (plan 047 D2): the CLI's journal, which the app replays into its chat.
+    public var recorder: ACPSessionJournal.Recorder?
+
     /// The agent's last message of the current or last turn, whole.
     public var lastMessage: String {
         for item in items[turnStart...].reversed() {
@@ -119,6 +122,7 @@ public struct ACPSession: Sendable {
 
     /// The user sends a prompt: a new turn starts.
     public mutating func prompted(_ text: String) {
+        recorder?.record(.prompted(text))
         turnStart = items.count
         items.append(.prompt(text))
         working = true
@@ -127,6 +131,7 @@ public struct ACPSession: Sendable {
 
     /// The agent answered the prompt: the turn is over. An open permission request is gone with it.
     public mutating func turnEnded(_ raw: String?) {
+        recorder?.record(.turnEnded(raw))
         let reason = raw.flatMap(StopReason.init(rawValue:)) ?? .endTurn
         if pending != nil { answered("Cancelled") }
         working = false
@@ -136,6 +141,7 @@ public struct ACPSession: Sendable {
 
     /// The prompt failed: the agent answered it with an error.
     public mutating func turnFailed(_ message: String) {
+        recorder?.record(.turnFailed(message))
         if pending != nil { answered("Cancelled") }
         working = false
         lastStop = nil
@@ -143,11 +149,13 @@ public struct ACPSession: Sendable {
     }
 
     public mutating func note(_ text: String) {
+        recorder?.record(.note(text))
         items.append(.note(text))
     }
 
     /// A `session/update` notification's params.
     public mutating func apply(update params: ACPWire.Value) {
+        recorder?.record(.update(params))
         guard let update = params["update"], let kind = update["sessionUpdate"]?.string else { return }
         switch kind {
         case "agent_message_chunk":
@@ -194,6 +202,7 @@ public struct ACPSession: Sendable {
     /// tab can give. A `question` is the agent asking the user one (its title is the question, its options the answers).
     @discardableResult
     public mutating func requested(permission id: ACPWire.Value, params: ACPWire.Value, question: Bool = false) -> Permission? {
+        recorder?.record(.requested(id: id, params: params, question: question))
         let call = params["toolCall"]
         if let call, let callID = call["toolCallId"]?.string {
             if var known = tools[callID] {
@@ -218,6 +227,7 @@ public struct ACPSession: Sendable {
 
     /// Moves the menu's cursor (up is -1), round neither end.
     public mutating func moveHighlight(_ step: Int) {
+        recorder?.record(.highlight(step))
         guard var permission = pending else { return }
         permission.highlighted = min(max(permission.highlighted + step, 0), permission.options.count - 1)
         pending = permission
@@ -232,6 +242,7 @@ public struct ACPSession: Sendable {
     /// Picks option `index` of the open request: the agent's request id and the option's id to answer with, or nil
     /// when there is no such option.
     public mutating func choose(_ index: Int) -> (requestID: ACPWire.Value, optionID: String)? {
+        recorder?.record(.chose(index))
         guard let permission = pending, permission.options.indices.contains(index) else { return nil }
         let option = permission.options[index]
         answered(option.name)
@@ -240,6 +251,7 @@ public struct ACPSession: Sendable {
 
     /// The open request's id, closed as cancelled (the user stopped the turn).
     public mutating func cancelPending() -> ACPWire.Value? {
+        recorder?.record(.cancelled)
         guard let permission = pending else { return nil }
         answered("Cancelled")
         return permission.requestID

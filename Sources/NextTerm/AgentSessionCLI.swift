@@ -200,6 +200,7 @@ final class AgentSessionRunner {
 
     func start() {
         rawTerminal()
+        openJournal()
         write("\u{1b}]2;\(agent.name)\u{07}") // the tab's title
         session.note("Starting \(agent.name) (\(driver.startWords))\u{2026}")
         draw()
@@ -266,6 +267,13 @@ final class AgentSessionRunner {
     }
 
     private func send(_ text: String) {
+        // Typed before the agent is ready (the chat's composer shows from the first report, plan 047): held, and sent as
+        // the first prompt is, the moment it is. Never dropped.
+        guard driver.isReady else {
+            firstPrompt = firstPrompt.map { $0 + "\n\n" + text } ?? text
+            session.note("Sent once \(agent.name) is ready.")
+            return draw()
+        }
         driver.send(text)
     }
 
@@ -392,6 +400,7 @@ final class AgentSessionRunner {
         if let stop = session.lastStop { update["stop_reason"] = stop.rawValue }
         update["agent_id"] = agent.id
         update["folder"] = FileManager.default.currentDirectoryPath
+        if let journalPath { update["journal"] = journalPath }
         if let agentVersion { update["agent_version"] = agentVersion }
         if let model { update["model"] = model }
         if let sessionID { update["session_id"] = sessionID }
@@ -411,9 +420,20 @@ final class AgentSessionRunner {
     /// id above all, which an update would otherwise resume). The tab's state isn't touched: no OSC 7501 yet.
     private func reportStart() {
         guard appSocket != nil else { return }
-        let update: [String: Any] = ["op": "report", "agent": agent.name, "state": "idle", "turns": 0, "last_message": "",
+        var update: [String: Any] = ["op": "report", "agent": agent.name, "state": "idle", "turns": 0, "last_message": "",
                                      "agent_id": agent.id, "folder": FileManager.default.currentDirectoryPath]
+        if let journalPath { update["journal"] = journalPath }
         callApp(update, timeout: 2) { _ in }
+    }
+
+    /// The session's journal (plan 047 D2): every change to `session` as a line, which the app replays into its chat
+    /// view. Only in a Next Term tab; it is the app's to remove once the tab closes.
+    private(set) var journalPath: String?
+
+    private func openJournal() {
+        guard let socket = appSocket, let (path, handle) = ACPSessionJournal.create(socket: socket, pid: getpid()) else { return }
+        journalPath = path
+        session.recorder = ACPSessionJournal.Recorder { data in try? handle.write(contentsOf: data) }
     }
 
     /// The version change was told: once a session.
