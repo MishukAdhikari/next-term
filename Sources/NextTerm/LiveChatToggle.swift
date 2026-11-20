@@ -17,7 +17,7 @@ final class LiveChatStrip: NSView {
     static let hoverRegion = NSSize(width: 120, height: 44)
     private static let fade: TimeInterval = 0.15
     let terminalButton = LiveChatStrip.button("terminal", help: "Show the agent's own terminal screen")
-    let chatButton = LiveChatStrip.button("bubble.left.and.text.bubble.right", help: "Show this session as a chat (\u{21E7}\u{2318}J)")
+    let chatButton = LiveChatStrip.button("bubble.left.and.text.bubble.right", help: "Show this session as a chat")
     private let material = NSVisualEffectView()
     /// A click: true for the chat, false for the terminal.
     var onPick: ((Bool) -> Void)?
@@ -159,6 +159,17 @@ extension LiveChatView {
         get { UserDefaults.standard.object(forKey: settingKey) as? Bool ?? true }
         set { UserDefaults.standard.set(newValue, forKey: settingKey) }
     }
+
+    /// The catalog id of `tab`'s agent: a session's own (plan 047), or the live chat's (plan 041).
+    static func agentID(of tab: TerminalTab) -> String? {
+        if let id = AgentSessionSocket.reports[tab.id]?.agentID { return id }
+        return tab.localAgent.flatMap(LiveChat.Agent.init).map(ChatFirst.id(of:))
+    }
+
+    /// Settings › Agents › the agent's "Opens as": whether a new session of `tab`'s agent shows its chat first.
+    static func opensAsChat(_ tab: TerminalTab) -> Bool {
+        agentID(of: tab).map { ChatFirst.opensAsChat($0) } ?? false
+    }
 }
 
 extension TerminalWindowController {
@@ -168,7 +179,7 @@ extension TerminalWindowController {
         return group.paneView(tab)
     }
 
-    /// View › Show as Chat (⇧⌘J): the tab with the keyboard shows its agent's session as a chat, or its terminal again.
+    /// View › Show as Chat (⇧⌘J, or the key the user gives it in Keyboard Shortcuts): the tab with the keyboard shows its agent's session as a chat, or its terminal again.
     @objc func toggleLiveChat(_ sender: Any?) {
         guard let pane = activeChatPane, LiveChatView.isOn, LiveChatView.offers(pane.tab) else { return NSSound.beep() }
         pane.setChat(shown: !pane.showsChat)

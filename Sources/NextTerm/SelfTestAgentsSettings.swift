@@ -69,6 +69,14 @@ extension SelfTest {
         }
         check(!popupSizes.isEmpty && popupSizes.allSatisfy { $0 == NSFont.systemFontSize },
               "agents settings: the Auto-update popups are in the row's type size", "\(popupSizes)")
+        // Opens as, beside Auto-update (plan 047): a popup on each agent whose sessions can be a chat, none on the others.
+        let opensColumn = pane.table.column(withIdentifier: NSUserInterfaceItemIdentifier("opens"))
+        let opens = pane.rows.indices.map { (pane.table.view(atColumn: opensColumn, row: $0, makeIfNecessary: true) as? NSPopUpButton)?.titleOfSelectedItem ?? "-" }
+        let chatAgents = pane.rows.map { ChatFirst.agentIDs.contains($0.agent.id) }
+        check(opensColumn >= 0 && zip(opens, chatAgents).allSatisfy { ($0 != "-") == $1 }
+              && opens.allSatisfy { $0 == "-" || $0 == "Terminal" || $0 == "Chat" },
+              "agents settings: each chat agent's row has Opens as (Terminal or Chat) beside Auto-update, the others none",
+              zip(pane.rows.map(\.agent.id), opens).map { "\($0) \($1)" }.joined(separator: ", "))
         // The toolbar: eleven names, each whole, none in an overflow menu.
         let items = settings.toolbarItems
         let visible = window.toolbar?.visibleItems?.count ?? 0

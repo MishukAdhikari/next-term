@@ -39,7 +39,11 @@ final class AgentsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
         super.init(frame: frame)
         build()
         NotificationCenter.default.addObserver(self, selector: #selector(changed), name: AgentCLIManager.changed, object: nil)
+        // Opens as, changed by an agent (settings_set agents_open_as_chat): the rows show it.
+        NotificationCenter.default.addObserver(self, selector: #selector(opensAsSettingChanged), name: ImportCoordinator.changed, object: nil)
     }
+
+    @objc private func opensAsSettingChanged() { table.reloadData() }
 
     required init?(coder: NSCoder) { fatalError("not used") }
 
@@ -68,7 +72,8 @@ final class AgentsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
             label.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         }
         let columns: [(String, String, CGFloat)] = [("agent", "Agent", 112), ("version", "Version", 128), ("method", "Installed by", 108),
-                                                    ("latest", "Latest", 92), ("schedule", "Auto-update", 116)]
+                                                    ("latest", "Latest", 92), ("schedule", "Auto-update", 116),
+                                                    ("opens", "Opens as", 96)]
         for (id, title, width) in columns {
             let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(id))
             column.title = title
@@ -256,7 +261,15 @@ final class AgentsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
     /// Chat view for agent tabs: off, every pane goes back to its terminal and loses its buttons.
     @objc private func toggleChatView() {
         LiveChatView.isOn = chatView.state == .on
+        table.reloadData() // Opens as follows the chat view setting
         AppDelegate.shared?.controllers.forEach { $0.liveChatSettingChanged() }
+    }
+
+    /// An agent's Opens as: its new sessions show their chat or their terminal first.
+    @objc private func opensAsChanged(_ sender: NSPopUpButton) {
+        let index = sender.tag
+        guard index >= 0, index < rows.count else { return }
+        ChatFirst.set(rows[index].agent.id, asChat: sender.indexOfSelectedItem == 1)
     }
 
     @objc private func showMissing() {
@@ -293,6 +306,22 @@ final class AgentsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
             popup.target = self
             popup.action = #selector(scheduleChanged(_:))
             popup.setAccessibilityLabel("Auto-update \(status.agent.name)")
+            return popup
+        }
+        if id == "opens", status.copy != nil, ChatFirst.agentIDs.contains(status.agent.id) {
+            // Beside Auto-update, the same control: a new session of this agent shows its chat or its terminal first.
+            let popup = NSPopUpButton(frame: .zero, pullsDown: false)
+            popup.controlSize = .regular
+            popup.font = .systemFont(ofSize: NSFont.systemFontSize)
+            popup.isBordered = false
+            popup.addItems(withTitles: ["Terminal", "Chat"])
+            popup.selectItem(at: ChatFirst.opensAsChat(status.agent.id) ? 1 : 0)
+            popup.isEnabled = LiveChatView.isOn
+            popup.tag = row
+            popup.target = self
+            popup.action = #selector(opensAsChanged(_:))
+            popup.toolTip = "How a new \(status.agent.name) session first shows; the other view is one click away."
+            popup.setAccessibilityLabel("\(status.agent.name) opens as")
             return popup
         }
         let cell = NSTableCellView()

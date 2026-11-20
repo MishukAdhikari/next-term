@@ -136,8 +136,9 @@ final class PaneView: NSView {
     func updateChatStrip() {
         let offered = LiveChatView.isOn && LiveChatView.offers(tab)
         if !offered, showsChat { setChat(shown: false) }
-        // A session started as a chat (plan 047) shows it once it reports its journal; the keyboard stays where it is.
-        if offered, !showsChat, AgentChatWatch.offers(tab), AgentChatWatch.takeStartAsChat(tab) { setChat(shown: true, focus: false) }
+        // The first time the tab offers a chat: its start view, else Settings › Agents › Open agent tabs as chat (plan 047).
+        // The keyboard stays where it is.
+        if offered, !showsChat, AgentChatWatch.firstView(tab) == true { setChat(shown: true, focus: false) }
         if chatStrip.isHidden == offered { chatStrip.isHidden = !offered }
         chatStrip.showing(chat: showsChat)
         chatStrip.describe(sessionAgent: AgentChatWatch.offers(tab) ? AgentSessionSocket.reports[tab.id]?.agent : nil)

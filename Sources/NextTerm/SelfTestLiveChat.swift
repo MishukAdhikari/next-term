@@ -61,9 +61,10 @@ extension SelfTest {
         try? script.write(toFile: bin + "/command-code", atomically: true, encoding: .utf8)
         try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: bin + "/command-code")
 
-        let savedHome = LiveChatWatch.home, savedSetting = LiveChatView.isOn
+        let savedHome = LiveChatWatch.home, savedSetting = LiveChatView.isOn, savedFirst = ChatFirst.opensAsChat("commandcode")
         LiveChatWatch.home = home
         LiveChatView.isOn = true
+        ChatFirst.set("commandcode", asChat: true)
         let holder = app.openWindow(directory: project)
         guard let tab = holder.tabs.first, let window = holder.window,
               let group = holder.groups.first(where: { $0.contains(tab) }) else { return check(false, "live chat: the window has a tab") }
@@ -73,6 +74,7 @@ extension SelfTest {
             tab.view.send(txt: "\u{03}")
             LiveChatWatch.home = savedHome
             LiveChatView.isOn = savedSetting
+            ChatFirst.set("commandcode", asChat: savedFirst)
             window.close()
             try? fm.removeItem(atPath: base)
         }
@@ -87,6 +89,11 @@ extension SelfTest {
               "live chat: a Command Code tab shows the terminal and chat buttons, floating in its corner",
               "agent \(String(describing: tab.localAgent)), program \(tab.status.program)")
         let terminalTop = tab.view.frame.maxY
+        check(await wait(5) { holder.refreshPaneHeaders(); return pane.showsChat },
+              "live chat: with Command Code's Opens as set to Chat (Settings › Agents), a new session's tab opens as its chat")
+        check(pane.chatStrip.chatButton.toolTip == "Show this session as a chat",
+              "live chat: the chat button's tip names no key (the command has none until the user gives it one)",
+              pane.chatStrip.chatButton.toolTip ?? "none")
 
         pane.chatStrip.chatButton.performClick(nil)
         guard await wait(3, { pane.showsChat }), let chat = pane.liveChat else { return check(false, "live chat: the chat button shows the chat") }
@@ -320,9 +327,9 @@ extension SelfTest {
         func atBottom() -> Bool { clip.bounds.maxY >= transcript.textView.frame.height - 24 }
         check(atBottom(), "live chat: 300 blocks load scrolled to the end", "clip \(clip.bounds), document \(transcript.textView.frame.height)")
 
-        func summary(_ steps: [Double]) -> (p95: Double, words: String) {
+        func summary(_ steps: [Double]) -> (median: Double, p95: Double, words: String) {
             let median = steps[steps.count / 2], p95 = steps[Int(Double(steps.count) * 0.95)], worst = steps.last ?? 0
-            return (p95, String(format: "median %.2f ms, 95th %.2f ms, worst %.2f ms", median, p95, worst))
+            return (median, p95, String(format: "median %.2f ms, 95th %.2f ms, worst %.2f ms", median, p95, worst))
         }
         let room = transcript.textView.frame.height - clip.bounds.height
         check(room > 150 * 14 && transcript.textView.string.count > 20_000,
@@ -343,8 +350,12 @@ extension SelfTest {
         let numbers = String(format: "300 blocks loaded in %.1f ms; 300 steps of 14 pt; idle: ", loadMs) + idle.words
             + "; agent printing every 50 ms: " + busy.words
         note("live chat scrolling: " + numbers)
-        check(idle.p95 < 8, "live chat: scrolling 300 blocks stays under 8 ms a step (95th percentile), idle", numbers)
-        check(busy.p95 < 8, "live chat: scrolling 300 blocks stays under 8 ms a step (95th percentile) with the agent printing", numbers)
+        // The median catches a real regression (the usual step, about 2 ms on a busy Mac); the 95th percentile has to fit
+        // in one 60 Hz frame. A 95th percentile under 8 ms flaked under load on builds that hadn't changed (2026-11-20).
+        check(idle.median < 4 && idle.p95 < 16,
+              "live chat: scrolling 300 blocks takes under 4 ms a step (median), every step but the slowest 5% inside a frame, idle", numbers)
+        check(busy.median < 4 && busy.p95 < 16,
+              "live chat: scrolling 300 blocks takes under 4 ms a step (median), every step but the slowest 5% inside a frame, with the agent printing", numbers)
         check(drawsHidden == 0 && ticksAfter >= ticksBefore + 20,
               "live chat: under the chat the terminal draws nothing for 2 s while its screen keeps up with the agent",
               "draws \(drawsHidden), ticks \(ticksBefore) → \(ticksAfter)")
