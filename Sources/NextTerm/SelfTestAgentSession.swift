@@ -35,6 +35,7 @@ extension SelfTest {
                 send({"jsonrpc":"2.0","id":"perm1","method":"session/request_permission","params":{"sessionId":"s1","toolCall":{"toolCallId":"t2"},"options":[{"optionId":"ok","name":"Allow once","kind":"allow_once"},{"optionId":"always","name":"Always allow","kind":"allow_always"},{"optionId":"no","name":"Reject","kind":"reject_once"}]}})
                 continue
             upd({"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"You said: " + text}})
+            upd({"sessionUpdate":"usage_update","used":184000,"size":200000})
             send({"jsonrpc":"2.0","id":m["id"],"result":{"stopReason":"end_turn"}})
         elif m.get("id") == "perm1":
             choice = m["result"]["outcome"].get("optionId", "cancelled")

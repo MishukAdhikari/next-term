@@ -199,7 +199,7 @@ import Testing
             answer("prompts/list"),
         ]
         let data = try JSONSerialization.data(withJSONObject: answers, options: [.sortedKeys, .withoutEscapingSlashes])
-        #expect(SecretRun.digest(data) == "fd3c234526ec2d1b3cd4f1c98d92739c9cbf50b26e93427ffdbf662fc048ce91")
+        #expect(SecretRun.digest(data) == "953ff416270591346e765ff160f52f24d06a2069d26abfe7481e95d8b15c2bbe")
         // And no hub file was read into them: with none, there is nothing.
         #expect(resolved(repo).isEmpty && !FileManager.default.fileExists(atPath: userFile))
     }

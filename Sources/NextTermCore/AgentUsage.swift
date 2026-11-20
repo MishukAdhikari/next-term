@@ -37,11 +37,30 @@ public struct AgentUsage: Equatable, Sendable {
         }
     }
 
-    public init(used: Int, window: Int, model: String? = nil, limits: [Limit] = []) {
+    /// The last request's tokens by kind, when the transcript gives them (Claude Code's and Codex's do).
+    public var breakdown: Breakdown?
+
+    public struct Breakdown: Equatable, Sendable {
+        /// Input not read from a cache.
+        public var input: Int
+        public var cacheRead: Int
+        public var cacheWritten: Int
+        public var output: Int
+
+        public init(input: Int, cacheRead: Int, cacheWritten: Int, output: Int) {
+            self.input = input
+            self.cacheRead = cacheRead
+            self.cacheWritten = cacheWritten
+            self.output = output
+        }
+    }
+
+    public init(used: Int, window: Int, model: String? = nil, limits: [Limit] = [], breakdown: Breakdown? = nil) {
         self.used = used
         self.window = window
         self.model = model
         self.limits = limits
+        self.breakdown = breakdown
     }
 
     /// Whole percent of the window used, 0 to 100.
@@ -118,7 +137,9 @@ public struct AgentUsage: Equatable, Sendable {
         let used = int(usage["input_tokens"]) + int(usage["cache_creation_input_tokens"]) + int(usage["cache_read_input_tokens"])
         guard used > 0 else { return nil }
         let model = message["model"] as? String
-        return AgentUsage(used: used, window: claudeWindow(model: model, used: used), model: model)
+        let breakdown = Breakdown(input: int(usage["input_tokens"]), cacheRead: int(usage["cache_read_input_tokens"]),
+                                  cacheWritten: int(usage["cache_creation_input_tokens"]), output: int(usage["output_tokens"]))
+        return AgentUsage(used: used, window: claudeWindow(model: model, used: used), model: model, breakdown: breakdown)
     }
 
     static func codex(_ record: [String: Any]) -> AgentUsage? {
@@ -137,7 +158,11 @@ public struct AgentUsage: Equatable, Sendable {
                 limits.append(Limit(minutes: minutes, usedPercent: percent, resetsAt: resets))
             }
         }
-        return AgentUsage(used: used, window: window, limits: limits)
+        // Codex counts cached input inside its input.
+        let cached = int(last["cached_input_tokens"])
+        let breakdown = Breakdown(input: max(0, int(last["input_tokens"]) - cached), cacheRead: cached, cacheWritten: 0,
+                                  output: int(last["output_tokens"]))
+        return AgentUsage(used: used, window: window, limits: limits, breakdown: breakdown)
     }
 
     private static func int(_ value: Any?) -> Int {

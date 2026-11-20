@@ -89,7 +89,7 @@ import Testing
                                                       "new_tab_folder", "terminal_position", "notify_decisions", "notify_agent_finished",
                                                       "notify_program_alerts", "notification_sound", "notify_commands", "notify_threshold_seconds",
                                                       "agent_spinner", "agents_offer_tabs", "agents_bring_tabs_forward", "open_projects_in",
-                                                      "at_launch", "sidebar_single_click", "shortcut_set", "agents_open_as_chat"])
+                                                      "at_launch", "sidebar_single_click", "shortcut_set", "chat_token_usage", "agents_open_as_chat"])
         #expect(MCPSettings.changes(["open_projects_in": "new_tab"]).failureText == nil)
         #expect(MCPSettings.changes(["open_projects_in": "tab"]).failureText?.contains("takes ask, this_window, new_window, new_tab, as_macos") == true)
         if case .success(let changes) = MCPSettings.changes(["agent_spinner": "still", "agents_offer_tabs": false]) {

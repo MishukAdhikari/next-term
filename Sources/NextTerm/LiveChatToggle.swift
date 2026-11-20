@@ -160,6 +160,14 @@ extension LiveChatView {
         set { UserDefaults.standard.set(newValue, forKey: settingKey) }
     }
 
+    static let tokenUsageKey = "chatTokenUsage"
+
+    /// Settings › Agents › "Show token usage in chat": one quiet line under the composer. On unless turned off.
+    static var showsTokenUsage: Bool {
+        get { UserDefaults.standard.object(forKey: tokenUsageKey) as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: tokenUsageKey) }
+    }
+
     /// The catalog id of `tab`'s agent: a session's own (plan 047), or the live chat's (plan 041).
     static func agentID(of tab: TerminalTab) -> String? {
         if let id = AgentSessionSocket.reports[tab.id]?.agentID { return id }

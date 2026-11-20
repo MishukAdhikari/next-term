@@ -72,6 +72,24 @@ extension SelfTest {
         await pause(0.4)
         check(!chat.showsStateRows, "agent chat: with the turn over, no working row or card shows")
 
+        // The usage the agent itself reported (usage_update): one quiet line under the composer, tinted near the limit.
+        let usageShown = await wait(3) { !chat.usageLine.isHidden }
+        let usageWords = chat.usageLine.stringValue
+        var tinted = false
+        chat.usageLine.attributedStringValue.enumerateAttribute(.foregroundColor, in: NSRange(location: 0, length: chat.usageLine.attributedStringValue.length)) { value, _, _ in
+            if (value as? NSColor) == NSColor.systemOrange { tinted = true }
+        }
+        check(usageShown && usageWords == "184k tokens  \u{00B7}  92\u{2009}% of context" && tinted
+              && chat.usageLine.toolTip?.hasPrefix("Context: 184,000 of 200,000 tokens") == true,
+              "agent chat: the agent's own usage shows as one line under the composer, the percent tinted near the limit",
+              "\(usageWords) — \(chat.usageLine.toolTip ?? "no tip")")
+        await screenshot(window, suffix: "agent-chat-usage")
+        LiveChatView.showsTokenUsage = false
+        chat.refresh()
+        check(chat.usageLine.isHidden, "agent chat: with Show token usage in chat off, the line is gone")
+        LiveChatView.showsTokenUsage = true
+        chat.refresh()
+
         // A permission: the card from the session's own request; a choice answers the session's menu.
         chat.composer.textView.string = "please rm it"
         chat.composer.submit()
