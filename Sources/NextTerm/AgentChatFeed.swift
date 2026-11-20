@@ -185,15 +185,20 @@ extension LiveChatView {
     }
 }
 
-/// Starting a session as a chat (plan 047 D5): the New Agent Session sheet's "Show as chat", and new_tab's `view`. The
-/// tab shows its chat once its session reports its journal (Panes.updateChatStrip), without taking the keyboard.
+/// How an agent tab first shows (plan 047 D5): Settings › Agents › "Open agent tabs as chat" (on unless turned off),
+/// unless the tab was started with a view of its own (the New Agent Session sheet's "Show as chat", new_tab's `view`).
+/// The tab shows its chat once it can (Panes.updateChatStrip), without taking the keyboard, and only that once: the user's
+/// own switch to the terminal stays.
 extension AgentChatWatch {
-    private static var startAsChat: Set<UUID> = []
-    /// The sheet's last choice; off until the user turns it on.
+    /// The view a tab was started with, by tab id; a tab not in it follows the setting.
+    private static var startViews: [UUID: Bool] = [:]
+    /// Tabs whose first view was given already.
+    private static var decided: Set<UUID> = []
+    /// The sheet's last choice; the setting's until the user picks one.
     static let sheetKey = "agentSessionShowsChat"
 
     static var sheetChoice: Bool {
-        get { UserDefaults.standard.bool(forKey: sheetKey) }
+        get { UserDefaults.standard.object(forKey: sheetKey) as? Bool ?? LiveChatView.opensAsChat }
         set { UserDefaults.standard.set(newValue, forKey: sheetKey) }
     }
 
@@ -207,13 +212,19 @@ extension AgentChatWatch {
 
     /// `tab` was started with this view.
     static func started(_ tab: TerminalTab, asChat: Bool) {
-        if asChat { startAsChat.insert(tab.id) } else { startAsChat.remove(tab.id) }
+        startViews[tab.id] = asChat
     }
 
-    /// Whether `tab` waits to show its chat; true once, then forgotten.
-    static func takeStartAsChat(_ tab: TerminalTab) -> Bool {
-        startAsChat.remove(tab.id) != nil
+    /// Whether `tab`, offering a chat for the first time, shows it: its own start view, else the setting. Asked once a
+    /// tab: nil after that.
+    static func firstView(_ tab: TerminalTab) -> Bool? {
+        guard !decided.contains(tab.id) else { return nil }
+        decided.insert(tab.id)
+        return startViews.removeValue(forKey: tab.id) ?? LiveChatView.opensAsChat
     }
 
-    static func forgetStart(_ tabID: UUID) { startAsChat.remove(tabID) }
+    static func forgetStart(_ tabID: UUID) {
+        startViews.removeValue(forKey: tabID)
+        decided.remove(tabID)
+    }
 }

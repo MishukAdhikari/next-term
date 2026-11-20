@@ -17,7 +17,7 @@ final class LiveChatStrip: NSView {
     static let hoverRegion = NSSize(width: 120, height: 44)
     private static let fade: TimeInterval = 0.15
     let terminalButton = LiveChatStrip.button("terminal", help: "Show the agent's own terminal screen")
-    let chatButton = LiveChatStrip.button("bubble.left.and.text.bubble.right", help: "Show this session as a chat (\u{21E7}\u{2318}J)")
+    let chatButton = LiveChatStrip.button("bubble.left.and.text.bubble.right", help: "Show this session as a chat")
     private let material = NSVisualEffectView()
     /// A click: true for the chat, false for the terminal.
     var onPick: ((Bool) -> Void)?
@@ -159,6 +159,15 @@ extension LiveChatView {
         get { UserDefaults.standard.object(forKey: settingKey) as? Bool ?? true }
         set { UserDefaults.standard.set(newValue, forKey: settingKey) }
     }
+
+    static let opensAsChatKey = "agentTabsOpenAsChat"
+
+    /// Settings › Agents › "Open agent tabs as chat": an agent tab shows its chat first, the terminal one click away. On
+    /// unless turned off.
+    static var opensAsChat: Bool {
+        get { UserDefaults.standard.object(forKey: opensAsChatKey) as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: opensAsChatKey) }
+    }
 }
 
 extension TerminalWindowController {
@@ -168,7 +177,7 @@ extension TerminalWindowController {
         return group.paneView(tab)
     }
 
-    /// View › Show as Chat (⇧⌘J): the tab with the keyboard shows its agent's session as a chat, or its terminal again.
+    /// View › Show as Chat (no key until the user gives it one in Keyboard Shortcuts): the tab with the keyboard shows its agent's session as a chat, or its terminal again.
     @objc func toggleLiveChat(_ sender: Any?) {
         guard let pane = activeChatPane, LiveChatView.isOn, LiveChatView.offers(pane.tab) else { return NSSound.beep() }
         pane.setChat(shown: !pane.showsChat)

@@ -61,9 +61,10 @@ extension SelfTest {
         try? script.write(toFile: bin + "/command-code", atomically: true, encoding: .utf8)
         try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: bin + "/command-code")
 
-        let savedHome = LiveChatWatch.home, savedSetting = LiveChatView.isOn
+        let savedHome = LiveChatWatch.home, savedSetting = LiveChatView.isOn, savedFirst = LiveChatView.opensAsChat
         LiveChatWatch.home = home
         LiveChatView.isOn = true
+        LiveChatView.opensAsChat = true
         let holder = app.openWindow(directory: project)
         guard let tab = holder.tabs.first, let window = holder.window,
               let group = holder.groups.first(where: { $0.contains(tab) }) else { return check(false, "live chat: the window has a tab") }
@@ -73,6 +74,7 @@ extension SelfTest {
             tab.view.send(txt: "\u{03}")
             LiveChatWatch.home = savedHome
             LiveChatView.isOn = savedSetting
+            LiveChatView.opensAsChat = savedFirst
             window.close()
             try? fm.removeItem(atPath: base)
         }
@@ -87,6 +89,11 @@ extension SelfTest {
               "live chat: a Command Code tab shows the terminal and chat buttons, floating in its corner",
               "agent \(String(describing: tab.localAgent)), program \(tab.status.program)")
         let terminalTop = tab.view.frame.maxY
+        check(await wait(5) { holder.refreshPaneHeaders(); return pane.showsChat },
+              "live chat: with Open agent tabs as chat on (the default), the agent's tab opens as its chat")
+        check(pane.chatStrip.chatButton.toolTip == "Show this session as a chat",
+              "live chat: the chat button's tip names no key (the command has none until the user gives it one)",
+              pane.chatStrip.chatButton.toolTip ?? "none")
 
         pane.chatStrip.chatButton.performClick(nil)
         guard await wait(3, { pane.showsChat }), let chat = pane.liveChat else { return check(false, "live chat: the chat button shows the chat") }

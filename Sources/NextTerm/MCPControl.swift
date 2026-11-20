@@ -703,7 +703,7 @@ enum MCPControl {
         // A pane beside another tab: its window, as the tab beside it is already there.
         let arrived = controller.presentForAgent(arguments["split_beside"] == nil ? tab : nil)
         driven.insert(tab.id)
-        if sessionLine != nil { MainActor.assumeIsolated { AgentChatWatch.started(tab, asChat: arguments["view"] as? String == "chat") } } // plan 047
+        if sessionLine != nil, let view = arguments["view"] as? String { MainActor.assumeIsolated { AgentChatWatch.started(tab, asChat: view == "chat") } } // plan 047
         // An agent's worker: it opens no tabs of its own unless the user asks it to. A hand-off carries on the user's own
         // conversation (next-term-worktrees), so it is nobody's worker.
         if arguments["hand_off"] as? Bool != true { tab.openedBy = caller?.id }

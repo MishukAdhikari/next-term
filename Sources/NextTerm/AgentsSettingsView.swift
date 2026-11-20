@@ -22,6 +22,8 @@ final class AgentsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
     let showAll = NSButton(checkboxWithTitle: "Show agents you don\u{2019}t have", target: nil, action: nil)
     /// Plan 041 D7: the terminal and chat buttons on Claude Code, Codex and Command Code tabs.
     let chatView = NSButton(checkboxWithTitle: "Chat view for agent tabs", target: nil, action: nil)
+    /// Agent tabs show their chat first.
+    let opensAsChat = NSButton(checkboxWithTitle: "Open agent tabs as chat", target: nil, action: nil)
     let status = NSTextField(labelWithString: "")
     let emptyTitle = NSTextField(labelWithString: "No coding agents on your PATH")
     let emptyText = NSTextField(wrappingLabelWithString: "Agents you install with npm, Homebrew or their own installers show here.")
@@ -102,7 +104,12 @@ final class AgentsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
         chatView.toolTip = "Claude Code, Codex and Command Code tabs show a terminal and a chat button: the chat is the same live session, and the terminal stays one click away."
         chatView.target = self
         chatView.action = #selector(toggleChatView)
-        let checks = NSStackView(views: [showAll, chatView])
+        opensAsChat.state = LiveChatView.opensAsChat ? .on : .off
+        opensAsChat.isEnabled = LiveChatView.isOn
+        opensAsChat.toolTip = "A new agent tab shows its chat first; the terminal stays one click away."
+        opensAsChat.target = self
+        opensAsChat.action = #selector(toggleOpensAsChat)
+        let checks = NSStackView(views: [showAll, chatView, opensAsChat])
         checks.spacing = 24
         for view in [intro, scroll, detail, buttons, checks] as [NSView] { content.addArrangedSubview(view) }
         content.setCustomSpacing(14, after: buttons)
@@ -256,7 +263,12 @@ final class AgentsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
     /// Chat view for agent tabs: off, every pane goes back to its terminal and loses its buttons.
     @objc private func toggleChatView() {
         LiveChatView.isOn = chatView.state == .on
+        opensAsChat.isEnabled = LiveChatView.isOn
         AppDelegate.shared?.controllers.forEach { $0.liveChatSettingChanged() }
+    }
+
+    @objc private func toggleOpensAsChat() {
+        LiveChatView.opensAsChat = opensAsChat.state == .on
     }
 
     @objc private func showMissing() {
