@@ -2,7 +2,7 @@ import AppKit
 import NextTermCore
 
 /// Settings › General: what a launch that names no folder or file shows, whether a quit with a terminal window open asks
-/// about resuming, whether a restore brings scrollback back, whether windows show their project's colour, where a
+/// about resuming, whether a restore brings scrollback back, Choose a Layout… (the layout picker), whether windows show their project's colour, where a
 /// project opens when the window in front is in use, whether the window column shows, whether tips show (and Reset Tips),
 /// and Full Disk Access… for the user who wants it. Each control saves
 /// only its own choice, as it changes, and it is read at the next launch, reopen or quit (LaunchSettings): "At launch"
@@ -27,12 +27,15 @@ final class GeneralSettingsView: NSView {
     let tips = NSButton(checkboxWithTitle: "Show tips for features you haven’t used", target: nil, action: nil)
     /// Under it: every tip seen or closed shows again, as Help › Show Tips Again does.
     let resetTips = NSButton(title: "Reset Tips", target: nil, action: nil)
+    /// Beside "Layout:": the sheet a new install's first launch shows, "How do you like to work?", any time.
+    let chooseLayout = NSButton(title: LayoutPicker.settingsButtonTitle, target: nil, action: nil)
     /// Beside "Privacy:": System Settings' Full Disk Access pane, opened when clicked. Nothing asks for it by itself.
     let fullDiskAccess = NSButton(title: "Full Disk Access…", target: nil, action: nil)
     /// The labels in the 110 pt column on the left, as in the other tabs.
     let launchLabel = NSTextField(labelWithString: "At launch:")
     let quitLabel = NSTextField(labelWithString: "At quit:")
     let sessionsLabel = NSTextField(labelWithString: "Sessions:")
+    let layoutLabel = NSTextField(labelWithString: "Layout:")
     let windowsLabel = NSTextField(labelWithString: "Windows:")
     let projectsLabel = NSTextField(labelWithString: "Projects:")
     let tipsLabel = NSTextField(labelWithString: "Tips:")
@@ -74,6 +77,9 @@ final class GeneralSettingsView: NSView {
         resetTips.bezelStyle = .rounded
         resetTips.target = self
         resetTips.action = #selector(resetTipsClicked)
+        chooseLayout.bezelStyle = .rounded
+        chooseLayout.target = self
+        chooseLayout.action = #selector(chooseLayoutClicked)
         fullDiskAccess.bezelStyle = .rounded
         fullDiskAccess.target = self
         fullDiskAccess.action = #selector(openFullDiskAccess)
@@ -94,6 +100,7 @@ final class GeneralSettingsView: NSView {
         let colorsNote = note("A soft glow of each project’s colour along the top of its window, behind the window’s buttons. A worktree’s window has its repository’s. Choose another in View › Project Color, or right-click the window’s top row.")
         let columnNote = note("A strip at the window’s edge listing every open window; a click brings one forward.")
         let projectsNote = note("Where Open Project and Open as Project Window go when the window in front is in use. An unused window always takes the project. Also in File › Open Projects In.")
+        let layoutNote = note("Where the project folder, the terminal and its tabs, and the window column go, in every window.")
         let tipsNote = note("Tips you’ve seen or closed will show again.")
         let privacyNote = note("Only if you want Next Term and the commands in it to reach every folder without macOS asking: this opens System Settings, where you add Next Term yourself.")
         // VoiceOver reads each note with the controls it is about.
@@ -104,6 +111,7 @@ final class GeneralSettingsView: NSView {
         windowColumn.setAccessibilityHelp(columnNote.stringValue)
         projectsIn.setAccessibilityHelp(projectsNote.stringValue)
         resetTips.setAccessibilityHelp(tipsNote.stringValue)
+        chooseLayout.setAccessibilityHelp(layoutNote.stringValue)
         fullDiskAccess.setAccessibilityHelp(privacyNote.stringValue)
         // A label in the 110 pt column on the left, as in the other tabs, and its controls beside it: on the first line's
         // baseline, for the radio buttons' two lines.
@@ -129,6 +137,8 @@ final class GeneralSettingsView: NSView {
         let askNoteRow = row(blank(), [askNote])
         let sessionsRow = row(sessionsLabel, [keepScrollback])
         let scrollbackNoteRow = row(blank(), [scrollbackNote])
+        let layoutRow = row(layoutLabel, [chooseLayout])
+        let layoutNoteRow = row(blank(), [layoutNote])
         let windowsRow = row(windowsLabel, [projectColors])
         let colorsNoteRow = row(blank(), [colorsNote])
         let columnRow = row(blank(), [windowColumn])
@@ -143,7 +153,7 @@ final class GeneralSettingsView: NSView {
         let resetRow = row(blank(), [resetTips])
         let tipsNoteRow = row(blank(), [tipsNote])
         let privacyRow = row(privacyLabel, [fullDiskAccess])
-        let rows: [NSView] = [launchRow, opensNoteRow, quitRow, askNoteRow, sessionsRow, scrollbackNoteRow, windowsRow, colorsNoteRow,
+        let rows: [NSView] = [launchRow, opensNoteRow, quitRow, askNoteRow, sessionsRow, scrollbackNoteRow, layoutRow, layoutNoteRow, windowsRow, colorsNoteRow,
                               columnRow, columnNoteRow, projectsRow, projectsNoteRow, tipsRow, resetRow, tipsNoteRow, privacyRow,
                               row(blank(), [privacyNote])]
         let stack = NSStackView(views: rows)
@@ -153,6 +163,7 @@ final class GeneralSettingsView: NSView {
         stack.setCustomSpacing(20, after: opensNoteRow)
         stack.setCustomSpacing(20, after: askNoteRow)
         stack.setCustomSpacing(20, after: scrollbackNoteRow)
+        stack.setCustomSpacing(20, after: layoutNoteRow)
         stack.setCustomSpacing(12, after: colorsNoteRow)
         stack.setCustomSpacing(20, after: columnNoteRow)
         stack.setCustomSpacing(20, after: projectsNoteRow)
@@ -234,6 +245,12 @@ final class GeneralSettingsView: NSView {
         let raw: String? = projectsIn.selectedItem?.representedObject as? String
         guard let target = raw.flatMap(AppDelegate.ProjectTarget.init(rawValue:)) else { return }
         AppDelegate.shared?.projectTarget = target
+    }
+
+    /// Choose a Layout…: the layout picker, over Settings.
+    @objc private func chooseLayoutClicked() {
+        guard let window else { return }
+        LayoutPickerSheet.present(over: window)
     }
 
     /// Every window's project colour, shown or hidden at once.
