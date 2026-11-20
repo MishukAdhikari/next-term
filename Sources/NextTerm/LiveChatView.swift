@@ -44,6 +44,9 @@ final class LiveChatView: NSView {
     /// The tokens the agent itself recorded for its last request, and how full its context is (ChatUsageLine).
     let usageLine = NSTextField(labelWithString: "")
     private var shownUsage: AgentUsage?
+    /// The budget's hairline under the usage line, while the user has set one (TokenBudgets).
+    let budgetBar = BudgetBar()
+    private var shownBudget: (spent: Int?, tokens: Int)?
     private var expanded: Set<String> = []
     private var timer: Timer?
     private var shownQuestion: String?
@@ -88,7 +91,12 @@ final class LiveChatView: NSView {
         usageLine.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         usageLine.isHidden = true
         usageLine.setAccessibilityLabel("Token usage")
-        let rows = NSStackView(views: [working, elsewhereRow, card, composer, usageLine])
+        budgetBar.isHidden = true
+        let usageMenu = NSMenu()
+        usageMenu.addItem(withTitle: "Set Token Budget\u{2026}", action: #selector(setBudget), keyEquivalent: "").target = self
+        usageMenu.addItem(withTitle: "Clear Token Budget", action: #selector(clearBudget), keyEquivalent: "").target = self
+        usageLine.menu = usageMenu
+        let rows = NSStackView(views: [working, elsewhereRow, card, composer, usageLine, budgetBar])
         rows.orientation = .vertical
         rows.alignment = .leading
         rows.spacing = Self.rowGap
@@ -114,7 +122,8 @@ final class LiveChatView: NSView {
             rows.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -Self.bottomMargin),
             rows.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Self.margin),
             fill,
-        ] + [working, elsewhereRow, card, composer, usageLine].map { $0.widthAnchor.constraint(equalTo: rows.widthAnchor) })
+            budgetBar.heightAnchor.constraint(equalToConstant: BudgetBar.height),
+        ] + [working, elsewhereRow, card, composer, usageLine, budgetBar].map { $0.widthAnchor.constraint(equalTo: rows.widthAnchor) })
         self.elsewhereRow = elsewhereRow
 
         transcript.onLink = { [weak self] link in self?.follow(link) }
@@ -207,25 +216,81 @@ final class LiveChatView: NSView {
         }
     }
 
-    /// The usage line, set only when what it shows changes: the agent records usage once a request, not every frame.
+    /// The usage line and the budget's hairline, set only when what they show changes: the agent records usage once a
+    /// request, not every frame.
     private func refreshUsage() {
         let usage = Self.showsTokenUsage ? self.usage : nil
-        guard usage != shownUsage || usageLine.isHidden != (usage == nil) else { return }
+        let budget = TokenBudgets.budgets[tab.id].map { (spent: TokenBudgets.spent(tab), tokens: $0) }
+        if budget != nil { TokenBudgets.refresh(tab) { [weak self] in self?.refreshUsage() } }
+        guard usage != shownUsage || budget?.spent != shownBudget?.spent || budget?.tokens != shownBudget?.tokens
+              || usageLine.isHidden != (usage == nil && budget == nil) else { return }
         shownUsage = usage
-        guard let usage else {
-            usageLine.isHidden = true
+        shownBudget = budget
+        let font = NSFont.monospacedDigitSystemFont(ofSize: CGFloat(Self.sizes.secondary), weight: .regular)
+        let line = NSMutableAttributedString()
+        var words: [String] = []
+        var tips: [String] = []
+        func add(_ text: String, warn: Bool = false) {
+            if line.length > 0 { line.append(NSAttributedString(string: " \u{00B7} ", attributes: [.font: font, .foregroundColor: Theme.textDim])) }
+            line.append(NSAttributedString(string: text, attributes: [.font: font, .foregroundColor: warn ? NSColor.systemOrange : Theme.textDim]))
+            words.append(text)
+        }
+        if let usage {
+            let parts = ChatUsageLine.parts(usage)
+            add(parts.tokens)
+            add(parts.percent, warn: parts.nearLimit)
+            tips.append(ChatUsageLine.tooltip(usage))
+        }
+        if let budget {
+            if let spent = budget.spent {
+                let shown = TokenBudget.words(spent: spent, budget: budget.tokens)
+                add(shown.text, warn: shown.fraction >= TokenBudget.warnFraction)
+                budgetBar.show(fraction: shown.fraction)
+                tips.append("Budget: \(shown.text), the session's tokens as the agent recorded them (cache reads apart). Shown, never enforced.")
+            } else {
+                add("budget \(AgentUsage.tokens(budget.tokens))")
+                budgetBar.show(fraction: 0)
+                tips.append("Budget: \(AgentUsage.tokens(budget.tokens)) tokens; counted once the agent records its next request.")
+            }
+        }
+        budgetBar.isHidden = budget == nil
+        usageLine.attributedStringValue = line
+        usageLine.toolTip = tips.isEmpty ? nil : tips.joined(separator: "\n")
+        usageLine.setAccessibilityValue(words.joined(separator: ", "))
+        usageLine.isHidden = line.length == 0
+    }
+
+    /// The usage line's menu: Set Token Budget…, as an agent's set_token_budget sets it.
+    @objc private func setBudget() {
+        guard TokenBudgets.source(tab) != nil else {
+            let alert = NSAlert()
+            alert.messageText = "No budget for this agent"
+            alert.informativeText = "Its sessions record no running total of their tokens that Next Term reads. Claude Code and Codex tabs do."
+            if let window { alert.beginSheetModal(for: window) }
             return
         }
-        let parts = ChatUsageLine.parts(usage)
-        let font = NSFont.monospacedDigitSystemFont(ofSize: CGFloat(Self.sizes.secondary), weight: .regular)
-        let line = NSMutableAttributedString(string: parts.tokens + " \u{00B7} ", attributes: [.font: font, .foregroundColor: Theme.textDim])
-        line.append(NSAttributedString(string: parts.percent, attributes: [
-            .font: font, .foregroundColor: parts.nearLimit ? NSColor.systemOrange : Theme.textDim,
-        ]))
-        usageLine.attributedStringValue = line
-        usageLine.toolTip = ChatUsageLine.tooltip(usage)
-        usageLine.setAccessibilityValue(ChatUsageLine.text(usage))
-        usageLine.isHidden = false
+        let alert = NSAlert()
+        alert.messageText = "Token Budget"
+        alert.informativeText = "Shown under the chat as the session goes: its tokens as the agent records them, cache reads apart. Never enforced."
+        let field = NSTextField(string: TokenBudgets.budgets[tab.id].map { AgentUsage.tokens($0) } ?? "")
+        field.placeholderString = "2M"
+        field.frame = NSRect(x: 0, y: 0, width: 200, height: 24)
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Set")
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = field
+        guard let window else { return }
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard let self, response == .alertFirstButtonReturn else { return }
+            guard let tokens = TokenBudget.parse(field.stringValue) else { return NSSound.beep() }
+            TokenBudgets.set(tokens, for: self.tab)
+            self.refreshUsage()
+        }
+    }
+
+    @objc private func clearBudget() {
+        TokenBudgets.set(nil, for: tab)
+        refreshUsage()
     }
 
     private var isWorking: Bool {

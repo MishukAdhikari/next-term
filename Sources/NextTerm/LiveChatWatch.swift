@@ -183,6 +183,9 @@ enum LiveChatWatch {
         return feed
     }
 
+    /// The tab's feed, if a chat view started one; never starts one.
+    static func existingFeed(_ tabID: UUID) -> LiveChatFeed? { feeds[tabID] }
+
     /// The tab's chat view closed: its feed stops.
     static func release(_ tab: TerminalTab) {
         feeds.removeValue(forKey: tab.id)?.stop()

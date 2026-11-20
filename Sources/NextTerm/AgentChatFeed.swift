@@ -145,6 +145,7 @@ enum AgentChatWatch {
     static func closed(_ tabID: UUID) {
         feeds.removeValue(forKey: tabID)?.stop()
         forgetStart(tabID)
+        TokenBudgets.forget(tabID)
         if let journal = AgentSessionSocket.reports[tabID]?.journal { try? FileManager.default.removeItem(atPath: journal) }
     }
 

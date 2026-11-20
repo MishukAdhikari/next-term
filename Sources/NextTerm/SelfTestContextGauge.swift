@@ -63,6 +63,43 @@ extension SelfTest {
         app.moveTerminalTabs(to: tabsBefore)
         holder.refresh()
 
+        // A token budget, as the user asks an agent for one (set_token_budget): the chat shows what the session has
+        // spent against it, from the agent's own record, under the composer; cleared, it goes.
+        let savedHome = LiveChatWatch.home, savedChat = LiveChatView.isOn
+        LiveChatWatch.home = home
+        LiveChatView.isOn = true
+        defer {
+            LiveChatWatch.home = savedHome
+            LiveChatView.isOn = savedChat
+        }
+        if let group = holder.groups.first(where: { $0.contains(tab) }) {
+            let pane = group.paneView(tab)
+            pane.setChat(shown: true)
+            func call(_ arguments: [String: Any]) async -> MCPServer.CallResult? {
+                var result: MCPServer.CallResult?
+                MCPControl.call("set_token_budget", arguments.merging(["tab_id": tab.id.uuidString.lowercased()]) { $1 }, caller: nil) { result = $0 }
+                _ = await wait(5) { result != nil }
+                return result
+            }
+            let bad = await call(["tokens": "lots"])
+            check(bad?.isError == true, "budget: set_token_budget refuses tokens it can't read", bad?.text ?? "no answer")
+            let set = await call(["tokens": "1M"])
+            let counted = await wait(10) { pane.liveChat?.refresh(); return pane.liveChat?.usageLine.stringValue.contains("254k of 1M budget") == true }
+            let chat = pane.liveChat
+            check(set?.isError == false && counted && chat?.budgetBar.isHidden == false && abs((chat?.budgetBar.fraction ?? 0) - 0.254) < 0.001,
+                  "budget: the chat shows the session's tokens against the budget, with a hairline under the usage line",
+                  "\(set?.text ?? "no answer") — \(chat?.usageLine.stringValue ?? "no chat")")
+            let listed = LiveChatMCP.listFields(tab)["budget"] as? [String: Any]
+            check(listed?["tokens"] as? Int == 1_000_000 && listed?["spent"] as? Int == 254_010,
+                  "budget: list_tabs gives the budget and what was spent", "\(listed ?? [:])")
+            if let window = holder.window { await screenshot(window, suffix: "-token-budget") }
+            _ = await call(["tokens": 0])
+            chat?.refresh()
+            check(chat?.budgetBar.isHidden == true && chat?.usageLine.stringValue.contains("budget") == false,
+                  "budget: cleared, the hairline and its words go", chat?.usageLine.stringValue ?? "no chat")
+            pane.setChat(shown: false)
+        }
+
         tab.view.send(txt: "\u{03}")
         let gone = await wait(15) { watch.poll(); holder.refresh(); return percent() == nil && !tab.status.running }
         check(gone, "context: the gauge goes when the agent ends", percent().map(String.init) ?? "none")

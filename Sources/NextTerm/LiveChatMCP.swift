@@ -14,7 +14,7 @@ enum LiveChatMCP {
     /// list_tabs: `view` (chat or terminal) for a tab whose agent has a live chat while the setting is on; nothing else.
     static func listFields(_ tab: TerminalTab) -> [String: Any] {
         guard LiveChatView.isOn, LiveChatView.offers(tab), let pane = pane(of: tab) else { return [:] }
-        return ["view": pane.showsChat ? "chat" : "terminal"]
+        return ["view": pane.showsChat ? "chat" : "terminal"].merging(TokenBudgets.fields(tab)) { $1 }
     }
 
     /// switch_view: shows the tab's session as a chat or its terminal. Refused, with why, for a tab that offers no chat.

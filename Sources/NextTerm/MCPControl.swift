@@ -358,6 +358,7 @@ enum MCPControl {
         case "read_file", "find_in_files", "git_status", "get_diff": projectTool(tool, arguments, caller: caller, reply: reply)
         case "show_tab": reply(withTab(arguments) { tab in showTab(tab) })
         case "switch_view": reply(withTab(arguments) { tab in MainActor.assumeIsolated { LiveChatMCP.switchView(tab, arguments) } }) // plan 041
+        case "set_token_budget": reply(withTab(arguments) { tab in MainActor.assumeIsolated { TokenBudgets.setFromMCP(tab, arguments) } }) // a session's budget
         case "close_tab": closeTab(arguments, caller: caller, approval: approval, requester: requester, connection: connection, reply: reply)
         case "rename_tab": reply(renameTab(arguments, caller: caller))
         case "start_agent": MainActor.assumeIsolated { HerdrMCP.startAgent(arguments, caller: caller, reply: reply) }
