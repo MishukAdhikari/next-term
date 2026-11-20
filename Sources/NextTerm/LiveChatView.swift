@@ -35,6 +35,7 @@ final class LiveChatView: NSView {
     let source: Source
     let transcript: ChatTranscriptView
     let card = ChatDecisionCard()
+    let planRow = NSTextField(labelWithString: "")
     let composer: AgentPromptBox
     /// "Working…" with the newest tool, while the agent works.
     private let working = NSTextField(labelWithString: "")
@@ -62,6 +63,15 @@ final class LiveChatView: NSView {
         wantsLayer = true
         setAccessibilityLabel("Chat view of the agent's session")
 
+        // The plan row (plan 048 R4): the latest plan's progress while it has steps left; a click shows the checklist.
+        planRow.font = .monospacedDigitSystemFont(ofSize: CGFloat(Self.sizes.secondary), weight: .regular)
+        planRow.textColor = Theme.textDim
+        planRow.lineBreakMode = .byTruncatingTail
+        planRow.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        planRow.isHidden = true
+        planRow.toolTip = "Show the plan"
+        planRow.setAccessibilityRole(.button)
+        planRow.addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(showPlan)))
         working.font = .systemFont(ofSize: CGFloat(Self.sizes.secondary))
         working.textColor = Theme.textDim
         working.lineBreakMode = .byTruncatingTail
@@ -96,7 +106,7 @@ final class LiveChatView: NSView {
         usageMenu.addItem(withTitle: "Set Token Budget\u{2026}", action: #selector(setBudget), keyEquivalent: "").target = self
         usageMenu.addItem(withTitle: "Clear Token Budget", action: #selector(clearBudget), keyEquivalent: "").target = self
         usageLine.menu = usageMenu
-        let rows = NSStackView(views: [working, elsewhereRow, card, composer, usageLine, budgetBar])
+        let rows = NSStackView(views: [planRow, working, elsewhereRow, card, composer, usageLine, budgetBar])
         rows.orientation = .vertical
         rows.alignment = .leading
         rows.spacing = Self.rowGap
@@ -123,7 +133,7 @@ final class LiveChatView: NSView {
             rows.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Self.margin),
             fill,
             budgetBar.heightAnchor.constraint(equalToConstant: BudgetBar.height),
-        ] + [working, elsewhereRow, card, composer, usageLine, budgetBar].map { $0.widthAnchor.constraint(equalTo: rows.widthAnchor) })
+        ] + [planRow, working, elsewhereRow, card, composer, usageLine, budgetBar].map { $0.widthAnchor.constraint(equalTo: rows.widthAnchor) })
         self.elsewhereRow = elsewhereRow
 
         transcript.onLink = { [weak self] link in self?.follow(link) }
@@ -184,7 +194,12 @@ final class LiveChatView: NSView {
         case .live(let feed): blocks = LiveChat.blocks(feed.items, expanded: expanded)
         case .session(let feed): blocks = ChatTranscript.blocks(from: feed.session, expanded: expanded, thoughtTimes: [:])
         }
-        transcript.show(blocks, sizes: Self.sizes, offersTerminal: true)
+        // One pass for both kinds of chat (plan 048): short paths, look-ups grouped, each turn's changes on its line.
+        let shown = ChatPresentation.shown(blocks, folder: tab.directory, home: NSHomeDirectory(), expanded: expanded)
+        transcript.show(shown, sizes: Self.sizes, offersTerminal: true)
+        let plan = ChatPresentation.planLine(shown)
+        if planRow.stringValue != (plan ?? "") { planRow.stringValue = plan ?? "" }
+        if planRow.isHidden != (plan == nil) { planRow.isHidden = plan == nil }
         composer.refreshPlaceholder() // a session names its agent once it reports
         refreshState()
     }
@@ -364,6 +379,14 @@ final class LiveChatView: NSView {
                 }
             }
         }
+    }
+
+    /// The plan row's click: the transcript scrolls to the plan's checklist.
+    @objc private func showPlan() {
+        guard let id = transcript.blocks.last(where: { if case .plan = $0.content { return true } else { return false } })?.id,
+              let range = transcript.range(of: id) else { return }
+        transcript.textView.scrollRangeToVisible(range)
+        transcript.textView.showFindIndicator(for: range)
     }
 
     private func follow(_ link: ChatLink) {

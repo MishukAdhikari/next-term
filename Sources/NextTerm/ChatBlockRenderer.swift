@@ -103,7 +103,7 @@ struct ChatBlockRenderer {
             switch block.content {
             case .prompt: self = .prompt
             case .message: self = .message
-            case .thought, .tool, .change, .answered: self = .row
+            case .thought, .tool, .group, .change, .answered: self = .row
             case .plan: self = .plan
             case .turnEnded: self = .turnEnd
             case .note: self = .note
@@ -145,6 +145,7 @@ struct ChatBlockRenderer {
         case .message(let markdown, _): message(markdown, into: out)
         case .thought(let thought): self.thought(thought, id: block.id, into: out)
         case .tool(let tool): self.tool(tool, id: block.id, into: out)
+        case .group(let group): self.group(group, id: block.id, into: out)
         case .change(let change): self.change(change, id: block.id, into: out)
         case .plan(let entries): plan(entries, into: out)
         case .answered(let action, let answer, let outcome): answered(action, answer: answer, outcome: outcome, into: out)
@@ -225,6 +226,39 @@ struct ChatBlockRenderer {
         }
     }
 
+    /// Finished look-ups as one row; unfolded, its members follow as their own rows, set in by one more slot.
+    private func group(_ group: ChatToolGroup, id: String, into out: NSMutableAttributedString) {
+        let font = NSFont.monospacedSystemFont(ofSize: mono, weight: .regular)
+        let row = NSMutableAttributedString()
+        row.append(symbol(group.expanded ? "chevron.down" : "chevron.right", size: secondary - 2, color: .tertiaryLabelColor,
+                          label: group.expanded ? "Unfolded," : "Folded,", weight: .semibold, on: font))
+        row.append(NSAttributedString(string: "\t" + group.title, attributes: [.font: font, .foregroundColor: NSColor.secondaryLabelColor]))
+        let whole = NSRange(location: 0, length: row.length)
+        row.addAttribute(.link, value: ChatLink.toggle(id).url, range: whole)
+        let files = group.tools.map(\.shownTitle).joined(separator: "\n")
+        row.addAttribute(.toolTip, value: files + "\n\n" + (group.expanded ? "Click to fold" : "Click to show each one"), range: whole)
+        row.append(NSAttributedString(string: "\n", attributes: [.font: font]))
+        let style = singleLineRow()
+        style.lineBreakMode = .byTruncatingTail
+        row.addAttribute(.paragraphStyle, value: style, range: NSRange(location: 0, length: row.length))
+        out.append(row)
+        guard group.expanded else { return }
+        for member in group.members {
+            guard case .tool(let tool) = member.content else { continue }
+            let text = NSMutableAttributedString()
+            self.tool(tool, id: member.id, into: text)
+            // One slot further in: the members read as the group's.
+            text.enumerateAttribute(.paragraphStyle, in: NSRange(location: 0, length: text.length), options: []) { value, range, _ in
+                guard let style = (value as? NSParagraphStyle)?.mutableCopy() as? NSMutableParagraphStyle else { return }
+                style.firstLineHeadIndent += rowIndent
+                style.headIndent += rowIndent
+                style.tabStops = style.tabStops.map { NSTextTab(textAlignment: $0.alignment, location: $0.location + rowIndent) }
+                text.addAttribute(.paragraphStyle, value: style, range: range)
+            }
+            out.append(text)
+        }
+    }
+
     private func tool(_ tool: ChatTool, id: String, into out: NSMutableAttributedString) {
         let font = NSFont.monospacedSystemFont(ofSize: mono, weight: .regular)
         let row = NSMutableAttributedString()
@@ -250,7 +284,10 @@ struct ChatBlockRenderer {
             row.addAttribute(.toolTip, value: title, range: whole)
         }
         row.append(NSAttributedString(string: "\n", attributes: [.font: font]))
-        row.addAttribute(.paragraphStyle, value: singleLineRow(), range: NSRange(location: 0, length: row.length))
+        // A command is known by its start; a file by its name, at the end: cut in the middle so the name stays.
+        let rowStyle = singleLineRow()
+        if tool.kind != "execute" { rowStyle.lineBreakMode = .byTruncatingMiddle }
+        row.addAttribute(.paragraphStyle, value: rowStyle, range: NSRange(location: 0, length: row.length))
         out.append(row)
         guard tool.expanded, opens else { return }
         // Lines, line length and characters are all capped before Show all (ChatTool.shownOutput).
