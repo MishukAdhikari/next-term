@@ -230,7 +230,7 @@ final class ChatTranscriptView: NSView, NSTextViewDelegate {
         guard let block = blocks.first(where: { $0.id == id }) else { return }
         switch block.content {
         case .tool(let tool) where !tool.output.isEmpty: onLink?(.toggle(id))
-        case .thought: onLink?(.toggle(id))
+        case .thought, .group: onLink?(.toggle(id))
         case .change: onLink?(.diff(id))
         default: NSSound.beep()
         }

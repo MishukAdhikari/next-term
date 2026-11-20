@@ -14,6 +14,8 @@ public struct ChatBlock: Equatable, Sendable {
         case message(markdown: String, streaming: Bool)
         case thought(ChatThought)
         case tool(ChatTool)
+        /// Finished reads and searches in a row, as one row (plan 048 R2); only the chat view's pass makes it.
+        case group(ChatToolGroup)
         /// A file a tool changed, right after its tool's row.
         case change(ChatChange)
         /// The plan as it stands, updated in place.
@@ -334,6 +336,10 @@ public enum ChatTranscript {
             let head = tool.glyph + " " + tool.shownTitle + " \u{00B7} " + tool.statusWord
             guard tool.expanded, !tool.output.isEmpty else { return [head] }
             return [head] + tool.output.components(separatedBy: "\n").map { "    " + $0 }
+        case .group(let group):
+            let head = "\u{2713} " + group.title
+            guard group.expanded else { return [head] }
+            return [head] + group.members.flatMap { plainLines($0).map { "  " + $0 } }
         case .change(let change):
             let verb = change.created ? "Created" : "Edited"
             return ["    " + verb + " " + change.path + " (+\(change.added) \u{2212}\(change.removed))"]
