@@ -26,9 +26,17 @@ enum MCPHubControl {
         // before its tool list. Without it the bridge's own PATH is used.
         let path = LoginShell.isProbed ? LoginShell.path : []
         if !LoginShell.isProbed { LoginShell.warmUp() }
+        // Claude Code's tool search loads an MCP tool only when it is wanted: it gets every server's tools as its own,
+        // deferred. The other agents keep the small budget their tool lists can take.
+        let deferring = MCPHubSignIns.agent(caller) == "claude"
         Task.detached {
             let resolution = MCPHubScope.servers(folder: folder, userFile: file)
             var plan = MCPHubPlan.make(resolution, folder: folder, path: path, approved: resolution.approved)
+            if deferring {
+                plan.budget = MCPHubDirect.deferredBudget
+                plan.deferred = true
+                plan.callLimit = MCPHubUpstream.Limits.longCall
+            }
             // The servers' cached tool lists, for the session's direct tools: read, never fetched (MCPHubManifest).
             plan.allotDirect(MCPHubManifest.read(resolution, userFile: file))
             let answer = MCPServer.CallResult(text: plan.servers.isEmpty && plan.problems.isEmpty ? "" : plan.text)

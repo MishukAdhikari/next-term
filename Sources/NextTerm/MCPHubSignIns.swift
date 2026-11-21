@@ -452,8 +452,9 @@ enum MCPHubSignIns {
     /// Next Term (or is given its own Authorization header, a key, which no sign-in joins); `fail` with the sentence when
     /// the sign-in can't be used for this agent now. `byUser`: the user's own Check Now in Settings, for which no agent
     /// is asking, so R15's consent (which agents may use the sign-in) has no one to ask about; the token stays in the app.
+    /// `ask`: false for a search across servers, which never puts a consent panel up; it says which server to name.
     static func withSignIn(_ server: MCPHubServer, deadline: Date, caller: TerminalTab?, pid: pid_t?, byUser: Bool = false,
-                           fail: @escaping (String) -> Void, use: @escaping (Use?) -> Void) {
+                           ask: Bool = true, fail: @escaping (String) -> Void, use: @escaping (Use?) -> Void) {
         if server.headers.keys.contains(where: { $0.lowercased() == "authorization" }) { return use(nil) }
         guard let found = record(for: server.url) else { return use(nil) }
         let name = server.name
@@ -495,6 +496,10 @@ enum MCPHubSignIns {
                 }
             }
             guard let agent else { return granted() }
+            if !ask, !record.consents.contains(agent) {
+                return fail("\(MCPHubSignInWords.agentTitle(agent)) isn\u{2019}t allowed to use the \(name) sign-in yet, so a search across "
+                    + "servers leaves it out. Name it (mcp_tools with server \"\(name)\") to search its tools; the user is asked then.")
+            }
             // The agent's other sign-ins it isn't allowed yet, asked about in the same panel: one question an agent, not one
             // a server (each server still named, each consent still recorded).
             let others = body.records.filter { other in

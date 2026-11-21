@@ -63,9 +63,12 @@ public final class MCPHubSession: @unchecked Sendable {
     /// stands for.
     public init(plan: MCPHubPlan?, refresh: @escaping Refresh, nxtrm: [String], environment: [String: String],
                 limits: MCPHubUpstream.Limits = .standard, version: String, report: Report? = nil, remote: Remote? = nil,
-                remember: Remember? = nil) {
+                remember: Remember? = nil, assumeActive: Bool = false) {
         self.plan = plan ?? MCPHubPlan(folder: "")
-        isActive = plan?.isActive ?? false
+        // `assumeActive`: the user has servers, but the app didn't answer as the agent started (not running yet, or
+        // busy). The catalog is offered anyway, and its first call asks the app again (`renew`), so a long session
+        // isn't left without the hub.
+        isActive = plan?.isActive ?? assumeActive
         self.refresh = refresh
         self.report = report
         self.remote = remote
@@ -81,7 +84,8 @@ public final class MCPHubSession: @unchecked Sendable {
     private func allot(_ plan: MCPHubPlan) {
         let entries = isActive ? MCPHubDirect.entries(plan) : []
         direct = Dictionary(entries.map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first })
-        directTools = entries.map(MCPHubDirect.listed)
+        let loaded = !(plan.deferred ?? false)
+        directTools = entries.map { MCPHubDirect.listed($0, alwaysLoad: loaded) }
         var states: [String: DirectState] = [:]
         for server in plan.servers where server.state == .ready {
             let count = entries.filter { $0.server == server.name }.count
@@ -100,9 +104,24 @@ public final class MCPHubSession: @unchecked Sendable {
         isActive ? currentPlan.servers.filter { $0.state == .ready }.map(\.name) : []
     }
 
+    /// Of `serverNames`, those with no direct tools in this session: an agent reaches them with mcp_tools and mcp_call.
+    public var callOnlyNames: [String] {
+        let names = serverNames // takes the lock itself, so read before it
+        lock.lock()
+        defer { lock.unlock() }
+        return names.filter { name in
+            if case .listed? = directState[name] { return false }
+            return true
+        }
+    }
+
     /// The local servers the first plan has no cached tool list for: `warm` starts them.
+    /// A server whose keys come from Secrets (`nxtrm secret run`) isn't: starting it would show Secrets' panel the moment
+    /// the agent starts, before it asked for anything.
     public var unlisted: [String] {
-        isActive ? plan.servers.filter { $0.state == .ready && !$0.isRemote && $0.cachedTools == nil }.map(\.name) : []
+        isActive ? plan.servers.filter {
+            $0.state == .ready && !$0.isRemote && $0.cachedTools == nil && ($0.command as NSString).lastPathComponent != "nxtrm"
+        }.map(\.name) : []
     }
 
     /// Before the bridge answers its first tool list: starts each local server with no cached tool list (a server just
@@ -116,7 +135,8 @@ public final class MCPHubSession: @unchecked Sendable {
         let deadline = Date().addingTimeInterval(seconds)
         let results = Results(count: names.count)
         DispatchQueue.concurrentPerform(iterations: names.count) { index in
-            results.set(index, tools(of: names[index], until: deadline))
+            // Quiet: a first start (a package downloading) can take longer than the warm-up; that is no failure to report.
+            results.set(index, tools(of: names[index], until: deadline, quiet: true))
         }
         var manifests: [String: MCPHubManifest] = [:]
         for (name, result) in zip(names, results.all) {
@@ -127,7 +147,7 @@ public final class MCPHubSession: @unchecked Sendable {
         lock.unlock()
         // The servers that had cached lists keep the tools the app gave; the budget is shared out again in plan order.
         let given = Dictionary(uniqueKeysWithValues: warmed.servers.map { ($0.name, $0) })
-        var left = MCPHubDirect.budget
+        var left = warmed.budget ?? MCPHubDirect.budget
         for index in warmed.servers.indices {
             let server = warmed.servers[index]
             guard server.state == .ready else { continue }
@@ -177,7 +197,7 @@ public final class MCPHubSession: @unchecked Sendable {
 
     /// One catalog tool's answer: a tool result, for the agent.
     public func call(_ tool: String, _ arguments: [String: Any]) -> [String: Any] {
-        let deadline = Date().addingTimeInterval(limits.call)
+        let deadline = Date().addingTimeInterval(currentPlan.callLimit.map { min($0, MCPHubUpstream.Limits.longCall) } ?? limits.call)
         switch tool {
         case "mcp_servers": return servers()
         case "mcp_tools": return toolsAnswer(arguments, until: deadline)
@@ -212,10 +232,11 @@ public final class MCPHubSession: @unchecked Sendable {
                         item["direct"] = "\(cached - count) of its tools have input schemas agents can't take as their own: mcp_call reaches them."
                     }
                 case .overBudget:
-                    item["direct"] = "Not listed as your own tools in this session (past its budget of \(MCPHubDirect.budget) direct tools, "
-                        + "or input schemas agents can't take): mcp_call reaches them."
+                    item["direct"] = "Not listed as your own tools in this session (past its budget of \(current.budget ?? MCPHubDirect.budget) "
+                        + "direct tools, or input schemas agents can't take): mcp_tools with server \"\(server.name)\" lists them, and mcp_call calls one."
                 case .notYet:
-                    item["direct"] = "Listed as your own tools from the next session on; until then mcp_call reaches them."
+                    item["direct"] = "Not listed as your own tools yet: Next Term learns its tools the first time it is reached. "
+                        + "mcp_tools with server \"\(server.name)\" lists them now, and mcp_call calls one."
                 }
             }
             if server.state == .ready, server.isRemote {
@@ -275,9 +296,17 @@ public final class MCPHubSession: @unchecked Sendable {
         // Every server that can start, at once: one slow to start holds up only its own part of the answer.
         let ready = currentPlan.servers.filter { $0.state == .ready }
         guard !ready.isEmpty else { return MCPHubCatalog.text("No MCP server the user connected in Next Term can start here.", isError: true) }
+        // A search never asks the user: a server whose keys come from Secrets, or whose sign-in this agent isn't allowed
+        // yet, is left out, saying to name it.
         let results = Results(count: ready.count)
         DispatchQueue.concurrentPerform(iterations: ready.count) { index in
-            results.set(index, tools(of: ready[index].name, until: deadline))
+            let server = ready[index]
+            if !server.isRemote, (server.command as NSString).lastPathComponent == "nxtrm" {
+                results.set(index, .failure(.init("\(server.name) needs a key from Next Term\u{2019}s Secrets, so a search across servers "
+                    + "leaves it out. Name it (mcp_tools with server \"\(server.name)\") to search its tools; the user is asked then.")))
+            } else {
+                results.set(index, tools(of: server.name, until: deadline, asking: false))
+            }
         }
         var servers: [[String: Any]] = []
         for (server, result) in zip(ready, results.all) {
@@ -361,7 +390,8 @@ public final class MCPHubSession: @unchecked Sendable {
     }
 
     /// A ready server's tools, starting it if it isn't running; a name the plan doesn't have asks the app again first.
-    private func tools(of name: String, until deadline: Date) -> Result<[[String: Any]], MCPHubUpstream.Failure> {
+    /// `quiet`: a failure isn't reported to the app (warm's own deadline), so no bar says a server didn't start.
+    private func tools(of name: String, until deadline: Date, quiet: Bool = false, asking: Bool = true) -> Result<[[String: Any]], MCPHubUpstream.Failure> {
         if currentPlan.server(named: name) == nil { renew() }
         guard let server = currentPlan.server(named: name) else {
             let names = currentPlan.servers.map(\.name)
@@ -377,7 +407,7 @@ public final class MCPHubSession: @unchecked Sendable {
                 + "Streamable HTTP URL (often ending in /mcp) in Next Term › Settings › MCP Servers."))
         }
         if server.isRemote {
-            return reach(server, ["op": "tools"], until: deadline).flatMap { answer in
+            return reach(server, ["op": "tools", "ask": asking], until: deadline).flatMap { answer in
                 guard let tools = answer["tools"] as? [[String: Any]] else {
                     return .failure(.init("Next Term's answer for \(name) had no tool list in it."))
                 }
@@ -387,7 +417,7 @@ public final class MCPHubSession: @unchecked Sendable {
         guard let upstream = upstream(server) else {
             if isStopped { return .failure(.init("\(name) was stopped: its session is ending.")) }
             let failure = launchFailure(server)
-            report?(name, server.list, failure, 0)
+            if !quiet { report?(name, server.list, failure, 0) }
             return .failure(.init(failure))
         }
         let before = upstream.status
@@ -397,7 +427,7 @@ public final class MCPHubSession: @unchecked Sendable {
         if after != before {
             switch after {
             case .running(let count): if case .running = before {} else { report?(name, server.list, nil, count) }
-            case .failed(let why): report?(name, server.list, why, 0)
+            case .failed(let why): if !quiet { report?(name, server.list, why, 0) }
             case .notStarted: break
             }
         }
@@ -440,6 +470,8 @@ public final class MCPHubSession: @unchecked Sendable {
         } else {
             result = .failure(.init("Next Term didn't answer for \(server.name), which it reaches for this session; it may be restarting. Try again in a moment."))
         }
+        // A search that didn't ask the user says nothing about the server's state: its refusal isn't kept as a failure.
+        if need["ask"] as? Bool == false, case .failure = result { return result }
         lock.lock()
         switch result {
         case .success(let answer):

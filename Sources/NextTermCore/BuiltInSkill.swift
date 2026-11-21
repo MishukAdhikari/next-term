@@ -255,6 +255,13 @@ public struct BuiltInSkill: Sendable, Equatable {
     public static let connectedServers = """
         ## MCP servers connected in Next Term
 
-        MCP servers the user connected in Next Term (Settings › MCP Servers) are yours too: their tools are listed as your own, named `<server>__<tool>`, and `mcp_servers`, `mcp_tools` and `mcp_call` reach every one, a server connected after you started included. Use them before asking the user to add a server to your own config. `list_mcp_servers` shows what is connected; when a server you need isn't, `add_mcp_server` connects it for every agent once the user approves on the Mac.
+        MCP servers the user connected in Next Term (Settings › MCP Servers) are yours too. Use them before asking the user to add a server to your own config, and never ask for a server's key or sign-in yourself: Next Term holds them and never hands them to you.
+
+        - **Your own tools or `mcp_call`.** Many are listed as your own, named `<server>__<tool>`. The rest, and a server connected after you started, are reached through `mcp_servers` (what is connected, and each one's state), `mcp_tools` (with `server`, that server's tools; with `tool` too, its full input schema) and `mcp_call` (`server`, `tool`, `arguments`). `mcp_servers` says which way each server comes.
+        - **Search wisely.** `mcp_tools` with `query` and no server searches every server it can reach without asking the user, and names the ones it left out (a key from Secrets, a sign-in this agent isn't allowed yet). Name a server to search it; the user is asked then.
+        - **A state that needs the user.** When `mcp_servers` gives `needs_sign_in`, `signed_out` or `needs_more_access`, or a call says so, tell the user what its note says (sign in or reconnect in Settings › MCP Servers) and call again once they have. No restart is needed.
+        - **Asked once.** The first time you use a signed-in server, the user allows you on the Mac, in one panel for every sign-in you aren't allowed yet. A call that answers "Next Term is asking the user…" or "the approval is kept": tell the user to answer on the Mac, then call again.
+        - **Only in Next Term's tabs.** Sign-ins are used only for an agent running in one of Next Term's own tabs. Started elsewhere, ask the user to start you in a Next Term tab.
+        - `list_mcp_servers` shows what is connected; when a server you need isn't, `add_mcp_server` connects it for every agent once the user approves on the Mac.
         """
 }
