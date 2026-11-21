@@ -227,13 +227,16 @@ extension SelfTest {
             var info = stat()
             return lstat((home as NSString).appendingPathComponent(path), &info) == 0
         }
-        func download() -> (SkillsInstaller.Fetched, String) {
+        /// `text`: SKILL.md's body; `runs`: more executable files, by path.
+        func download(text: String = "Use it well.", runs: [String] = []) -> (SkillsInstaller.Fetched, String) {
             let scratch = SkillsInstaller.downloads.appendingPathComponent(UUID().uuidString)
             let folder = scratch.appendingPathComponent("files/skills-0123456/skills/demo-skill").path
             try? manager.createDirectory(atPath: folder + "/scripts", withIntermediateDirectories: true)
-            try? "---\nname: demo-skill\ndescription: A demo skill.\nlicense: Apache-2.0\n---\nUse it well.\n".write(toFile: folder + "/SKILL.md", atomically: true, encoding: .utf8)
-            try? "#!/bin/sh\necho hi\n".write(toFile: folder + "/scripts/run.sh", atomically: true, encoding: .utf8)
-            chmod(folder + "/scripts/run.sh", 0o755)
+            try? "---\nname: demo-skill\ndescription: A demo skill.\nlicense: Apache-2.0\n---\n\(text)\n".write(toFile: folder + "/SKILL.md", atomically: true, encoding: .utf8)
+            for path in ["scripts/run.sh"] + runs {
+                try? "#!/bin/sh\necho hi\n".write(toFile: folder + "/" + path, atomically: true, encoding: .utf8)
+                chmod(folder + "/" + path, 0o755)
+            }
             let found = SkillsGitHub.Found(path: "skills/demo-skill", tree: GitHash.folder(folder) ?? "")
             let source = SkillSource(owner: "example-org", repo: "skills", path: "skills/demo-skill")
             let resolved = SkillsGitHub.Resolved(source: source, commit: String(repeating: "0123456789", count: 4), date: nil, skills: [found], truncated: false)
@@ -348,6 +351,38 @@ extension SelfTest {
         _ = await wait(10) { answered != nil }
         check(answered == .some(nil) && !manager.fileExists(atPath: gone.scratch.path),
               "skills: a review whose download changed ends instead of offering Install again", "\(String(describing: answered))")
+
+        // Update automatically: a text change installs by itself; an update adding a script waits, saying why; Undo
+        // takes the automatic one back.
+        let (first, _) = download()
+        _ = await SkillsInstaller.install(first.candidates, fetched: first, claude: ["demo-skill": .skip])
+        let savedAuto = SkillsAutoUpdate.isOn
+        SkillsAutoUpdate.isOn = true
+        var next = download(text: "Use it better.").0
+        SkillsAutoUpdate.fetchForTest = { _ in next }
+        SkillsInstaller.updates["demo-skill"] = .available(commit: "1111111")
+        await SkillsAutoUpdate.run()
+        check(read(".agents/skills/demo-skill/SKILL.md")?.contains("Use it better.") == true && SkillsInstaller.updates["demo-skill"] == .current
+              && SkillsAutoUpdate.summary == "1 updated automatically",
+              "skills: Update automatically installs an update that changes only text", "\(String(describing: SkillsInstaller.updates["demo-skill"])) \(SkillsAutoUpdate.summary ?? "-")")
+        next = download(text: "Use it better.", runs: ["scripts/setup.sh"]).0
+        SkillsInstaller.updates["demo-skill"] = .available(commit: "2222222")
+        await SkillsAutoUpdate.run()
+        check(!exists(".agents/skills/demo-skill/scripts/setup.sh") && SkillsAutoUpdate.held["demo-skill"]?.contains("scripts/setup.sh") == true
+              && !manager.fileExists(atPath: next.scratch.path),
+              "skills: an update that adds something that runs waits for a review, says why, and leaves no download",
+              SkillsAutoUpdate.held["demo-skill"] ?? "none")
+        SkillsAutoUpdate.isOn = false
+        SkillsInstaller.updates["demo-skill"] = .available(commit: "3333333")
+        next = download(text: "Off.").0
+        await SkillsAutoUpdate.run()
+        check(read(".agents/skills/demo-skill/SKILL.md")?.contains("Use it better.") == true, "skills: with Update automatically off, nothing installs by itself")
+        next.discard()
+        _ = await SkillsStore.undo()
+        check(read(".agents/skills/demo-skill/SKILL.md")?.contains("Use it well.") == true, "skills: Undo takes an automatic update back")
+        SkillsAutoUpdate.fetchForTest = nil
+        SkillsAutoUpdate.isOn = savedAuto
+        SkillsInstaller.updates = [:]
 
         let window = SkillsWindowController()
         check(window.window?.title == "Skills" && SkillFeatured.list.count >= 10, "skills: Window › Skills opens with the Featured list")

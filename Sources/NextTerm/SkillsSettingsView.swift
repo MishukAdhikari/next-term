@@ -18,6 +18,7 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
     private let removeButton = NSButton(title: "Remove…", target: nil, action: nil)
     private let checkButton = NSButton(title: "Check for Updates", target: nil, action: nil)
     private let browseButton = NSButton(title: "Browse Skills…", target: nil, action: nil)
+    let autoUpdate = NSButton(checkboxWithTitle: "Update automatically", target: nil, action: nil)
     private let checkOnOpen = NSButton(checkboxWithTitle: "Check for updates once a day, and when Window › Skills opens", target: nil, action: nil)
     private var inventory: SkillInventory?
     private var rows: [SkillRow] = []
@@ -108,7 +109,13 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
         checkOnOpen.action = #selector(checkOnOpenChanged)
         checkOnOpen.state = SkillsWindowController.checksOnOpen ? .on : .off
         checkOnOpen.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
-        let top = NSStackView(views: [filter, summary, NSView(), checkButton, browseButton])
+        autoUpdate.target = self
+        autoUpdate.action = #selector(autoUpdateChanged)
+        autoUpdate.state = SkillsAutoUpdate.isOn ? .on : .off
+        autoUpdate.toolTip = "Once a day, after the update check, skills install their updates by themselves. An update that adds "
+            + "something that runs, changes its MCP servers or plugin, brings a new warning, or would replace your own changes "
+            + "waits for your review. Undo takes an update back."
+        let top = NSStackView(views: [filter, summary, NSView(), autoUpdate, checkButton, browseButton])
         top.spacing = 8
         let buttons = NSStackView(views: [unifyButton, linkButton, updateButton, removeButton, NSView(), undoButton])
         buttons.spacing = 8
@@ -180,7 +187,7 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
         let needsAttention = filter.indexOfSelectedItem == 1
         rows = inventory.rows.filter { !needsAttention || Self.needsAttention($0) }
         let problems = inventory.rows.filter(Self.needsAttention).count
-        summary.stringValue = "\(inventory.rows.count) skills · \(problems) need attention"
+        summary.stringValue = "\(inventory.rows.count) skills · \(problems) need attention" + (SkillsAutoUpdate.summary.map { " · " + $0 } ?? "")
         table.reloadData()
         if let kept, let index = rows.firstIndex(where: { $0.name == kept }) {
             table.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
@@ -217,6 +224,7 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
             cell.stringValue = row.name
             cell.toolTip = row.copies.first?.frontMatter?.description
         case "state":
+            cell.toolTip = nil
             cell.stringValue = Self.stateText(row)
             cell.textColor = Self.needsAttention(row) ? .systemOrange : .secondaryLabelColor
             if let state = SkillsInstaller.updates[row.name] {
@@ -224,6 +232,8 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
                 case .available:
                     cell.stringValue = "Update available"
                     cell.textColor = .controlAccentColor
+                    // Update automatically left it for a review: why.
+                    if let held = SkillsAutoUpdate.held[row.name] { cell.toolTip = "Waits for your review: \(held)" }
                 case .unknown(let reason):
                     cell.toolTip = "The update check could not tell: \(reason)"
                 case .current: break
@@ -338,6 +348,13 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
     // MARK: actions
 
     @objc private func checkOnOpenChanged() { SkillsWindowController.checksOnOpen = checkOnOpen.state == .on }
+
+    /// Turned on: the updates already found install now, as they would after the next daily check.
+    @objc private func autoUpdateChanged() {
+        SkillsAutoUpdate.isOn = autoUpdate.state == .on
+        guard SkillsAutoUpdate.isOn else { return }
+        Task { await SkillsAutoUpdate.run() }
+    }
 
     @objc private func browse() { SkillsWindowController.show() }
 
