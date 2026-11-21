@@ -300,6 +300,11 @@ extension TerminalWindowController {
     /// keyboard moves to it; from the box, it hides and the terminal takes the keyboard back.
     @objc func togglePromptBox(_ sender: Any?) {
         guard let pane = activePane else { return }
+        // Over the chat, the chat's own composer is the prompt box: it takes the keyboard.
+        if pane.showsChat, let chat = pane.liveChat {
+            window?.makeFirstResponder(chat.composer.textView)
+            return
+        }
         guard let box = pane.promptBox, pane.showsPromptBox else { return pane.setPromptBox(shown: true) }
         if window?.firstResponder === box.textView { pane.setPromptBox(shown: false) } else { window?.makeFirstResponder(box.textView) }
     }
