@@ -6,7 +6,8 @@ import NextTermCore
 /// whole; ⇧Return and ⌥Return add a line. Esc in an empty box goes to the terminal (an agent stops on it). ↑ in an empty
 /// box brings back what was sent last. Files dropped on it, or pasted from Finder, go in as their paths, quoted, as a
 /// drop on the terminal types them; on a server they are copied there first. An image pasted alone goes to the program
-/// as a ⌘V in the terminal would. "/" is the agent's own: its command list shows in the terminal once the text is sent.
+/// as a ⌘V in the terminal would. "/" at the start opens a menu of the agent's commands (SlashMenu): ↑ ↓ choose, Tab
+/// completes, Return sends; a command that opens a screen of the agent's own shows the terminal when sent from the chat.
 /// View › Prompt Box shows it for a tab; its key moves the keyboard between it and the terminal.
 final class AgentPromptBox: NSView, NSTextViewDelegate {
     let textView = PromptTextView()
@@ -16,6 +17,19 @@ final class AgentPromptBox: NSView, NSTextViewDelegate {
     private weak var tab: TerminalTab?
     /// What was sent last, for ↑.
     private var last: String?
+    /// The "/" menu.
+    let slashMenu = SlashMenu()
+    /// An agent session's own commands (ACP), given by the chat view; they replace the list kept for the agent.
+    var sessionCommands: (() -> [String])?
+    /// After a send: the text, and the command it named when it was one of the menu's.
+    var onSent: ((String, ChatCommand?) -> Void)?
+    /// The user's and the project's commands, read off the main thread, and for which agent and folder.
+    private var custom: [ChatCommand] = []
+    private var customKey = ""
+    private var customRead = Date.distantPast
+    private var reading = false
+    /// The self-test's commands, in place of the agent's (the self-test runs in release builds too).
+    static var commandsForTest: [ChatCommand]?
 
     init(tab: TerminalTab) {
         self.tab = tab
@@ -40,6 +54,7 @@ final class AgentPromptBox: NSView, NSTextViewDelegate {
         textView.delegate = self
         textView.owner = self
         textView.registerForDraggedTypes([.fileURL])
+        slashMenu.onPick = { [weak self] in self?.send($0) }
         textView.setAccessibilityLabel("Prompt")
         textView.setAccessibilityRoleDescription("prompt box")
 
@@ -114,6 +129,65 @@ final class AgentPromptBox: NSView, NSTextViewDelegate {
         last = text
         textView.string = ""
         textChanged()
+        onSent?(text, command(in: text))
+    }
+
+    // MARK: the "/" menu
+
+    /// The commands the menu offers for this tab now.
+    func commands() -> [ChatCommand] {
+        if let test = Self.commandsForTest { return test }
+        if let names = sessionCommands?(), !names.isEmpty { return ChatCommands.session(names) }
+        guard let agent = tab?.localAgent else { return [] }
+        readCustom(agent)
+        return ChatCommands.builtIn(for: agent) + custom
+    }
+
+    /// Reads the user's and the project's commands again, off the main thread, when the agent or folder changed or
+    /// half a minute passed; the menu updates once they are in.
+    private func readCustom(_ agent: AgentKind) {
+        let folder = tab?.directory, home = NSHomeDirectory()
+        let key = agent.rawValue + "|" + (folder ?? "")
+        guard !reading, key != customKey || Date().timeIntervalSince(customRead) > 30 else { return }
+        reading = true
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let found = ChatCommands.custom(for: agent, folder: folder, home: home)
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.reading = false
+                self.customRead = Date()
+                let changed = self.customKey != key || self.custom != found
+                self.customKey = key
+                self.custom = found
+                if changed { self.updateMenu() }
+            }
+        }
+    }
+
+    /// The command `text` names, when it is one of the menu's: "/compact keep the tests" names compact.
+    private func command(in text: String) -> ChatCommand? {
+        guard text.hasPrefix("/") else { return nil }
+        let name = text.dropFirst().prefix { !$0.isWhitespace }
+        return name.isEmpty ? nil : commands().first { $0.name == name }
+    }
+
+    private func updateMenu() {
+        guard window?.firstResponder === textView, let typed = ChatCommands.typed(textView.string) else { return slashMenu.hide() }
+        slashMenu.show(ChatCommands.matches(commands(), typed: typed), above: self)
+    }
+
+    /// Return on a chosen command, or a click: it is sent as it is named.
+    fileprivate func send(_ command: ChatCommand) {
+        slashMenu.hide()
+        textView.string = "/" + command.name
+        submit()
+    }
+
+    /// Tab: the name in full and a space, for what follows it.
+    fileprivate func complete(_ command: ChatCommand) {
+        textView.string = "/" + command.name + " "
+        textView.setSelectedRange(NSRange(location: (textView.string as NSString).length, length: 0))
+        textChanged()
     }
 
     /// Esc in an empty box: the terminal gets it.
@@ -156,6 +230,7 @@ final class AgentPromptBox: NSView, NSTextViewDelegate {
 
     private func textChanged() {
         fitHeight()
+        updateMenu()
         let ready = !textView.string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         send.isEnabled = ready
         send.contentTintColor = ready ? .controlAccentColor : .tertiaryLabelColor
@@ -212,11 +287,23 @@ final class PromptTextView: NSTextView {
 
     override func resignFirstResponder() -> Bool {
         let made = super.resignFirstResponder()
+        if made { owner?.slashMenu.hide() }
         owner?.needsDisplay = true
         return made
     }
 
     override func doCommand(by selector: Selector) {
+        if let menu = owner?.slashMenu, menu.isShown, let chosen = menu.current {
+            let flags = NSApp.currentEvent?.modifierFlags ?? []
+            switch selector {
+            case #selector(moveUp(_:)): return menu.move(-1)
+            case #selector(moveDown(_:)): return menu.move(1)
+            case #selector(insertTab(_:)): return owner?.complete(chosen) ?? ()
+            case #selector(insertNewline(_:)) where !flags.contains(.shift) && !flags.contains(.option): return owner?.send(chosen) ?? ()
+            case #selector(cancelOperation(_:)): return menu.hide()
+            default: break
+            }
+        }
         switch selector {
         case #selector(insertNewline(_:)):
             let flags = NSApp.currentEvent?.modifierFlags ?? []
@@ -239,7 +326,10 @@ final class PromptTextView: NSTextView {
         }
     }
 
-    override func cancelOperation(_ sender: Any?) { escapePressed() }
+    override func cancelOperation(_ sender: Any?) {
+        if let menu = owner?.slashMenu, menu.isShown { return menu.hide() }
+        escapePressed()
+    }
 
     /// Esc: an empty box sends it to the terminal (an agent stops on it); else the text's selection goes, as Esc does.
     private func escapePressed() {
