@@ -97,7 +97,10 @@ public enum MCPHubOAuthRegistration {
         public var secret: String?
         public var secretName: String?
         public var issuer: String?
-        public init(clientID: String, secret: String? = nil, secretName: String? = nil, issuer: String? = nil) {
+        /// The exact callback URL the app was registered with, port and all; nil for any port.
+        public var redirect: String?
+        public init(clientID: String, secret: String? = nil, secretName: String? = nil, issuer: String? = nil, redirect: String? = nil) {
+            self.redirect = redirect
             self.clientID = clientID
             self.secret = secret
             self.secretName = secretName
@@ -137,8 +140,14 @@ public enum MCPHubOAuthRegistration {
             return .use(Client(issuer: metadata.issuer, clientID: metadataDocument, kind: .metadataDocument))
         }
         if let text = metadata.registrationEndpoint, let url = URL(string: text) { return .register(url) }
-        return .none("\(name) doesn\u{2019}t let apps register themselves. Sign in with your own OAuth app, or give \(name) a key "
-            + "(a personal access token) instead.")
+        return .none(cantRegister(name))
+    }
+
+    /// The sentence for a server that offers no way for Next Term to register itself: Settings opens the server's own-app
+    /// rows when a sign-in ends with exactly this.
+    public static func cantRegister(_ name: String) -> String {
+        "\(name) doesn\u{2019}t let apps register themselves. Sign in with your own OAuth app, or give \(name) a key "
+            + "(a personal access token) instead."
     }
 
     /// The registration's body, exactly: members in this order.

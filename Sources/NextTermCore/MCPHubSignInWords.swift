@@ -4,7 +4,7 @@ import Foundation
 /// (the `isError` text of mcp_call and the direct tools), the notice for a lapse, and the R15 panel. An agent is never
 /// told to sign in itself, and never starts one: it asks the user to, in Next Term.
 public enum MCPHubSignInWords {
-    static let settings = "Next Term \u{203A} Settings \u{203A} MCP Servers"
+    public static let settings = "Next Term \u{203A} Settings \u{203A} MCP Servers"
 
     /// The server asked for a sign-in Next Term doesn't have.
     public static func needsSignIn(_ name: String) -> String {
@@ -33,7 +33,9 @@ public enum MCPHubSignInWords {
 
     /// The caller isn't an agent in one of this Mac's tabs, so it can't be asked about.
     public static func notAnAgent(_ name: String) -> String {
-        "Next Term uses its sign-in to \(name) only for an agent in one of this Mac\u{2019}s tabs."
+        "Next Term uses its sign-in to \(name) only for an agent running in one of its own tabs on this Mac, so nothing was sent. "
+            + "Ask the user to start you in a Next Term tab (in Next Term: File \u{203A} New Tab, then run you there); "
+            + "\(name)\u{2019}s tools then work with no setup."
     }
 
     /// The panel is up and the call stopped waiting for it.
@@ -79,6 +81,15 @@ public enum MCPHubSignInWords {
     public static func consent(agent: String, _ name: String) -> (title: String, details: String) {
         ("\(agent) wants to use your \(name) sign-in",
          "\(agent) can then use \(name)\u{2019}s tools as you, in every project where \(name) applies. Next Term asks once for each agent.")
+    }
+
+    /// The R15 panel for several sign-ins at once: the one needed now first, then the agent's others not yet allowed, so
+    /// an agent asks once rather than once a server. Allow allows each one it names.
+    public static func consent(agent: String, names: [String]) -> (title: String, details: String) {
+        let list = ListFormatter.localizedString(byJoining: names)
+        return ("\(agent) wants to use your sign-ins to \(list)",
+                "\(agent) can then use their tools as you, in every project where each applies. Allow covers each one named here; "
+                + "Settings \u{203A} MCP Servers lists the agents each sign-in allows, with Change\u{2026}.")
     }
 
     /// Settings' line while the browser is out.

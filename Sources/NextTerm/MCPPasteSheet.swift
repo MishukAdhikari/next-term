@@ -205,7 +205,11 @@ final class MCPPasteSheet: NSWindowController, NSWindowDelegate, NSTextViewDeleg
             name.delegate = self
             name.setAccessibilityLabel("Server name")
             name.widthAnchor.constraint(equalToConstant: 160).isActive = true
-            let runs = NSTextField(labelWithString: (try? server.server().get()).map(MCPHubOverview.runsText) ?? "")
+            // What it runs, as the table shows it: the command itself, never Next Term's wrapper that hands it its keys.
+            let made = try? server.server().get()
+            let runs = NSTextField(labelWithString: made.map { $0.transport == .stdio
+                ? MCPHubOverview.keys(of: $0).inner.map(ShellQuote.quote).joined(separator: " ") : $0.url } ?? "")
+            runs.toolTip = made.map(MCPHubOverview.runsText)
             runs.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
             runs.textColor = .secondaryLabelColor
             runs.lineBreakMode = .byTruncatingMiddle
@@ -216,18 +220,21 @@ final class MCPPasteSheet: NSWindowController, NSWindowDelegate, NSTextViewDeleg
             for key in server.keys {
                 let place = NSTextField(labelWithString: key.whereText)
                 place.font = .systemFont(ofSize: 11)
-                place.widthAnchor.constraint(equalToConstant: 170).isActive = true
+                place.widthAnchor.constraint(equalToConstant: 140).isActive = true
                 place.lineBreakMode = .byTruncatingMiddle
                 let keyName = NSTextField(string: key.name)
                 keyName.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
                 keyName.delegate = self
                 keyName.setAccessibilityLabel("Its name in Secrets")
-                keyName.widthAnchor.constraint(equalToConstant: 170).isActive = true
-                var views: [NSView] = [NSView(), place, NSTextField(labelWithString: "\u{2192}"), keyName]
+                keyName.widthAnchor.constraint(equalToConstant: 150).isActive = true
+                let saved = NSTextField(labelWithString: "saved in Secrets as")
+                saved.font = .systemFont(ofSize: 11)
+                saved.textColor = .secondaryLabelColor
+                var views: [NSView] = [NSView(), place, saved, keyName]
                 views[0].widthAnchor.constraint(equalToConstant: 8).isActive = true
                 var value: NSSecureTextField?
                 if let kind = key.kind {
-                    let what = NSTextField(labelWithString: "\(kind), from the config")
+                    let what = NSTextField(labelWithString: "the \(kind) in the config")
                     what.font = .systemFont(ofSize: 11)
                     what.textColor = .secondaryLabelColor
                     views.append(what)

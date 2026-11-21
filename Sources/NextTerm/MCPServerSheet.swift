@@ -53,6 +53,8 @@ final class MCPServerSheet: NSWindowController, NSWindowDelegate, NSTextFieldDel
     let keyInsteadButton = NSButton(title: "Use a key instead", target: nil, action: nil)
     let ownAppButton = NSButton(title: "Use your own OAuth app", target: nil, action: nil)
     let clientIDField = NSTextField()
+    /// The app's exact callback URL, for a provider that holds it to its port (Slack); empty for any port.
+    let callbackField = NSTextField()
     let secretPopUp = NSPopUpButton()
     let newSecretName = NSTextField()
     let newSecretValue = NSSecureTextField()
@@ -61,10 +63,16 @@ final class MCPServerSheet: NSWindowController, NSWindowDelegate, NSTextFieldDel
     private(set) var ownApp = false
     /// Discovery found no way for Next Term to register (no registration endpoint, no client metadata documents).
     private(set) var cantRegister = false
+    /// Opened from Settings' Sign In… for a server that can't register Next Term: the own-app rows are open, the line
+    /// above them says why, and the primary button signs in (the change is saved once signed in).
+    private(set) var signsInAfterSave = false
+    /// The user typed in the Callback field: Slack's is no longer filled in for them.
+    private var callbackTouched = false
     /// The authorization server discovery found, kept with the app so its secret is never sent to another.
     private var discoveredIssuer: String?
     private var ownLinkRow = NSStackView()
     private var clientIDRow = NSStackView()
+    private var callbackRow = NSStackView()
     private var secretRow = NSStackView()
     private var newSecretRow = NSStackView()
     private var ownHelpRow = NSStackView()
@@ -122,7 +130,9 @@ final class MCPServerSheet: NSWindowController, NSWindowDelegate, NSTextFieldDel
         clientIDField.placeholderString = "Ov23li\u{2026}"
         newSecretName.placeholderString = "GITHUB_OAUTH_CLIENT_SECRET"
         newSecretValue.placeholderString = "Paste the client secret"
-        for field in [clientIDField, newSecretName] {
+        callbackField.placeholderString = "Any port (\(MCPHubOAuthRegistration.redirect))"
+        callbackField.setAccessibilityLabel("Callback URL")
+        for field in [clientIDField, newSecretName, callbackField] {
             field.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
             field.delegate = self
             field.usesSingleLineMode = true
@@ -203,6 +213,7 @@ final class MCPServerSheet: NSWindowController, NSWindowDelegate, NSTextFieldDel
         ownLinkRow = row("", ownAppButton)
         clientIDRow = row("Client ID", clientIDField)
         secretRow = row("Secret", secretPopUp)
+        callbackRow = row("Callback", callbackField)
         newSecretRow = NSStackView(views: [NSView(), newSecretName, newSecretValue])
         newSecretRow.spacing = 8
         newSecretRow.views.first?.widthAnchor.constraint(equalToConstant: 80).isActive = true
@@ -213,7 +224,7 @@ final class MCPServerSheet: NSWindowController, NSWindowDelegate, NSTextFieldDel
         ownHelpRow = row("", ownAppHelp)
         let stack = form
         stack.setViews([heading, row("Name", nameField), row("Runs", kind), row("", runsField), keyRow, signInRow,
-                        ownLinkRow, clientIDRow, secretRow, newSecretRow, ownHelpRow,
+                        ownLinkRow, clientIDRow, secretRow, newSecretRow, callbackRow, ownHelpRow,
                         newKeyRow, variableRow, row("Applies to", appliesPopUp), reasonLabel, buttons], in: .top)
         stack.orientation = .vertical
         stack.alignment = .leading
@@ -234,6 +245,7 @@ final class MCPServerSheet: NSWindowController, NSWindowDelegate, NSTextFieldDel
             newKeyName.widthAnchor.constraint(equalToConstant: 180),
             newKeyValue.widthAnchor.constraint(equalToConstant: 204),
             clientIDField.widthAnchor.constraint(equalToConstant: 260),
+            callbackField.widthAnchor.constraint(equalToConstant: 300),
             newSecretName.widthAnchor.constraint(equalToConstant: 180),
             newSecretValue.widthAnchor.constraint(equalToConstant: 204),
             variableField.widthAnchor.constraint(equalToConstant: 260),
@@ -272,6 +284,7 @@ final class MCPServerSheet: NSWindowController, NSWindowDelegate, NSTextFieldDel
 
         let app = server?.oauth
         clientIDField.stringValue = app?.clientID ?? ""
+        callbackField.stringValue = app?.redirect ?? ""
         ownApp = app != nil
         discoveredIssuer = app?.issuer
         secretPopUp.removeAllItems()
@@ -346,6 +359,17 @@ final class MCPServerSheet: NSWindowController, NSWindowDelegate, NSTextFieldDel
     }
 
     var clientID: String { clientIDField.stringValue.trimmingCharacters(in: .whitespaces) }
+    var callback: String { callbackField.stringValue.trimmingCharacters(in: .whitespaces) }
+
+    /// The server is Slack's (its URL, or where it signs in): its OAuth apps hold the callback to its port.
+    var isSlack: Bool {
+        let hosts = [URL(string: runsField.stringValue.trimmingCharacters(in: .whitespaces))?.host,
+                     discoveredIssuer.flatMap { URL(string: $0)?.host }].compactMap { $0?.lowercased() }
+        return hosts.contains { $0 == "slack.com" || $0.hasSuffix(".slack.com") }
+    }
+
+    /// The callback a Slack app gets: one fixed port on this Mac, by name, as Slack's redirect list takes it.
+    static let slackCallback = "http://localhost:47819/callback"
 
     /// The key picked or given, by name; nil for none.
     var keyName: String? {
@@ -386,7 +410,8 @@ final class MCPServerSheet: NSWindowController, NSWindowDelegate, NSTextFieldDel
                 // The issuer stays bound to the same client ID (or comes from discovery); a new client ID starts unbound.
                 let old = editing?.server?.oauth
                 let issuer = discoveredIssuer ?? (old?.clientID == clientID ? old?.issuer : nil)
-                server.oauth = MCPHubServer.OAuthApp(clientID: clientID, secretName: secretName, issuer: issuer)
+                server.oauth = MCPHubServer.OAuthApp(clientID: clientID, secretName: secretName, issuer: issuer,
+                                                     redirect: callback.isEmpty ? nil : callback)
             } else {
                 server.oauth = nil
             }
@@ -433,6 +458,9 @@ final class MCPServerSheet: NSWindowController, NSWindowDelegate, NSTextFieldDel
             if clientID.count > 256 || clientID.unicodeScalars.contains(where: { $0.properties.isWhitespace || $0.properties.generalCategory == .control }) {
                 return "A client ID is one word, as the provider shows it."
             }
+            if !callback.isEmpty, MCPHubServer.OAuthApp.redirectPort(callback) == nil {
+                return "The callback is a URL on this Mac with a port, such as \(Self.slackCallback)."
+            }
             if isNewSecret {
                 guard StoredSecretName.isValid(newSecretName.stringValue) else { return StoredSecretName.rule }
                 if Self.storedKeys.contains(newSecretName.stringValue) { return "\(newSecretName.stringValue) is in Secrets already: pick it from the menu." }
@@ -459,7 +487,10 @@ final class MCPServerSheet: NSWindowController, NSWindowDelegate, NSTextFieldDel
 
     @objc private func changed() { refresh() }
 
-    func controlTextDidChange(_ notification: Notification) { refresh() }
+    func controlTextDidChange(_ notification: Notification) {
+        if (notification.object as? NSTextField) === callbackField { callbackTouched = true }
+        refresh()
+    }
 
     /// Whether the sheet offers Sign In… in place of Add: a new server at a URL that asked for a sign-in, with no key.
     var offersSignIn: Bool { asksSignIn && !keyInstead && editing == nil && isURL && keyName == nil }
@@ -473,12 +504,16 @@ final class MCPServerSheet: NSWindowController, NSWindowDelegate, NSTextFieldDel
         signInLine.stringValue = cantRegister
             ? "\(who) asks you to sign in, and doesn\u{2019}t let apps register themselves: sign in with your own OAuth app."
             : "\(who) asks you to sign in. Next Term keeps you signed in for every agent."
-        ownLinkRow.isHidden = !offersOwnApp || cantRegister
+        ownLinkRow.isHidden = !offersOwnApp || cantRegister || signsInAfterSave
         ownAppButton.title = ownApp ? "Don\u{2019}t use your own OAuth app" : "Use your own OAuth app"
-        for each in [clientIDRow, secretRow, ownHelpRow] { each.isHidden = !usesOwnApp }
+        for each in [clientIDRow, secretRow, callbackRow, ownHelpRow] { each.isHidden = !usesOwnApp }
+        // Slack matches the callback port and all: a fixed one, filled in until the user writes their own.
+        if usesOwnApp, isSlack, callback.isEmpty, !callbackTouched { callbackField.stringValue = Self.slackCallback }
         newSecretRow.isHidden = !isNewSecret
-        ownAppHelp.stringValue = Self.callbackHelp(issuer: discoveredIssuer)
-        addButton.title = offersSignIn ? "Sign In\u{2026}" : editing == nil ? "Add" : "Save"
+        ownAppHelp.stringValue = (signsInAfterSave && usesOwnApp ? "\(who) doesn\u{2019}t let apps register themselves, so sign in with an "
+            + "OAuth app of your own: its client ID, and its secret if it has one. " : "")
+            + Self.callbackHelp(issuer: discoveredIssuer, callback: callback.isEmpty ? nil : callback, slack: isSlack)
+        addButton.title = offersSignIn || signsInAfterSave ? "Sign In\u{2026}" : editing == nil ? "Add" : "Save"
         newKeyRow.isHidden = !isNewKey
         variableField.isHidden = isURL || keyName == nil
         variableCaption.isHidden = isURL || keyName == nil
@@ -556,13 +591,31 @@ final class MCPServerSheet: NSWindowController, NSWindowDelegate, NSTextFieldDel
     /// The line under the own-app rows: which callback URL to register at the provider. GitHub's OAuth apps take
     /// `http://127.0.0.1/callback` and send the browser back to it on any port ("Loopback redirect urls", GitHub's
     /// Authorizing OAuth apps); RFC 8252 §7.3 asks the same of every server.
-    static func callbackHelp(issuer: String?) -> String {
+    static func callbackHelp(issuer: String?, callback: String? = nil, slack: Bool = false) -> String {
+        if let callback {
+            if slack {
+                return "In your Slack app (api.slack.com/apps) \u{203A} OAuth & Permissions, add \(callback) under Redirect URLs, exactly as "
+                    + "written: Slack holds the callback to its port."
+            }
+            return "Register \(callback) as the app\u{2019}s callback URL, exactly as written. Next Term listens at that port when you sign in."
+        }
         let callback = MCPHubOAuthRegistration.redirect
         if issuer.flatMap({ URL(string: $0)?.host?.lowercased() }) == "github.com" {
             return "In GitHub \u{203A} Settings \u{203A} Developer settings \u{203A} OAuth Apps, set the app\u{2019}s Authorization callback URL to \(callback). "
                 + "GitHub takes it on any port, so it works as written."
         }
-        return "Register \(callback) as the app\u{2019}s callback URL. Next Term listens on a port of its own each time, which loopback addresses allow."
+        return "Register \(callback) as the app\u{2019}s callback URL. Next Term listens on a port of its own each time, which most providers allow; "
+            + "for one that holds it to a port, give the app\u{2019}s exact callback above."
+    }
+
+
+    /// Settings' Sign In… found that the server can't register Next Term: the own-app rows, open, with the client ID
+    /// field to type in, and Sign In… as the sheet's one action.
+    func showOwnApp() {
+        ownApp = true
+        signsInAfterSave = true
+        refresh()
+        window?.makeFirstResponder(clientIDField)
     }
 
     @objc private func toggleOwnApp() {
@@ -606,7 +659,7 @@ final class MCPServerSheet: NSWindowController, NSWindowDelegate, NSTextFieldDel
             planned.append(SecretCopyIn.Planned(name: newSecretName.stringValue, value: SecretBytes(utf8: newSecretValue.stringValue),
                                                 purpose: Self.secretPurpose(server.name), replaces: false))
         }
-        let signsIn = offersSignIn
+        let signsIn = offersSignIn || signsInAfterSave
         guard !planned.isEmpty else { return signsIn ? signIn(server, title: title, steps: steps) : end(MCPHubEdits.apply(title, steps)) }
         isBusy = true
         refresh()

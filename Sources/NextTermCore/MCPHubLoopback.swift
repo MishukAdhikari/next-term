@@ -29,8 +29,9 @@ public final class MCPHubLoopback: @unchecked Sendable {
     /// Requests that didn't end the wait, for the tests.
     public private(set) var strays = 0
 
-    /// `port`: the one to listen on if it's free (0, or taken: one the system picks).
-    public init(port wanted: UInt16 = 0, accepts: @escaping Accepts) throws {
+    /// `port`: the one to listen on if it's free (0, or taken: one the system picks). `strict`: that port or none, for a
+    /// callback the provider holds to its port.
+    public init(port wanted: UInt16 = 0, strict: Bool = false, accepts: @escaping Accepts) throws {
         self.accepts = accepts
         var address = sockaddr_in()
         address.sin_family = sa_family_t(AF_INET)
@@ -50,7 +51,7 @@ public final class MCPHubLoopback: @unchecked Sendable {
             return fd
         }
         listener = wanted == 0 ? -1 : open(wanted)
-        if listener < 0 { listener = open(0) }
+        if listener < 0, !strict { listener = open(0) }
         guard listener >= 0 else { throw POSIXError(.EADDRINUSE) }
         var size = socklen_t(MemoryLayout<sockaddr_in>.size)
         _ = withUnsafeMutablePointer(to: &address) {

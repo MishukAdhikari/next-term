@@ -39,11 +39,23 @@ public struct MCPHubServer: Equatable, Sendable {
         /// The key in Secrets that holds the app's client secret; nil for an app with none (a public client).
         public var secretName: String?
         public var issuer: String?
+        /// The exact callback URL registered at the provider (`http://localhost:47819/callback`), for a provider that
+        /// matches it port and all (Slack); nil for the usual loopback on any port (`http://127.0.0.1/callback`).
+        public var redirect: String?
 
-        public init(clientID: String, secretName: String? = nil, issuer: String? = nil) {
+        public init(clientID: String, secretName: String? = nil, issuer: String? = nil, redirect: String? = nil) {
             self.clientID = clientID
             self.secretName = secretName
             self.issuer = issuer
+            self.redirect = redirect
+        }
+
+        /// A callback URL Next Term can listen at: http, this Mac by name or address, a port, a path; its port, or nil.
+        public static func redirectPort(_ text: String) -> UInt16? {
+            guard let url = URL(string: text), url.scheme == "http", let host = url.host?.lowercased(),
+                  ["localhost", "127.0.0.1"].contains(host), let port = url.port, port > 0, port < 65536,
+                  url.user == nil, url.query == nil, url.fragment == nil, !url.path.isEmpty else { return nil }
+            return UInt16(port)
         }
 
         /// As the entry keeps it.
@@ -51,6 +63,7 @@ public struct MCPHubServer: Equatable, Sendable {
             var members = [MCPHubFile.Member("clientID", .string(clientID))]
             if let secretName { members.append(MCPHubFile.Member("clientSecret", .string("${secret:\(secretName)}"))) }
             if let issuer { members.append(MCPHubFile.Member("issuer", .string(issuer))) }
+            if let redirect { members.append(MCPHubFile.Member("redirect", .string(redirect))) }
             return .object(members)
         }
 
@@ -83,7 +96,15 @@ public struct MCPHubServer: Equatable, Sendable {
                     reasons.append("Its nextTerm.oauth.issuer is not an https address.")
                 }
             }
-            return reasons.count == before ? OAuthApp(clientID: id, secretName: secret, issuer: issuer) : nil
+            var redirect: String?
+            if let found = value.member("redirect") {
+                if let text = found.string, redirectPort(text) != nil {
+                    redirect = text
+                } else {
+                    reasons.append("Its nextTerm.oauth.redirect is not a callback on this Mac with a port, such as http://localhost:47819/callback.")
+                }
+            }
+            return reasons.count == before ? OAuthApp(clientID: id, secretName: secret, issuer: issuer, redirect: redirect) : nil
         }
     }
 

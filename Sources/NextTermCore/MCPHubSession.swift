@@ -226,7 +226,12 @@ public final class MCPHubSession: @unchecked Sendable {
                 case .failed(let why):
                     item["state"] = "failed"
                     item["error"] = why
-                case .notStarted: break
+                case .notStarted:
+                    // Not reached in this session yet: the app knows what Settings shows (a sign-in it needs, a lapse).
+                    if let known = appState(server) {
+                        for (key, value) in known where key != "tools" { item[key] = value }
+                        if let tools = known["tools"] { item["tools"] = tools }
+                    }
                 }
             } else if server.state == .ready {
                 switch upstream(server)?.status {
@@ -444,6 +449,17 @@ public final class MCPHubSession: @unchecked Sendable {
         }
         lock.unlock()
         return result
+    }
+
+    /// A remote server's state as the app knows it, asking it over the session's channel (a second at most); nil when
+    /// it can't be asked, or it says nothing more than "ready".
+    private func appState(_ server: MCPHubPlan.Server) -> [String: Any]? {
+        guard let remote else { return nil }
+        let arguments: [String: Any] = ["op": "state", "server": server.name, "list": server.list, "url": server.url, "seconds": 1]
+        guard let answer = remote(arguments, 2), !answer.isError,
+              let object = (try? JSONSerialization.jsonObject(with: Data(answer.text.utf8))) as? [String: Any],
+              let state = object["state"] as? String, state != "ready" else { return nil }
+        return object
     }
 
     private func remoteState(_ name: String) -> MCPHubUpstream.Status {

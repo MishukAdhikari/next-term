@@ -137,7 +137,7 @@ extension MCPServer {
     // MARK: list_mcp_servers
 
     /// A state as the answer spells it, and its reason when it has one.
-    static func stateFields(_ state: MCPHubOverview.State) -> [String: Any] {
+    public static func stateFields(_ state: MCPHubOverview.State) -> [String: Any] {
         switch state {
         case .ready(let tools?): return ["state": "ready", "tools": tools]
         case .ready(nil): return ["state": "ready"]

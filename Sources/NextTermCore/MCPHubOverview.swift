@@ -144,7 +144,7 @@ public enum MCPHubOverview {
 
     /// The state its last need left, and for a server at a URL, its sign-in: a lapse or more access first, since the
     /// next need would end there; a sign-in whose need then failed for another reason shows that reason.
-    static func ran(_ server: MCPHubServer, _ list: String, _ runs: [String: Run], _ signIns: [String: SignIn] = [:]) -> State {
+    public static func ran(_ server: MCPHubServer, _ list: String, _ runs: [String: Run], _ signIns: [String: SignIn] = [:]) -> State {
         let run = runs[runKey(list: list, server: server.name)]
         let signIn = server.transport == .stdio ? nil : signIns[signInKey(server.url)]
         switch signIn {

@@ -90,6 +90,16 @@ import Testing
     /// A server that holds a registration to the redirect it named, port and all (xcdev's authorization endpoint did): the
     /// port is registered and kept, the next sign-in listens on it again, and one taken, or a registration kept before
     /// ports were, is registered again rather than sent to a page that refuses it.
+    @Test func aStrictListenerTakesItsPortOrNone() throws {
+        let first = try MCPHubLoopback { _ in nil }
+        defer { first.close() }
+        // Another listener holds the port: a strict one fails, a lenient one takes another.
+        #expect(throws: (any Error).self) { _ = try MCPHubLoopback(port: first.port, strict: true) { _ in nil } }
+        let other = try MCPHubLoopback(port: first.port) { _ in nil }
+        defer { other.close() }
+        #expect(other.port != first.port && other.port != 0)
+    }
+
     @Test func aServerThatHoldsThePortGetsTheSamePortAgain() throws {
         let setup = try Setup()
         setup.auth.exactRedirects = true
