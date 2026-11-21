@@ -140,7 +140,7 @@ final class HoverTip {
         panel.isReleasedWhenClosed = false
         let background = NSView()
         background.wantsLayer = true
-        background.layer?.backgroundColor = Theme.tabHover.cgColor
+        background.themedBackground(Theme.tabHover)
         background.layer?.cornerRadius = 5
         background.layer?.borderWidth = 1
         background.layer?.borderColor = WorkSplitView.line.cgColor

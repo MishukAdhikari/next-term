@@ -183,14 +183,14 @@ final class LiveChatView: NSView {
 
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
-        layer?.backgroundColor = Theme.background.cgColor
+        themedBackground(Theme.background)
         transcript.redrawAll()
     }
 
     override var wantsUpdateLayer: Bool { true }
 
     override func updateLayer() {
-        layer?.backgroundColor = Theme.background.cgColor
+        themedBackground(Theme.background)
     }
 
     /// The transcript from the feed's items, then the state rows.

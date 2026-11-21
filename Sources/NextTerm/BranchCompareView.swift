@@ -66,7 +66,7 @@ final class BranchComparePane: NSView, NSTableViewDataSource, NSTableViewDelegat
         self.current = current
         super.init(frame: .zero)
         wantsLayer = true
-        layer?.backgroundColor = Theme.background.cgColor
+        themedBackground(Theme.background)
         build()
         reload()
         watch()
@@ -341,7 +341,7 @@ final class BranchComparePane: NSView, NSTableViewDataSource, NSTableViewDelegat
         header.spacing = 8
         header.edgeInsets = NSEdgeInsets(top: 0, left: 12, bottom: 0, right: 10)
         header.wantsLayer = true
-        header.layer?.backgroundColor = Theme.bar.cgColor
+        header.themedBackground(Theme.bar)
         updateTitle()
 
         let column = NSTableColumn(identifier: .init("row"))

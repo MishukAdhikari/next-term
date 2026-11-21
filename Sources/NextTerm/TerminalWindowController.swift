@@ -202,7 +202,7 @@ final class ThemedSplitView: HairlineSplitView {}
 /// Between the editor and the terminal: both have the same background, so the line between them must
 /// show (a hairline a few shades lighter), and it is easy to grab (see effectiveRect).
 final class WorkSplitView: HairlineSplitView {
-    static let line = NSColor(hex: 0x393B40)
+    static let line = Theme.pair(light: NSColor(hex: 0xDFE1E5), dark: NSColor(hex: 0x393B40))
     override var lineColor: NSColor { Self.line }
 
     /// A drag of the divider ended: the user pressed, moved it and let go (a window resize never calls it).
@@ -395,7 +395,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         window.tabbingMode = WindowTabbing.suppressed ? .disallowed : .automatic
         window.tabbingIdentifier = WindowTabbing.projectIdentifier
         window.isReleasedWhenClosed = false
-        window.appearance = NSAppearance(named: .darkAqua)
+        window.appearance = nil // the app\'s look (Settings › General › Appearance)
         super.init(window: window)
 
         window.delegate = self

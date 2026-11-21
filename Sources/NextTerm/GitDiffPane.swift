@@ -68,7 +68,7 @@ final class GitDiffPane: NSView, NSSplitViewDelegate {
         self.root = root
         super.init(frame: .zero)
         wantsLayer = true
-        layer?.backgroundColor = Theme.background.cgColor
+        themedBackground(Theme.background)
         build()
         watch()
     }
@@ -646,7 +646,7 @@ final class GitDiffPane: NSView, NSSplitViewDelegate {
         topBar.spacing = 8
         topBar.edgeInsets = NSEdgeInsets(top: 0, left: 8, bottom: 0, right: 10)
         topBar.wantsLayer = true
-        topBar.layer?.backgroundColor = Theme.bar.cgColor
+        topBar.themedBackground(Theme.bar)
         updateTopBar()
 
         list.onSelectFile = { [weak self] path in self?.select(path: path) }

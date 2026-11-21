@@ -340,7 +340,7 @@ final class WindowColumnView: NSView, ProjectGlowing {
     }
 
     /// The guide's colour: a step lighter than the bar, plainer with Increase Contrast.
-    private static var guideColor: NSColor { DisplayOptions.increasesContrast ? Theme.textDim : NSColor(hex: 0x45474D) }
+    private static var guideColor: NSColor { DisplayOptions.increasesContrast ? Theme.textDim : Theme.pair(light: NSColor(hex: 0xCDD0D6), dark: NSColor(hex: 0x45474D)) }
 
     /// The "+N": how many windows do not fit, in the colour of the most urgent mark among them; unfolded, "All Windows…"
     /// beside it with ⌘O's key. Its tooltip names them.
@@ -651,7 +651,7 @@ final class WindowColumnButton: NSButton {
     }
 
     /// The rail's quiet dot: a grey that is there without drawing the eye.
-    static let restingDot = NSColor(hex: 0x6E7178)
+    static let restingDot = Theme.pair(light: NSColor(hex: 0xA0A4AD), dark: NSColor(hex: 0x6E7178))
 
     /// The dot's colour as it shows now: its project's (a neutral grey without one) while awake, else the resting grey;
     /// with Increase Contrast, its colour always.
@@ -921,7 +921,7 @@ final class WindowColumnButton: NSButton {
                 // A row: the tab list's hover, and a step lighter pressed.
                 (isHighlighted ? Theme.tabHover : TabListRowView.hoverFill).setFill()
             } else {
-                NSColor.white.withAlphaComponent(isHighlighted ? 0.14 : 0.08).setFill()
+                Theme.overlay(isHighlighted ? 0.14 : 0.08).setFill()
             }
             shape.fill()
         }
@@ -1148,7 +1148,7 @@ final class WindowColumnActionButton: NSButton {
             if expanded {
                 (isHighlighted ? Theme.tabHover : TabListRowView.hoverFill).setFill()
             } else {
-                NSColor.white.withAlphaComponent(isHighlighted ? 0.14 : 0.08).setFill()
+                Theme.overlay(isHighlighted ? 0.14 : 0.08).setFill()
             }
             NSBezierPath(roundedRect: plate, xRadius: radius, yRadius: radius).fill()
         }
@@ -1189,7 +1189,7 @@ final class WindowColumnActionButton: NSButton {
         guard !keyLines.isEmpty else { return }
         let place: NSRect = stackRect
         if hovering || isHighlighted {
-            (isHighlighted ? NSColor.white.withAlphaComponent(0.14) : NSColor.white.withAlphaComponent(0.08)).setFill()
+            (isHighlighted ? Theme.overlay(0.14) : Theme.overlay(0.08)).setFill()
             NSBezierPath(roundedRect: place, xRadius: WindowColumnGrid.plateRadius, yRadius: WindowColumnGrid.plateRadius).fill()
         }
         let color: NSColor = hovering ? SwitcherRowStyle.selectedSecondary : WindowColumnView.secondary

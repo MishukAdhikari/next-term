@@ -29,7 +29,7 @@ final class MCPConnectorBar: NSView {
     override init(frame: NSRect) {
         super.init(frame: frame)
         wantsLayer = true
-        layer?.backgroundColor = Theme.bar.cgColor
+        themedBackground(Theme.bar)
         clipsToBounds = true
         setAccessibilityElement(true)
         setAccessibilityRole(.group)

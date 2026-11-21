@@ -267,7 +267,7 @@ final class SwitcherHeadingRowView: NSTableRowView {
 enum SwitcherRowStyle {
     /// Secondary text (folder, branch, destination) on a selected row. `Theme.textDim` is 3.74:1 on the selection's
     /// blue, under the 4.5:1 small text needs; this is 5.10:1.
-    static let selectedSecondary = NSColor(hex: 0xB8BBC2)
+    static let selectedSecondary = Theme.pair(light: NSColor(hex: 0x4A4F5A), dark: NSColor(hex: 0xB8BBC2))
     static let gutterCenter: CGFloat = 20
     /// Where the names start in a row: the gutter, 14 to 26, then 8.
     static let nameX: CGFloat = 34

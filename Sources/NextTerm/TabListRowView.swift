@@ -27,7 +27,7 @@ final class TabListRowView: NSView, NSTextFieldDelegate {
     private static let hintFont = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular)
     /// A hovered row: a step darker than the top bar's hover, so the dim second line on it still reads at 4.5:1
     /// (4.56:1 here, 4.28:1 on the bar's).
-    static let hoverFill = NSColor(hex: 0x35373B)
+    static let hoverFill = Theme.pair(light: NSColor(hex: 0xE3E5E9), dark: NSColor(hex: 0x35373B))
     /// The row's own layers change at once, as its view's colours do: never a fade.
     private static let noAnimations: [String: CAAction] = [
         "backgroundColor": NSNull(), "bounds": NSNull(), "position": NSNull(), "hidden": NSNull(),
@@ -154,7 +154,7 @@ final class TabListRowView: NSView, NSTextFieldDelegate {
         pinView.toolTip = "Pinned: Close Other Tabs leaves it, and closing it asks first."
         addSubview(pinView)
         pinLine.wantsLayer = true
-        pinLine.layer?.backgroundColor = Theme.textDim.withAlphaComponent(0.35).cgColor
+        pinLine.themedBackground(Theme.textDim.withAlphaComponent(0.35))
         pinLine.isHidden = true
         addSubview(pinLine)
         KeyHint.style(hint) // said in the row's own help, as the buttons' keys are in theirs
@@ -268,7 +268,7 @@ final class TabListRowView: NSView, NSTextFieldDelegate {
 
     /// The selected tab's place in the collapsed column, lighter under the pointer, as the rail's.
     private static func slotFill(selected: Bool, hovering: Bool) -> NSColor {
-        let lift = NSColor.white.withAlphaComponent(0.08)
+        let lift = Theme.overlay(0.08)
         guard selected else { return hovering ? lift : .clear }
         guard hovering else { return Theme.background }
         return Theme.background.blended(withFraction: 0.08, of: .white) ?? Theme.background

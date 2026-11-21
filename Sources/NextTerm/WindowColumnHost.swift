@@ -122,7 +122,7 @@ final class WindowColumnHost: NSView {
         edge.onDrag = { [weak self] (event: NSEvent) in self?.column.dragEdge(from: event) }
         addSubview(edge) // over the column's rows and the content beside it
         coverStrip.wantsLayer = true
-        coverStrip.layer?.backgroundColor = Theme.bar.cgColor
+        coverStrip.themedBackground(Theme.bar)
         coverStrip.isHidden = true
         addSubview(coverStrip)
         column.onPointer = { [weak self] (inside: Bool) in self?.railPointer(inside) }
@@ -495,7 +495,7 @@ final class WindowColumnHost: NSView {
         // Its background and shadow, round the clip that reveals the list: a clip's mask would cut the shadow off.
         let shade = NSView()
         shade.wantsLayer = true
-        shade.layer?.backgroundColor = Theme.bar.cgColor
+        shade.themedBackground(Theme.bar)
         shade.layer?.shadowColor = NSColor.black.cgColor
         shade.layer?.shadowRadius = 5
         shade.layer?.shadowOffset = .zero

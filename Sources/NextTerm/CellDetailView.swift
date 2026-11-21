@@ -102,7 +102,7 @@ final class CellDetailView: NSView, NSTableViewDataSource, NSTableViewDelegate, 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
-        layer?.backgroundColor = Theme.background.cgColor
+        themedBackground(Theme.background)
         build()
         show(nil, items: [], current: -1)
     }
@@ -122,7 +122,7 @@ final class CellDetailView: NSView, NSTableViewDataSource, NSTableViewDelegate, 
         header.spacing = 8
         header.edgeInsets = NSEdgeInsets(top: 0, left: 10, bottom: 0, right: 8)
         header.wantsLayer = true
-        header.layer?.backgroundColor = Theme.bar.cgColor
+        header.themedBackground(Theme.bar)
 
         textView.isEditable = false
         textView.isSelectable = true
@@ -225,7 +225,7 @@ final class CellDetailView: NSView, NSTableViewDataSource, NSTableViewDelegate, 
         for view in [noteLabel, editLabel, buttons] { view.widthAnchor.constraint(equalTo: footer.widthAnchor, constant: -18).isActive = true }
         footer.edgeInsets = NSEdgeInsets(top: 5, left: 10, bottom: 5, right: 8)
         footer.wantsLayer = true
-        footer.layer?.backgroundColor = Theme.bar.cgColor
+        footer.themedBackground(Theme.bar)
 
         for view in [header, split, footer] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false

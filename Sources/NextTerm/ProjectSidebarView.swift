@@ -209,7 +209,7 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     override init(frame: NSRect) {
         super.init(frame: frame)
         wantsLayer = true
-        layer?.backgroundColor = Theme.bar.cgColor
+        themedBackground(Theme.bar)
 
         let column = NSTableColumn(identifier: .init("name"))
         column.resizingMask = .autoresizingMask

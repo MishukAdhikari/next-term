@@ -287,7 +287,7 @@ final class GitDiffListView: NSView, NSOutlineViewDataSource, NSOutlineViewDeleg
         commitsCount.textColor = Theme.textDim
         commitsCount.alignment = .right
         commitsHeader.wantsLayer = true
-        commitsHeader.layer?.backgroundColor = Theme.bar.cgColor
+        commitsHeader.themedBackground(Theme.bar)
         let lower = NSView()
         for view in [commitsTitle, commitsCount] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false

@@ -167,7 +167,7 @@ final class CompletionPopup: NSObject, NSTableViewDataSource, NSTableViewDelegat
         // The app's own dark surface, as Go to File's (a system material washes out over the dark theme).
         let background = NSView()
         background.wantsLayer = true
-        background.layer?.backgroundColor = Theme.bar.cgColor
+        background.themedBackground(Theme.bar)
         background.layer?.cornerRadius = 7
         background.layer?.masksToBounds = true
         background.layer?.borderWidth = 1
@@ -298,7 +298,7 @@ final class CompletionCell: NSTableCellView {
             let isMarked = marked.contains(index)
             text.append(NSAttributedString(string: String(scalar), attributes: [
                 .font: isMarked ? CompletionPopup.markFont : CompletionPopup.nameFont,
-                .foregroundColor: isMarked ? (chosen ? NSColor.white : NSColor(hex: 0x6EA4F7)) : base,
+                .foregroundColor: isMarked ? (chosen ? NSColor.white : Theme.gitModified) : base,
             ]))
         }
         name.attributedStringValue = text
@@ -306,7 +306,7 @@ final class CompletionCell: NSTableCellView {
         detail.isHidden = row.description.isEmpty
         let symbol = row.isFolder ? "folder" : "doc"
         icon.image = NSImage(systemSymbolName: symbol, accessibilityDescription: row.isFolder ? "Folder" : "File")
-        icon.contentTintColor = row.isFolder ? NSColor(hex: 0x6EA4F7) : Theme.textDim
+        icon.contentTintColor = row.isFolder ? Theme.gitModified : Theme.textDim
         toolTip = row.description.isEmpty ? row.text : "\(row.text) — \(row.description)"
         setAccessibilityLabel(CompletionPopup.spoken(row))
     }

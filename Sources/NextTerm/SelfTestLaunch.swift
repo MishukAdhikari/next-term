@@ -161,7 +161,7 @@ extension SelfTest {
             if let field = next as? NSTextField, field.stringValue.isEmpty { blanks.append(field) }
             views.append(contentsOf: next.subviews)
         }
-        let silent = blanks.count == 11 && blanks.allSatisfy { !$0.isAccessibilityElement() }
+        let silent = blanks.count == 13 && blanks.allSatisfy { !$0.isAccessibilityElement() }
         let beside = besideRadios && besideAsk && besideScrollback
         check(titles && column && beside && oneEdge && readOnce && silent,
               "Settings › General: At launch, At quit, Sessions, Windows, Projects, Tips and Privacy beside their controls, in a 110 pt label column as in the other tabs",

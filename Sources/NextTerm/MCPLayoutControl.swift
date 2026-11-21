@@ -383,6 +383,9 @@ extension MCPWriteControl {
         switch setting.name {
         case "terminal_font_family": return .choice(Preferences.terminalFontFamily ?? MCPSettings.defaultFont)
         case "terminal_font_size": return app.terminalOwnFontSize.map { .number(Double($0)) } ?? .choice(MCPSettings.sameAsEditor)
+        case "appearance": return .choice(Preferences.appearance.rawValue)
+        case "light_theme": return .choice(Theme.palettes.light.id)
+        case "dark_theme": return .choice(Theme.palettes.dark.id)
         case "terminal_colours": return .choice(Preferences.terminalPalette == nil ? "next_term" : "imported")
         case "terminal_cursor": return .choice(Preferences.terminalCursorShape.rawValue)
         case "terminal_cursor_blink": return .flag(Preferences.terminalCursorBlinks)
@@ -442,6 +445,9 @@ extension MCPWriteControl {
         case ("terminal_font_family", .choice(let family)): app.setTerminalFontFamily(family == MCPSettings.defaultFont ? nil : family)
         case ("terminal_font_size", .number(let size)): app.setTerminalFontSize(CGFloat(size))
         case ("terminal_font_size", .choice): app.setTerminalFontSize(nil)
+        case ("appearance", .choice(let raw)): Preferences.appearance = AppAppearance(stored: raw)
+        case ("light_theme", .choice(let id)): Preferences.lightTheme = id
+        case ("dark_theme", .choice(let id)): Preferences.darkTheme = id
         case ("terminal_colours", .choice(let name)):
             // Imported: the colours Settings keeps from the last import, as its Colours menu offers them.
             app.setTerminalPalette(name == "imported" ? Preferences.customTerminalPalette : nil)

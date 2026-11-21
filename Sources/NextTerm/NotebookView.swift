@@ -50,7 +50,7 @@ final class NotebookPane: NSView, NSMenuDelegate {
         textView = NotebookTextView(frame: NSRect(x: 0, y: 0, width: 600, height: 400), textContainer: container)
         super.init(frame: .zero)
         wantsLayer = true
-        layer?.backgroundColor = Theme.background.cgColor
+        themedBackground(Theme.background)
         build()
         reload()
     }
@@ -82,7 +82,7 @@ final class NotebookPane: NSView, NSMenuDelegate {
         header.spacing = 10
         header.edgeInsets = NSEdgeInsets(top: 0, left: 12, bottom: 0, right: 12)
         header.wantsLayer = true
-        header.layer?.backgroundColor = Theme.bar.cgColor
+        header.themedBackground(Theme.bar)
 
         textView.isEditable = false
         textView.isSelectable = true
@@ -449,11 +449,11 @@ enum NotebookRenderer {
         let images: [(attachment: NSTextAttachment, image: Notebook.Image)]
     }
 
-    static let codeFill = NSColor(hex: 0x2B2D30)
-    static let codeStroke = NSColor(hex: 0x35373B)
-    static let stderrFill = NSColor(hex: 0x33282A)
-    static let errorFill = NSColor(hex: 0x3A2527)
-    static let errorText = NSColor(hex: 0xF0928D)
+    static let codeFill = Theme.bar
+    static let codeStroke = Theme.pair(light: NSColor(hex: 0xE1E3E8), dark: NSColor(hex: 0x35373B))
+    static let stderrFill = Theme.pair(light: NSColor(hex: 0xFDF0F0), dark: NSColor(hex: 0x33282A))
+    static let errorFill = Theme.pair(light: NSColor(hex: 0xFBE3E3), dark: NSColor(hex: 0x3A2527))
+    static let errorText = Theme.pair(light: NSColor(hex: 0xB42318), dark: NSColor(hex: 0xF0928D))
 
     static func render(_ notebook: Notebook, style: Style) -> Rendered {
         var builder = Builder(style: style)

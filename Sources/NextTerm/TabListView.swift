@@ -111,7 +111,7 @@ final class TabListView: NSView {
     override init(frame: NSRect) {
         super.init(frame: frame)
         wantsLayer = true
-        layer?.backgroundColor = Theme.bar.cgColor
+        themedBackground(Theme.bar)
         layerContentsRedrawPolicy = .onSetNeedsDisplay
 
         document.list = self
@@ -651,7 +651,7 @@ final class TabListChipButton: NSButton {
         bezelStyle = .regularSquare
         isBordered = false
         wantsLayer = true
-        layer?.backgroundColor = Theme.background.cgColor
+        themedBackground(Theme.background)
         layer?.cornerRadius = Self.height / 2
         refusesFirstResponder = true // the list never takes the keyboard from the terminal
         addSubview(dot)

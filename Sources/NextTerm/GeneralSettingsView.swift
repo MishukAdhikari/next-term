@@ -36,6 +36,12 @@ final class GeneralSettingsView: NSView {
     let quitLabel = NSTextField(labelWithString: "At quit:")
     let sessionsLabel = NSTextField(labelWithString: "Sessions:")
     let layoutLabel = NSTextField(labelWithString: "Layout:")
+    /// Appearance: Match System, Light or Dark (plan 049).
+    let appearanceLabel = NSTextField(labelWithString: "Appearance:")
+    /// The theme each look takes, by name: Next Term Light and Next Term Dark now, more later.
+    let lightThemeChoice = NSPopUpButton(frame: .zero, pullsDown: false)
+    let darkThemeChoice = NSPopUpButton(frame: .zero, pullsDown: false)
+    let appearanceChoice = NSSegmentedControl(labels: AppAppearance.allCases.map(\.title), trackingMode: .selectOne, target: nil, action: nil)
     let windowsLabel = NSTextField(labelWithString: "Windows:")
     let projectsLabel = NSTextField(labelWithString: "Projects:")
     let tipsLabel = NSTextField(labelWithString: "Tips:")
@@ -77,6 +83,23 @@ final class GeneralSettingsView: NSView {
         resetTips.bezelStyle = .rounded
         resetTips.target = self
         resetTips.action = #selector(resetTipsClicked)
+        appearanceChoice.target = self
+        appearanceChoice.action = #selector(appearanceChanged)
+        appearanceChoice.selectedSegment = AppAppearance.allCases.firstIndex(of: Preferences.appearance) ?? 2
+        appearanceChoice.setAccessibilityLabel("Appearance")
+        for (popUp, themes, chosen) in [(lightThemeChoice, ThemePalette.lightThemes, Theme.palettes.light.id),
+                                        (darkThemeChoice, ThemePalette.darkThemes, Theme.palettes.dark.id)] {
+            popUp.removeAllItems()
+            for theme in themes {
+                popUp.addItem(withTitle: theme.name)
+                popUp.lastItem?.representedObject = theme.id
+                if theme.id == chosen { popUp.select(popUp.lastItem) }
+            }
+            popUp.target = self
+            popUp.action = #selector(themeChanged(_:))
+        }
+        lightThemeChoice.setAccessibilityLabel("Light theme")
+        darkThemeChoice.setAccessibilityLabel("Dark theme")
         chooseLayout.bezelStyle = .rounded
         chooseLayout.target = self
         chooseLayout.action = #selector(chooseLayoutClicked)
@@ -137,6 +160,18 @@ final class GeneralSettingsView: NSView {
         let askNoteRow = row(blank(), [askNote])
         let sessionsRow = row(sessionsLabel, [keepScrollback])
         let scrollbackNoteRow = row(blank(), [scrollbackNote])
+        let lightWords = NSTextField(labelWithString: "Light")
+        let darkWords = NSTextField(labelWithString: "Dark")
+        for words in [lightWords, darkWords] { words.setAccessibilityElement(false) }
+        let appearanceRow = row(appearanceLabel, [appearanceChoice])
+        let themesRow = row(blank(), [lightWords, lightThemeChoice, darkWords, darkThemeChoice])
+        themesRow.setCustomSpacing(6, after: lightWords)
+        themesRow.setCustomSpacing(16, after: lightThemeChoice)
+        themesRow.setCustomSpacing(6, after: darkWords)
+        let appearanceNote = note("Light or dark windows, terminals and code, each in the theme chosen for it. Match System follows the "
+            + "Mac\u{2019}s own as it changes.")
+        appearanceChoice.setAccessibilityHelp(appearanceNote.stringValue)
+        let appearanceNoteRow = row(blank(), [appearanceNote])
         let layoutRow = row(layoutLabel, [chooseLayout])
         let layoutNoteRow = row(blank(), [layoutNote])
         let windowsRow = row(windowsLabel, [projectColors])
@@ -153,7 +188,7 @@ final class GeneralSettingsView: NSView {
         let resetRow = row(blank(), [resetTips])
         let tipsNoteRow = row(blank(), [tipsNote])
         let privacyRow = row(privacyLabel, [fullDiskAccess])
-        let rows: [NSView] = [launchRow, opensNoteRow, quitRow, askNoteRow, sessionsRow, scrollbackNoteRow, layoutRow, layoutNoteRow, windowsRow, colorsNoteRow,
+        let rows: [NSView] = [launchRow, opensNoteRow, quitRow, askNoteRow, sessionsRow, scrollbackNoteRow, appearanceRow, themesRow, appearanceNoteRow, layoutRow, layoutNoteRow, windowsRow, colorsNoteRow,
                               columnRow, columnNoteRow, projectsRow, projectsNoteRow, tipsRow, resetRow, tipsNoteRow, privacyRow,
                               row(blank(), [privacyNote])]
         let stack = NSStackView(views: rows)
@@ -164,6 +199,7 @@ final class GeneralSettingsView: NSView {
         stack.setCustomSpacing(20, after: askNoteRow)
         stack.setCustomSpacing(20, after: scrollbackNoteRow)
         stack.setCustomSpacing(20, after: layoutNoteRow)
+        stack.setCustomSpacing(20, after: appearanceNoteRow)
         stack.setCustomSpacing(12, after: colorsNoteRow)
         stack.setCustomSpacing(20, after: columnNoteRow)
         stack.setCustomSpacing(20, after: projectsNoteRow)
@@ -248,6 +284,17 @@ final class GeneralSettingsView: NSView {
     }
 
     /// Choose a Layout…: the layout picker, over Settings.
+    @objc private func themeChanged(_ sender: NSPopUpButton) {
+        guard let id = sender.selectedItem?.representedObject as? String else { return }
+        if sender === lightThemeChoice { Preferences.lightTheme = id } else { Preferences.darkTheme = id }
+    }
+
+    @objc private func appearanceChanged() {
+        let all = AppAppearance.allCases
+        guard all.indices.contains(appearanceChoice.selectedSegment) else { return }
+        Preferences.appearance = all[appearanceChoice.selectedSegment]
+    }
+
     @objc private func chooseLayoutClicked() {
         guard let window else { return }
         LayoutPickerSheet.present(over: window)

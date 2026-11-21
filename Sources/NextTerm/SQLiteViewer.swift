@@ -97,7 +97,7 @@ final class DatabasePane: NSView, NSTableViewDataSource, NSTableViewDelegate {
         self.url = URL(fileURLWithPath: canonicalPath(url.path))
         super.init(frame: .zero)
         wantsLayer = true
-        layer?.backgroundColor = Theme.background.cgColor
+        themedBackground(Theme.background)
         build()
         reloadTables()
     }
@@ -141,7 +141,7 @@ final class DatabasePane: NSView, NSTableViewDataSource, NSTableViewDelegate {
         header.spacing = 10
         header.edgeInsets = NSEdgeInsets(top: 0, left: 12, bottom: 0, right: 12)
         header.wantsLayer = true
-        header.layer?.backgroundColor = Theme.bar.cgColor
+        header.themedBackground(Theme.bar)
 
         let listColumn = NSTableColumn(identifier: .init("table"))
         listColumn.resizingMask = .autoresizingMask
@@ -225,7 +225,7 @@ final class DatabasePane: NSView, NSTableViewDataSource, NSTableViewDelegate {
         footer.spacing = 6
         footer.edgeInsets = NSEdgeInsets(top: 0, left: 10, bottom: 0, right: 8)
         footer.wantsLayer = true
-        footer.layer?.backgroundColor = Theme.bar.cgColor
+        footer.themedBackground(Theme.bar)
         for view in [gridScroll, footer] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             right.addSubview(view)

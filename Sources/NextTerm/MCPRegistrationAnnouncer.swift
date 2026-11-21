@@ -88,7 +88,7 @@ final class MCPRegistrationCard: NSView {
     init() {
         super.init(frame: .zero)
         wantsLayer = true
-        layer?.backgroundColor = Theme.tabHover.cgColor
+        themedBackground(Theme.tabHover)
         layer?.cornerRadius = 8
         layer?.borderWidth = 1
         layer?.borderColor = WorkSplitView.line.cgColor

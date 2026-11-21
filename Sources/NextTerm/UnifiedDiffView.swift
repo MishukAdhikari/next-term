@@ -446,7 +446,7 @@ final class UnifiedTextView: NSTextView {
 /// The unified column's gutter: a bar, the line number and its "−" or "+" for each row, tinted as the row
 /// is; a fold's chevron. It stays put while the text scrolls sideways.
 final class UnifiedRuler: NSRulerView {
-    static let foldBand = NSColor(hex: 0x26282E)
+    static let foldBand = Theme.currentLine
     private weak var column: UnifiedColumn?
 
     init(column: UnifiedColumn) {
@@ -500,7 +500,7 @@ final class UnifiedRuler: NSRulerView {
                 break
             }
             let current = row.hunk != nil && row.hunk == column.currentHunk
-            let dim = NSColor(hex: current ? 0x8C909A : 0x5A5F69)
+            let dim = current ? Theme.lineNumberCurrent : Theme.lineNumber
             if let number = row.number {
                 let label = "\(number)" as NSString
                 let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: dim]

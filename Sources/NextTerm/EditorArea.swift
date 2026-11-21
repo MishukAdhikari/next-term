@@ -104,7 +104,7 @@ final class EditorArea: NSView, TabBarViewDelegate {
         super.init(frame: frame)
         isHidden = true // nothing open yet
         wantsLayer = true
-        layer?.backgroundColor = Theme.background.cgColor
+        themedBackground(Theme.background)
         tabBar.allowsNewTab = false
         tabBar.allowsRename = false
         tabBar.kind = "file"
@@ -904,7 +904,7 @@ final class EditorBanner: NSView {
     override init(frame: NSRect) {
         super.init(frame: frame)
         wantsLayer = true
-        layer?.backgroundColor = NSColor(hex: 0x3D3223).cgColor
+        themedBackground(Theme.pair(light: NSColor(hex: 0xFFF4E0), dark: NSColor(hex: 0x3D3223)))
         clipsToBounds = true
         label.font = .systemFont(ofSize: 12)
         label.textColor = Theme.text
