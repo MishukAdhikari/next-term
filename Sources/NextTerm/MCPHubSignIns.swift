@@ -181,7 +181,8 @@ enum MCPHubSignIns {
         withKey(reason: "keep your sign-in to \(name) in Secrets", makes: true) { key in
             guard let key else { return done("Not approved, so Next Term didn\u{2019}t sign in to \(name).") }
             let challenge = MCPHubOAuthChallenge.bearer(challenges[at])
-            let own = server.oauth.map { MCPHubOAuthRegistration.Own(clientID: $0.clientID, secretName: $0.secretName, issuer: $0.issuer) }
+            let own = server.oauth.map { MCPHubOAuthRegistration.Own(clientID: $0.clientID, secretName: $0.secretName, issuer: $0.issuer,
+                                                                         redirect: $0.redirect) }
             let secretName = server.oauth?.secretName
             let flow = MCPHubSignIn(name: name, server: url, challenge: challenge, own: own,
                                     readSecret: secretName.map { secretName in { host in readSecret(secretName, server: name, host: host) } },
@@ -494,15 +495,28 @@ enum MCPHubSignIns {
                 }
             }
             guard let agent else { return granted() }
-            consent(record, agent: agent, name: name, store: signIns, deadline: deadline, caller: caller, pid: pid, fail: fail) { granted() }
+            // The agent's other sign-ins it isn't allowed yet, asked about in the same panel: one question an agent, not one
+            // a server (each server still named, each consent still recorded).
+            let others = body.records.filter { other in
+                guard other.id != record.id, !other.consents.contains(agent), !refused.contains(other.id + "\u{0}" + agent) else { return false }
+                switch other.state {
+                case .signedIn, .refreshing: return true
+                case .signedOut, .needsMoreAccess: return false
+                }
+            }
+            consent(record, others: others, agent: agent, name: name, store: signIns, deadline: deadline, caller: caller, pid: pid,
+                    fail: fail) { granted() }
         }
     }
 
     /// R15: the first time each agent kind uses each sign-in, the user approves once on the Mac; recorded in the sealed
-    /// file, so an agent can't grant itself. Don't Allow refuses that agent for the sign-in until Next Term quits. A need
-    /// that outlasts its call while the user decides is told so; an Allow that comes later is kept in the file for the
-    /// agent's next need.
-    private static func consent(_ record: SignInFile.Record, agent: String, name: String, store: SignInStore, deadline: Date,
+    /// file, so an agent can't grant itself. The panel names the sign-in needed now and the agent's `others` not yet
+    /// allowed, and Allow allows each it names, so an agent asks once rather than once a server. Don't Allow refuses that
+    /// agent the sign-in needed now, until Next Term quits; the others are asked about when they are needed. A need that
+    /// outlasts its call while the user decides is told so; an Allow that comes later is kept in the file for the agent's
+    /// next need.
+    private static func consent(_ record: SignInFile.Record, others: [SignInFile.Record] = [], agent: String, name: String,
+                                store: SignInStore, deadline: Date,
                                 caller: TerminalTab?, pid: pid_t?, fail: @escaping (String) -> Void, granted: @escaping () -> Void) {
         if record.consents.contains(agent) { return granted() }
         let title = MCPHubSignInWords.agentTitle(agent)
@@ -524,26 +538,33 @@ enum MCPHubSignIns {
             return
         }
         asking[ask] = [reply]
-        let words = MCPHubSignInWords.consent(agent: title, name)
+        // The others join this panel: a need of one of them meanwhile waits for its answer rather than a panel of its own.
+        let group = others.filter { asking[$0.id + "\u{0}" + agent] == nil }
+        for other in group { asking[other.id + "\u{0}" + agent] = [] }
+        let words = group.isEmpty ? MCPHubSignInWords.consent(agent: title, name)
+            : MCPHubSignInWords.consent(agent: title, names: [name] + group.map(\.name))
         let facts = SecretsMCP.askedBy(caller: caller, pid: pid, requester: nil)
         let requester = [title, facts.tab.map { "in " + $0 }, facts.project.map { "of " + ($0 as NSString).lastPathComponent }]
             .compactMap { $0 }.joined(separator: " ")
         let request = AgentApprovalWindow.Request(title: words.title, requester: requester, agentWords: nil, details: words.details,
                                                   approveTitle: "Allow", declineTitle: "Don\u{2019}t Allow")
+        let asks = [ask] + group.map { $0.id + "\u{0}" + agent }
         func answer(_ allowed: Bool) {
             panels[ask] = nil
             func tell() {
-                let waiting = asking.removeValue(forKey: ask) ?? []
-                for each in waiting { each(allowed) }
+                for each in asks {
+                    let waiting = asking.removeValue(forKey: each) ?? []
+                    for reply in waiting { reply(allowed) }
+                }
             }
             guard allowed else {
-                refused.insert(ask)
+                refused.insert(ask) // the one needed now; the others are asked about again when needed
                 return tell()
             }
             // Written off the main thread: the file's lock may be held by a refresh waiting on its server.
-            let id = record.id
+            let ids = [record.id] + group.map(\.id)
             DispatchQueue.global(qos: .userInitiated).async {
-                try? store.setConsent(id: id, agent: agent, allowed: true)
+                for id in ids { try? store.setConsent(id: id, agent: agent, allowed: true) }
                 DispatchQueue.main.async {
                     MainActor.assumeIsolated {
                         NotificationCenter.default.post(name: MCPHubControl.changed, object: nil)

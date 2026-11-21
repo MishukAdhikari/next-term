@@ -97,7 +97,10 @@ public enum MCPHubOAuthRegistration {
         public var secret: String?
         public var secretName: String?
         public var issuer: String?
-        public init(clientID: String, secret: String? = nil, secretName: String? = nil, issuer: String? = nil) {
+        /// The exact callback URL the app was registered with, port and all; nil for any port.
+        public var redirect: String?
+        public init(clientID: String, secret: String? = nil, secretName: String? = nil, issuer: String? = nil, redirect: String? = nil) {
+            self.redirect = redirect
             self.clientID = clientID
             self.secret = secret
             self.secretName = secretName

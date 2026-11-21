@@ -88,8 +88,11 @@ public final class MCPHubSignIn: @unchecked Sendable {
         let state = MCPHubOAuthFlow.random(32)
         let box = PendingBox()
         let listener: MCPHubLoopback
+        // The user's own app registered with an exact callback (Slack holds it to its port): that port, or nothing.
+        let exact = chosen?.kind == .preRegistered ? own?.redirect : nil
+        let exactPort = exact.flatMap(MCPHubServer.OAuthApp.redirectPort)
         do {
-            listener = try MCPHubLoopback(port: chosen?.port ?? 0) { [name] query in
+            listener = try MCPHubLoopback(port: exactPort ?? chosen?.port ?? 0, strict: exactPort != nil) { [name] query in
                 guard let pending = box.pending else { return nil }
                 switch MCPHubOAuthFlow.callback(query: query, pending: pending) {
                 case .notOurs: return nil
@@ -100,6 +103,10 @@ public final class MCPHubSignIn: @unchecked Sendable {
                 }
             }
         } catch {
+            if let exactPort {
+                return .failure(MCPHubOAuth.Failure("Another program on this Mac is using port \(exactPort), the one your OAuth app\u{2019}s callback "
+                    + "names, so Next Term can\u{2019}t listen for the sign-in. Quit it and try again, or give the app another callback."))
+            }
             return .failure(MCPHubOAuth.Failure("Next Term couldn\u{2019}t listen for the sign-in\u{2019}s answer on this Mac."))
         }
         defer { listener.close() }
@@ -127,7 +134,7 @@ public final class MCPHubSignIn: @unchecked Sendable {
             return .failure(MCPHubOAuth.Failure("Next Term couldn\u{2019}t find how to sign in to \(name)."))
         }
         let wanted = scopes ?? metadata.scopes(challenge: challenge)
-        let pending = MCPHubOAuthFlow.Pending(state: state, metadata: metadata, client: client, redirect: listener.redirect, scopes: wanted)
+        let pending = MCPHubOAuthFlow.Pending(state: state, metadata: metadata, client: client, redirect: exact ?? listener.redirect, scopes: wanted)
         box.pending = pending
         guard let url = pending.authorizationURL, MCPHubOAuthURL.isOpenable(url, server: server) else {
             return .failure(MCPHubOAuth.Failure("\(name)\u{2019}s sign-in address isn\u{2019}t one Next Term opens."))

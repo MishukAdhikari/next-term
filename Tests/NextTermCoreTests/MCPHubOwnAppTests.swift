@@ -219,6 +219,27 @@ import Testing
         #expect(!String(decoding: gone, as: UTF8.self).contains("oauth"))
     }
 
+    @Test func anExactCallbackIsKeptAndChecked() throws {
+        #expect(MCPHubServer.OAuthApp.redirectPort("http://localhost:47819/callback") == 47819)
+        #expect(MCPHubServer.OAuthApp.redirectPort("http://127.0.0.1:8080/oauth/callback") == 8080)
+        for bad in ["http://localhost/callback", "https://localhost:47819/callback", "http://example.com:47819/callback",
+                    "http://localhost:47819", "http://user@localhost:47819/callback", "http://localhost:47819/callback?x=1"] {
+            #expect(MCPHubServer.OAuthApp.redirectPort(bad) == nil, "\(bad)")
+        }
+        var slack = MCPHubServer.remote("slack", url: "https://mcp.slack.com/mcp")
+        slack.oauth = MCPHubServer.OAuthApp(clientID: "123.456", secretName: "SLACK_OAUTH_CLIENT_SECRET", redirect: "http://localhost:47819/callback")
+        let data = try #require(try MCPHubFile.updated(nil, place: .user, .set(slack)).get())
+        #expect(String(decoding: data, as: UTF8.self).contains("\"redirect\": \"http:\\/\\/localhost:47819\\/callback\"")
+                || String(decoding: data, as: UTF8.self).contains("\"redirect\": \"http://localhost:47819/callback\""))
+        let back = try MCPHubServer.decode(name: "slack", MCPHubFile.parse(data).get().document.entries[0].value, place: .user).get()
+        #expect(back == slack)
+        let json = #"{"mcpServers": {"slack": {"type": "http", "url": "https://mcp.slack.com/mcp", "nextTerm": {"oauth": {"clientID": "1.2", "redirect": "https://example.com/cb"}}}}}"#
+        guard case .failure(let broken) = MCPHubServer.decode(name: "slack", try Self.read(json), place: .user) else {
+            return #expect(Bool(false), "a callback off this Mac is refused")
+        }
+        #expect(broken.reasons.contains { $0.contains("nextTerm.oauth.redirect") })
+    }
+
     @Test func aSecretWrittenIntoTheEntryIsRefused() throws {
         func reasons(_ oauth: String, type: String = "\"type\": \"http\", \"url\": \"https://api.githubcopilot.com/mcp/\"") throws -> [String] {
             let json = "{\"mcpServers\": {\"github\": {\(type), \"nextTerm\": {\"oauth\": \(oauth)}}}}"

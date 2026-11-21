@@ -37,9 +37,11 @@ enum MCPHubRemoteControl {
             return fail("Next Term reaches remote MCP servers only for an agent on this Mac, not one in a remote tab.")
         }
         guard let name = arguments["server"] as? String, let list = arguments["list"] as? String, let url = arguments["url"] as? String,
-              let op = arguments["op"] as? String, op == "tools" || op == "call" else {
+              let op = arguments["op"] as? String, op == "tools" || op == "call" || op == "state" else {
             return fail("That isn't a request Next Term's MCP hub makes.")
         }
+        // mcp_servers' question: the server's state as Settings shows it (its last need, its sign-in), sending nothing.
+        if op == "state" { return reply(MCPServer.CallResult(text: stateAnswer(name: name, list: list, url: url), isError: false)) }
         let tool = arguments["tool"] as? String ?? ""
         if op == "call", tool.isEmpty { return fail("Name the tool to call.") }
         let toolArguments = arguments["arguments"] as? [String: Any] ?? [:]
@@ -79,6 +81,25 @@ enum MCPHubRemoteControl {
                 }
             }
         }
+    }
+
+    /// A server's state for mcp_servers, as JSON: what Settings' State column says, from the needs this Mac's agents and
+    /// Settings made and the sign-in Next Term holds, so an agent's list never says "ready" for a server that needs the user.
+    static func stateAnswer(name: String, list: String, url: String) -> String {
+        var server = MCPHubServer(name: name, transport: .http)
+        server.url = url
+        let state = MCPHubOverview.ran(server, list, MCPHubControl.lastRuns, MCPHubSignIns.states())
+        var fields = MCPServer.stateFields(state)
+        switch state {
+        case .needsSignIn:
+            fields["note"] = "It needs the user to sign in, in \(MCPHubSignInWords.settings); Next Term then keeps it signed in for every agent. "
+                + "Tell the user before calling it."
+        case .signedOut: fields["note"] = "Its sign-in lapsed: the user reconnects it in \(MCPHubSignInWords.settings)."
+        case .needsMoreAccess: fields["note"] = "It needs more access: the user reconnects it in \(MCPHubSignInWords.settings)."
+        default: break
+        }
+        let data = (try? JSONSerialization.data(withJSONObject: fields, options: [.sortedKeys])) ?? Data("{}".utf8)
+        return String(decoding: data, as: UTF8.self)
     }
 
     // MARK: Check Now
