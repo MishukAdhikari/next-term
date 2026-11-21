@@ -20,6 +20,8 @@ final class PaneView: NSView {
     let chatStrip = LiveChatStrip()
     /// The live chat over the terminal, made the first time it shows. The terminal keeps running under it.
     private(set) var liveChat: LiveChatView?
+    /// The agent the tab ran when its chat strip last looked: the prompt box closes when it ends or another takes its place.
+    private var boxAgent: AgentKind?
 
     init(tab: TerminalTab) {
         self.tab = tab
@@ -134,6 +136,11 @@ final class PaneView: NSView {
     /// The strip follows the tab: shown while its agent has a live chat and the setting is on; gone (and the chat with
     /// it) when the agent ends or the setting goes off.
     func updateChatStrip() {
+        // The prompt box was for this agent: it ends, or another starts in its place, and the box goes with it. A box
+        // opened at the shell stays while an agent starts from it.
+        let agent = tab.localAgent
+        if let was = boxAgent, was != agent { setPromptBox(shown: false) }
+        boxAgent = agent
         let offered = LiveChatView.isOn && LiveChatView.offers(tab)
         if !offered, showsChat { setChat(shown: false) }
         // The first time the tab offers a chat: its start view, else Settings › Agents › Open agent tabs as chat (plan 047).
@@ -179,10 +186,10 @@ final class PaneView: NSView {
             let appearing = chat.isHidden || chat.alphaValue < 1
             chat.isHidden = false
             chat.refresh()
-            // The terminal's prompt box goes while the chat shows: the chat has its own, and the box's strip sits above
-            // the chat, so it would draw over the chat's. The keyboard it had goes to the chat's.
+            // The terminal's prompt box closes when the chat shows: the chat has its own, and the box sat above the
+            // chat's. It stays closed on the way back to the terminal (⇧⌘I opens it). The keyboard it had goes to the chat's.
             let boxHadKeyboard = promptBox.map { window?.firstResponder === $0.textView } ?? false
-            boxArea.isHidden = true
+            setPromptBox(shown: false)
             if focus || boxHadKeyboard || window?.firstResponder === tab.view { window?.makeFirstResponder(chat.composer.textView) }
             let coverTerminal = { [weak self, weak chat] in
                 guard let self, let chat, self.liveChat === chat, !chat.isHidden else { return }
@@ -203,10 +210,8 @@ final class PaneView: NSView {
             let had = chat.window != nil && !chat.isHidden
             liveChat = nil
             LiveChatView.release(tab)
-            // The terminal first, drawn as its screen is now, with its prompt box if it had one shown, then the chat fades
-            // away above it.
+            // The terminal first, drawn as its screen is now, then the chat fades away above it.
             tab.view.isHidden = false
-            boxArea.isHidden = false
             tab.view.needsDisplay = true
             if had { window?.makeFirstResponder(tab.view) }
             if had, Self.fades {

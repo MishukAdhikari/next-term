@@ -48,5 +48,49 @@ extension SelfTest {
         check(escaped, "prompt box: Esc in the empty box reaches the program", read().debugDescription)
         holder.togglePromptBox(nil)
         check(!group.paneView(tab).showsPromptBox && holder.window?.firstResponder === tab.view, "prompt box: ⇧⌘I from the box hides it, the terminal takes the keyboard")
+        // A tab of its own: cat above reads raw, so nothing ends it from the keyboard.
+        let agentTab = holder.addTab(directory: base)
+        _ = await wait(20) { agentTab.status.integrated }
+        guard let agentGroup = holder.groups.first(where: { $0.contains(agentTab) }) else { return check(false, "prompt box: a second tab opens") }
+        await agentChangeChecks(holder: holder, tab: agentTab, pane: agentGroup.paneView(agentTab), base: base)
+    }
+
+    /// The box belongs to the tab's agent: it closes when the agent ends, and when another agent takes its place; the
+    /// terminal takes the keyboard if the box had it. Stand-ins: command-code ends on a line, codex reads until ⌃C.
+    private static func agentChangeChecks(holder: TerminalWindowController, tab: TerminalTab, pane: PaneView, base: String) async {
+        let fm = FileManager.default
+        let bin = base + "/bin"
+        try? fm.createDirectory(atPath: bin, withIntermediateDirectories: true)
+        let codex = bin + "/codex"
+        let scripts = [bin + "/command-code": "#!/bin/sh\nread line\n",
+                       codex: "#!/bin/sh\nexec cat > /dev/null\n"]
+        for (path, text) in scripts {
+            try? text.write(toFile: path, atomically: true, encoding: .utf8)
+            try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: path)
+        }
+        func settled(_ kind: AgentKind?) async -> Bool { await wait(10) { holder.refreshPaneHeaders(); return tab.localAgent == kind } }
+        tab.view.send(txt: ShellQuote.quote(bin + "/command-code") + "\r")
+        guard await settled(.commandCode) else {
+            return check(false, "prompt box: a Command Code stand-in runs", "agent \(String(describing: tab.localAgent)), program \(tab.status.program)")
+        }
+        holder.togglePromptBox(nil)
+        check(pane.showsPromptBox, "prompt box: ⇧⌘I opens the box over the agent")
+        // Return ends the stand-in and Codex starts at once, before the pane looks again.
+        tab.view.send(txt: "\r" + ShellQuote.quote(codex) + "\r")
+        let swapped = await settled(.codex)
+        check(swapped && !pane.showsPromptBox && holder.window?.firstResponder === tab.view,
+              "prompt box: another agent starting in the tab closes the box, the terminal takes the keyboard",
+              "agent \(String(describing: tab.localAgent)), box \(pane.showsPromptBox)")
+        holder.togglePromptBox(nil)
+        check(pane.showsPromptBox, "prompt box: ⇧⌘I opens the box over the new agent")
+        tab.view.send(txt: "\u{03}")
+        let ended = await settled(nil)
+        check(ended && !pane.showsPromptBox && holder.window?.firstResponder === tab.view,
+              "prompt box: the agent ending closes the box, the terminal takes the keyboard",
+              "agent \(String(describing: tab.localAgent)), box \(pane.showsPromptBox)")
+        holder.togglePromptBox(nil)
+        holder.refreshPaneHeaders()
+        check(pane.showsPromptBox, "prompt box: a box opened at the shell stays open")
+        pane.setPromptBox(shown: false)
     }
 }
