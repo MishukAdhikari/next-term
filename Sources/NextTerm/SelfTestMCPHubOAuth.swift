@@ -257,6 +257,23 @@ extension SelfTest {
         check(add.cantRegister && add.usesOwnApp && add.offersSignIn && !add.clientIDField.isHidden && !add.addButton.isEnabled,
               "MCP OAuth, own app: a server that can\u{2019}t register Next Term opens the own-app rows, and Sign In\u{2026} waits for a client ID",
               add.signInLine.stringValue)
+        // The steps say how to get a client ID; a server on this Mac has no page to open. Copied anywhere once the
+        // watch runs, a client ID fills in; a URL copied first never does.
+        check(add.ownAppHelp.stringValue.hasPrefix("1. ") && add.createAppButton.isHiddenOrHasHiddenAncestor && !add.copyCallbackButton.isHiddenOrHasHiddenAncestor,
+              "MCP OAuth, own app: numbered steps, Copy beside the callback, and no page to open for a server on this Mac", add.ownAppHelp.stringValue)
+        let board = NSPasteboard.general, kept = board.string(forType: .string)
+        add.watchClipboard()
+        board.clearContents()
+        board.setString("https://example.com/not-an-id", forType: .string)
+        add.checkClipboard()
+        let urlIgnored = add.clientIDField.stringValue.isEmpty
+        board.clearContents()
+        board.setString("Ov23liSELFTEST\n", forType: .string)
+        add.checkClipboard()
+        check(urlIgnored && add.clientIDField.stringValue == "Ov23liSELFTEST",
+              "MCP OAuth, own app: a client ID copied on the provider\u{2019}s page fills in; a URL doesn\u{2019}t", add.clientIDField.stringValue)
+        board.clearContents()
+        if let kept { board.setString(kept, forType: .string) }
         add.clientIDField.stringValue = "Ov23liSELFTEST"
         add.secretPopUp.selectItem(withTitle: MCPServerSheet.newKey)
         add.newSecretName.stringValue = "SELFTEST_OAUTH_CLIENT_SECRET"
