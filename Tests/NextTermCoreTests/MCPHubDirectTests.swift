@@ -227,7 +227,7 @@ import Testing
         let servers = (try? JSONSerialization.jsonObject(with: Data(text(hub.call("mcp_servers", [:])).utf8))) as? [String: Any]
         let rows = servers?["servers"] as? [[String: Any]] ?? []
         #expect(rows.first { $0["name"] as? String == "fake" }?["direct_tools"] as? Int == 2)
-        #expect((rows.first { $0["name"] as? String == "later" }?["direct"] as? String)?.contains("next session") == true)
+        #expect((rows.first { $0["name"] as? String == "later" }?["direct"] as? String)?.contains("first time it is reached") == true)
         // A name it doesn't have is unknown, as before.
         #expect(text(hub.call("fake__nothing", [:])).hasPrefix("Unknown tool"))
     }

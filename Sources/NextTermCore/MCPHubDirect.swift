@@ -25,6 +25,8 @@ import Foundation
 /// deferred tool stays out of sight until a search the agent has no reason to make.
 public enum MCPHubDirect {
     public static let budget = 40
+    /// The budget for an agent whose tool search defers MCP tools (Claude Code): every server's tools, within reason.
+    public static let deferredBudget = 300
     /// The longest name: 64 less the longest agent prefix (`mcp__next-term__`).
     public static let nameLimit = 64 - ("mcp__" + MCPServer.name + "__").count
     static let hashLength = 6
@@ -108,13 +110,13 @@ public enum MCPHubDirect {
 
     /// One as `tools/list` lists it: the server's name in its title, its description as the server gave it (cut), its
     /// schema and hints, kept loaded for Claude Code. A hint the server left out is MCP's default for it, as it would be.
-    public static func listed(_ entry: Entry) -> MCPServer.Tool {
+    public static func listed(_ entry: Entry, alwaysLoad: Bool = true) -> MCPServer.Tool {
         let tool = entry.tool
         let description = tool.description.flatMap { $0.isEmpty ? nil : $0 } ?? "\(tool.name), a tool of \(entry.server)."
         return MCPServer.Tool(name: entry.name, title: "\(entry.server): \(tool.title ?? tool.name)", description: description,
                               inputSchema: tool.inputSchema ?? #"{"type":"object"}"#, readOnly: tool.readOnlyHint ?? false,
                               destructive: tool.destructiveHint ?? true, idempotent: tool.idempotentHint ?? false,
-                              timeout: MCPHubUpstream.Limits.standard.call, openWorld: tool.openWorldHint ?? true, alwaysLoad: true)
+                              timeout: MCPHubUpstream.Limits.standard.call, openWorld: tool.openWorldHint ?? true, alwaysLoad: alwaysLoad)
     }
 
     /// Of a server's cached tools, those that can be direct: the ones with a schema an agent takes.
@@ -124,8 +126,8 @@ public enum MCPHubDirect {
 extension MCPHubPlan {
     /// Gives each ready server with a whole cached list its usable tools for direct tools, in order, while they fit in
     /// `budget`; the others keep only their cached list's digest and size, so the plan stays small.
-    public mutating func allotDirect(_ manifests: [String: MCPHubManifest], budget: Int = MCPHubDirect.budget) {
-        var left = budget
+    public mutating func allotDirect(_ manifests: [String: MCPHubManifest], budget given: Int? = nil) {
+        var left = given ?? budget ?? MCPHubDirect.budget
         for index in servers.indices {
             let name = servers[index].name
             guard servers[index].state == .ready, let manifest = manifests[name] else { continue }

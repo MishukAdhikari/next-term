@@ -69,6 +69,12 @@ public struct MCPHubPlan: Codable, Equatable, Sendable {
     public var servers: [Server]
     /// Lists and entries Next Term passed over, each a sentence for the agent to pass on.
     public var problems: [String]
+    /// How many direct tools this agent's session may list; nil for MCPHubDirect.budget. Claude Code, whose tool search
+    /// loads an MCP tool only when it is wanted, gets MCPHubDirect.deferredBudget.
+    public var budget: Int?
+    /// The direct tools are listed deferred (`anthropic/alwaysLoad` false): Claude Code's tool search finds them, so
+    /// they cost its context nothing until used.
+    public var deferred: Bool?
 
     public init(folder: String, path: [String] = [], servers: [Server] = [], problems: [String] = []) {
         self.folder = folder

@@ -362,7 +362,8 @@ enum MCPBridge {
                     // at most), so the agent is told which of the user's servers it has, and has their tools.
                     let method = message["method"] as? String
                     let session = method == "tools/list" || method == "initialize" ? hub.session : nil
-                    let instructions = MCPServer.instructions(inTab: inTab, offeringTabs: offering, hubServers: session?.serverNames ?? [])
+                    let instructions = MCPServer.instructions(inTab: inTab, offeringTabs: offering, hubServers: session?.serverNames ?? [],
+                                                                  callOnly: session?.callOnlyNames ?? [])
                     if let response = MCPServer.respond(to: message, version: version, instructions: instructions,
                                                         extra: session?.tools ?? [],
                                                         call: { _, _ in MCPServer.CallResult(text: "") }) {
@@ -524,8 +525,10 @@ final class MCPBridgeHub: @unchecked Sendable {
             return (answer.text, answer.isError)
         }
         DispatchQueue.global(qos: .userInitiated).async {
-            let session = MCPHubSession(plan: fetch(), refresh: fetch, nxtrm: nxtrm, environment: environment, version: version,
-                                        report: report, remote: remote, remember: remember)
+            // Only an app that didn't answer leaves the catalog on: one that answered with no plan has no server here.
+            let asked = Self.ask(socket: socket, folder: folder)
+            let session = MCPHubSession(plan: asked.plan, refresh: fetch, nxtrm: nxtrm, environment: environment, version: version,
+                                        report: report, remote: remote, remember: remember, assumeActive: !asked.answered)
             self.lock.lock()
             self.made = session
             self.lock.unlock()
@@ -581,11 +584,14 @@ final class MCPBridgeHub: @unchecked Sendable {
 
     /// The app's plan for this bridge's agent, or nil (no app, a remote tab, no server). `folder`: where the bridge runs,
     /// which the app uses for an agent outside its tabs.
-    static func plan(socket: String, folder: String) -> MCPHubPlan? {
-        guard case .success(let answer) = MCPBridge.attempt(MCPHubPlan.tool, ["folder": folder], socket: socket, wait: askWait), !answer.isError else {
-            return nil
+    static func plan(socket: String, folder: String) -> MCPHubPlan? { ask(socket: socket, folder: folder).plan }
+
+    /// The plan, and whether the app answered at all (an answer with no plan: no server applies here).
+    static func ask(socket: String, folder: String) -> (plan: MCPHubPlan?, answered: Bool) {
+        guard case .success(let answer) = MCPBridge.attempt(MCPHubPlan.tool, ["folder": folder], socket: socket, wait: askWait) else {
+            return (nil, false)
         }
-        return MCPHubPlan.decode(answer.text)
+        return answer.isError ? (nil, true) : (MCPHubPlan.decode(answer.text), true)
     }
 
     static func toolName(_ message: [String: Any]) -> String {

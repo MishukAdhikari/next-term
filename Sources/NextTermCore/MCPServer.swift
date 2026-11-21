@@ -93,13 +93,14 @@ public enum MCPServer {
     /// hub's session is active), a line naming them right after Secrets' first line: an agent uses a tool it knows it has,
     /// and never searches for a server it doesn't know about. When it doesn't fit in the limit, the two sentences an agent
     /// needs least (`spareSentences`) make room; names that still don't fit are counted instead.
-    public static func instructions(inTab: Bool, offeringTabs: Bool, hubServers: [String]) -> String {
+    public static func instructions(inTab: Bool, offeringTabs: Bool, hubServers: [String], callOnly: [String] = []) -> String {
         let base = instructions(inTab: inTab, offeringTabs: offeringTabs)
         guard !hubServers.isEmpty else { return base }
         let spared = spareSentences.reduce(base) { $0.replacingOccurrences(of: " " + $1, with: "") }
         for text in [base, spared] {
             guard let lineEnd = text.firstIndex(of: "\n"),
-                  let line = hubParagraph(hubServers, room: instructionsLimit - text.utf16.count - 1, least: text == base ? hubServers.count : 1)
+                  let line = hubParagraph(hubServers, callOnly: callOnly, room: instructionsLimit - text.utf16.count - 1,
+                                          least: text == base ? hubServers.count : 1)
             else { continue }
             return String(text[..<lineEnd]) + "\n" + line + String(text[lineEnd...])
         }
@@ -115,11 +116,17 @@ public enum MCPServer {
     ]
 
     /// The hub's line for `servers`, within `room` characters and naming at least `least` of them, or nil.
-    static func hubParagraph(_ servers: [String], room: Int, least: Int = 1) -> String? {
+    static func hubParagraph(_ servers: [String], callOnly: [String] = [], room: Int, least: Int = 1) -> String? {
         func line(_ names: [String], more: Int) -> String {
             let listed = names.joined(separator: ", ") + (more > 0 ? " and \(more) more" : "")
-            return "MCP servers connected in Next Term: \(listed). Use their tools, <server>__<tool>; "
-                + "mcp_servers, mcp_tools and mcp_call reach all."
+            // The servers with no direct tools in this session are named: an agent looks for <server>__<tool> and
+            // doesn't find theirs.
+            let shown = Set(names)
+            let viaCall = callOnly.filter { shown.contains($0) }
+            let use = viaCall.isEmpty || viaCall.count == names.count && more == 0
+                ? (viaCall.isEmpty ? "Use their tools, <server>__<tool>; " : "Reach them with mcp_tools (server: its name) and mcp_call; ")
+                : "Use their tools, <server>__<tool>; for \(viaCall.joined(separator: ", ")), mcp_tools (server: its name) then mcp_call; "
+            return "MCP servers connected in Next Term: \(listed). " + use + "mcp_servers, mcp_tools and mcp_call reach all."
         }
         for count in stride(from: servers.count, through: max(1, least), by: -1) {
             let made = line(Array(servers.prefix(count)), more: servers.count - count)

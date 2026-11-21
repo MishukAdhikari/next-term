@@ -30,6 +30,8 @@ enum MCPHubRemoteControl {
     private static var late: [String: (values: [String: String], until: Date)] = [:]
 
     static var limits: MCPHubUpstream.Limits = .standard
+    /// The least of a call's wait an approval must leave for the request it allows; with less, it is kept for the next call.
+    static let roomAfterApproval: TimeInterval = 10
 
     static func call(_ arguments: [String: Any], caller: TerminalTab?, pid: pid_t?, reply: @escaping MCPControl.Reply) {
         func fail(_ text: String) { reply(MCPServer.CallResult(text: text, isError: true)) }
@@ -62,8 +64,9 @@ enum MCPHubRemoteControl {
                     guard applied.server.url == url else {
                         return fail("\(name)'s URL changed in Next Term since this session asked; call again to use the new one.")
                     }
-                    let need = Need(server: applied.server, list: list, folder: folder, op: op, tool: tool, arguments: toolArguments,
+                    var need = Need(server: applied.server, list: list, folder: folder, op: op, tool: tool, arguments: toolArguments,
                                     deadline: deadline, userFile: file)
+                    need.ask = (arguments["ask"] as? Bool) ?? true
                     let caller = MCPControl.tab(withID: tabID)
                     // A need that ended in something only the user can mend: the bar in the agent's window says so.
                     @MainActor func ended(_ result: MCPServer.CallResult, _ kind: MCPHubRemote.Failure.Kind?) {
@@ -73,7 +76,7 @@ enum MCPHubRemoteControl {
                         reply(result)
                     }
                     withKeys(need, caller: caller, pid: pid, fail: fail) { values in
-                        MCPHubSignIns.withSignIn(need.server, deadline: need.deadline, caller: caller, pid: pid,
+                        MCPHubSignIns.withSignIn(need.server, deadline: need.deadline, caller: caller, pid: pid, ask: need.ask,
                                                  fail: { ended(MCPServer.CallResult(text: $0, isError: true), nil) }) { signIn in
                             reach(need, values: values, signIn: signIn, reply: ended)
                         }
@@ -149,6 +152,9 @@ enum MCPHubRemoteControl {
         let deadline: Date
         /// The user's list, beside which the server's cached tool list is kept (MCPHubManifest).
         let userFile: String
+        /// Whether the user may be asked for it (Secrets' panel, a sign-in's consent): not for a search across every
+        /// server, which says which to name instead.
+        var ask = true
 
         var names: [String] { Self.names(of: server) }
 
@@ -188,6 +194,10 @@ enum MCPHubRemoteControl {
         let asker = MCPWriteControl.asker(connection: nil, requester: nil, caller: caller)
         let lateKey = asker + "\u{0}" + need.key
         if let kept = late.removeValue(forKey: lateKey), kept.until > Date() { return use(kept.values) }
+        guard need.ask else {
+            return fail("\(name) needs \(keys) from Next Term\u{2019}s Secrets, so a search across servers leaves it out. "
+                + "Name it (mcp_tools with server \"\(name)\") to search its tools; the user is asked then.")
+        }
         let facts = SecretsMCP.askedBy(caller: caller, pid: pid, requester: nil)
         let binding = SecretBinding(source: .tool, asker: asker, program: name, command: ["mcp", name, need.server.url],
                                     keys: Dictionary(uniqueKeysWithValues: names.map { ($0, $0) }), folder: need.folder,
@@ -223,6 +233,14 @@ enum MCPHubRemoteControl {
             var values: [String: String] = [:]
             if case .allowed(let released, _) = decision {
                 for (key, value) in released { values[key] = value.utf8String() }
+            }
+            // An approval that comes with too little of the call's wait left for the sign-in and the request itself is
+            // kept as a late one, below: the agent is told to call again, rather than spending an "Allow once" on a
+            // request that would run out of time.
+            if !answered, case .allowed = decision, need.deadline.timeIntervalSinceNow < Self.roomAfterApproval {
+                answered = true
+                fail("The user allowed this agent to reach \(name) with \(keys) just as the call ran out of time. "
+                    + "Call again now: the approval is kept for two minutes.")
             }
             guard !answered else {
                 // The call stopped waiting: an approval is kept for this agent's next need of the server.
