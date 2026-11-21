@@ -181,16 +181,20 @@ extension SelfTest {
         pane.chatStrip.terminalButton.performClick(nil)
         check(await wait(3) { !pane.showsChat } && window.firstResponder === tab.view,
               "live chat: the terminal button brings the terminal back with the keyboard")
-        // The terminal's prompt box, shown, never draws over the chat's own: it goes with the chat and comes back after.
+        // The terminal's prompt box, shown, never draws over the chat's own: showing the chat closes it, and it stays
+        // closed back on the terminal, where ⇧⌘I opens it again.
         pane.setPromptBox(shown: true)
         if let box = pane.promptBox {
             pane.setChat(shown: true, focus: false)
             _ = await wait(2) { pane.showsChat }
-            check(box.isHiddenOrHasHiddenAncestor && window.firstResponder === pane.liveChat?.composer.textView,
-                  "live chat: over the chat, the terminal's prompt box is out of sight and the chat's composer has the keyboard")
+            check(!pane.showsPromptBox && box.isHiddenOrHasHiddenAncestor && window.firstResponder === pane.liveChat?.composer.textView,
+                  "live chat: showing the chat closes the terminal's prompt box, and the chat's composer has the keyboard")
             pane.setChat(shown: false)
             _ = await wait(2) { !pane.showsChat }
-            check(!box.isHiddenOrHasHiddenAncestor, "live chat: back on the terminal, its prompt box shows again")
+            check(!pane.showsPromptBox && window.firstResponder === tab.view,
+                  "live chat: back on the terminal, its prompt box stays closed and the terminal has the keyboard")
+            holder.togglePromptBox(nil)
+            check(pane.showsPromptBox && window.firstResponder === box.textView, "live chat: ⇧⌘I opens the prompt box again")
             pane.setPromptBox(shown: false)
         } else {
             check(false, "live chat: the prompt box shows over the terminal")
