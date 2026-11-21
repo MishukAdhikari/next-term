@@ -50,6 +50,7 @@ final class MCPServersSettingsView: NSView, NSTableViewDataSource, NSTableViewDe
     let foundIntro = NSTextField(wrappingLabelWithString: "Set up in your agents\u{2019} own configs. Add one to use it in every agent in Next Term; their configs stay as they are.")
     let foundTable = NSTableView()
     private let foundSection = NSStackView()
+    private var foundHeight: NSLayoutConstraint?
     /// The servers Found in your agents lists: in the agents' configs, not in the user's list.
     private(set) var foundRows: [MCPHubAgents.Server] = []
     private let scroll = NSScrollView()
@@ -60,6 +61,10 @@ final class MCPServersSettingsView: NSView, NSTableViewDataSource, NSTableViewDe
     let emptyButton = NSButton(title: "Add Server\u{2026}", target: nil, action: nil)
     private var pickerRow = NSStackView()
     private var detailRow = NSStackView()
+    /// The table's height: its rows, from three to ten, so no column of empty stripes pushes the rest down.
+    private lazy var tableHeight = scroll.heightAnchor.constraint(equalToConstant: Self.tableHeight(rows: 0))
+
+    static func tableHeight(rows: Int) -> CGFloat { 26 + CGFloat(min(max(rows, 3), 10)) * 26 + 2 }
 
     private(set) var rows: [MCPHubOverview.Row] = []
     /// The project shown on Project, by its real path.
@@ -132,6 +137,7 @@ final class MCPServersSettingsView: NSView, NSTableViewDataSource, NSTableViewDe
         table.dataSource = self
         table.delegate = self
         table.usesAlternatingRowBackgroundColors = true
+        table.rowHeight = 24
         table.allowsMultipleSelection = false
         table.target = self
         table.doubleAction = #selector(edit)
@@ -155,11 +161,15 @@ final class MCPServersSettingsView: NSView, NSTableViewDataSource, NSTableViewDe
         detailRow = NSStackView(views: [detail, agentsButton])
         detailRow.spacing = 6
         detailRow.alignment = .firstBaseline
-        buttons = NSStackView(views: [editButton, removeButton, toggleButton, checkButton, approveButton, signInButton, NSView(), undoButton])
+        // What the selected server's state asks for (Sign In…, Approve…) first, beside its line; Remove apart, by Undo.
+        buttons = NSStackView(views: [signInButton, approveButton, editButton, toggleButton, checkButton, NSView(), removeButton, undoButton])
         buttons.spacing = 8
         buildFound()
-        for view in [pickerRow, intro, scroll, detailRow, buttons, foundSection, note] { content.addArrangedSubview(view) }
+        let rest = NSView()
+        rest.setContentHuggingPriority(.init(1), for: .vertical)
+        for view in [pickerRow, intro, scroll, detailRow, buttons, note, foundSection, rest] { content.addArrangedSubview(view) }
         content.setCustomSpacing(18, after: buttons)
+        content.setCustomSpacing(18, after: note)
         content.orientation = .vertical
         content.alignment = .leading
         content.spacing = 10
@@ -191,7 +201,7 @@ final class MCPServersSettingsView: NSView, NSTableViewDataSource, NSTableViewDe
             buttons.widthAnchor.constraint(equalTo: content.widthAnchor, constant: -32),
             note.widthAnchor.constraint(equalTo: content.widthAnchor, constant: -32),
             foundSection.widthAnchor.constraint(equalTo: content.widthAnchor, constant: -32),
-            scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 180),
+            tableHeight,
             empty.centerXAnchor.constraint(equalTo: centerXAnchor),
             empty.centerYAnchor.constraint(equalTo: centerYAnchor),
             empty.widthAnchor.constraint(lessThanOrEqualTo: widthAnchor, constant: -64),
@@ -221,7 +231,8 @@ final class MCPServersSettingsView: NSView, NSTableViewDataSource, NSTableViewDe
         foundScroll.documentView = foundTable
         foundScroll.hasVerticalScroller = true
         foundScroll.borderType = .bezelBorder
-        foundScroll.heightAnchor.constraint(equalToConstant: 128).isActive = true
+        foundHeight = foundScroll.heightAnchor.constraint(equalToConstant: 128)
+        foundHeight?.isActive = true
         for view in [foundTitle, foundIntro, foundScroll] { foundSection.addArrangedSubview(view) }
         foundSection.orientation = .vertical
         foundSection.alignment = .leading
@@ -298,6 +309,8 @@ final class MCPServersSettingsView: NSView, NSTableViewDataSource, NSTableViewDe
         note.isHidden = note.stringValue.isEmpty
         table.reloadData()
         foundTable.reloadData()
+        tableHeight.constant = Self.tableHeight(rows: rows.count)
+        foundHeight?.constant = 26 + CGFloat(min(max(foundRows.count, 1), 5)) * 26 + 2
         if let kept, let index = rows.firstIndex(where: { $0.name == kept.0 && $0.list == kept.1 }) {
             table.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
         }
@@ -368,7 +381,21 @@ final class MCPServersSettingsView: NSView, NSTableViewDataSource, NSTableViewDe
         case "applies": cell.toolTip = SkillStep.short(row.list)
         default: break
         }
-        return cell
+        return Self.centred(cell)
+    }
+
+    /// A label centred in its row, on the line of the State column's words, as a label alone would sit at the row's top.
+    static func centred(_ cell: NSTextField) -> NSView {
+        let box = NSView()
+        cell.translatesAutoresizingMaskIntoConstraints = false
+        box.addSubview(cell)
+        NSLayoutConstraint.activate([
+            cell.leadingAnchor.constraint(equalTo: box.leadingAnchor, constant: 2),
+            cell.trailingAnchor.constraint(equalTo: box.trailingAnchor, constant: -2),
+            cell.centerYAnchor.constraint(equalTo: box.centerYAnchor),
+        ])
+        cell.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        return box
     }
 
     func cellText(_ row: MCPHubOverview.Row, column: String) -> String {
@@ -405,17 +432,7 @@ final class MCPServersSettingsView: NSView, NSTableViewDataSource, NSTableViewDe
         cell.lineBreakMode = column.identifier.rawValue == "name" || column.identifier.rawValue == "agents" ? .byTruncatingTail : .byTruncatingMiddle
         cell.toolTip = column.identifier.rawValue == "agents" ? server.files.map(SkillStep.short).joined(separator: "\n") : text
         if column.identifier.rawValue != "name" { cell.textColor = .secondaryLabelColor }
-        // Centred in the row, on the line of the Add… beside it, as a label alone would sit at the row's top.
-        let box = NSView()
-        cell.translatesAutoresizingMaskIntoConstraints = false
-        box.addSubview(cell)
-        NSLayoutConstraint.activate([
-            cell.leadingAnchor.constraint(equalTo: box.leadingAnchor, constant: 2),
-            cell.trailingAnchor.constraint(equalTo: box.trailingAnchor, constant: -2),
-            cell.centerYAnchor.constraint(equalTo: box.centerYAnchor),
-        ])
-        cell.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        return box
+        return Self.centred(cell)
     }
 
     func tableViewSelectionDidChange(_ notification: Notification) {
@@ -446,6 +463,9 @@ final class MCPServersSettingsView: NSView, NSTableViewDataSource, NSTableViewDe
         signInButton.isHidden = action == nil
         signInButton.title = action ?? ""
         signInButton.isEnabled = action != nil
+        // The one primary: the action the server waits on (Sign In…, Reconnect…), never Sign Out or a cancel.
+        let asks = action == "Sign In\u{2026}" || action == "Reconnect\u{2026}"
+        signInButton.bezelColor = asks ? .controlAccentColor : nil
         let usable = row?.server != nil
         editButton.isEnabled = usable
         removeButton.isEnabled = row != nil
@@ -516,8 +536,12 @@ final class MCPServersSettingsView: NSView, NSTableViewDataSource, NSTableViewDe
                 self?.note.isHidden = false
                 self?.updateButtons()
             }, done: { [weak self] failure in
-                self?.signingIn = nil
-                self?.said(failure ?? "Signed in to \(server.name). Every agent in Next Term can use it once you allow it.")
+                guard let self else { return }
+                self.signingIn = nil
+                // No way to register Next Term there (Slack's, GitHub's): straight to the server's own-app rows, with
+                // Sign In… as their one action, rather than a sentence at the foot of the tab.
+                if failure == MCPHubOAuthRegistration.cantRegister(server.name), server.oauth == nil, self.openOwnApp(row) { return self.reload() }
+                self.said(failure ?? "Signed in to \(server.name). Every agent in Next Term can use it once you allow it.")
             })
             updateButtons()
         case nil:
@@ -662,16 +686,23 @@ final class MCPServersSettingsView: NSView, NSTableViewDataSource, NSTableViewDe
         beginServerSheet(row)
     }
 
-    func beginServerSheet(_ row: MCPHubOverview.Row?) {
-        guard let window, window.attachedSheet == nil else { return }
+    @discardableResult
+    func beginServerSheet(_ row: MCPHubOverview.Row?, ownApp: Bool = false) -> Bool {
+        guard let window, window.attachedSheet == nil else { return false }
         let sheet = MCPServerSheet(editing: row, project: showsProject ? project : nil) { [weak self] said in
             self?.sheet = nil
             self?.said(said)
         }
         sheet.onPasteInstead = { [weak self] in self?.paste() }
+        if ownApp { sheet.showOwnApp() }
         self.sheet = sheet
         if let sheetWindow = sheet.window { window.beginSheet(sheetWindow, completionHandler: nil) }
+        if ownApp { sheet.window?.makeFirstResponder(sheet.clientIDField) }
+        return true
     }
+
+    /// The selected server's sheet with its own-app rows open, for a sign-in Next Term can't register for.
+    func openOwnApp(_ row: MCPHubOverview.Row) -> Bool { row.server != nil && beginServerSheet(row, ownApp: true) }
 
     /// Remove takes the entry out of its list at once: Undo puts it back as it was. The last entry for a URL Next Term
     /// is signed in to takes the sign-in with it, revoked at the server (Undo then brings the server back signed out).

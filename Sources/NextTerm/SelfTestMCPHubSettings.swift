@@ -210,6 +210,21 @@ extension SelfTest {
             view.table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
         }
         await screenshot(window, suffix: "-mcp-settings-sign-in-states")
+        // Sign In… where the server can't register Next Term: the server's sheet, own-app rows open, Sign In… its action.
+        if let at = view.rows.firstIndex(where: { $0.name == "signs-in" }) {
+            view.table.selectRowIndexes(IndexSet(integer: at), byExtendingSelection: false)
+            check(view.signInButton.title == "Sign In\u{2026}" && view.signInButton.bezelColor == .controlAccentColor,
+                  "MCP settings: Sign In\u{2026} is the primary for a server that asks", view.signInButton.title)
+            await screenshot(window, suffix: "-mcp-settings-needs-sign-in")
+            if view.openOwnApp(view.rows[at]), let own = view.sheet as? MCPServerSheet, let ownWindow = own.window {
+                check(own.usesOwnApp && own.addButton.title == "Sign In\u{2026}" && own.ownAppHelp.stringValue.contains("register themselves"),
+                      "MCP settings: a server that can't register opens its own-app rows with Sign In\u{2026}", own.addButton.title)
+                await screenshot(ownWindow, suffix: "-mcp-settings-own-app")
+                own.cancel()
+            } else {
+                check(false, "MCP settings: a server that can't register opens its sheet")
+            }
+        }
         if let local = view.rows.firstIndex(where: { $0.server?.transport == .stdio }) {
             view.table.selectRowIndexes(IndexSet(integer: local), byExtendingSelection: false)
             check(view.signInButton.isHidden, "MCP settings: a local server has no Sign In\u{2026}")

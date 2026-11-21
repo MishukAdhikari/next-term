@@ -61,6 +61,9 @@ final class MCPServerSheet: NSWindowController, NSWindowDelegate, NSTextFieldDel
     private(set) var ownApp = false
     /// Discovery found no way for Next Term to register (no registration endpoint, no client metadata documents).
     private(set) var cantRegister = false
+    /// Opened from Settings' Sign In… for a server that can't register Next Term: the own-app rows are open, the line
+    /// above them says why, and the primary button signs in (the change is saved once signed in).
+    private(set) var signsInAfterSave = false
     /// The authorization server discovery found, kept with the app so its secret is never sent to another.
     private var discoveredIssuer: String?
     private var ownLinkRow = NSStackView()
@@ -473,12 +476,13 @@ final class MCPServerSheet: NSWindowController, NSWindowDelegate, NSTextFieldDel
         signInLine.stringValue = cantRegister
             ? "\(who) asks you to sign in, and doesn\u{2019}t let apps register themselves: sign in with your own OAuth app."
             : "\(who) asks you to sign in. Next Term keeps you signed in for every agent."
-        ownLinkRow.isHidden = !offersOwnApp || cantRegister
+        ownLinkRow.isHidden = !offersOwnApp || cantRegister || signsInAfterSave
         ownAppButton.title = ownApp ? "Don\u{2019}t use your own OAuth app" : "Use your own OAuth app"
         for each in [clientIDRow, secretRow, ownHelpRow] { each.isHidden = !usesOwnApp }
         newSecretRow.isHidden = !isNewSecret
-        ownAppHelp.stringValue = Self.callbackHelp(issuer: discoveredIssuer)
-        addButton.title = offersSignIn ? "Sign In\u{2026}" : editing == nil ? "Add" : "Save"
+        ownAppHelp.stringValue = (signsInAfterSave && usesOwnApp ? "\(who) doesn\u{2019}t let apps register themselves, so sign in with an "
+            + "OAuth app of your own: its client ID, and its secret if it has one. " : "") + Self.callbackHelp(issuer: discoveredIssuer)
+        addButton.title = offersSignIn || signsInAfterSave ? "Sign In\u{2026}" : editing == nil ? "Add" : "Save"
         newKeyRow.isHidden = !isNewKey
         variableField.isHidden = isURL || keyName == nil
         variableCaption.isHidden = isURL || keyName == nil
@@ -565,6 +569,15 @@ final class MCPServerSheet: NSWindowController, NSWindowDelegate, NSTextFieldDel
         return "Register \(callback) as the app\u{2019}s callback URL. Next Term listens on a port of its own each time, which loopback addresses allow."
     }
 
+    /// Settings' Sign In… found that the server can't register Next Term: the own-app rows, open, with the client ID
+    /// field to type in, and Sign In… as the sheet's one action.
+    func showOwnApp() {
+        ownApp = true
+        signsInAfterSave = true
+        refresh()
+        window?.makeFirstResponder(clientIDField)
+    }
+
     @objc private func toggleOwnApp() {
         ownApp.toggle()
         refresh()
@@ -606,7 +619,7 @@ final class MCPServerSheet: NSWindowController, NSWindowDelegate, NSTextFieldDel
             planned.append(SecretCopyIn.Planned(name: newSecretName.stringValue, value: SecretBytes(utf8: newSecretValue.stringValue),
                                                 purpose: Self.secretPurpose(server.name), replaces: false))
         }
-        let signsIn = offersSignIn
+        let signsIn = offersSignIn || signsInAfterSave
         guard !planned.isEmpty else { return signsIn ? signIn(server, title: title, steps: steps) : end(MCPHubEdits.apply(title, steps)) }
         isBusy = true
         refresh()
