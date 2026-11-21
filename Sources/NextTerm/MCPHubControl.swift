@@ -35,6 +35,7 @@ enum MCPHubControl {
             if deferring {
                 plan.budget = MCPHubDirect.deferredBudget
                 plan.deferred = true
+                plan.callLimit = MCPHubUpstream.Limits.longCall
             }
             // The servers' cached tool lists, for the session's direct tools: read, never fetched (MCPHubManifest).
             plan.allotDirect(MCPHubManifest.read(resolution, userFile: file))

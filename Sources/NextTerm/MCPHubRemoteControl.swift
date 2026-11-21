@@ -29,7 +29,9 @@ enum MCPHubRemoteControl {
     /// An approval that came after its call stopped waiting: kept for that agent's next need of the server.
     private static var late: [String: (values: [String: String], until: Date)] = [:]
 
-    static var limits: MCPHubUpstream.Limits = .standard
+    /// The session asks for its own agent's wait (`seconds`, at most MCPHubUpstream.Limits.longCall): Claude Code's are
+    /// longer than the standard 50 seconds, and a server's connection is made to outlast the longest.
+    static var limits = MCPHubUpstream.Limits(call: MCPHubUpstream.Limits.longCall)
     /// The least of a call's wait an approval must leave for the request it allows; with less, it is kept for the next call.
     static let roomAfterApproval: TimeInterval = 10
 
@@ -47,7 +49,7 @@ enum MCPHubRemoteControl {
         let tool = arguments["tool"] as? String ?? ""
         if op == "call", tool.isEmpty { return fail("Name the tool to call.") }
         let toolArguments = arguments["arguments"] as? [String: Any] ?? [:]
-        let seconds = min(limits.call, max(1, (arguments["seconds"] as? NSNumber)?.doubleValue ?? limits.call))
+        let seconds = min(limits.call, max(1, (arguments["seconds"] as? NSNumber)?.doubleValue ?? MCPHubUpstream.Limits.standard.call))
         let deadline = Date().addingTimeInterval(seconds)
         let file = MCPHubControl.userFile ?? MCPHubScope.userPath()
         let tabID = caller?.id.uuidString ?? "" // the tab is found again on the main thread, never carried off it
@@ -132,7 +134,7 @@ enum MCPHubRemoteControl {
             NotificationCenter.default.post(name: MCPHubControl.changed, object: nil)
             done(failure)
         }
-        let seconds = min(limits.call, 30)
+        let seconds = min(MCPHubUpstream.Limits.standard.call, 30)
         MCPHubSignIns.withSignIn(server, deadline: Date().addingTimeInterval(seconds), caller: nil, pid: nil, byUser: true,
                                  fail: { finish($0) }) { signIn in
             // Its time from here: a presence check for the sign-ins' key takes none of it.

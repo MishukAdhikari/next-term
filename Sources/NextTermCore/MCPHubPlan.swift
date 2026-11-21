@@ -75,6 +75,10 @@ public struct MCPHubPlan: Codable, Equatable, Sendable {
     /// The direct tools are listed deferred (`anthropic/alwaysLoad` false): Claude Code's tool search finds them, so
     /// they cost its context nothing until used.
     public var deferred: Bool?
+    /// The longest a catalog or direct tool's call may take for this agent; nil for MCPHubUpstream.Limits.standard's.
+    /// Claude Code, whose MCP tool calls have no short timer of their own, gets MCPHubUpstream.Limits.longCall, so a slow
+    /// tool isn't cut at 50 seconds; agents with a 60-second limit (Codex) keep the standard one.
+    public var callLimit: TimeInterval?
 
     public init(folder: String, path: [String] = [], servers: [Server] = [], problems: [String] = []) {
         self.folder = folder

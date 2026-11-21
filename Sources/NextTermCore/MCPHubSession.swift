@@ -197,7 +197,7 @@ public final class MCPHubSession: @unchecked Sendable {
 
     /// One catalog tool's answer: a tool result, for the agent.
     public func call(_ tool: String, _ arguments: [String: Any]) -> [String: Any] {
-        let deadline = Date().addingTimeInterval(limits.call)
+        let deadline = Date().addingTimeInterval(currentPlan.callLimit.map { min($0, MCPHubUpstream.Limits.longCall) } ?? limits.call)
         switch tool {
         case "mcp_servers": return servers()
         case "mcp_tools": return toolsAnswer(arguments, until: deadline)

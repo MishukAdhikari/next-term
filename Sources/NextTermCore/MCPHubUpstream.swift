@@ -28,6 +28,8 @@ public final class MCPHubUpstream: @unchecked Sendable {
         }
 
         public static let standard = Limits()
+        /// A call's longest wait for an agent with no short tool timer of its own (Claude Code: about 28 hours).
+        public static let longCall: TimeInterval = 300
     }
 
     /// What is started: the program (a full path), its arguments, its whole environment and its folder.
