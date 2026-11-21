@@ -343,10 +343,10 @@ final class SessionsPanelController: NSObject, NSTextFieldDelegate, NSTableViewD
         panel.hasShadow = true
         panel.backgroundColor = .clear
         panel.isOpaque = false
-        panel.appearance = NSAppearance(named: .darkAqua)
+        panel.appearance = nil // the app\'s look (Settings › General › Appearance)
         let background = NSView()
         background.wantsLayer = true
-        background.layer?.backgroundColor = Theme.bar.cgColor
+        background.themedBackground(Theme.bar)
         background.layer?.cornerRadius = 10
         background.layer?.masksToBounds = true
         background.layer?.borderWidth = 1

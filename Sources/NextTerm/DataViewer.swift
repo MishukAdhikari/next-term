@@ -78,7 +78,7 @@ final class DataPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMenu
         kind = DataFileKind(path: self.url.path)
         super.init(frame: .zero)
         wantsLayer = true
-        layer?.backgroundColor = Theme.background.cgColor
+        themedBackground(Theme.background)
         build()
         reload()
     }
@@ -128,7 +128,7 @@ final class DataPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMenu
         header.spacing = 10
         header.edgeInsets = NSEdgeInsets(top: 0, left: 12, bottom: 0, right: 12)
         header.wantsLayer = true
-        header.layer?.backgroundColor = Theme.bar.cgColor
+        header.themedBackground(Theme.bar)
 
         grid.dataSource = self
         grid.delegate = self
@@ -199,7 +199,7 @@ final class DataPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMenu
         footer.spacing = 8
         footer.edgeInsets = NSEdgeInsets(top: 0, left: 10, bottom: 0, right: 8)
         footer.wantsLayer = true
-        footer.layer?.backgroundColor = Theme.bar.cgColor
+        footer.themedBackground(Theme.bar)
 
         message.textColor = Theme.textDim
         message.alignment = .center

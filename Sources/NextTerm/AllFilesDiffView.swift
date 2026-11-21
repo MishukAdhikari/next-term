@@ -77,7 +77,7 @@ final class AllFilesView: NSView, DiffSelectionHost {
     override init(frame: NSRect) {
         super.init(frame: frame)
         wantsLayer = true
-        layer?.backgroundColor = Theme.background.cgColor
+        themedBackground(Theme.background)
         build()
     }
 
@@ -460,7 +460,7 @@ final class AllFilesView: NSView, DiffSelectionHost {
         header.spacing = 10
         header.edgeInsets = NSEdgeInsets(top: 0, left: 12, bottom: 0, right: 12)
         header.wantsLayer = true
-        header.layer?.backgroundColor = Theme.bar.cgColor
+        header.themedBackground(Theme.bar)
         scroll.documentView = page
         scroll.hasVerticalScroller = true
         scroll.autohidesScrollers = true
@@ -624,7 +624,7 @@ final class AllFilesHeader: NSView {
     override init(frame: NSRect) {
         super.init(frame: frame)
         wantsLayer = true
-        layer?.backgroundColor = Theme.bar.cgColor
+        themedBackground(Theme.bar)
         chevron.contentTintColor = Theme.textDim
         Typography.singleLine(name, truncation: .byTruncatingMiddle)
         name.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)

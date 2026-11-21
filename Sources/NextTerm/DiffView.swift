@@ -159,7 +159,7 @@ final class DiffPane: NSView, DiffSelectionHost {
         self.proposal = proposal
         super.init(frame: .zero)
         wantsLayer = true
-        layer?.backgroundColor = Theme.background.cgColor
+        themedBackground(Theme.background)
         build()
         reload()
     }
@@ -202,7 +202,7 @@ final class DiffPane: NSView, DiffSelectionHost {
         commit = change
         super.init(frame: .zero)
         wantsLayer = true
-        layer?.backgroundColor = Theme.background.cgColor
+        themedBackground(Theme.background)
         build()
         reload()
     }
@@ -215,7 +215,7 @@ final class DiffPane: NSView, DiffSelectionHost {
         branchChange = change
         super.init(frame: .zero)
         wantsLayer = true
-        layer?.backgroundColor = Theme.background.cgColor
+        themedBackground(Theme.background)
         build()
         reload()
     }
@@ -234,7 +234,7 @@ final class DiffPane: NSView, DiffSelectionHost {
         refLabel = label
         super.init(frame: .zero)
         wantsLayer = true
-        layer?.backgroundColor = Theme.background.cgColor
+        themedBackground(Theme.background)
         build()
         reload()
     }
@@ -322,7 +322,7 @@ final class DiffPane: NSView, DiffSelectionHost {
         header.spacing = 8
         header.edgeInsets = NSEdgeInsets(top: 0, left: 12, bottom: 0, right: 12)
         header.wantsLayer = true
-        header.layer?.backgroundColor = Theme.bar.cgColor
+        header.themedBackground(Theme.bar)
 
         message.textColor = Theme.textDim
         message.alignment = .center
@@ -1066,7 +1066,7 @@ final class DiffTextView: NSTextView {
             let mine = column.side == .left ? row.left : row.right
             switch row.kind {
             case .hunkHeader:
-                (index == column.currentHunkRow ? NSColor(hex: 0x2E3440) : NSColor(hex: 0x26282E)).setFill()
+                (index == column.currentHunkRow ? Theme.tabHover : Theme.currentLine).setFill()
                 band.fill()
                 if let hunk = row.hunkIndex {
                     let label = "⋯  change \(hunk + 1)" as NSString
@@ -1076,7 +1076,7 @@ final class DiffTextView: NSTextView {
                 }
             case .removed, .added, .changed:
                 if mine == nil {
-                    NSColor(hex: 0x232428).setFill() // the line exists only on the other side
+                    Theme.overlay(0.03).setFill() // the line exists only on the other side
                     band.fill()
                 } else {
                     (column.side == .left ? Theme.linesRemoved : Theme.linesAdded).withAlphaComponent(0.12).setFill()
@@ -1127,7 +1127,7 @@ final class DiffRuler: NSRulerView {
         let last = min(column.rows.count - 1, Int((visible.maxY - top) / height) + 1)
         guard first <= last else { return }
         let font = NSFont.monospacedDigitSystemFont(ofSize: max(9, (EditorDocument.font.pointSize) - 1.5), weight: .regular)
-        let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor(hex: 0x5A5F69)]
+        let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: Theme.lineNumber]
         for index in first...last {
             guard let number = column.number(at: index) else { continue }
             let label = "\(number)" as NSString

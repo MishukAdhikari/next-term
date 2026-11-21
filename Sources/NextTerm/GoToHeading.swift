@@ -125,10 +125,10 @@ final class GoToHeadingController: NSObject, NSTextFieldDelegate, NSTableViewDat
         panel.hasShadow = true
         panel.backgroundColor = .clear
         panel.isOpaque = false
-        panel.appearance = NSAppearance(named: .darkAqua)
+        panel.appearance = nil // the app\'s look (Settings › General › Appearance)
         let background = NSView()
         background.wantsLayer = true
-        background.layer?.backgroundColor = Theme.bar.cgColor
+        background.themedBackground(Theme.bar)
         background.layer?.cornerRadius = 10
         background.layer?.masksToBounds = true
         background.layer?.borderWidth = 1
@@ -279,7 +279,7 @@ final class GoToHeadingCell: NSTableCellView {
             let isMarked = (i..<j).contains { marked.contains($0) }
             text.append(NSAttributedString(string: String(decoding: utf8[i..<j], as: UTF8.self), attributes: [
                 .font: NSFont.systemFont(ofSize: 13, weight: isMarked ? .bold : weight),
-                .foregroundColor: isMarked ? (chosen ? NSColor.white : NSColor(hex: 0x6EA4F7)) : Theme.text,
+                .foregroundColor: isMarked ? (chosen ? NSColor.white : Theme.gitModified) : Theme.text,
             ]))
             i = j
         }

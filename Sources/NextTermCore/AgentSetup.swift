@@ -116,6 +116,7 @@ public enum AgentSetup {
         case "soft_wrap": return ["softWrap"]
         case "terminal_font_family": return ["terminalFontFamily"]
         case "terminal_font_size": return ["terminalFontSize"]
+        case "appearance", "light_theme", "dark_theme": return [] // no import sets the look
         case "terminal_colours": return ["terminalPalette"]
         case "terminal_cursor": return ["terminalCursorShape"]
         case "terminal_cursor_blink": return ["terminalCursorBlink"]
@@ -180,7 +181,7 @@ public enum AgentSetup {
 
     /// A setting's short name in a row, before its values.
     static let rowTitles: [String: String] = [
-        "font_size": "Font size", "line_height": "Line height", "soft_wrap": "Soft wrap", "terminal_font_family": "Terminal font",
+        "appearance": "Appearance", "light_theme": "Light theme", "dark_theme": "Dark theme", "font_size": "Font size", "line_height": "Line height", "soft_wrap": "Soft wrap", "terminal_font_family": "Terminal font",
         "terminal_font_size": "Terminal font size", "terminal_colours": "Terminal colours", "terminal_cursor": "Terminal cursor",
         "terminal_cursor_blink": "Terminal cursor blinks", "terminal_scrollback": "Terminal scrollback",
         "new_tab_folder": "New tabs open in", "notify_decisions": "Notify when an agent needs a decision",
@@ -201,6 +202,9 @@ public enum AgentSetup {
         case ("terminal_font_family", .choice(MCPSettings.defaultFont)): return "Next Term’s own"
         case ("terminal_font_size", .choice): return "the editor’s"
         case ("terminal_colours", .choice(let name)): return name == "imported" ? "imported" : "Next Term’s"
+        case ("appearance", .choice(let raw)): return AppAppearance(stored: raw).title
+        case ("light_theme", .choice(let id)): return ThemePalette.theme(id, dark: false).name
+        case ("dark_theme", .choice(let id)): return ThemePalette.theme(id, dark: true).name
         case ("new_tab_folder", .choice(let folder)):
             switch folder {
             case "project": return "the project’s folder"

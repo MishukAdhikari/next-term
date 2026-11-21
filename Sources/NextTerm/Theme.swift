@@ -2,41 +2,84 @@ import AppKit
 import NextTermCore
 import SwiftTerm
 
-/// Dark palette.
+/// Next Term's colours (plan 049). Each is the light or dark palette's, as the view it is drawn in looks: a colour
+/// here resolves when it is drawn, so text, fills drawn in `draw(_:)` and `updateLayer()`, windows' and text views'
+/// backgrounds all follow a change of appearance by themselves. A layer's colour set once is set with
+/// `themedBackground(_:)` (ThemeLayers), which sets it again on a change.
 enum Theme {
-    static let background = NSColor(hex: 0x1E1F22)
-    static let bar = NSColor(hex: 0x2B2D30)
-    static let tabHover = NSColor(hex: 0x393B40)
-    static let border = NSColor(hex: 0x1E1F22)
-    static let text = NSColor(hex: 0xDFE1E5)
-    static let textDim = NSColor(hex: 0x9DA0A8)
-    static let accent = NSColor(hex: 0x3574F0)
+    /// The palettes for light and dark windows. More looks are more palettes, one chosen for each.
+    nonisolated(unsafe) static var palettes: (light: ThemePalette, dark: ThemePalette) = (.nextLight, .nextDark) {
+        didSet { MainActor.assumeIsolated { ThemeWatch.changed() } }
+    }
 
-    static let working = NSColor(hex: 0x3574F0)
-    static let done = NSColor(hex: 0x5FB865)
+    static func isDark(_ appearance: NSAppearance) -> Bool {
+        appearance.bestMatch(from: [.darkAqua, .aqua, .vibrantDark, .vibrantLight]).map { $0 == .darkAqua || $0 == .vibrantDark } ?? true
+    }
+
+    /// The palette for `appearance` (the app's, when none is given).
+    static func palette(for appearance: NSAppearance? = nil) -> ThemePalette {
+        isDark(appearance ?? NSApp.effectiveAppearance) ? palettes.dark : palettes.light
+    }
+
+    /// Whether the app is drawn light now.
+    static var isLight: Bool { !palette().isDark }
+
+    /// A colour that is `key` of the palette its view is drawn in.
+    static func dynamic(_ key: KeyPath<ThemePalette, UInt32>) -> NSColor {
+        NSColor(name: nil) { appearance in NSColor(hex: palette(for: appearance)[keyPath: key]) }
+    }
+
+    /// One colour for light windows and another for dark: for the few that are no palette's (overlays, shades).
+    static func pair(light: NSColor, dark: NSColor) -> NSColor {
+        NSColor(name: nil) { appearance in isDark(appearance) ? dark : light }
+    }
+
+    /// A wash over a surface, as the dark look had it in white: in white on dark, in black on light, half as strong.
+    static func overlay(_ alpha: CGFloat) -> NSColor {
+        pair(light: NSColor.black.withAlphaComponent(alpha * 0.5), dark: NSColor.white.withAlphaComponent(alpha))
+    }
+
+    static let background = dynamic(\.background)
+    static let bar = dynamic(\.bar)
+    static let tabHover = dynamic(\.tabHover)
+    static let border = dynamic(\.border)
+    static let text = dynamic(\.text)
+    static let textDim = dynamic(\.textDim)
+    static let accent = dynamic(\.accent)
+
+    static let working = dynamic(\.working)
+    static let done = dynamic(\.done)
     /// Done, quietly: the green three-quarters over the bar. Nothing needs you yet, so the mark doesn't pull the eye, and
     /// it stays 3:1 against the bar, the selected tab and a hovered one. Increase Contrast keeps `done`.
-    static let doneQuiet = NSColor(hex: 0x529558)
+    static let doneQuiet = dynamic(\.doneQuiet)
     /// The small counts beside marks ("+3", the window column's count): tabular figures, so they never shift.
     static let countFont = NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .medium)
-    static let failed = NSColor(hex: 0xE55765)
-    static let attention = NSColor(hex: 0xF2C55C)
+    static let failed = dynamic(\.failed)
+    static let attention = dynamic(\.attention)
 
     // Git status in the project tree.
-    static let gitModified = NSColor(hex: 0x6EA4F7)
-    static let gitAdded = NSColor(hex: 0x73C27A)
-    static let gitUntracked = NSColor(hex: 0xD9876C)
-    static let gitConflicted = NSColor(hex: 0xF0706E)
-    static let gitIgnored = NSColor(hex: 0x86876A)
-    static let linesAdded = NSColor(hex: 0x73C27A)
-    static let linesRemoved = NSColor(hex: 0xE5736F)
+    static let gitModified = dynamic(\.gitModified)
+    static let gitAdded = dynamic(\.gitAdded)
+    static let gitUntracked = dynamic(\.gitUntracked)
+    static let gitConflicted = dynamic(\.gitConflicted)
+    static let gitIgnored = dynamic(\.gitIgnored)
+    static let linesAdded = dynamic(\.linesAdded)
+    static let linesRemoved = dynamic(\.linesRemoved)
 
     // Git blame in the editor: the column's text, and the shade of the newest lines (older ones fade
     // towards the background).
-    static let blameText = NSColor(hex: 0x8C8F96)
-    static let blameHash = NSColor(hex: 0x62666E)
-    static let blameRecent = NSColor(hex: 0x5C86D1)
-    static let blameNote = NSColor(hex: 0x5F636B)
+    static let blameText = dynamic(\.blameText)
+    static let blameHash = dynamic(\.blameHash)
+    static let blameRecent = dynamic(\.blameRecent)
+    static let blameNote = dynamic(\.blameNote)
+
+    // The editor's own.
+    static let currentLine = dynamic(\.currentLine)
+    static let gutterAdded = dynamic(\.gutterAdded)
+    static let gutterModified = dynamic(\.gutterModified)
+    static let gutterDeleted = dynamic(\.gutterDeleted)
+    static let lineNumber = dynamic(\.lineNumber)
+    static let lineNumberCurrent = dynamic(\.lineNumberCurrent)
 
     static func color(for change: GitChange?) -> NSColor {
         switch change {
@@ -50,15 +93,12 @@ enum Theme {
         }
     }
 
-    static let terminalForeground = NSColor(hex: defaultTerminal.foreground)
-    static let caret = NSColor(hex: defaultTerminal.cursor)
-    static let selection = NSColor(hex: defaultTerminal.selection)
+    static let terminalForeground = dynamic(\.terminal.foreground)
+    static let caret = dynamic(\.terminal.cursor)
+    static let selection = dynamic(\.terminal.selection)
 
-    /// ANSI colours, normal then bright.
-    static let ansi: [UInt32] = [
-        0x000000, 0xF0524F, 0x5C962C, 0xA68A0D, 0x3993D4, 0xA771BF, 0x00A3A3, 0x808080,
-        0x595959, 0xFF4050, 0x4FC414, 0xE5BF00, 0x1FB0FF, 0xED7EED, 0x00E5E5, 0xFFFFFF,
-    ]
+    /// The dark look's ANSI colours, normal then bright.
+    static let ansi: [UInt32] = ThemePalette.nextDark.terminal.ansi
 
     static let defaultFontSize: CGFloat = 13
     static let fontSizeRange: ClosedRange<CGFloat> = 8...32
@@ -100,9 +140,10 @@ enum Theme {
         applyColours(to: view)
     }
 
-    /// The terminal's colours: the user's own (Settings › Terminal › Colours) over Next Term's.
+    /// The terminal's colours: the user's own (Settings › Terminal › Colours) over Next Term's for the view's look.
+    /// ThemeWatch applies them again when the look changes.
     static func applyColours(to view: TerminalView) {
-        let colours = terminalColours(Preferences.terminalPalette)
+        let colours = terminalColours(Preferences.terminalPalette, base: terminalDefaults(for: view.effectiveAppearance))
         view.nativeForegroundColor = NSColor(hex: colours.foreground)
         view.nativeBackgroundColor = NSColor(hex: colours.background)
         view.caretColor = NSColor(hex: colours.cursor)
@@ -117,12 +158,20 @@ enum Theme {
         var foreground, background, cursor, selection: UInt32
     }
 
-    /// Next Term's own terminal colours (the background is the window's).
-    static let defaultTerminal = TerminalColours(ansi: ansi, foreground: 0xBCBEC4, background: 0x1E1F22, cursor: 0xCED0D6, selection: 0x214283)
+    /// Next Term's own dark terminal colours (the background is the window's).
+    static let defaultTerminal = terminalDefaults(ThemePalette.nextDark)
 
-    /// Every terminal colour, each from `palette` when it sets it, else Next Term's own.
-    static func terminalColours(_ palette: TerminalPalette?) -> TerminalColours {
-        var colours = defaultTerminal
+    static func terminalDefaults(_ palette: ThemePalette) -> TerminalColours {
+        let t = palette.terminal
+        return TerminalColours(ansi: t.ansi, foreground: t.foreground, background: t.background, cursor: t.cursor, selection: t.selection)
+    }
+
+    /// Next Term's terminal colours for a view that looks like `appearance`.
+    static func terminalDefaults(for appearance: NSAppearance) -> TerminalColours { terminalDefaults(palette(for: appearance)) }
+
+    /// Every terminal colour, each from `palette` when it sets it, else Next Term's own (`base`: the dark look's).
+    static func terminalColours(_ palette: TerminalPalette?, base: TerminalColours = Theme.defaultTerminal) -> TerminalColours {
+        var colours = base
         guard let palette else { return colours }
         for (index, colour) in palette.ansi.enumerated() where index < colours.ansi.count {
             if let colour { colours.ansi[index] = colour }

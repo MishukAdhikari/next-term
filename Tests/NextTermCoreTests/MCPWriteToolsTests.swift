@@ -85,7 +85,7 @@ import Testing
 @Suite struct MCPSettingsTests {
     @Test func theAllowlistIsShortAndHarmless() {
         #expect(MCPSettings.allowlist.map(\.name) == ["font_size", "line_height", "soft_wrap", "terminal_font_family", "terminal_font_size",
-                                                      "terminal_colours", "terminal_cursor", "terminal_cursor_blink", "terminal_scrollback",
+                                                      "appearance", "light_theme", "dark_theme", "terminal_colours", "terminal_cursor", "terminal_cursor_blink", "terminal_scrollback",
                                                       "new_tab_folder", "terminal_position", "notify_decisions", "notify_agent_finished",
                                                       "notify_program_alerts", "notification_sound", "notify_commands", "notify_threshold_seconds",
                                                       "agent_spinner", "agents_offer_tabs", "agents_bring_tabs_forward", "open_projects_in",

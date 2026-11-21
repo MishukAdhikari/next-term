@@ -2310,6 +2310,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         env["TERM"] = "xterm-256color"
         env["COLORTERM"] = "truecolor"
         env["TERM_PROGRAM"] = "NextTerm"
+        env["COLORFGBG"] = Theme.isLight ? "0;15" : "15;0" // light or dark, for programs that pick colours by it (plan 049)
         env["TERM_PROGRAM_VERSION"] = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
         // OpenTUI programs (OpenCode) send their notifications as OSC 777, which a tab reads, unless the user chose.
         ProgramNotice.prepare(&env)

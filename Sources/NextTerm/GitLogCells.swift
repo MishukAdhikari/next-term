@@ -22,7 +22,7 @@ enum GitLogStyle {
         if ref.isCurrent || ref.kind == .head { return Theme.done }
         switch ref.kind {
         case .branch: return Theme.gitModified
-        case .remote: return NSColor(hex: 0xB792E6)
+        case .remote: return Theme.pair(light: NSColor(hex: 0x7A3FC2), dark: NSColor(hex: 0xB792E6))
         case .tag: return Theme.attention
         case .head, .other: return Theme.textDim
         }
@@ -236,7 +236,7 @@ final class GitTextCell: NSTableCellView {
 /// Full-width selection, so the graph's lines stay unbroken across the selected row.
 final class GitLogRowView: NSTableRowView {
     override func drawSelection(in dirtyRect: NSRect) {
-        (isEmphasized ? Theme.selection : NSColor(hex: 0x2E3138)).setFill()
+        (isEmphasized ? Theme.selection : Theme.pair(light: NSColor(hex: 0xE8EAEE), dark: NSColor(hex: 0x2E3138))).setFill()
         bounds.fill()
     }
 }

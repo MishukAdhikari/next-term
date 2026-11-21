@@ -789,11 +789,11 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
         panel.hasShadow = true
         panel.backgroundColor = .clear
         panel.isOpaque = false
-        panel.appearance = NSAppearance(named: .darkAqua)
+        panel.appearance = nil // the app\'s look (Settings › General › Appearance)
         panel.keyHandler = { [weak self] event in self?.keyEquivalent(event) ?? false }
         let background = NSView()
         background.wantsLayer = true
-        background.layer?.backgroundColor = Theme.bar.cgColor
+        background.themedBackground(Theme.bar)
         background.layer?.cornerRadius = 10
         background.layer?.masksToBounds = true
         background.layer?.borderWidth = 1
@@ -1107,7 +1107,7 @@ final class BranchCell: NSTableCellView {
             guard i >= 0, i < bytes.count else { continue }
             let start = String(decoding: bytes[..<i], as: UTF8.self).utf16.count
             let length = String(decoding: bytes[i...i], as: UTF8.self).utf16.count
-            text.addAttributes([.font: NSFont.systemFont(ofSize: 13, weight: .bold), .foregroundColor: chosen ? NSColor.white : NSColor(hex: 0x6EA4F7)],
+            text.addAttributes([.font: NSFont.systemFont(ofSize: 13, weight: .bold), .foregroundColor: chosen ? NSColor.white : Theme.gitModified],
                                range: NSRange(location: start, length: length))
         }
         return text

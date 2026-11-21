@@ -166,7 +166,7 @@ final class HintLine: NSView {
         layer?.backgroundColor = beside ? Theme.bar.cgColor : nil
         layer?.cornerRadius = beside ? 6 : 0
         layer?.borderWidth = beside ? 1 : 0
-        layer?.borderColor = (DisplayOptions.increasesContrast ? Theme.textDim : Theme.border).cgColor
+        themedBorder((DisplayOptions.increasesContrast ? Theme.textDim : Theme.border))
         needsLayout = true
     }
 

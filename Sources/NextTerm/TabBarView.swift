@@ -229,7 +229,7 @@ final class TabBarView: NSView, ProjectGlowing {
     private let pinDivider: NSView = {
         let line = NSView()
         line.wantsLayer = true
-        line.layer?.backgroundColor = Theme.textDim.withAlphaComponent(0.35).cgColor
+        line.themedBackground(Theme.textDim.withAlphaComponent(0.35))
         line.setAccessibilityElement(false)
         return line
     }()
@@ -285,7 +285,7 @@ final class TabBarView: NSView, ProjectGlowing {
     override init(frame: NSRect) {
         super.init(frame: frame)
         wantsLayer = true
-        layer?.backgroundColor = Theme.bar.cgColor
+        themedBackground(Theme.bar)
 
         newTabButton.bezelStyle = .regularSquare
         newTabButton.isBordered = false
@@ -858,7 +858,7 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
     var shownRemoteLink: RemoteLink? { remoteMark.isHidden ? nil : remoteMark.link }
 
     private func refresh() {
-        layer?.backgroundColor = (selected ? Theme.background : hovering ? Theme.tabHover : .clear).cgColor
+        themedBackground((selected ? Theme.background : hovering ? Theme.tabHover : .clear))
         label.textColor = selected || hovering ? Theme.text : Theme.textDim
         remoteMark.tint = label.textColor ?? Theme.textDim
         // Unsaved: a dot that turns into the close button under the pointer.

@@ -5,7 +5,7 @@ import NextTermCore
 /// IDE keys: auto-indent, Tab and Shift-Tab on lines, ⌘/ to comment, and the current line highlighted.
 final class CodeTextView: NSTextView {
     weak var document: EditorDocument?
-    static let currentLine = NSColor(hex: 0x26282E)
+    static let currentLine = Theme.currentLine
 
     override func drawBackground(in rect: NSRect) {
         super.drawBackground(in: rect)
@@ -460,9 +460,9 @@ final class LineNumberRuler: NSRulerView {
     /// installing them is already queued (once per turn of the run loop, however often it scrolls).
     var blameToolTipRects: [NSRect] = []
     var blameToolTipsQueued = false
-    static let added = NSColor(hex: 0x549159)
-    static let modified = NSColor(hex: 0x375FAD)
-    static let deleted = NSColor(hex: 0xC75450)
+    static let added = Theme.gutterAdded
+    static let modified = Theme.gutterModified
+    static let deleted = Theme.gutterDeleted
 
     init(textView: CodeTextView, spacing: LineSpacing) {
         codeView = textView
@@ -533,8 +533,8 @@ final class LineNumberRuler: NSRulerView {
         let characters = layoutManager.characterRange(forGlyphRange: glyphs, actualGlyphRange: nil)
         let caretLine = index.line(at: min(view.selectedRange().location, text.length))
         let font = numberFont
-        let dim: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor(hex: 0x4B5059)]
-        let bright: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor(hex: 0xA1A3AB)]
+        let dim: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: Theme.lineNumber]
+        let bright: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: Theme.lineNumberCurrent]
         let offset = convert(NSPoint.zero, from: view).y + view.textContainerOrigin.y
 
         let marks = self.marks

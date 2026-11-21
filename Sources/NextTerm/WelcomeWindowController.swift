@@ -103,7 +103,7 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
         // and clickable, their agents in view, and the Mac already shows them subdued while this one is in front. A
         // dimmed or blurred screen would say they are blocked, which they are not.
         window.backgroundColor = Theme.background
-        window.appearance = NSAppearance(named: .darkAqua)
+        window.appearance = nil // the app\'s look (Settings › General › Appearance)
         window.isReleasedWhenClosed = false
         window.minSize = NSSize(width: 720, height: 440)
         // File › Open Project… shows it from a project window in full screen too: it comes over that window, on the
@@ -246,7 +246,7 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
         // Left: the app, search, projects and servers, and the three ways in.
         let left = NSView()
         left.wantsLayer = true
-        left.layer?.backgroundColor = Theme.bar.cgColor
+        left.themedBackground(Theme.bar)
         let icon = NSImageView(image: NSApp.applicationIconImage ?? NSImage())
         icon.imageScaling = .scaleProportionallyUpOrDown
         let name = NSTextField(labelWithString: "Next Term")

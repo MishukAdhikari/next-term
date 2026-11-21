@@ -600,6 +600,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // "How do you like to work?": a new install's first launch only, read before the launch writes any of the keys that
         // tell a new install from one used before. Never in a self-test.
         if !SelfTest.isRequested { layoutPickerDue = LayoutPicker.isDue(in: .standard) }
+        MainActor.assumeIsolated { ThemeWatch.start() } // the app's look, before any window opens (plan 049)
         // Secrets' marks first, with no crypto, so the first MCP answer and IDE message are already masked; then the
         // load check, off the main thread.
         MainActor.assumeIsolated { SecretsStore.shared.loadMarks() }

@@ -279,12 +279,12 @@ final class GoToFileController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         panel.hasShadow = true
         panel.backgroundColor = .clear
         panel.isOpaque = false
-        panel.appearance = NSAppearance(named: .darkAqua)
+        panel.appearance = nil // the app\'s look (Settings › General › Appearance)
 
         // The app's own dark surface (a system material washes out to grey over the dark theme).
         let background = NSView()
         background.wantsLayer = true
-        background.layer?.backgroundColor = Theme.bar.cgColor
+        background.themedBackground(Theme.bar)
         background.layer?.cornerRadius = 10
         background.layer?.masksToBounds = true
         background.layer?.borderWidth = 1
@@ -394,7 +394,7 @@ final class GoToFileController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
 /// The chosen row: a rounded highlight inside the panel's margins, in the editor's selection blue.
 final class GoToFileRowView: NSTableRowView {
     override func drawSelection(in dirtyRect: NSRect) {
-        NSColor(hex: 0x2E436E).setFill()
+        Theme.pair(light: NSColor(hex: 0xD6E4FF), dark: NSColor(hex: 0x2E436E)).setFill()
         NSBezierPath(roundedRect: bounds.insetBy(dx: 6, dy: 1), xRadius: 5, yRadius: 5).fill()
     }
 
@@ -481,7 +481,7 @@ final class GoToFileCell: NSTableCellView {
         name.attributedStringValue = Self.text(utf8[nameStart...], offset: nameStart, marked: marked,
                                                font: .systemFont(ofSize: 13), color: Theme.text,
                                                markFont: .systemFont(ofSize: 13, weight: .semibold),
-                                               markColor: chosen ? .white : NSColor(hex: 0x6EA4F7))
+                                               markColor: chosen ? .white : Theme.gitModified)
         let folderBytes = nameStart > 0 ? utf8[..<(nameStart - 1)] : []
         folder.attributedStringValue = folderBytes.isEmpty
             ? NSAttributedString(string: "project root", attributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: Theme.textDim])

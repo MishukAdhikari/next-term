@@ -12,7 +12,7 @@ final class SessionPreview: NSView {
     override init(frame: NSRect) {
         super.init(frame: frame)
         wantsLayer = true
-        layer?.backgroundColor = Theme.background.withAlphaComponent(0.35).cgColor
+        themedBackground(Theme.background.withAlphaComponent(0.35))
         textView.isEditable = false
         textView.isSelectable = true
         textView.drawsBackground = false

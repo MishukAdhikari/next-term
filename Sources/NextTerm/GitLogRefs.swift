@@ -49,7 +49,7 @@ final class GitLogRefsView: NSView, NSOutlineViewDataSource, NSOutlineViewDelega
     override init(frame: NSRect) {
         super.init(frame: frame)
         wantsLayer = true
-        layer?.backgroundColor = Theme.background.cgColor
+        themedBackground(Theme.background)
         build()
     }
 

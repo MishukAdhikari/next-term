@@ -36,11 +36,11 @@ final class CodeLayoutManager: NSLayoutManager {
     /// Runs of characters drawn on a tint behind their text, in order: a Markdown code span's.
     var tintedRuns: ((NSRange) -> [NSRange])?
     private static let bullet = "•" as NSString
-    static let fenceTint = NSColor(white: 1, alpha: 0.035)
-    static let codeTint = NSColor(white: 1, alpha: 0.07)
-    static let markColor = NSColor(hex: 0x9DA0A8)
-    static let ruleColor = NSColor(hex: 0x43454A)
-    static let quoteColor = NSColor(hex: 0x4E5157)
+    static let fenceTint = Theme.overlay(0.035)
+    static let codeTint = Theme.overlay(0.07)
+    static let markColor = Theme.textDim
+    static let ruleColor = Theme.pair(light: NSColor(hex: 0xD5D7DC), dark: NSColor(hex: 0x43454A))
+    static let quoteColor = Theme.pair(light: NSColor(hex: 0xC9CCD2), dark: NSColor(hex: 0x4E5157))
 
     override func drawGlyphs(forGlyphRange glyphsToShow: NSRange, at origin: NSPoint) {
         let characters = characterRange(forGlyphRange: glyphsToShow, actualGlyphRange: nil)

@@ -77,6 +77,15 @@ final class SyntaxEngine {
         if digits.count == 3 || digits.count == 4 { digits = digits.map { "\($0)\($0)" }.joined() }
         guard digits.count == 6 || digits.count == 8, let value = UInt64(digits, radix: 16) else { return nil }
         let rgba = digits.count == 6 ? value << 8 | 0xFF : value
+        // The theme's colours are the dark look's: a light window draws each as the light palette maps it (plan 049).
+        if digits.count == 6 {
+            let key = "#" + digits.uppercased(), dark = UInt32(value)
+            let color = NSColor(name: nil) { appearance in
+                NSColor(hex: Theme.isDark(appearance) ? (Theme.palettes.dark.code(key) ?? dark) : (Theme.palettes.light.code(key) ?? dark))
+            }
+            colors[hex] = color
+            return color
+        }
         let color = NSColor(srgbRed: CGFloat(rgba >> 24 & 0xFF) / 255, green: CGFloat(rgba >> 16 & 0xFF) / 255,
                             blue: CGFloat(rgba >> 8 & 0xFF) / 255, alpha: CGFloat(rgba & 0xFF) / 255)
         colors[hex] = color

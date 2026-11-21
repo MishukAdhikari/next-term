@@ -403,7 +403,7 @@ final class PaneHeaderView: NSView, NSTextFieldDelegate {
     }
 
     private func refresh() {
-        layer?.backgroundColor = (focused ? Theme.background : hovering ? Theme.tabHover : Theme.bar).cgColor
+        themedBackground((focused ? Theme.background : hovering ? Theme.tabHover : Theme.bar))
         label.textColor = focused || hovering ? Theme.text : Theme.textDim
         remoteMark.tint = label.textColor ?? Theme.textDim
         closeButton.isHidden = !(focused || hovering)
