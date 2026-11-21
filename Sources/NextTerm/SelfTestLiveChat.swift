@@ -106,6 +106,7 @@ extension SelfTest {
               "live chat: the edit shows as a change with its counts")
         check(window.firstResponder === chat.composer.textView, "live chat: the composer has the keyboard")
         check(chat.usageLine.isHidden, "live chat: an agent that records no usage Next Term reads shows no usage line, never an estimate")
+        slashMenuChecks(chat.composer)
 
         // Appended by the agent as it works: shown within a second or two.
         if let handle = FileHandle(forWritingAtPath: session) {
@@ -458,5 +459,34 @@ extension SelfTest {
         let unfolded = renderer.render(ChatBlock(id: "x", content: .tool(colours)), after: nil).string
         check(unfolded.contains("Tests:    52 passed") && unfolded.contains("Duration 7.35s") && !unfolded.contains("[39m") && !unfolded.contains("\u{1B}"),
               "live chat: an unfolded output shows no terminal colour codes", unfolded)
+    }
+
+    /// The composer's "/" menu: it opens on a leading "/", narrows as the name is typed, ↓ chooses, Tab completes the
+    /// name for an argument, Esc closes it and keeps the text, and the composer keeps the keyboard throughout.
+    static func slashMenuChecks(_ box: AgentPromptBox) {
+        let saved = AgentPromptBox.commandsForTest
+        AgentPromptBox.commandsForTest = [
+            ChatCommand(name: "compact", description: "Compact the conversation", source: .builtIn),
+            ChatCommand(name: "config", description: "Open settings", source: .builtIn, opensScreen: true),
+            ChatCommand(name: "model", description: "Choose the model", source: .builtIn, opensScreen: true),
+        ]
+        defer {
+            AgentPromptBox.commandsForTest = saved
+            box.text = ""
+        }
+        let menu = box.slashMenu
+        box.text = "/co"
+        check(menu.isShown && menu.items.map(\.name) == ["compact", "config"], "live chat: “/co” opens the command menu with the names that start with it",
+              menu.items.map(\.name).joined(separator: ", "))
+        box.textView.doCommand(by: #selector(NSResponder.moveDown(_:)))
+        check(menu.current?.name == "config", "live chat: ↓ chooses the next command", menu.current?.name ?? "none")
+        box.textView.doCommand(by: #selector(NSResponder.insertTab(_:)))
+        check(box.text == "/config " && !menu.isShown, "live chat: Tab completes the name and a space, and the menu goes", box.text.debugDescription)
+        check(box.window?.firstResponder === box.textView, "live chat: the composer keeps the keyboard with the menu")
+        box.text = "/m"
+        box.textView.doCommand(by: #selector(NSResponder.cancelOperation(_:)))
+        check(!menu.isShown && box.text == "/m", "live chat: Esc closes the menu and keeps the text", box.text.debugDescription)
+        box.text = "tell me /co"
+        check(!menu.isShown, "live chat: a “/” inside a message opens no menu")
     }
 }

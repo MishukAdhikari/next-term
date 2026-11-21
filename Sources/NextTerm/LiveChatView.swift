@@ -61,6 +61,12 @@ final class LiveChatView: NSView {
         composer = AgentPromptBox(tab: tab)
         super.init(frame: NSRect(x: 0, y: 0, width: 600, height: 400))
         wantsLayer = true
+        // The "/" menu: an agent session's own commands; a command whose screen the chat can't draw shows the terminal.
+        if case .session(let feed) = source { composer.sessionCommands = { [weak feed] in feed?.session.commands ?? [] } }
+        composer.onSent = { [weak self] _, command in
+            guard let self, command?.opensScreen == true, case .live = self.source else { return }
+            self.onShowTerminal?()
+        }
         setAccessibilityLabel("Chat view of the agent's session")
 
         // The plan row (plan 048 R4): the latest plan's progress while it has steps left; a click shows the checklist.
