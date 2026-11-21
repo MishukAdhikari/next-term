@@ -106,6 +106,11 @@ public enum MCPRegistrar {
             Target(id: "junie", name: "Junie", programs: ["junie"], file: path(".junie/mcp/mcp.json"),
                    format: .json(strict: false), container: "mcpServers", preamble: [:],
                    entry: { ["command": $0, "args": ["mcp"], "enabled": true] }),
+            // Kimi Code CLI reads ~/.kimi-code/mcp.json (claudedocs/research_agent-mcp-config-formats_2026-11-21); an
+            // older install's ~/.kimi/mcp.json is written when it alone is there.
+            Target(id: "kimi", name: "Kimi Code CLI", programs: ["kimi"],
+                   file: existing([path(".kimi-code/mcp.json"), path(".kimi/mcp.json")]),
+                   format: .json(strict: false), container: "mcpServers", preamble: [:], entry: standard),
             Target(id: "commandcode", name: "Command Code", programs: ["commandcode", "command-code"], file: path(".commandcode/mcp.json"),
                    format: .json(strict: true), container: "mcpServers", preamble: [:],
                    entry: { ["transport": "stdio", "command": $0, "args": ["mcp"], "enabled": true] }),

@@ -31,11 +31,19 @@ public enum MCPHubSignInWords {
         "The user didn\u{2019}t allow \(agent) to use their \(name) sign-in, so nothing was sent."
     }
 
-    /// The caller isn't an agent in one of this Mac's tabs, so it can't be asked about.
+    /// The caller isn't a coding agent Next Term can name (a shell running `nxtrm mcp` by hand, the remote door), so it
+    /// can't be asked about.
     public static func notAnAgent(_ name: String) -> String {
-        "Next Term uses its sign-in to \(name) only for an agent running in one of its own tabs on this Mac, so nothing was sent. "
-            + "Ask the user to start you in a Next Term tab (in Next Term: File \u{203A} New Tab, then run you there); "
-            + "\(name)\u{2019}s tools then work with no setup."
+        "Next Term uses its sign-in to \(name) only for a coding agent on this Mac that it can name, so nothing was sent. "
+            + "Run the agent itself (claude, codex and the like) in a terminal or a Next Term tab, and ask the user to allow it."
+    }
+
+    /// The panel for an agent outside Next Term's tabs: what it would use, and that Allow lasts for this session only.
+    public static func outsideConsent(agent: String, names: [String]) -> (title: String, details: String) {
+        let list = ListFormatter.localizedString(byJoining: names)
+        return ("\(agent) outside Next Term wants to use your \(names.count == 1 ? "sign-in to" : "sign-ins to") \(list)",
+                "It runs in another terminal. \(agent) can then use their tools as you until it quits; Next Term asks again for "
+                + "its next session, and never keeps this.")
     }
 
     /// The panel is up and the call stopped waiting for it.
