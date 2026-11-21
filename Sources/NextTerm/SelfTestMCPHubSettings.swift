@@ -1,5 +1,6 @@
 #if DEBUG
 import AppKit
+import UserNotifications
 import NextTermCore
 
 /// The MCP hub, step 3: Settings › MCP Servers, on a list and a project of the self-test's own (MCPHubControl.userFile,
@@ -238,8 +239,14 @@ extension SelfTest {
         let id = "self-test-\(getpid())"
         MCPHubSignIns.notice(id, lapse: 1, name: "lapsed", url: lapsed)
         MCPHubSignIns.notice(id, lapse: 1, name: "lapsed", url: lapsed)
-        let notices = AppDelegate.shared.testNotifications.dropFirst(before).filter { $0.identifier.hasPrefix("mcp-sign-in-") }
+        // The notice goes out on the next turn of the main queue, once the need's answer has reached the bar.
+        func noticesNow() -> [UNNotificationRequest] {
+            AppDelegate.shared.testNotifications.dropFirst(before).filter { $0.identifier.hasPrefix("mcp-sign-in-") }
+        }
         let expected = NotificationSettings(defaults: .standard).programAlerts ? 1 : 0
+        _ = await wait(2) { noticesNow().count >= expected }
+        try? await Task.sleep(nanoseconds: 300_000_000) // a second one, were there one, would be there by now
+        let notices = noticesNow()
         check(notices.count == expected && (notices.first.map { $0.content.title == MCPHubSignInWords.notice("lapsed").title
                                                               && $0.content.body == MCPHubSignInWords.notice("lapsed").body } ?? true),
               "MCP settings: a lapse is one notice, never repeated for the same lapse", "\(notices.count) notices")

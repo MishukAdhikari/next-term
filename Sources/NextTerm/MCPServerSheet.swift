@@ -59,6 +59,13 @@ final class MCPServerSheet: NSWindowController, NSWindowDelegate, NSTextFieldDel
     let newSecretName = NSTextField()
     let newSecretValue = NSSecureTextField()
     let ownAppHelp = NSTextField(wrappingLabelWithString: "")
+    /// Opens the provider's page that makes the OAuth app ("Create a Slack App…"), filled in where it takes that.
+    let createAppButton = NSButton(title: "Create an OAuth App\u{2026}", target: nil, action: nil)
+    let copyCallbackButton = NSButton(title: "Copy", target: nil, action: nil)
+    /// Watching the clipboard for the client ID copied on the provider's page: from the create button until it fills in.
+    private var clipboardWatch: Timer?
+    private var clipboardSeen = 0
+    private var createRow = NSStackView()
     /// The own-app rows are open: by the user, or because the server can't register Next Term.
     private(set) var ownApp = false
     /// Discovery found no way for Next Term to register (no registration endpoint, no client metadata documents).
@@ -222,9 +229,20 @@ final class MCPServerSheet: NSWindowController, NSWindowDelegate, NSTextFieldDel
         ownAppHelp.preferredMaxLayoutWidth = 392
         ownAppHelp.isSelectable = true // the callback URL, to copy
         ownHelpRow = row("", ownAppHelp)
+        for (button, action) in [(createAppButton, #selector(createApp)), (copyCallbackButton, #selector(copyCallback))] {
+            button.target = self
+            button.action = action
+            button.bezelStyle = .rounded
+            button.controlSize = .small
+            button.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        }
+        copyCallbackButton.toolTip = "Copy the callback URL"
+        createRow = row("", createAppButton)
+        callbackRow.addArrangedSubview(copyCallbackButton)
+        callbackRow.alignment = .centerY
         let stack = form
         stack.setViews([heading, row("Name", nameField), row("Runs", kind), row("", runsField), keyRow, signInRow,
-                        ownLinkRow, clientIDRow, secretRow, newSecretRow, callbackRow, ownHelpRow,
+                        ownLinkRow, createRow, ownHelpRow, clientIDRow, secretRow, newSecretRow, callbackRow,
                         newKeyRow, variableRow, row("Applies to", appliesPopUp), reasonLabel, buttons], in: .top)
         stack.orientation = .vertical
         stack.alignment = .leading
@@ -361,16 +379,6 @@ final class MCPServerSheet: NSWindowController, NSWindowDelegate, NSTextFieldDel
     var clientID: String { clientIDField.stringValue.trimmingCharacters(in: .whitespaces) }
     var callback: String { callbackField.stringValue.trimmingCharacters(in: .whitespaces) }
 
-    /// The server is Slack's (its URL, or where it signs in): its OAuth apps hold the callback to its port.
-    var isSlack: Bool {
-        let hosts = [URL(string: runsField.stringValue.trimmingCharacters(in: .whitespaces))?.host,
-                     discoveredIssuer.flatMap { URL(string: $0)?.host }].compactMap { $0?.lowercased() }
-        return hosts.contains { $0 == "slack.com" || $0.hasSuffix(".slack.com") }
-    }
-
-    /// The callback a Slack app gets: one fixed port on this Mac, by name, as Slack's redirect list takes it.
-    static let slackCallback = "http://localhost:47819/callback"
-
     /// The key picked or given, by name; nil for none.
     var keyName: String? {
         if isNewKey { return newKeyName.stringValue.isEmpty ? nil : newKeyName.stringValue }
@@ -459,7 +467,7 @@ final class MCPServerSheet: NSWindowController, NSWindowDelegate, NSTextFieldDel
                 return "A client ID is one word, as the provider shows it."
             }
             if !callback.isEmpty, MCPHubServer.OAuthApp.redirectPort(callback) == nil {
-                return "The callback is a URL on this Mac with a port, such as \(Self.slackCallback)."
+                return "The callback is a URL on this Mac with a port, such as \(MCPOwnAppGuide.fixedPortCallback)."
             }
             if isNewSecret {
                 guard StoredSecretName.isValid(newSecretName.stringValue) else { return StoredSecretName.rule }
@@ -507,12 +515,17 @@ final class MCPServerSheet: NSWindowController, NSWindowDelegate, NSTextFieldDel
         ownLinkRow.isHidden = !offersOwnApp || cantRegister || signsInAfterSave
         ownAppButton.title = ownApp ? "Don\u{2019}t use your own OAuth app" : "Use your own OAuth app"
         for each in [clientIDRow, secretRow, callbackRow, ownHelpRow] { each.isHidden = !usesOwnApp }
-        // Slack matches the callback port and all: a fixed one, filled in until the user writes their own.
-        if usesOwnApp, isSlack, callback.isEmpty, !callbackTouched { callbackField.stringValue = Self.slackCallback }
+        // A provider that matches the callback port and all (Slack, HubSpot, Entra…): a fixed one, filled in until the
+        // user writes their own.
+        if usesOwnApp, callback.isEmpty, !callbackTouched, let fixed = self.guide.fixedCallback { callbackField.stringValue = fixed }
         newSecretRow.isHidden = !isNewSecret
+        let guide = self.guide
+        createAppButton.title = guide.createTitle
+        createRow.isHidden = !usesOwnApp || guide.createURL == nil
+        clientIDField.placeholderString = guide.clientIDExample
+        let steps = guide.steps.enumerated().map { "\($0.offset + 1). \($0.element)" }.joined(separator: "\n")
         ownAppHelp.stringValue = (signsInAfterSave && usesOwnApp ? "\(who) doesn\u{2019}t let apps register themselves, so sign in with an "
-            + "OAuth app of your own: its client ID, and its secret if it has one. " : "")
-            + Self.callbackHelp(issuer: discoveredIssuer, callback: callback.isEmpty ? nil : callback, slack: isSlack)
+            + "OAuth app of your own.\n" : "") + steps
         addButton.title = offersSignIn || signsInAfterSave ? "Sign In\u{2026}" : editing == nil ? "Add" : "Save"
         newKeyRow.isHidden = !isNewKey
         variableField.isHidden = isURL || keyName == nil
@@ -588,27 +601,6 @@ final class MCPServerSheet: NSWindowController, NSWindowDelegate, NSTextFieldDel
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: work)
     }
 
-    /// The line under the own-app rows: which callback URL to register at the provider. GitHub's OAuth apps take
-    /// `http://127.0.0.1/callback` and send the browser back to it on any port ("Loopback redirect urls", GitHub's
-    /// Authorizing OAuth apps); RFC 8252 §7.3 asks the same of every server.
-    static func callbackHelp(issuer: String?, callback: String? = nil, slack: Bool = false) -> String {
-        if let callback {
-            if slack {
-                return "In your Slack app (api.slack.com/apps) \u{203A} OAuth & Permissions, add \(callback) under Redirect URLs, exactly as "
-                    + "written: Slack holds the callback to its port."
-            }
-            return "Register \(callback) as the app\u{2019}s callback URL, exactly as written. Next Term listens at that port when you sign in."
-        }
-        let callback = MCPHubOAuthRegistration.redirect
-        if issuer.flatMap({ URL(string: $0)?.host?.lowercased() }) == "github.com" {
-            return "In GitHub \u{203A} Settings \u{203A} Developer settings \u{203A} OAuth Apps, set the app\u{2019}s Authorization callback URL to \(callback). "
-                + "GitHub takes it on any port, so it works as written."
-        }
-        return "Register \(callback) as the app\u{2019}s callback URL. Next Term listens on a port of its own each time, which most providers allow; "
-            + "for one that holds it to a port, give the app\u{2019}s exact callback above."
-    }
-
-
     /// Settings' Sign In… found that the server can't register Next Term: the own-app rows, open, with the client ID
     /// field to type in, and Sign In… as the sheet's one action.
     func showOwnApp() {
@@ -617,6 +609,71 @@ final class MCPServerSheet: NSWindowController, NSWindowDelegate, NSTextFieldDel
         refresh()
         window?.makeFirstResponder(clientIDField)
     }
+
+    // MARK: getting a client ID
+
+    /// The callback the app must hold: the one typed, else Next Term's any-port one.
+    var callbackToRegister: String { callback.isEmpty ? guide.fixedCallback ?? MCPHubOAuthRegistration.redirect : callback }
+
+    /// How to get a client ID for this server: its provider's page, steps and client ID shape.
+    var guide: MCPOwnAppGuide {
+        MCPOwnAppGuide.guide(server: runsField.stringValue.trimmingCharacters(in: .whitespaces), issuer: discoveredIssuer,
+                             callback: callback.isEmpty ? nil : callback)
+    }
+
+    /// Opens the page that makes the app, with the callback on the clipboard when the page doesn't already hold it, and
+    /// watches the clipboard: the client ID copied there fills in here.
+    @objc func createApp() {
+        let guide = self.guide
+        guard let url = guide.createURL else { return }
+        if !guide.createHoldsCallback { copy(callbackToRegister) }
+        NSWorkspace.shared.open(url)
+        watchClipboard()
+    }
+
+    @objc private func copyCallback() {
+        copy(callbackToRegister)
+        copyCallbackButton.title = "Copied"
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in self?.copyCallbackButton.title = "Copy" }
+    }
+
+    private func copy(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        clipboardSeen = NSPasteboard.general.changeCount
+    }
+
+    /// From now on, while the Client ID field is empty: a client ID copied anywhere fills it in. Checked twice a second,
+    /// and the moment the sheet comes back to the front.
+    func watchClipboard() {
+        clipboardSeen = NSPasteboard.general.changeCount
+        clipboardWatch?.invalidate()
+        clipboardWatch = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.checkClipboard() }
+        }
+    }
+
+    private func stopWatchingClipboard() {
+        clipboardWatch?.invalidate()
+        clipboardWatch = nil
+    }
+
+    /// Fills the Client ID field from the clipboard once it holds a new copy shaped like this provider's client IDs.
+    func checkClipboard() {
+        guard clipboardWatch != nil else { return }
+        guard usesOwnApp, clientID.isEmpty, window?.isVisible == true else { return stopWatchingClipboard() }
+        let board = NSPasteboard.general
+        guard board.changeCount != clipboardSeen else { return }
+        clipboardSeen = board.changeCount
+        guard let text = board.string(forType: .string), guide.looksLikeClientID(text) else { return }
+        clientIDField.stringValue = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        stopWatchingClipboard()
+        refresh()
+        NSAccessibility.post(element: clientIDField, notification: .announcementRequested,
+                             userInfo: [.announcement: "Client ID filled in from the clipboard", .priority: NSAccessibilityPriorityLevel.high.rawValue])
+    }
+
+    func windowDidBecomeKey(_ notification: Notification) { checkClipboard() }
 
     @objc private func toggleOwnApp() {
         ownApp.toggle()
@@ -714,6 +771,7 @@ final class MCPServerSheet: NSWindowController, NSWindowDelegate, NSTextFieldDel
     }
 
     func end(_ said: String?) {
+        stopWatchingClipboard()
         guard let window else { return }
         window.sheetParent?.endSheet(window)
         window.orderOut(nil)
