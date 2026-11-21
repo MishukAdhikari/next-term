@@ -21,7 +21,9 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
     private let checkOnOpen = NSButton(checkboxWithTitle: "Check for updates once a day, and when Window › Skills opens", target: nil, action: nil)
     private var inventory: SkillInventory?
     private var rows: [SkillRow] = []
-    private var review: SkillsReviewSheet?
+    private(set) var review: SkillsReviewSheet?
+    /// Update… is fetching the new commit: a second click (or a reload re-enabling the button meanwhile) starts nothing.
+    private(set) var fetchingUpdate = false
     /// Counts reloads, so a slow scan never overwrites a newer one.
     private var generation = 0
     /// A change landed and the rows shown are from before it, until the reload shows.
@@ -320,7 +322,11 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
         removeButton.isEnabled = idle && personal && sharedCopy != nil
         // A skill neither Next Term nor npx skills installed is only moved to the Trash.
         removeButton.title = row.map { SkillsInstaller.tracksInstall($0.name) } == false ? "Move to Trash…" : "Remove…"
-        if let row, case .available = SkillsInstaller.updates[row.name] { updateButton.isEnabled = idle && personal } else { updateButton.isEnabled = false }
+        if let row, case .available = SkillsInstaller.updates[row.name] {
+            updateButton.isEnabled = idle && personal && !fetchingUpdate && review == nil
+        } else {
+            updateButton.isEnabled = false
+        }
         checkButton.isEnabled = personal
         openButton.isEnabled = row?.distinctCopies.isEmpty == false
         revealButton.isEnabled = row != nil
@@ -362,17 +368,24 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
     }
 
     /// An update: the new commit is fetched and reviewed like an install, with what changed.
-    @objc private func update() {
-        guard let row = selectedRow, let window else { return }
+    @objc func update() {
+        guard !fetchingUpdate, review == nil, let row = selectedRow, let window, window.attachedSheet == nil else { return }
+        fetchingUpdate = true
         updateButton.isEnabled = false
         Task {
-            defer { updateButtons() }
+            defer {
+                fetchingUpdate = false
+                updateButtons()
+            }
             guard let item = await SkillsInstaller.tracked().first(where: { $0.name == row.name }) else { return }
             do {
                 let fetched = try await SkillsInstaller.fetch(SkillSource(owner: item.source.owner, repo: item.source.repo, ref: item.source.ref, path: item.path))
+                // Settings closed, or showing another sheet, meanwhile: no review over it.
+                guard self.window === window, window.isVisible, window.attachedSheet == nil else { return fetched.discard() }
                 let sheet = SkillsReviewSheet(fetched: fetched) { [weak self] installed in
                     self?.review = nil
                     if installed != nil { SkillsInstaller.updates[row.name] = .current }
+                    self?.updateButtons()
                 }
                 review = sheet
                 if let sheetWindow = sheet.window { window.beginSheet(sheetWindow, completionHandler: nil) }

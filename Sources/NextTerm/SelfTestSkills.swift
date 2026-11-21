@@ -270,6 +270,22 @@ extension SelfTest {
               "skills: a plain skill gets the checkbox for Claude Code's link, and no plugin popup",
               "checkbox hidden=\(sheet.claudeLink.isHidden) popup hidden=\(sheet.choice.view.isHidden)")
 
+        // A review whose opener let go of it (Update… clicked twice replaced it) still answers: Cancel closes it.
+        let (dropped, _) = download()
+        var held: SkillsReviewSheet? = SkillsReviewSheet(fetched: dropped) { _ in }
+        weak var kept = held
+        let keptID = held.map(ObjectIdentifier.init)
+        held = nil
+        func button(_ title: String, in view: NSView) -> NSButton? {
+            if let button = view as? NSButton, button.title == title { return button }
+            return view.subviews.lazy.compactMap { button(title, in: $0) }.first
+        }
+        let cancelButton = kept?.window?.contentView.flatMap { button("Cancel", in: $0) }
+        cancelButton?.performClick(nil)
+        check(cancelButton != nil && keptID.map { SkillsReviewSheet.open[$0] == nil } == true && !manager.fileExists(atPath: dropped.scratch.path),
+              "skills: a review its opener let go of keeps working, and Cancel closes it and removes the download",
+              "button \(cancelButton != nil), open \(SkillsReviewSheet.open.count)")
+
         guard let candidate else { return }
         if case .failure(let failure) = await SkillsInstaller.install([candidate], fetched: fetched, claude: ["demo-skill": .link]) {
             check(false, "skills: Install applies", failure.message)
