@@ -19,7 +19,7 @@ import Glibc
 /// - The remote door calls it with `caller: nil`, `requester:` the connection's name as the approval
 ///   window should show it (for example “the connection “Claude, phone””), `connection:` its grant id,
 ///   and `.askOnMac` while the connection's “Ask on this Mac before changes” is on,
-///   `.preApprovedByGrant(grantID)` while it is off. Decline and Stop Asking stops the asker by
+///   `.preApprovedByGrant(grantID)` while it is off. Don’t Ask Again stops the asker by
 ///   `connection`: that connection only, not another of the same name, and not lifted by a rename.
 ///
 /// propose_edit takes the policy too, but its ask is its proposal: under either policy the change opens

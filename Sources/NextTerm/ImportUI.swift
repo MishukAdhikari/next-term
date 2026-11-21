@@ -833,7 +833,7 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
         if ask != nil {
             // An agent asks at a moment of its own choosing: no key answers it, and only a click applies.
             apply.refusesFirstResponder = true
-            let stop = NSButton(title: "Decline and Stop Asking", target: self, action: #selector(declineAndStop))
+            let stop = NSButton(title: "Don’t Ask Again", target: self, action: #selector(declineAndStop))
             layout(rows, buttons: [stop, cancel, apply], scrolls: true)
         } else {
             cancel.keyEquivalent = "\u{1b}"

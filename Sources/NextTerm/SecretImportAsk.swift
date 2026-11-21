@@ -36,7 +36,7 @@ final class SecretImportAsk {
     /// How the request ended, as the agent hears it.
     enum End {
         case outcome(SecretSources.CopyInOutcome)
-        /// Cancel, or the banner's Decline and Stop Asking.
+        /// Cancel, or the banner's Don’t Ask Again.
         case declined(stopAsking: Bool)
         /// Secrets shows another sheet: the import window couldn't open.
         case busy
@@ -85,7 +85,7 @@ final class SecretImportAsk {
     /// The sheets showing it, closed when the queue ends it first.
     private weak var fileSheet: SecretFileImportSheet?
     private weak var managerSheet: SecretManagerImportSheet?
-    /// The banner's Decline and Stop Asking, turned off once the request has ended.
+    /// The banner's Don’t Ask Again, turned off once the request has ended.
     weak var stopButton: NSButton?
 
     /// The requests waiting for their tab's pipe, by that tab's id.
@@ -143,7 +143,7 @@ extension SecretImportAsk {
         told?(end)
     }
 
-    /// Decline and Stop Asking, from the banner: the sheet closes first, so the queue's next request finds Secrets
+    /// Don’t Ask Again, from the banner: the sheet closes first, so the queue's next request finds Secrets
     /// free, then the request is declined and the agent asks no more until Next Term quits. Not while the sheet copies
     /// keys in.
     func declineAndStopAsking() {

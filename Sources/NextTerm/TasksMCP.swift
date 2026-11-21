@@ -4,7 +4,7 @@ import NextTermCore
 /// add_task on the app's side (MCPServer.taskTools). The arguments are checked, the project found and where its tasks go
 /// read fresh from the settings first, and a refusal (a destination that can't take the task now, Through your agent)
 /// is answered at once with no window. Then the user is asked on the Mac (MCPWriteControl.approve: one request at a
-/// time, the 50-second wait, Decline and Stop Asking), seeing where it goes and exactly what leaves, stored keys masked.
+/// time, the 50-second wait, Don’t Ask Again), seeing where it goes and exactly what leaves, stored keys masked.
 /// A task leaving Next Term is always shown first, even to a remote connection that skips asking for local changes.
 /// On Approve the todo folder is written by TaskWriter as Tasks › Add Task… does, and every other destination is sent
 /// by TaskDestinations, the sheet's own sender, so both give the same text for the same task. Nothing here logs.

@@ -8,7 +8,7 @@ import NextTermCore
 ///
 /// It waits as an import request does (MCPImportControl): one request open at a time across the write tools, `pending`
 /// with a request id after `answerWithin` seconds, a cancel after `openFor`, a declined request answered declined at once
-/// until Next Term quits, and Decline and Stop Asking from an earlier ask honoured. Local only, as the import tools are:
+/// until Next Term quits, and Don’t Ask Again from an earlier ask honoured. Local only, as the import tools are:
 /// the remote door gets none of it.
 @MainActor
 enum MCPSetupControl {

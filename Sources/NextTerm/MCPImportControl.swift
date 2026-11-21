@@ -399,7 +399,7 @@ enum MCPImportControl {
             + ImportCoordinator.undoMessage(changedSince: coordinator.changedSinceImport())
         let window = AgentApprovalWindow(.init(title: "An agent asks to undo your import from \(last.source)", requester: who,
                                                agentWords: asked.reason, details: details, approveTitle: "Undo Import",
-                                               stopTitle: "Decline and Stop Asking"),
+                                               stopTitle: "Don’t Ask Again"),
                                          approve: { window in undoApproved(request, undoID: undoID, window: window) },
                                          decline: { stop in
                                              if stop { MCPWriteControl.stopped.insert(asker) }

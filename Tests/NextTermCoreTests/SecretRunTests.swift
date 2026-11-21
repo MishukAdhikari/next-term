@@ -53,7 +53,7 @@ import Testing
             (.answer(.paused, name: nil, until: now.addingTimeInterval(720)),
              "nxtrm: you declined this a few minutes ago, so Next Term won’t ask again until 12:12 PM.", 1),
             (.answer(.stopped, name: nil, until: nil),
-             "nxtrm: you chose Decline and Stop Asking for this command, so Next Term won’t ask again until it quits. Resume it in Settings › Secrets.", 1),
+             "nxtrm: you chose Don’t Ask Again for this command, so Next Term won’t ask again until it quits. Resume it in Settings › Secrets.", 1),
             (.answer(.declining, name: nil, until: now.addingTimeInterval(37 * 60)), "nxtrm: Next Term is pausing key requests for the next 37 minutes.", 1),
             (.answer(.busy, name: nil, until: nil), "nxtrm: too many key requests are waiting in Next Term. Answer them, then restart this command.", 1),
             (.answer(.limited, name: nil, until: nil), "nxtrm: this command has asked too often. Resume it in Settings › Secrets, or restart Next Term.", 1),

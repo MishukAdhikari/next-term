@@ -102,7 +102,7 @@ enum ApprovalLayout {
         case accent, destructive
     }
 
-    /// The window's buttons: `left` (rarer choices, such as Decline and Stop Asking) at the start, then Decline and the
+    /// The window's buttons: `left` (rarer choices, such as Don’t Ask Again) at the start, then Decline and the
     /// primary at the end. Decline takes Escape; the primary takes no key and never the keyboard, so only a click
     /// presses it. It stands as tall as Decline's bezel.
     static func buttonRow(left: [NSButton], decline: NSButton, primary: PrimaryButton, look: PrimaryLook = .accent) -> NSStackView {
@@ -111,6 +111,8 @@ enum ApprovalLayout {
             button.keyEquivalent = ""
         }
         decline.keyEquivalent = "\u{1b}" // Escape declines, which is always safe
+        // The rarer choices read as quiet text, so the eye goes to Decline and the primary: small, borderless, dim.
+        for button in left { quiet(button) }
         primary.refusesFirstResponder = true
         primary.look = look
         let row = NSStackView(views: left + [NSView(), decline, primary])
@@ -118,6 +120,22 @@ enum ApprovalLayout {
         primary.heightAnchor.constraint(equalTo: decline.heightAnchor).isActive = true
         return row
     }
+
+    /// A rarer choice (Don’t Ask Again): small secondary text with no bezel, which still takes a click and the keyboard
+    /// like any button.
+    static func quiet(_ button: NSButton) {
+        button.isBordered = false
+        button.controlSize = .small
+        button.attributedTitle = NSAttributedString(string: button.title, attributes: [
+            .font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize), .foregroundColor: NSColor.secondaryLabelColor,
+        ])
+        if button.toolTip == nil, button.title == stopTitle {
+            button.toolTip = "Decline, and refuse its requests without asking until Next Term quits."
+        }
+    }
+
+    /// The rarer choice every request window offers: declines and stops asking until Next Term quits.
+    static let stopTitle = "Don\u{2019}t Ask Again"
 
     /// An alert's chosen button (an NSAlert, key while it shows, so AppKit's own tint draws): tinted and semibold, or
     /// marked destructive.

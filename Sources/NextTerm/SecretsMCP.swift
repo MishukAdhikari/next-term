@@ -469,7 +469,7 @@ enum SecretsMCP {
         case .saved(let name, let replaced):
             return ["status": Status.saved.rawValue, "name": name, "replaced": replaced]
         case .declined(let stopAsking):
-            let note = stopAsking ? "The user chose Decline and Stop Asking: Next Term won't ask them for you again until it quits."
+            let note = stopAsking ? "The user chose Don’t Ask Again: Next Term won't ask them for you again until it quits."
                 : "The user declined, so \(nothing)."
             return ["status": Status.declined.rawValue, "note": note]
         case .answered(let answer):
@@ -504,7 +504,7 @@ enum SecretsMCP {
             return ["status": Status.declined.rawValue, "note": "paused because you declined this at \(SecretRequests.clockText(declinedAt))"]
         case .stopped:
             return ["status": Status.declined.rawValue,
-                    "note": "The user chose Decline and Stop Asking for you: Next Term won't ask again until it quits."]
+                    "note": "The user chose Don’t Ask Again for you: Next Term won't ask again until it quits."]
         case .declining(let until):
             return ["status": Status.declined.rawValue, "note": "Next Term is pausing key requests until \(SecretRequests.clockText(until))."]
         }

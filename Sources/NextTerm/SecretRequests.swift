@@ -70,7 +70,7 @@ final class SecretRequests {
     enum Decision {
         /// The keys' values, for that connection only. `how` is how it was approved.
         case allowed([String: SecretBytes], how: SecretAudit.Approval)
-        /// The user declined: Decline, Decline and Stop Asking, or closing the panel.
+        /// The user declined: Decline, Don’t Ask Again, or closing the panel.
         case declined(stopAsking: Bool)
         /// Refused before any panel.
         case refused(SecretLimits.Refusal)
@@ -721,7 +721,7 @@ final class SecretRequests {
         finish(request, outcome: .declined, decision: .declined(stopAsking: stopAsking))
     }
 
-    /// import_secrets' sheet ended: a decline counts and pauses as any other, and Decline and Stop Asking stops the
+    /// import_secrets' sheet ended: a decline counts and pauses as any other, and Don’t Ask Again stops the
     /// asker; any other end answers as it is, with an audit line when nothing was copied in (a copy-in writes its own).
     private func importEnded(_ request: Request, _ end: SecretImportAsk.End) {
         guard !request.isAnswered else { return }
@@ -1019,7 +1019,7 @@ final class SecretRequests {
             finish(request, outcome: .answeredByGrant, decision: .allowed(copies(values), how: how))
             return true
         }
-        // A decline meanwhile (its pause, Decline and Stop Asking) or the hour pause: refused as it would be now. The
+        // A decline meanwhile (its pause, Don’t Ask Again) or the hour pause: refused as it would be now. The
         // counts are not checked again: they counted it when it asked.
         if let refusal = limits.admit(asker: request.asker, binding: request.binding, at: now) {
             switch refusal {

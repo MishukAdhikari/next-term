@@ -371,7 +371,7 @@ public enum SecretRun {
             let time = until.map { clock($0, timeZone: timeZone) } ?? "10 minutes from when you declined it"
             return ("nxtrm: you declined this a few minutes ago, so Next Term won’t ask again until \(time).", 1)
         case .stopped:
-            return ("nxtrm: you chose Decline and Stop Asking for this command, so Next Term won’t ask again until it quits. Resume it in Settings › Secrets.", 1)
+            return ("nxtrm: you chose Don’t Ask Again for this command, so Next Term won’t ask again until it quits. Resume it in Settings › Secrets.", 1)
         case .declining:
             let minutes = until.map { max(1, Int(($0.timeIntervalSince(now) / 60).rounded(.up))) } ?? 60
             return ("nxtrm: Next Term is pausing key requests for the next \(minutes) \(minutes == 1 ? "minute" : "minutes").", 1)

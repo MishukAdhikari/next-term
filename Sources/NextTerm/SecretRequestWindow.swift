@@ -6,8 +6,9 @@ import NextTermCore
 /// agent's reaches it.
 ///
 /// It is an ordinary window, listed in the Window menu and in the ⌘` cycle, but it never takes the keyboard on
-/// its own: it opens in front without becoming key, and clicking a field makes it key. It has no default button, even
-/// once it is key, so a Return meant for something else never saves. Closing it declines.
+/// its own: it opens in front without becoming key, and clicking a field makes it key. It has no default button, so a
+/// Return meant for something else never saves; Return in the value field does, once the key is typed there (the user
+/// clicked into it to type it). Closing it declines.
 @MainActor
 final class SecretRequestWindow: NSWindowController, NSWindowDelegate, NSTextFieldDelegate {
     struct Content {
@@ -52,6 +53,8 @@ final class SecretRequestWindow: NSWindowController, NSWindowDelegate, NSTextFie
     private(set) var declineButton: NSButton!
     private(set) var stopButton: NSButton!
     private let savedAsLabel = NSTextField(labelWithString: "")
+    /// What Never show means, while it is ticked.
+    private var writeOnlyLineLabel: NSTextField?
     private let replaceLabel = NSTextField(wrappingLabelWithString: "")
     private let shortLabel = NSTextField(wrappingLabelWithString: SecretRequestWindow.shortLine)
     private(set) var statusLabel = NSTextField(wrappingLabelWithString: "")
@@ -95,7 +98,8 @@ final class SecretRequestWindow: NSWindowController, NSWindowDelegate, NSTextFie
         if let words = content.agentWords.map({ SecretApprovalPanel.sanitized($0, limit: 500) }), !words.isEmpty {
             top.append(ApprovalLayout.agentWords(words, who: nil, width: inner))
         }
-        top.append(ApprovalLayout.secondary("Asked by \(SecretApprovalPanel.sanitized(content.askedBy, limit: 300)).", width: inner))
+        let asker = content.askedBy.replacingOccurrences(of: NSHomeDirectory() + "/", with: "~/")
+        top.append(ApprovalLayout.secondary("Asked by \(SecretApprovalPanel.sanitized(asker, limit: 300)).", width: inner))
         statusLabel.font = .systemFont(ofSize: 12)
         statusLabel.isHidden = true
         let fields = ApprovalLayout.group(fieldRows())
@@ -123,6 +127,8 @@ final class SecretRequestWindow: NSWindowController, NSWindowDelegate, NSTextFie
             }
         }
         NSLayoutConstraint.activate(constraints)
+        // A click into the window puts the keyboard where the user has something to do: the value.
+        window?.initialFirstResponder = valueField
         refreshName()
     }
 
@@ -153,18 +159,23 @@ final class SecretRequestWindow: NSWindowController, NSWindowDelegate, NSTextFie
         writeOnlyBox.state = chosenNeverShow ? .on : .off
         let writeOnlyLine = SecretApprovalPanel.label(Self.writeOnlyLine, size: 11)
         writeOnlyLine.textColor = .secondaryLabelColor
+        writeOnlyLineLabel = writeOnlyLine
+        // Captioned as the other fields are: plain and secondary.
+        linkField.captionLabel.font = .systemFont(ofSize: 11)
+        linkField.captionLabel.textColor = .secondaryLabelColor
         linkField.onChange = { [weak self] in self?.refreshName() }
         linkField.value = { [weak self] in self.map { SecretBytes(utf8: $0.valueField.stringValue) } }
         linkField.suggest(value: nil, name: content.name)
-        return [Self.caption("Name"), nameField, savedAsLabel, replaceLabel, Self.caption("What it\u{2019}s for"), purposeField,
-                linkField, Self.caption("Value"), valueField, shortLabel, writeOnlyBox, writeOnlyLine]
+        // What the user came to do first: the name and its value; then what the key is for and where it came from.
+        return [Self.caption("Name"), nameField, savedAsLabel, replaceLabel, Self.caption("Value"), valueField, shortLabel,
+                writeOnlyBox, writeOnlyLine, Self.caption("What it\u{2019}s for"), purposeField, linkField]
     }
 
     /// A field's label: plain and secondary, so the heading stays the one bold line.
     private static func caption(_ text: String) -> NSTextField { ApprovalLayout.caption(text) }
 
     private func buttonRow() -> NSView {
-        stopButton = NSButton(title: "Decline and Stop Asking", target: self, action: #selector(declineAndStop))
+        stopButton = NSButton(title: "Don’t Ask Again", target: self, action: #selector(declineAndStop))
         declineButton = NSButton(title: "Decline", target: self, action: #selector(decline))
         saveButton = PrimaryButton(title: "Save", target: self, action: #selector(save))
         // Save is the primary, by a click only, even once the window is key; Escape declines.
@@ -199,6 +210,13 @@ final class SecretRequestWindow: NSWindowController, NSWindowDelegate, NSTextFie
         pasteWatch?.record()
     }
 
+    /// Return in the value field saves, once Save can: the key was typed or pasted there, so the Return is the user's.
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+        guard control === valueField, selector == #selector(NSResponder.insertNewline(_:)) else { return false }
+        if saveButton?.isEnabled == true { save() }
+        return true
+    }
+
     func controlTextDidChange(_ notification: Notification) {
         guard let field = notification.object as? NSTextField else { return }
         if field === nameField {
@@ -226,6 +244,8 @@ final class SecretRequestWindow: NSWindowController, NSWindowDelegate, NSTextFie
         let valid = StoredSecretName.isValid(name)
         savedAsLabel.stringValue = valid ? "Saved as \(name)" : StoredSecretName.rule
         savedAsLabel.textColor = valid ? .secondaryLabelColor : .systemOrange
+        // "Saved as" says something only when the name typed is not the one saved.
+        savedAsLabel.isHidden = valid && name == nameField.stringValue
         let stored = valid ? SecretsStore.shared.index?.entry(named: name) : nil
         replaceLabel.stringValue = stored.map { Self.replaceLine($0) } ?? ""
         replaceLabel.isHidden = stored == nil
@@ -235,6 +255,7 @@ final class SecretRequestWindow: NSWindowController, NSWindowDelegate, NSTextFie
         writeOnlyBox?.state = ticked ? .on : .off
         writeOnlyBox?.isEnabled = !neverShown && !isBusy && !answered
         writeOnlyBox?.toolTip = neverShown ? Self.neverShownTip : nil
+        writeOnlyLineLabel?.isHidden = !ticked
         // A stored key keeps what it's for and its page: Save replaces only its value.
         purposeField.isEnabled = stored == nil && !isBusy
         linkField.setEnabled(stored == nil && !isBusy && !answered)
