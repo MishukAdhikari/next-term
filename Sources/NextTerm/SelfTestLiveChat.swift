@@ -181,6 +181,20 @@ extension SelfTest {
         pane.chatStrip.terminalButton.performClick(nil)
         check(await wait(3) { !pane.showsChat } && window.firstResponder === tab.view,
               "live chat: the terminal button brings the terminal back with the keyboard")
+        // The terminal's prompt box, shown, never draws over the chat's own: it goes with the chat and comes back after.
+        pane.setPromptBox(shown: true)
+        if let box = pane.promptBox {
+            pane.setChat(shown: true, focus: false)
+            _ = await wait(2) { pane.showsChat }
+            check(box.isHiddenOrHasHiddenAncestor && window.firstResponder === pane.liveChat?.composer.textView,
+                  "live chat: over the chat, the terminal's prompt box is out of sight and the chat's composer has the keyboard")
+            pane.setChat(shown: false)
+            _ = await wait(2) { !pane.showsChat }
+            check(!box.isHiddenOrHasHiddenAncestor, "live chat: back on the terminal, its prompt box shows again")
+            pane.setPromptBox(shown: false)
+        } else {
+            check(false, "live chat: the prompt box shows over the terminal")
+        }
         // Over the terminal the buttons stay out of the agent's text until the pointer comes to the corner.
         pane.chatStrip.pointerNear(false)
         check(await wait(1) { pane.chatStrip.alphaValue < 0.01 } && !pane.chatStrip.isRevealed,
