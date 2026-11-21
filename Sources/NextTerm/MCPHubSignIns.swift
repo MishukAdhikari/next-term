@@ -29,6 +29,9 @@ enum MCPHubSignIns {
     private static var noticed = Set<String>()
     /// Don't Allow, until Next Term quits: "id\0agent".
     private static var refused = Set<String>()
+    /// Sign-ins allowed for one agent outside Next Term's tabs, by record id and that agent's session (its process: pid,
+    /// start time, executable): in memory only, never in the sealed file, so it ends with that process or Next Term.
+    private static var outsideAllowed = Set<String>()
     /// Needs waiting on one consent panel: "id\0agent".
     private static var asking: [String: [(Bool) -> Void]] = [:]
     /// The panel shown for each consent being asked.
@@ -466,7 +469,12 @@ enum MCPHubSignIns {
         case .signedIn, .refreshing: break
         }
         let agent = byUser ? nil : Self.agent(caller)
-        if !byUser, agent == nil { return fail(MCPHubSignInWords.notAnAgent(name)) }
+        // An agent outside Next Term's tabs (another terminal), named as Secrets names one: the agent process above the
+        // bridge, by pid, start time and executable. Anything that isn't one (a shell running `nxtrm mcp`, the remote
+        // door) is refused.
+        let outside = !byUser && agent == nil && caller == nil ? pid.flatMap(SecretSocket.agentAbove) : nil
+        let outsideSession = outside.flatMap { SecretRequests.session(outside: $0.pid) }
+        if !byUser, agent == nil, outsideSession == nil { return fail(MCPHubSignInWords.notAnAgent(name)) }
         withKey(reason: "use its sign-in to \(name) for your agents", makes: false) { key in
             guard let key else { return fail(MCPHubSignInWords.notUnlocked(name)) }
             let signIns = store(key)
@@ -495,7 +503,11 @@ enum MCPHubSignIns {
                     }
                 }
             }
-            guard let agent else { return granted() }
+            guard let agent else {
+                guard let outside, let outsideSession else { return granted() }
+                return outsideConsent(record, others: body.records, agent: outside, session: outsideSession, name: name, ask: ask,
+                                      deadline: deadline, fail: fail, granted: granted)
+            }
             if !ask, !record.consents.contains(agent) {
                 return fail("\(MCPHubSignInWords.agentTitle(agent)) isn\u{2019}t allowed to use the \(name) sign-in yet, so a search across "
                     + "servers leaves it out. Name it (mcp_tools with server \"\(name)\") to search its tools; the user is asked then.")
@@ -583,6 +595,66 @@ enum MCPHubSignIns {
             answer(true)
         }, decline: { _ in answer(false) })
         panels[ask] = window
+        window.present()
+    }
+
+    /// R15 for an agent outside Next Term's tabs: one panel naming the sign-in needed now and the others it may use,
+    /// whose Allow lasts while that agent's process runs (`outsideAllowed`), never written to the sealed file. A new
+    /// session of the agent is asked again. Don't Allow refuses the one needed now for that session.
+    private static func outsideConsent(_ record: SignInFile.Record, others: [SignInFile.Record], agent: SecretSocket.Agent,
+                                       session: String, name: String, ask: Bool, deadline: Date,
+                                       fail: @escaping (String) -> Void, granted: @escaping () -> Void) {
+        let key = record.id + "\u{0}" + session
+        if outsideAllowed.contains(key) { return granted() }
+        let title = MCPHubSignInWords.agentTitle(MCPHubSignInWords.agentKey(program: agent.program))
+        if !ask {
+            return fail("\(title) isn\u{2019}t allowed to use the \(name) sign-in yet, so a search across servers leaves it out. "
+                + "Name it (mcp_tools with server \"\(name)\") to search its tools; the user is asked then.")
+        }
+        if refused.contains(key) { return fail(MCPHubSignInWords.declined(agent: title, name)) }
+        var answered = false
+        DispatchQueue.main.asyncAfter(deadline: .now() + max(0, deadline.timeIntervalSinceNow - 1)) {
+            guard !answered else { return }
+            answered = true
+            fail(MCPHubSignInWords.asking(agent: title, name))
+        }
+        let reply: (Bool) -> Void = { allowed in
+            guard !answered else { return }
+            answered = true
+            if allowed { granted() } else { fail(MCPHubSignInWords.declined(agent: title, name)) }
+        }
+        if asking[key] != nil {
+            asking[key]?.append(reply)
+            return
+        }
+        asking[key] = [reply]
+        let group = others.filter { other in
+            let otherKey = other.id + "\u{0}" + session
+            guard other.id != record.id, !outsideAllowed.contains(otherKey), !refused.contains(otherKey), asking[otherKey] == nil else { return false }
+            switch other.state {
+            case .signedIn, .refreshing: return true
+            case .signedOut, .needsMoreAccess: return false
+            }
+        }
+        for other in group { asking[other.id + "\u{0}" + session] = [] }
+        let keys = [key] + group.map { $0.id + "\u{0}" + session }
+        let words = MCPHubSignInWords.outsideConsent(agent: title, names: [name] + group.map(\.name))
+        let request = AgentApprovalWindow.Request(title: words.title, requester: "\(title) in another terminal (process \(agent.pid))",
+                                                  agentWords: nil, details: words.details,
+                                                  approveTitle: "Allow", declineTitle: "Don\u{2019}t Allow")
+        func answer(_ allowed: Bool) {
+            panels[key] = nil
+            if allowed { keys.forEach { outsideAllowed.insert($0) } } else { refused.insert(key) }
+            for each in keys {
+                let waiting = asking.removeValue(forKey: each) ?? []
+                for reply in waiting { reply(allowed) }
+            }
+        }
+        let window = AgentApprovalWindow(request, approve: { window in
+            window.finish()
+            answer(true)
+        }, decline: { _ in answer(false) })
+        panels[key] = window
         window.present()
     }
 

@@ -261,7 +261,7 @@ public struct BuiltInSkill: Sendable, Equatable {
         - **Search wisely.** `mcp_tools` with `query` and no server searches every server it can reach without asking the user, and names the ones it left out (a key from Secrets, a sign-in this agent isn't allowed yet). Name a server to search it; the user is asked then.
         - **A state that needs the user.** When `mcp_servers` gives `needs_sign_in`, `signed_out` or `needs_more_access`, or a call says so, tell the user what its note says (sign in or reconnect in Settings › MCP Servers) and call again once they have. No restart is needed.
         - **Asked once.** The first time you use a signed-in server, the user allows you on the Mac, in one panel for every sign-in you aren't allowed yet. A call that answers "Next Term is asking the user…" or "the approval is kept": tell the user to answer on the Mac, then call again.
-        - **Only in Next Term's tabs.** Sign-ins are used only for an agent running in one of Next Term's own tabs. Started elsewhere, ask the user to start you in a Next Term tab.
+        - **Any terminal.** You get these servers in any terminal. In another terminal, the user allows a signed-in server for your session only, and is asked again next session; in a Next Term tab, once.
         - `list_mcp_servers` shows what is connected; when a server you need isn't, `add_mcp_server` connects it for every agent once the user approves on the Mac.
         """
 }
