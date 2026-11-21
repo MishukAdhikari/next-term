@@ -20,6 +20,7 @@ extension LiveChat {
             }
         }
         var blocks: [ChatBlock] = []
+        var waiting: [(id: String, text: String, shown: Bool)] = []
         for (index, item) in items.enumerated() {
             switch item.kind {
             case .user(let text):
@@ -66,9 +67,26 @@ extension LiveChat {
                 blocks.append(ChatBlock(id: item.id, content: .turnEnded(words: turnWords(durationMs), usage: nil, reason: .endTurn)))
             case .error(let text):
                 blocks.append(ChatBlock(id: item.id, content: .note(text: text, tone: .error)))
+            case .queued(let text, let shown):
+                waiting.append((item.id, text, shown))
+            case .unqueued(let text):
+                // By its text when given, else the oldest: the queue goes first in, first out.
+                if let at = text.map({ text in waiting.firstIndex { $0.text == text } }) ?? (waiting.isEmpty ? nil : 0) {
+                    waiting.remove(at: at)
+                }
+            case .unqueuedAll:
+                waiting.removeAll()
             case .unknown:
                 break
             }
+        }
+        // Messages still waiting in the agent's queue, at the foot: the user's words, then one line saying they wait.
+        waiting.removeAll { !$0.shown }
+        for (id, text, _) in waiting { blocks.append(ChatBlock(id: "queued:" + id, content: .prompt(text: text))) }
+        if !waiting.isEmpty {
+            let words = waiting.count == 1 ? "Queued: the agent reads it when it finishes this step."
+                : "\(waiting.count) queued: the agent reads them when it finishes this step."
+            blocks.append(ChatBlock(id: "queued:note:" + (waiting.last?.id ?? ""), content: .note(text: words, tone: .info)))
         }
         return blocks
     }

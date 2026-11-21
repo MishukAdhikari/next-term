@@ -79,6 +79,14 @@ public enum LiveChat {
         /// A turn ended, with how long it took when the agent says.
         case turnEnd(durationMs: Int?)
         case error(String)
+        /// A message waiting in the agent's queue (Claude Code's queue-operation enqueue): the user's, shown, or one Next Term or
+        /// another session sent (a task notice), kept only so the queue's order holds.
+        case queued(String, shown: Bool)
+        /// A message left the queue: the one with this text (read into the turn, or taken back), or the oldest (nil: taken
+        /// as the next prompt, which Claude Code records without its text).
+        case unqueued(String?)
+        /// Every queued message left it at once (the user took them all back to edit).
+        case unqueuedAll
         /// A record of a type not known here, by its type.
         case unknown(String)
     }
@@ -173,6 +181,16 @@ public enum LiveChat {
     static func claude(_ record: [String: Any]) -> [Kind] {
         if record["isSidechain"] as? Bool == true { return [] }
         let type = record["type"] as? String ?? ""
+        // Messages typed while Claude Code works: queued, and then either taken as the next prompt (a user record
+        // follows) or read into the turn as it runs, which only an attachment records. Both show as the user's prompt;
+        // one still waiting shows at the chat's foot, marked queued.
+        if type == "queue-operation" { return claudeQueue(record) }
+        if type == "attachment", let attachment = record["attachment"] as? [String: Any],
+           attachment["type"] as? String == "queued_command",
+           (attachment["origin"] as? [String: Any])?["kind"] as? String == "human",
+           let prompt = attachment["prompt"] as? String, !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return [.user(prompt)]
+        }
         let content = (record["message"] as? [String: Any])?["content"]
         switch type {
         case "user":
@@ -204,6 +222,24 @@ public enum LiveChat {
             return claudeQuiet.contains(type) || type.isEmpty ? [] : [.unknown(type)]
         }
     }
+
+    /// A queue-operation record: a message waiting, or leaving the queue. Messages Next Term or another session sent the
+    /// agent (task notices, cross-session messages) are left out: only the user's own words show.
+    static func claudeQueue(_ record: [String: Any]) -> [Kind] {
+        let content = record["content"] as? String ?? ""
+        switch record["operation"] as? String {
+        case "enqueue":
+            let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+            return [.queued(content, shown: !trimmed.isEmpty && !Self.machineQueued.contains { trimmed.hasPrefix($0) })]
+        case "dequeue": return [.unqueued(nil)]
+        case "remove": return [.unqueued(content.isEmpty ? nil : content)]
+        case "popAll": return [.unqueuedAll]
+        default: return []
+        }
+    }
+
+    /// How messages that are not the user's start, when queued.
+    static let machineQueued = ["<task-notification", "<cross-session-message", "<system-reminder", "<command-"]
 
     /// An assistant's content block, shared by Claude Code and Command Code (both write Anthropic's blocks).
     static func assistantBlock(_ block: [String: Any]) -> Kind? {
@@ -455,7 +491,9 @@ public enum LiveChat {
             call.diff = call.diff.map { Diff(path: $0.path, lines: $0.lines.map(m)) }
             call.plan = call.plan?.map { PlanStep(text: m($0.text), status: $0.status) }
             return .tool(call)
-        case .compacted, .turnEnd, .unknown: return kind
+        case .queued(let text, let shown): return .queued(m(text), shown: shown)
+        case .unqueued(let text): return .unqueued(text.map(m))
+        case .compacted, .turnEnd, .unknown, .unqueuedAll: return kind
         }
     }
 }
