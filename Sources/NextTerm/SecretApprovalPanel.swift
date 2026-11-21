@@ -529,7 +529,11 @@ final class SecretApprovalPanel: NSWindowController, NSWindowDelegate {
         row.alignment = .firstBaseline
         var only: String?
         if durationChoice.count > 1 {
+            // Each choice is a button of its own, one click each (Allow is Only this time); the pop-up stays, out of
+            // sight, as the panel's state.
+            row.isHidden = true
             lines.append(row)
+            lines.append(quickRow())
             lines.append(rememberNote)
         } else {
             // One choice is no choice: the pop-up stays (the panel's state reads it), out of sight.
@@ -561,7 +565,15 @@ final class SecretApprovalPanel: NSWindowController, NSWindowDelegate {
 
     /// What the choice Remember shows means.
     private func updateRememberNote() {
-        let how = selectedHow
+        let text = rememberText(selectedHow)
+        rememberNote.stringValue = text ?? ""
+        rememberNote.isHidden = text == nil
+        fitHeight()
+        refreshQuick()
+    }
+
+    /// What a Remember choice means, in a line or two: under the panel for the chosen one, and as each button's tip.
+    func rememberText(_ how: SecretRequests.How) -> String? {
         let agent = content.always?.agent ?? content.askedBy.agent ?? "this agent"
         var text: String?
         switch how {
@@ -622,9 +634,99 @@ final class SecretApprovalPanel: NSWindowController, NSWindowDelegate {
                     + "\(one ? "it" : "they") still \(one ? "asks" : "ask") every time."
             }
         }
-        rememberNote.stringValue = text ?? ""
-        rememberNote.isHidden = text == nil
-        fitHeight()
+        return text
+    }
+
+    // MARK: the choices as buttons
+
+    /// The buttons for the choices other than Only this time, by choice.
+    private(set) var quickButtons: [SecretRequests.How: NSButton] = [:]
+    /// The rarer choices, in one pull-down beside them.
+    private(set) var morePopUp: NSPopUpButton?
+
+    /// At most three choices as buttons of their own: For 15 Minutes, For This Session and the first Always, else the
+    /// first offered; the others in More.
+    static func directChoices(_ offered: [SecretRequests.How]) -> [SecretRequests.How] {
+        let others = offered.filter { $0 != .once }
+        var direct: [SecretRequests.How] = []
+        for wanted in [others.first { $0 == .fifteenMinutes }, others.first { $0 == .session }, others.first(where: \.isAlways)] {
+            if let wanted { direct.append(wanted) }
+        }
+        for how in others where direct.count < 3 && !direct.contains(how) { direct.append(how) }
+        return others.filter(direct.contains)
+    }
+
+    /// A choice's button title: short, as a button reads, its full words in its tip.
+    func buttonTitle(of how: SecretRequests.How) -> String {
+        switch how {
+        case .once: return "Allow"
+        case .fifteenMinutes: return "For 15 Minutes"
+        case .untilLock: return "Until the Mac Locks"
+        case .session: return "For This Session"
+        case .worktreeUntilQuit: return "In This Worktree"
+        case .folderUntilQuit: return "In This Folder"
+        case .alwaysProject, .alwaysWorktree, .alwaysFolder: return "Always"
+        }
+    }
+
+    /// "Or allow  [For 15 Minutes] [For This Session] [Always] [More]": each allows at once for that long.
+    private func quickRow() -> NSView {
+        let caption = ApprovalLayout.caption("Or allow")
+        caption.setAccessibilityElement(false)
+        var views: [NSView] = [caption]
+        let direct = Self.directChoices(content.choices)
+        for how in direct {
+            let button = NSButton(title: buttonTitle(of: how), target: self, action: #selector(quickAllow(_:)))
+            button.bezelStyle = .rounded
+            button.keyEquivalent = ""
+            button.identifier = NSUserInterfaceItemIdentifier(how.rawValue)
+            button.toolTip = [title(of: how), rememberText(how)].compactMap { $0 }.joined(separator: ". ")
+            button.setAccessibilityLabel("Allow " + title(of: how).lowercased())
+            quickButtons[how] = button
+            views.append(button)
+        }
+        let rest = content.choices.filter { $0 != .once && !direct.contains($0) }
+        if !rest.isEmpty {
+            let more = NSPopUpButton(frame: .zero, pullsDown: true)
+            more.addItem(withTitle: "More")
+            for how in rest {
+                more.addItem(withTitle: title(of: how))
+                more.lastItem?.representedObject = how.rawValue
+                more.lastItem?.toolTip = rememberText(how)
+            }
+            more.target = self
+            more.action = #selector(moreAllow(_:))
+            more.setAccessibilityLabel("Allow for longer")
+            morePopUp = more
+            views.append(more)
+        }
+        let row = NSStackView(views: views)
+        row.spacing = 8
+        row.alignment = .centerY
+        return row
+    }
+
+    @objc private func quickAllow(_ sender: NSButton) {
+        guard let raw = sender.identifier?.rawValue, let how = SecretRequests.How(rawValue: raw) else { return }
+        allowNow(how)
+    }
+
+    @objc private func moreAllow(_ sender: NSPopUpButton) {
+        guard let raw = sender.selectedItem?.representedObject as? String, let how = SecretRequests.How(rawValue: raw) else { return }
+        allowNow(how)
+    }
+
+    /// One click on a choice: it is chosen and allowed.
+    func allowNow(_ how: SecretRequests.How) {
+        guard !answered, !isBusy, durationChoice[how]?.isEnabled != false else { return }
+        select(how)
+        allow()
+    }
+
+    /// The choice buttons follow the panel: off while it waits for Touch ID or once answered, and each as its choice.
+    private func refreshQuick() {
+        for (how, button) in quickButtons { button.isEnabled = !answered && !isBusy && durationChoice[how]?.isEnabled != false }
+        morePopUp?.isEnabled = !answered && !isBusy
     }
 
     /// Requests waiting behind this one, and the hour's pause that declines them all, beside it (also in the Secrets
@@ -646,15 +748,13 @@ final class SecretApprovalPanel: NSWindowController, NSWindowDelegate {
 
     private var waitingRowView: NSStackView?
 
-    /// Decline and Stop Asking at the start, small and quiet; Decline (Escape) and Allow at the end, Allow the one
+    /// Don’t Ask Again at the start, small and quiet; Decline (Escape) and Allow at the end, Allow the one
     /// primary. Return is Allow with what Remember shows, once the user is in the panel.
     private func buttonRow() -> NSView {
-        stopButton = NSButton(title: "Decline and Stop Asking", target: self, action: #selector(declineAndStop))
+        stopButton = NSButton(title: "Don’t Ask Again", target: self, action: #selector(declineAndStop))
         declineButton = NSButton(title: "Decline", target: self, action: #selector(decline))
         allowButton = PrimaryButton(title: content.allowTitle, target: self, action: #selector(allow))
         let row = ApprovalLayout.buttonRow(left: [stopButton], decline: declineButton, primary: allowButton)
-        stopButton.controlSize = .small
-        stopButton.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         allowButton.keyEquivalent = "\r"
         return row
     }
@@ -697,6 +797,7 @@ final class SecretApprovalPanel: NSWindowController, NSWindowDelegate {
         isBusy = busy
         for button in [allowButton, declineButton, stopButton, pauseButton, serverButton] { button?.isEnabled = !busy }
         rememberPopUp?.isEnabled = !busy
+        refreshQuick()
         if oncePausesWhenGone, cardLabel.isHidden == false { durationChoice[.once]?.isEnabled = false }
         window?.standardWindowButton(.closeButton)?.isEnabled = !busy
         setStatus(busy ? "Waiting for Touch ID or your password\u{2026}" : "")
@@ -771,6 +872,7 @@ final class SecretApprovalPanel: NSWindowController, NSWindowDelegate {
         setBusy(false)
         for button in [allowButton, declineButton, stopButton, pauseButton, serverButton] { button?.isEnabled = false }
         rememberPopUp?.isEnabled = false
+        refreshQuick()
         cardLabel.stringValue = text
         cardLabel.isHidden = false
         rememberNote.isHidden = true

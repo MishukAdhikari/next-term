@@ -759,7 +759,7 @@ extension SelfTest {
         _ = try? scratch.startOver()
         check(granted && requests.grants.isEmpty, "secrets: Start Over ends every grant, so a key added again under its name asks again")
 
-        // Decline pauses that request only; Decline and Stop Asking stops the asker.
+        // Decline pauses that request only; Don’t Ask Again stops the asker.
         let tool = secretsRequest(asker: "selftest-tab-x", command: ["npm test"], source: .tool, agent: "Claude Code")
         requests.ask(tool) { answers.take($0) }
         tool.panel?.declineButton.performClick(nil)
@@ -774,7 +774,7 @@ extension SelfTest {
         other.panel?.stopButton.performClick(nil)
         let third = secretsRequest(asker: "selftest-tab-x", command: ["npm run lint"], source: .tool, agent: "Claude Code")
         requests.ask(third) { answers.take($0) }
-        check(secretsRefusal(answers.last) == .stopped, "secrets: Decline and Stop Asking refuses that agent's next, different request")
+        check(secretsRefusal(answers.last) == .stopped, "secrets: Don’t Ask Again refuses that agent's next, different request")
 
         // A remote request offers only "Allow once".
         let remote = secretsRequest(asker: "remote:grant-1", command: ["npm test"], source: .tool, remote: "Claude, phone", agent: nil)

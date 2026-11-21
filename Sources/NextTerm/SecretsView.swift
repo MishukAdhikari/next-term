@@ -262,7 +262,7 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
     static let columns: [Column] = [Column(id: "name", title: "Name", width: 84, minWidth: 64),
                                     Column(id: "purpose", title: "What it’s for", width: 70, minWidth: 44),
                                     Column(id: "page", title: "Page", width: 78, minWidth: 48),
-                                    Column(id: "writeOnly", title: "", width: 20, minWidth: 18, maxWidth: 28),
+                                    Column(id: "writeOnly", title: "", width: 24, minWidth: 22, maxWidth: 30),
                                     Column(id: "rotated", title: "Rotated", width: 66, minWidth: 48),
                                     Column(id: "used", title: "Last used", width: 64, minWidth: 48)]
 
@@ -285,7 +285,7 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
         table.intercellSpacing = NSSize(width: 8, height: table.intercellSpacing.height)
         table.dataSource = self
         table.delegate = self
-        table.rowHeight = 22
+        table.rowHeight = 24
         table.usesAlternatingRowBackgroundColors = true
         table.allowsMultipleSelection = false
         table.target = self
@@ -394,8 +394,7 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         guard entries.indices.contains(row) else { return nil }
         let entry = entries[row]
-        let cell = NSTextField(labelWithString: "")
-        cell.lineBreakMode = .byTruncatingTail
+        let cell = SecretsCellField.make()
         switch tableColumn?.identifier.rawValue {
         case "name":
             cell.stringValue = entry.name
@@ -407,7 +406,8 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
         case "page":
             Self.fillPageCell(cell, SecretsStore.shared.pageLink(of: entry.name))
         case "writeOnly":
-            return Self.neverShownCell(entry)
+            // A key never shown has its lock; any other, an eye that reveals it (Touch ID first).
+            return entry.writeOnly ? Self.neverShownCell(entry) : revealCell(entry, row: row)
         case "rotated":
             Self.fillRotatedCell(cell, entry, now: Date())
         default:
@@ -605,7 +605,7 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
                          + "\(SecretRequests.clockText(pause.untilDate)).", { requests.resume(binding) }))
         }
         for asker in limits.stopped.sorted() {
-            rows.append(("\(Self.askerText(asker)): you chose Decline and Stop Asking.", { requests.resume(asker: asker) }))
+            rows.append(("\(Self.askerText(asker)): you chose Don’t Ask Again.", { requests.resume(asker: asker) }))
         }
         for asker in limits.limitedAskers where !limits.stopped.contains(asker) {
             rows.append(("\(Self.askerText(asker)): asked too often this session.", { requests.resume(asker: asker) }))
@@ -747,6 +747,27 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
 
     /// The Touch ID it asks for ends with Reveal (`endReveal`), and an approval that comes after that shows nothing:
     /// the value is dropped, its bytes wiped.
+    /// The eye in a key's row: Reveal for that key, one click.
+    private func revealCell(_ entry: SecretVault.Entry, row: Int) -> NSView {
+        let help = "Reveal \(entry.name) (asks for Touch ID or your password)"
+        let button = NSButton(image: NSImage(systemSymbolName: "eye", accessibilityDescription: help) ?? NSImage(),
+                              target: self, action: #selector(revealRow(_:)))
+        button.isBordered = false
+        button.imagePosition = .imageOnly
+        button.contentTintColor = .secondaryLabelColor
+        button.tag = row
+        button.toolTip = help
+        button.setAccessibilityLabel("Reveal \(entry.name)")
+        return button
+    }
+
+    @objc private func revealRow(_ sender: NSButton) {
+        guard entries.indices.contains(sender.tag) else { return }
+        table.selectRowIndexes(IndexSet(integer: sender.tag), byExtendingSelection: false)
+        refreshButtons()
+        reveal()
+    }
+
     @objc func reveal() {
         guard let entry = selectedEntry, !entry.writeOnly else { return }
         revealTask?.cancel() // the newer Reveal asks instead
@@ -1073,4 +1094,39 @@ final class UndoOutcome: @unchecked Sendable {
 /// A document view whose rows start at the top.
 private final class SecretsFlippedView: NSView {
     override var isFlipped: Bool { true }
+}
+
+/// A cell of the list: one line, cut at its end, set in the middle of its row's height so every column's text shares a
+/// baseline.
+final class SecretsCellField: NSTextField {
+    static func make() -> SecretsCellField {
+        let field = SecretsCellField(labelWithString: "")
+        field.cell = CenteredCell(textCell: "")
+        field.isBordered = false
+        field.drawsBackground = false
+        field.isEditable = false
+        field.isSelectable = false
+        field.font = .systemFont(ofSize: 12)
+        field.textColor = .labelColor
+        field.lineBreakMode = .byTruncatingTail
+        field.cell?.truncatesLastVisibleLine = true
+        field.cell?.usesSingleLineMode = true
+        return field
+    }
+
+    private final class CenteredCell: NSTextFieldCell {
+        override func titleRect(forBounds rect: NSRect) -> NSRect {
+            var title = super.titleRect(forBounds: rect)
+            let height = cellSize(forBounds: rect).height
+            if height < title.height {
+                title.origin.y += ((title.height - height) / 2).rounded()
+                title.size.height = height
+            }
+            return title
+        }
+
+        override func drawInterior(withFrame frame: NSRect, in view: NSView) {
+            super.drawInterior(withFrame: titleRect(forBounds: frame), in: view)
+        }
+    }
 }

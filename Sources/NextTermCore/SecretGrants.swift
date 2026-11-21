@@ -346,7 +346,7 @@ public struct SecretLimits: Sendable {
         case busy
         /// The same request was declined within 10 minutes.
         case paused(declinedAt: Date, until: Date)
-        /// Decline and Stop Asking, until Next Term quits.
+        /// Don’t Ask Again, until Next Term quits.
         case stopped
         /// A count is reached.
         case limited
@@ -423,7 +423,7 @@ public struct SecretLimits: Sendable {
         }
     }
 
-    /// Decline and Stop Asking: the asker is refused until Next Term quits, or Resume.
+    /// Don’t Ask Again: the asker is refused until Next Term quits, or Resume.
     public mutating func stop(_ asker: String) {
         stopped.insert(asker)
     }

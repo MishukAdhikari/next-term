@@ -141,7 +141,7 @@ extension SelfTest {
 
 extension SelfTest {
     /// The shared limits: with the asker's count of declines reached, import_secrets gets limited and opens nothing. The
-    /// banner's Decline and Stop Asking declines and stops the asker: its next request is refused, with nothing opened.
+    /// banner's Don’t Ask Again declines and stops the asker: its next request is refused, with nothing opened.
     static func secretImportToolLimitChecks(_ view: SecretsView, env: URL) async {
         let requests = SecretRequests.shared
         requests.resetForSelfTest()
@@ -159,21 +159,21 @@ extension SelfTest {
         let call = secretsStart("import_secrets", ["source": "bitwarden"])
         guard await wait(15, { view.managerSheet != nil }), let sheet = view.managerSheet,
               let stop = secretImportStopButton(sheet.window) else {
-            return check(false, "import_secrets: the source's sheet has the banner's Decline and Stop Asking")
+            return check(false, "import_secrets: the source's sheet has the banner's Don’t Ask Again")
         }
         stop.performClick(nil)
         let declined: [String: Any] = await call.value
-        let stopped: Bool = (declined["note"] as? String)?.hasPrefix("The user chose Decline and Stop Asking") == true
+        let stopped: Bool = (declined["note"] as? String)?.hasPrefix("The user chose Don’t Ask Again") == true
         check(declined["status"] as? String == "declined" && stopped && view.managerSheet == nil,
-              "import_secrets: the banner's Decline and Stop Asking declines and closes the sheet", secretsJSON(declined))
+              "import_secrets: the banner's Don’t Ask Again declines and closes the sheet", secretsJSON(declined))
         let again: [String: Any] = await secretsTool("import_secrets", ["source": "1password"])
-        let refused: Bool = (again["note"] as? String)?.hasPrefix("The user chose Decline and Stop Asking for you") == true
+        let refused: Bool = (again["note"] as? String)?.hasPrefix("The user chose Don’t Ask Again for you") == true
         check(again["status"] as? String == "declined" && refused && !view.hasOpenSheet,
-              "import_secrets: after Decline and Stop Asking, the agent's next request opens nothing", secretsJSON(again))
+              "import_secrets: after Don’t Ask Again, the agent's next request opens nothing", secretsJSON(again))
         requests.resetForSelfTest()
     }
 
-    /// The banner's Decline and Stop Asking in `window`, if it has one.
+    /// The banner's Don’t Ask Again in `window`, if it has one.
     static func secretImportStopButton(_ window: NSWindow?) -> SecretImportStopButton? {
         func find(_ view: NSView) -> SecretImportStopButton? {
             if let button = view as? SecretImportStopButton { return button }

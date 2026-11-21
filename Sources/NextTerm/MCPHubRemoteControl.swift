@@ -261,7 +261,7 @@ enum MCPHubRemoteControl {
             switch decision {
             case .allowed: use(values)
             case .declined(let stopAsking):
-                fail(stopAsking ? "The user chose Decline and Stop Asking, so Next Term won't reach \(name) for you with \(keys) until it quits."
+                fail(stopAsking ? "The user chose Don’t Ask Again, so Next Term won't reach \(name) for you with \(keys) until it quits."
                     : "The user declined letting this agent reach \(name) with \(keys), so nothing was sent.")
             case .refused(let refusal):
                 fail("Next Term didn't reach \(name): " + (SecretsMCP.refusalAnswer(refusal)["note"] as? String ?? "refused."))

@@ -2,7 +2,7 @@ import AppKit
 import NextTermCore
 
 /// The MCP tools that change things, called through the local socket (`nxtrm mcp`) as a local agent calls
-/// them: every change asks on the Mac, and Approve, Decline, no answer and Decline and Stop Asking each do
+/// them: every change asks on the Mac, and Approve, Decline, no answer and Don’t Ask Again each do
 /// what they say. They work in a repository of their own inside the self-test's project, so the other
 /// checks' git state is untouched.
 extension SelfTest {
@@ -446,7 +446,7 @@ extension SelfTest {
             try? FileManager.default.removeItem(atPath: base)
         }
 
-        // Decline and Stop Asking: that asker is refused without a window until Next Term quits, its
+        // Don’t Ask Again: that asker is refused without a window until Next Term quits, its
         // proposals and the writing of a proposal it had accepted too.
         let proposing = Task { await client.call("propose_edit", ["path": notes, "content": "accepted before the stop\n"]) }
         let stopPane = await proposalPane(in: pc)
@@ -457,11 +457,11 @@ extension SelfTest {
         let after = await client.call("write_file", ["path": notes, "content": "stop\n"])
         let acceptedAfter = await client.call("write_file", ["path": notes, "content": "accepted before the stop\n"])
         let proposedAfter = await client.call("propose_edit", ["path": notes, "content": "after the stop\n"])
-        let refusedAfter = [after, acceptedAfter, proposedAfter].allSatisfy { $0.isError && $0.text.contains("Decline and Stop Asking") }
+        let refusedAfter = [after, acceptedAfter, proposedAfter].allSatisfy { $0.isError && $0.text.contains("Don’t Ask Again") }
         let noProposal = !pc.editorArea.proposals.contains { $0.proposal?.tag.hasPrefix("mcp:") == true && !$0.isDecided }
         let notesUnchanged = read("notes.txt") == "one\ntwo\nthree\n"
         check(stop.isError && refusedAfter && noProposal && notesUnchanged && MCPWriteControl.pending == nil,
-              "MCP writes: after Decline and Stop Asking, the asker's changes and proposals are refused without a window", after.text + " / " + proposedAfter.text)
+              "MCP writes: after Don’t Ask Again, the asker's changes and proposals are refused without a window", after.text + " / " + proposedAfter.text)
         MCPWriteControl.stopped = []
         MCPWriteControl.accepted = [:]
 
@@ -486,7 +486,7 @@ extension SelfTest {
         check(doorWindow && namedConnection && doorDeclined.isError && read("notes.txt") == "granted\n",
               "MCP writes: askOnMac from the door asks on the Mac, naming the connection", doorShown)
 
-        // A remote Decline and Stop Asking stops that connection by its grant id: not another connection of
+        // A remote Don’t Ask Again stops that connection by its grant id: not another connection of
         // the same name, and not the agents on this Mac.
         let stopping = Task { await door(.askOnMac, "a\n", connection: "g-a") }
         let stopShown = await wait(30) { MCPWriteControl.pending?.window != nil }
@@ -498,14 +498,14 @@ extension SelfTest {
         MCPWriteControl.pending?.window?.declineButton.performClick(nil)
         _ = await otherB.value
         let local = await client.asked("write_file", ["path": notes, "content": "local\n"], .decline)
-        let aStopped = againA.isError && againA.text.contains("Decline and Stop Asking")
+        let aStopped = againA.isError && againA.text.contains("Don’t Ask Again")
         check(stopShown && aStopped && bAsked && local.window != nil && read("notes.txt") == "granted\n",
-              "MCP writes: a remote Decline and Stop Asking stops that connection only", againA.text)
+              "MCP writes: a remote Don’t Ask Again stops that connection only", againA.text)
         MCPWriteControl.stopped = []
     }
 
     /// install_skill and remove_skill from the remote door: under a grant they run without a window and
-    /// name the grant; asking on the Mac, a Decline and Stop Asking pauses that connection only. Run from
+    /// name the grant; asking on the Mac, a Don’t Ask Again pauses that connection only. Run from
     /// skillsChecks' MCP checks, on their home folder with notes-helper installed.
     static func skillsPolicyChecks(home: String) async {
         let manager = FileManager.default
@@ -572,7 +572,7 @@ extension SelfTest {
         check(overFailed && overSaid && mineKept && !exists(".agents/skills/grant-mine"), "skills mcp: under a grant an install never replaces the user's own skill", "\(over)")
         try? manager.removeItem(atPath: mine)
 
-        // Asking on the Mac: a connection's Decline and Stop Asking pauses that connection by its grant id,
+        // Asking on the Mac: a connection's Don’t Ask Again pauses that connection by its grant id,
         // not another of the same name, and not the agents on this Mac.
         let fromA = await door("install_skill", ["source": "example-org/a-one"], .askOnMac, "g-a")
         let windowA = SkillsMCP.open?.window
@@ -589,7 +589,7 @@ extension SelfTest {
         let quietA = againA["status"] as? String == "declined"
         let askedB = fromB["status"] as? String == "pending" && windowB != nil
         let askedLocal = local["status"] as? String == "pending" && windowLocal != nil
-        check(askedA && quietA && askedB && askedLocal, "skills mcp: a remote Decline and Stop Asking pauses that connection only",
+        check(askedA && quietA && askedB && askedLocal, "skills mcp: a remote Don’t Ask Again pauses that connection only",
               "\(fromA) \(againA) \(fromB) \(local)")
     }
 
