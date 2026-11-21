@@ -28,10 +28,8 @@ final class AgentPromptBox: NSView, NSTextViewDelegate {
     private var customKey = ""
     private var customRead = Date.distantPast
     private var reading = false
-    #if DEBUG
-    /// The self-test's commands, in place of the agent's.
+    /// The self-test's commands, in place of the agent's (the self-test runs in release builds too).
     static var commandsForTest: [ChatCommand]?
-    #endif
 
     init(tab: TerminalTab) {
         self.tab = tab
@@ -138,9 +136,7 @@ final class AgentPromptBox: NSView, NSTextViewDelegate {
 
     /// The commands the menu offers for this tab now.
     func commands() -> [ChatCommand] {
-        #if DEBUG
         if let test = Self.commandsForTest { return test }
-        #endif
         if let names = sessionCommands?(), !names.isEmpty { return ChatCommands.session(names) }
         guard let agent = tab?.localAgent else { return [] }
         readCustom(agent)
