@@ -146,50 +146,52 @@ extension ThemePalette {
         code: [:],
         divider: 0x393B40, hoverFill: 0x35373B)
 
-    /// Next Term's light look, made easy on the eyes: a soft paper white for what you read and write (the terminal, the
-    /// editor), never a glaring pure white, a quiet warm grey for the bars around them, and soft near-black text rather
-    /// than black, so the contrast is plenty (about 13:1) without glare. Every colour is checked against its
-    /// background: text 4.5:1 at the least, marks 3:1. The code's colours are IntelliJ Light's for the roles the dark
-    /// theme gives JetBrains' dark ones.
+    /// Next Term's light look, made easy on the eyes. The paper you read and write on (the terminal, the editor) is a
+    /// soft cool grey at about the lightness of the Mac's own window grey (L* 93), not near-white: on light the glare
+    /// comes from the area at full brightness, and the terminal and editor are almost all of the window. The bars sit a
+    /// clear step darker (they are Dark's text colour, so the two looks mirror each other), and both take Dark's faint
+    /// blue-grey, so Light and Dark look like one product. Text stays near 12:1: comfort comes from lowering the paper,
+    /// not greying the words. Every colour is checked against the paper and the bars: text 4.5:1 at the least, marks
+    /// 3:1. The code's colours are IntelliJ Light's for the roles the dark theme gives JetBrains' dark ones, each made
+    /// darker where the grey paper needs it.
     public static let nextLight = ThemePalette(
         id: "next-term-light", name: "Next Term Light", isDark: false,
-        background: 0xF7F7F4, bar: 0xE6E6E1, tabHover: 0xD7D7D0, border: 0xCFCFC8,
-        text: 0x2B2D31, textDim: 0x5A5D63, accent: 0x2459C2,
-        working: 0x2459C2, done: 0x2E8540, doneQuiet: 0x3F8A4B, failed: 0xC02A37, attention: 0xA86A00,
-        gitModified: 0x2F6AD0, gitAdded: 0x2E8540, gitUntracked: 0xB0532A, gitConflicted: 0xC02A37, gitIgnored: 0x8A8A70,
-        linesAdded: 0x2E8540, linesRemoved: 0xC02A37,
-        blameText: 0x6C707E, blameHash: 0x8A8D96, blameRecent: 0x2F6AD0, blameNote: 0x8A8D96,
-        currentLine: 0xECECE6, gutterAdded: 0x55A562, gutterModified: 0x5F8BDB, gutterDeleted: 0xD2625D,
-        lineNumber: 0x8E9198, lineNumberCurrent: 0x5A5D63,
-        // GitHub's light terminal colours (Primer), with those that fade on light made darker: every colour 4.5:1 on the
-        // paper at the least, yellow included, and white and bright white readable greys (4.5:1 too), as VS Code's light
-        // terminal has them: a program that writes in white for a dark terminal stays readable.
+        background: 0xEBECEF, bar: 0xDFE1E5, tabHover: 0xD2D5DA, border: 0xC6C9D0,
+        text: 0x2A2C31, textDim: 0x575B63, accent: 0x2557C0,
+        working: 0x2557C0, done: 0x277237, doneQuiet: 0x3A7F47, failed: 0xB8283A, attention: 0x8C5800,
+        gitModified: 0x285FBC, gitAdded: 0x277237, gitUntracked: 0x9E4A25, gitConflicted: 0xB8283A, gitIgnored: 0x7A7A62,
+        linesAdded: 0x277237, linesRemoved: 0xB8283A,
+        blameText: 0x5E6270, blameHash: 0x7A7E88, blameRecent: 0x285FBC, blameNote: 0x7A7E88,
+        currentLine: 0xE2E4E8, gutterAdded: 0x458F52, gutterModified: 0x4F7BCB, gutterDeleted: 0xC85A55,
+        lineNumber: 0x838790, lineNumberCurrent: 0x4F535B,
+        // Every colour 4.5:1 on the paper at the least, yellow included, and white and bright white readable greys, as
+        // VS Code's light terminal has them: a program that writes in white for a dark terminal stays readable.
         terminal: Terminal(ansi: [
-            0x24292F, 0xCF222E, 0x116329, 0x9A6700, 0x0969DA, 0x8250DF, 0x1B7C83, 0x666E78,
-            0x57606A, 0xA40E26, 0x1A7F37, 0x7D4E00, 0x1A65D8, 0xA142C7, 0x137A8A, 0x646B75,
-        ], foreground: 0x2B2D31, background: 0xF7F7F4, cursor: 0x3A6FC4, selection: 0xC9DDF2),
+            0x2A2C31, 0xC4283A, 0x2A7A3B, 0x8A6200, 0x2557C0, 0x7E3FBF, 0x16757A, 0x5F646D,
+            0x4F535B, 0xA61E2E, 0x1F6B30, 0x744F00, 0x1D49A6, 0x6A2FA6, 0x0E6870, 0x646973,
+        ], foreground: 0x2A2C31, background: 0xEBECEF, cursor: 0x2557C0, selection: 0xC3D3EE),
         code: [
-            "#BCBEC4": 0x2B2D31, // text, operators, types
-            "#7A7E85": 0x6E7176, // comments: 4.5:1, never faint
-            "#5F826B": 0x557560, // doc comments
-            "#67A37C": 0x3D7A4E, // doc tags
-            "#6AAB73": 0x067D17, // strings
-            "#CF8E6D": 0x0033B3, // keywords
-            "#2AACB8": 0x1750EB, // numbers
-            "#56A8F5": 0x00627A, // functions
-            "#C77DBB": 0x871094, // properties, constants
-            "#B3AE60": 0x7D6A00, // decorators
-            "#D5B778": 0x0033B3, // tags
-            "#BABABA": 0x174AD4, // attributes
-            "#548AF7": 0x1F5BD6, // links
-            "#73C27A": 0x067D17, // inserted
-            "#E5736F": 0xC42B1C, // deleted
-            "#6EA4F7": 0x1750EB, // changed
-            "#F75464": 0xD01C2E, // invalid
-            "#9876AA": 0x6F42C1,
-            "#6897BB": 0x1750EB,
+            "#BCBEC4": 0x2A2C31, // text, operators, types
+            "#7A7E85": 0x666A72, // comments: 4.5:1, never faint
+            "#5F826B": 0x4F6E59, // doc comments
+            "#67A37C": 0x346B44, // doc tags
+            "#6AAB73": 0x0B6B1A, // strings
+            "#CF8E6D": 0x0030A8, // keywords
+            "#2AACB8": 0x1748D4, // numbers
+            "#56A8F5": 0x005A70, // functions
+            "#C77DBB": 0x7A0E87, // properties, constants
+            "#B3AE60": 0x6E5C00, // decorators
+            "#D5B778": 0x0030A8, // tags
+            "#BABABA": 0x1745C4, // attributes
+            "#548AF7": 0x1F55C8, // links
+            "#73C27A": 0x0B6B1A, // inserted
+            "#E5736F": 0xB8283A, // deleted
+            "#6EA4F7": 0x1748D4, // changed
+            "#F75464": 0xBE1A2B, // invalid
+            "#9876AA": 0x6239B0,
+            "#6897BB": 0x1748D4,
         ],
-        divider: 0xCFCFC8, hoverFill: 0xD7D7D0)
+        divider: 0xC6C9D0, hoverFill: 0xD5D8DD)
 
     /// The themes Next Term ships, each by its own name: more come as more palettes, light or dark.
     public static let builtIn: [ThemePalette] = [nextDark, nextLight]
