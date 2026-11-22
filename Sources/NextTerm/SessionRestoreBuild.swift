@@ -227,6 +227,10 @@ enum RestoreBuild {
                 if unit.members.count > 1, let group = front.window?.tabGroup {
                     for (place, member) in unit.members.enumerated() where member != unit.front {
                         guard let window = shown[member].controller.window else { continue }
+                        // On screen before it joins, as Reopen's windows are, just behind the front one (no flash, no
+                        // keyboard): a window that only ever came in behind a tab never drew its terminals' text (the
+                        // caret moved over a blank pane) until it was taken out.
+                        if let frontNumber = front.window?.windowNumber { window.order(.below, relativeTo: frontNumber); window.displayIfNeeded() }
                         group.insertWindow(window, at: min(place, group.windows.count))
                     }
                     group.selectedWindow = front.window

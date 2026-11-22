@@ -163,7 +163,7 @@ final class HintLine: NSView {
         label?.textColor = color
         closeButton.contentTintColor = color
         closeButton.alphaValue = hovering ? 1 : 0
-        layer?.backgroundColor = beside ? Theme.bar.cgColor : nil
+        themedBackground(beside ? Theme.bar : nil) // set again when the look changes
         layer?.cornerRadius = beside ? 6 : 0
         layer?.borderWidth = beside ? 1 : 0
         themedBorder((DisplayOptions.increasesContrast ? Theme.textDim : Theme.border))

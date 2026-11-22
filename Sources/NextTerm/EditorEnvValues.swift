@@ -39,7 +39,7 @@ final class CodeLayoutManager: NSLayoutManager {
     static let fenceTint = Theme.overlay(0.035)
     static let codeTint = Theme.overlay(0.07)
     static let markColor = Theme.textDim
-    static let ruleColor = Theme.pair(light: NSColor(hex: 0xD5D7DC), dark: NSColor(hex: 0x43454A))
+    static let ruleColor = Theme.pair(light: Theme.dynamic(\.divider), dark: NSColor(hex: 0x43454A))
     static let quoteColor = Theme.pair(light: NSColor(hex: 0xC9CCD2), dark: NSColor(hex: 0x4E5157))
 
     override func drawGlyphs(forGlyphRange glyphsToShow: NSRange, at origin: NSPoint) {

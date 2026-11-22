@@ -48,15 +48,28 @@ enum Theme {
         NSColor(name: nil) { appearance in isDark(appearance) ? dark : light }
     }
 
-    /// A wash over a surface, as the dark look had it in white: in white on dark, in black on light, half as strong.
+    /// A mark's colour made for dark (an agent's, a graph lane's): as it is on dark, and on light darkened until it stands
+    /// 3:1 on the bars, so a pale yellow or a sky blue never fades into the paper.
+    static func mark(_ rgb: UInt32) -> NSColor {
+        NSColor(name: nil) { appearance in
+            isDark(appearance) ? NSColor(hex: rgb) : NSColor(hex: ThemePalette.readable(rgb, on: palette(for: appearance).bar, ratio: 3))
+        }
+    }
+
+    /// A wash over a surface, as the dark look had it in white: in white on dark, in black on light at four fifths, so a
+    /// hover or a selection shows on paper as plainly as it does on dark.
     static func overlay(_ alpha: CGFloat) -> NSColor {
-        pair(light: NSColor.black.withAlphaComponent(alpha * 0.5), dark: NSColor.white.withAlphaComponent(alpha))
+        pair(light: NSColor.black.withAlphaComponent(alpha * 0.8), dark: NSColor.white.withAlphaComponent(alpha))
     }
 
     static let background = dynamic(\.background)
     static let bar = dynamic(\.bar)
     static let tabHover = dynamic(\.tabHover)
     static let border = dynamic(\.border)
+    /// A line that is always seen: between panes, around popups (`border` may be the background itself).
+    static let divider = dynamic(\.divider)
+    /// A row under the pointer.
+    static let hoverFill = dynamic(\.hoverFill)
     static let text = dynamic(\.text)
     static let textDim = dynamic(\.textDim)
     static let accent = dynamic(\.accent)

@@ -3,8 +3,8 @@ import NextTermCore
 
 /// How the Git Log looks: lane colours, sizes, ref badges and dates.
 enum GitLogStyle {
-    /// One colour per lane colour of CommitGraph, readable on the dark background.
-    static let lanes: [NSColor] = [0x6EA4F7, 0x73C27A, 0xE5A55C, 0xC28FE0, 0x5FC4C4, 0xE5736F, 0xD6C86A, 0x9AA3F5].map { NSColor(hex: $0) }
+    /// One colour per lane colour of CommitGraph, readable on dark and, darkened, on light.
+    static let lanes: [NSColor] = [0x6EA4F7, 0x73C27A, 0xE5A55C, 0xC28FE0, 0x5FC4C4, 0xE5736F, 0xD6C86A, 0x9AA3F5].map(Theme.mark)
     static let rowHeight: CGFloat = 24
     static let laneWidth: CGFloat = 14
     static let graphInset: CGFloat = 6
@@ -236,7 +236,7 @@ final class GitTextCell: NSTableCellView {
 /// Full-width selection, so the graph's lines stay unbroken across the selected row.
 final class GitLogRowView: NSTableRowView {
     override func drawSelection(in dirtyRect: NSRect) {
-        (isEmphasized ? Theme.selection : Theme.pair(light: NSColor(hex: 0xE8EAEE), dark: NSColor(hex: 0x2E3138))).setFill()
+        (isEmphasized ? Theme.selection : Theme.pair(light: Theme.dynamic(\.hoverFill), dark: NSColor(hex: 0x2E3138))).setFill()
         bounds.fill()
     }
 }

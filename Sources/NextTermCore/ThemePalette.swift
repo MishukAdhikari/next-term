@@ -53,6 +53,11 @@ public struct ThemePalette: Equatable, Sendable {
     /// drawn as `derivedCode` makes it.
     public var code: [String: UInt32]
 
+    /// A line between panes and around popups, always seen (`border` may be the background itself, as dark's is).
+    public var divider: UInt32 = 0
+    /// A row under the pointer, in lists and the tab list.
+    public var hoverFill: UInt32 = 0
+
     public struct Terminal: Equatable, Sendable {
         /// ANSI colours, normal then bright.
         public var ansi: [UInt32]
@@ -138,7 +143,8 @@ extension ThemePalette {
             0x000000, 0xF0524F, 0x5C962C, 0xA68A0D, 0x3993D4, 0xA771BF, 0x00A3A3, 0x808080,
             0x595959, 0xFF4050, 0x4FC414, 0xE5BF00, 0x1FB0FF, 0xED7EED, 0x00E5E5, 0xFFFFFF,
         ], foreground: 0xBCBEC4, background: 0x1E1F22, cursor: 0xCED0D6, selection: 0x214283),
-        code: [:])
+        code: [:],
+        divider: 0x393B40, hoverFill: 0x35373B)
 
     /// Next Term's light look, made easy on the eyes: a soft paper white for what you read and write (the terminal, the
     /// editor), never a glaring pure white, a quiet warm grey for the bars around them, and soft near-black text rather
@@ -147,14 +153,14 @@ extension ThemePalette {
     /// theme gives JetBrains' dark ones.
     public static let nextLight = ThemePalette(
         id: "next-term-light", name: "Next Term Light", isDark: false,
-        background: 0xF7F7F4, bar: 0xEDEDE9, tabHover: 0xE2E2DD, border: 0xDCDCD6,
-        text: 0x2B2D31, textDim: 0x606369, accent: 0x2A62D4,
-        working: 0x2A62D4, done: 0x2E8540, doneQuiet: 0x4A9455, failed: 0xC42B39, attention: 0xA86A00,
-        gitModified: 0x2F6AD0, gitAdded: 0x2E8540, gitUntracked: 0xB0532A, gitConflicted: 0xC42B39, gitIgnored: 0x8A8A70,
-        linesAdded: 0x2E8540, linesRemoved: 0xC42B39,
-        blameText: 0x6C707E, blameHash: 0x9A9DA6, blameRecent: 0x2F6AD0, blameNote: 0x9A9DA6,
-        currentLine: 0xEFEFEA, gutterAdded: 0x7DBF86, gutterModified: 0x8BAEEB, gutterDeleted: 0xE08A86,
-        lineNumber: 0xA3A6AD, lineNumberCurrent: 0x606369,
+        background: 0xF7F7F4, bar: 0xE6E6E1, tabHover: 0xD7D7D0, border: 0xCFCFC8,
+        text: 0x2B2D31, textDim: 0x5A5D63, accent: 0x2459C2,
+        working: 0x2459C2, done: 0x2E8540, doneQuiet: 0x3F8A4B, failed: 0xC02A37, attention: 0xA86A00,
+        gitModified: 0x2F6AD0, gitAdded: 0x2E8540, gitUntracked: 0xB0532A, gitConflicted: 0xC02A37, gitIgnored: 0x8A8A70,
+        linesAdded: 0x2E8540, linesRemoved: 0xC02A37,
+        blameText: 0x6C707E, blameHash: 0x8A8D96, blameRecent: 0x2F6AD0, blameNote: 0x8A8D96,
+        currentLine: 0xECECE6, gutterAdded: 0x55A562, gutterModified: 0x5F8BDB, gutterDeleted: 0xD2625D,
+        lineNumber: 0x8E9198, lineNumberCurrent: 0x5A5D63,
         // GitHub's light terminal colours (Primer), with those that fade on light made darker: every colour 4.5:1 on the
         // paper at the least, yellow included, and white and bright white readable greys (4.5:1 too), as VS Code's light
         // terminal has them: a program that writes in white for a dark terminal stays readable.
@@ -182,7 +188,8 @@ extension ThemePalette {
             "#F75464": 0xD01C2E, // invalid
             "#9876AA": 0x6F42C1,
             "#6897BB": 0x1750EB,
-        ])
+        ],
+        divider: 0xCFCFC8, hoverFill: 0xD7D7D0)
 
     /// The themes Next Term ships, each by its own name: more come as more palettes, light or dark.
     public static let builtIn: [ThemePalette] = [nextDark, nextLight]

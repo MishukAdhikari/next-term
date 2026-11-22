@@ -27,7 +27,7 @@ final class TabListRowView: NSView, NSTextFieldDelegate {
     private static let hintFont = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular)
     /// A hovered row: a step darker than the top bar's hover, so the dim second line on it still reads at 4.5:1
     /// (4.56:1 here, 4.28:1 on the bar's).
-    static let hoverFill = Theme.pair(light: NSColor(hex: 0xE3E5E9), dark: NSColor(hex: 0x35373B))
+    static let hoverFill = Theme.hoverFill
     /// The row's own layers change at once, as its view's colours do: never a fade.
     private static let noAnimations: [String: CAAction] = [
         "backgroundColor": NSNull(), "bounds": NSNull(), "position": NSNull(), "hidden": NSNull(),
@@ -116,8 +116,7 @@ final class TabListRowView: NSView, NSTextFieldDelegate {
         idleDot.zPosition = -1
         slot.cornerRadius = 4
         idleDot.cornerRadius = 2.5
-        idleDot.backgroundColor = Theme.textDim.withAlphaComponent(0.7).cgColor
-        edge.backgroundColor = Theme.accent.cgColor
+        setMarkColours()
 
         label.font = Self.font
         label.textColor = Theme.text
@@ -241,12 +240,26 @@ final class TabListRowView: NSView, NSTextFieldDelegate {
     /// Whether `point`, in the row's coordinates, is on the × it shows.
     func closeContains(_ point: NSPoint) -> Bool { !closeButton.isHidden && closeButton.frame.contains(point) }
 
+    /// The look changed (Light, Dark, the Mac's): the fills set as layers' colours follow it.
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        setMarkColours()
+        refresh()
+    }
+
+    /// The idle dot's and the selection edge's colours, in the look the row is in now.
+    private func setMarkColours() {
+        idleDot.backgroundColor = ThemeLayers.resolved(Theme.textDim.withAlphaComponent(0.7), for: self)
+        edge.backgroundColor = ThemeLayers.resolved(Theme.accent, for: self)
+    }
+
     private func refresh() {
         let pane = isPane
-        layer?.backgroundColor = rowFill.cgColor
+        // Each fill in the look the row is in now, never the one current wherever this runs.
+        layer?.backgroundColor = ThemeLayers.resolved(rowFill, for: self)
         edge.isHidden = collapsed || pane || !selected
         slot.isHidden = !collapsed || !(selected || hovering)
-        if collapsed { slot.backgroundColor = Self.slotFill(selected: selected, hovering: hovering).cgColor }
+        if collapsed { slot.backgroundColor = ThemeLayers.resolved(Self.slotFill(selected: selected, hovering: hovering), for: self) }
         // An idle tab has no mark (nor a working one with Agent Spinner off); collapsed it still needs something to
         // see and click, as on the rail.
         idleDot.isHidden = !collapsed || StatusDotView.shows(row?.state ?? .idle)
@@ -266,12 +279,20 @@ final class TabListRowView: NSView, NSTextFieldDelegate {
         return hovering ? Self.hoverFill : .clear
     }
 
+    /// The selected tab under the pointer, collapsed: lighter on dark, as it was; the hover fill on light (lighter than
+    /// the paper would not show).
+    private static let selectedHover = NSColor(name: nil) { appearance in
+        let palette = Theme.palette(for: appearance)
+        let paper = NSColor(hex: palette.background)
+        return palette.isDark ? (paper.blended(withFraction: 0.08, of: .white) ?? paper) : NSColor(hex: palette.hoverFill)
+    }
+
     /// The selected tab's place in the collapsed column, lighter under the pointer, as the rail's.
     private static func slotFill(selected: Bool, hovering: Bool) -> NSColor {
         let lift = Theme.overlay(0.08)
         guard selected else { return hovering ? lift : .clear }
         guard hovering else { return Theme.background }
-        return Theme.background.blended(withFraction: 0.08, of: .white) ?? Theme.background
+        return selectedHover
     }
 
     /// The × and "⌘N" share one place at the row's end: the × on the selected or hovered row, the key on the
