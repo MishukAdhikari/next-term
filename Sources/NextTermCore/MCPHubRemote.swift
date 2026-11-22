@@ -332,7 +332,9 @@ public final class MCPHubRemote: @unchecked Sendable {
 
     /// POSTs one message: a request (`method`, then `params` are its params) or, with no method, `params` as the whole
     /// message (a notification). A request's answer is found by its id in the JSON or event stream that comes back.
-    private func post(request method: String?, _ params: [String: Any], endpoint: Endpoint, until deadline: Date) -> Result<Reply, Failure> {
+    /// `retried`: this is the second try after a connection that dropped before any answer (see below).
+    private func post(request method: String?, _ params: [String: Any], endpoint: Endpoint, until deadline: Date,
+                      retried: Bool = false) -> Result<Reply, Failure> {
         var id: Int?
         var message = params
         lock.lock()
@@ -392,6 +394,11 @@ public final class MCPHubRemote: @unchecked Sendable {
         }
         guard let response = exchange.response else {
             if (exchange.error as? URLError)?.code == .timedOut { return .failure(Failure("\(name) didn't answer Next Term's \(what) in time.", kind: late)) }
+            // A connection that dropped before any answer (a kept-alive one the server or a proxy had closed, or a busy
+            // Mac's): tried once more, while time is left, for everything but a tool's call, which might have run.
+            if !retried, method != "tools/call", (exchange.error as? URLError)?.code == .networkConnectionLost, deadline.timeIntervalSinceNow > 0.5 {
+                return post(request: method, params, endpoint: endpoint, until: deadline, retried: true)
+            }
             let why = exchange.error.map { ": " + $0.localizedDescription } ?? "."
             return .failure(Failure("\(name) can't be reached at \(Self.shown(endpoint.url))\(why)", kind: .unreachable))
         }

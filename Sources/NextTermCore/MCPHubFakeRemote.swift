@@ -36,6 +36,9 @@ public final class MCPHubFakeRemote: @unchecked Sendable {
     public var auth: MCPHubFakeAuth?
     public var insufficientScopeFor: String?
     public var slowSeconds: Double = 5
+    /// Requests (by their JSON-RPC method) whose connection is dropped once, unanswered: a kept-alive connection a
+    /// server or proxy closed.
+    public var dropOnce: Set<String> = []
 
     private let lock = NSLock()
     private var listener: Int32 = -1
@@ -137,6 +140,15 @@ public final class MCPHubFakeRemote: @unchecked Sendable {
         seenList.append(Seen(method: method, headers: headers, body: String(decoding: body, as: UTF8.self)))
         lock.unlock()
 
+        lock.lock()
+        let drop = dropOnce.remove(method) != nil
+        lock.unlock()
+        if drop {
+            // An abortive close: the client sees the connection lost, with no answer.
+            var hard = linger(l_onoff: 1, l_linger: 0)
+            setsockopt(fd, SOL_SOCKET, SO_LINGER, &hard, socklen_t(MemoryLayout<linger>.size))
+            return
+        }
         if let redirect { return send(fd, status: "307 Temporary Redirect", headers: ["Location": redirect], body: "") }
         if let auth {
             let sent = headers["authorization"].flatMap { $0.hasPrefix("Bearer ") ? String($0.dropFirst(7)) : nil } ?? ""

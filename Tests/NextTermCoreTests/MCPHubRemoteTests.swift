@@ -76,6 +76,20 @@ import Testing
     /// An answer that has arrived is read at once even while the process is busy: the session's delegate runs on a
     /// queue GCD always gives a thread (MCPHubRemote.delegateQueue). On an OperationQueue's own queue it waited for a
     /// free CPU, 18 to 30 seconds in a parallel test run, and the start timed out with its answer already in.
+    /// A connection dropped before any answer is tried once more for a start or a list, never for a tool's call, which
+    /// might have run.
+    @Test func aDroppedConnectionIsTriedAgainExceptForACall() throws {
+        let fake = try MCPHubFakeRemote()
+        fake.dropOnce = ["initialize", "tools/list"]
+        let remote = MCPHubRemote(name: "flaky", clientVersion: "1.0")
+        #expect(try remote.tools(endpoint(fake), until: soon(10)).get().count == 3)
+        #expect(fake.seen.filter { $0.method == "initialize" }.count == 2 && fake.seen.filter { $0.method == "tools/list" }.count == 2)
+        fake.dropOnce = ["tools/call"]
+        let calls = fake.seen.filter { $0.method == "tools/call" }.count
+        _ = remote.call("echo", arguments: ["text": "hi"], endpoint: endpoint(fake), until: soon(10))
+        #expect(fake.seen.filter { $0.method == "tools/call" }.count == calls + 1)
+    }
+
     @Test func anAnswerIsReadWhileTheProcessIsBusy() throws {
         let fake = try MCPHubFakeRemote()
         let remote = MCPHubRemote(name: "busy", clientVersion: "1.0")
