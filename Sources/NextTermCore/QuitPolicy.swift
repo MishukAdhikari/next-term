@@ -139,9 +139,10 @@ public enum QuitPolicy {
         return input.terminalWindows > 0 && !input.sheetAttached
     }
 
-    /// Where the resume checkbox starts: at the stored "At launch" choice, and checked when none is stored.
+    /// Where the resume checkbox starts: checked, whatever "At launch" is. Bringing the work back is the usual wish at a
+    /// quit; unchecking it is the one click for a fresh start, and sets "At launch" as before.
     public static func resumeCheckbox(_ settings: LaunchSettings) -> Bool {
-        settings.opensChosen ? settings.opens == .lastProjects : true
+        true
     }
 
     /// The questions, in order. None in the self-test.
@@ -328,17 +329,27 @@ extension QuitPolicy {
     /// clears Quit's Return, and NSAlert gives Cancel ⎋, which ⌘. presses too.
     public static let promptButtons: [QuitPromptButton] = [.quit, .cancel]
 
-    /// The plain dialog's title. It has no informative text.
+    /// The plain dialog's title.
     public static let promptTitle = "Quit Next Term?"
 
-    /// The checkbox on the plain dialog and on the save-changes, unsaved-values and "Quitting stops…" alerts.
-    public static let checkboxTitle = "Reopen windows and resume sessions when Next Term opens"
+    /// The plain dialog's informative text: what can come back, naming the open projects.
+    public static func promptText(_ projects: [String]) -> String {
+        let where_ = projects.isEmpty ? "" : " in " + projectList(projects)
+        return "Your windows, tabs and agent sessions\(where_) can come back when you open it again."
+    }
+
+    /// The plain dialog's checkbox, under `promptText`.
+    public static let promptCheckboxTitle = "Reopen them next time"
+
+    /// The checkbox on the save-changes, unsaved-values and "Quitting stops…" alerts, which say nothing of their own about
+    /// what comes back.
+    public static let checkboxTitle = "Reopen windows and sessions next time"
 
     /// The checkbox's tooltip, naming the open projects.
     public static func checkboxToolTip(_ projects: [String]) -> String {
         let what = projects.isEmpty ? "its windows" : projectList(projects)
         return "Checked: Next Term brings back \(what) with their tabs, splits and sessions next time it opens. Unchecked: it "
-            + "shows the Welcome window. You can change this in Settings › General."
+            + "starts fresh. You can change this in Settings › General."
     }
 
     /// The open projects by their folders' names, each once, in order. Folders with one name get their parent

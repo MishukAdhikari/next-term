@@ -59,9 +59,9 @@ import Testing
     }
 
     @Test func aQuitWithNothingElseToAskShowsThePlainDialogAlone() {
-        // AE17, AE19: the box starts at the stored "At launch" choice, and checked when none is stored.
+        // AE17, AE19: the box starts checked, whatever "At launch" is.
         expectQuestions(input(opens: nil), plain(true))
-        expectQuestions(input(opens: .welcome), plain(false))
+        expectQuestions(input(opens: .welcome), plain(true))
         expectQuestions(input(opens: .lastProjects), plain(true))
         expectQuestions(input(windows: 1, opens: nil), plain(true))
     }
@@ -74,29 +74,29 @@ import Testing
     }
 
     @Test func theQuittingStopsAlertCarriesTheCheckboxWhenItShows() {
-        // AE22: the save-changes alert first, without it; then "Quitting stops…", checked under Resume.
+        // AE22: the save-changes alert first, without it; then "Quitting stops…", checked.
         expectQuestions(input(unsaved: 1, busy: 1, opens: .lastProjects), saveChanges(nil), busy(true))
-        expectQuestions(input(unsaved: 3, busy: 2), saveChanges(nil), busy(false))
+        expectQuestions(input(unsaved: 3, busy: 2), saveChanges(nil), busy(true))
         expectQuestions(input(unsaved: 1, busy: 1, opens: nil), saveChanges(nil), busy(true))
-        expectQuestions(input(busy: 1), busy(false))
+        expectQuestions(input(busy: 1), busy(true))
         expectQuestions(input(busy: 1, opens: .lastProjects), busy(true))
     }
 
     @Test func elseTheSaveChangesAlertCarriesIt() {
         // No plain dialog follows it.
-        expectQuestions(input(unsaved: 1), saveChanges(false))
+        expectQuestions(input(unsaved: 1), saveChanges(true))
         expectQuestions(input(unsaved: 2, opens: .lastProjects), saveChanges(true))
         expectQuestions(input(unsaved: 1, opens: nil), saveChanges(true))
     }
 
     @Test func aDatabaseValueIsWarnedAboutAfterTheFilesAndBeforeTheBusyTabs() {
         // R22: alone, the warning carries the box; after the save-changes alert, it carries it instead.
-        expectQuestions(input(values: 1), unsavedValues(false))
+        expectQuestions(input(values: 1), unsavedValues(true))
         expectQuestions(input(values: 2, opens: .lastProjects), unsavedValues(true))
         expectQuestions(input(unsaved: 1, values: 1, opens: nil), saveChanges(nil), unsavedValues(true))
         // "Quitting stops…" follows, so it carries the box.
         expectQuestions(input(values: 1, busy: 1, opens: .lastProjects), unsavedValues(nil), busy(true))
-        expectQuestions(input(unsaved: 2, values: 1, busy: 3), saveChanges(nil), unsavedValues(nil), busy(false))
+        expectQuestions(input(unsaved: 2, values: 1, busy: 3), saveChanges(nil), unsavedValues(nil), busy(true))
         // The safety question stays where nothing is asked about resuming.
         expectQuestions(input(values: 1, ask: false), unsavedValues(nil))
         expectQuestions(input(values: 1, reason: .systemSession), unsavedValues(nil))
@@ -188,7 +188,7 @@ import Testing
         let carriers: [QuitQuestion] = asked.filter(carriesTheBox)
         let once: Int = applies ? 1 : 0
         #expect(carriers.count == once, "\(label)")
-        let starts: Bool = !quit.settings.opensChosen || quit.settings.opens == .lastProjects
+        let starts = true // checked, whatever At launch is
         for question in carriers {
             switch question {
             case .saveChanges(let checkbox), .unsavedValues(let checkbox), .busy(let checkbox): #expect(checkbox == starts, "\(label)")
@@ -255,8 +255,8 @@ import Testing
     @Test func theAnswerNeverUndoesOpenANewTerminal() {
         let terminal = chosen(.newTerminal)
         let resume = chosen(.lastProjects)
-        // The box starts unchecked: nothing resumes under it.
-        #expect(!QuitPolicy.resumeCheckbox(terminal))
+        // The box starts checked here too; unchecked, it leaves "At launch" as it is.
+        #expect(QuitPolicy.resumeCheckbox(terminal))
         // Unchecked, on the plain dialog or an alert: "At launch" stays as it is.
         #expect(QuitPolicy.settings(after: .quit(resume: false, dontAskAgain: false), from: terminal) == terminal)
         #expect(QuitPolicy.settings(after: .checkbox(checked: false), from: terminal) == terminal)
@@ -532,7 +532,10 @@ import Testing
         let same: Bool = titles == ["Quit", "Cancel"]
         #expect(same, "\(titles)")
         #expect(QuitPolicy.promptTitle == "Quit Next Term?")
-        #expect(QuitPolicy.checkboxTitle == "Reopen windows and resume sessions when Next Term opens")
+        #expect(QuitPolicy.checkboxTitle == "Reopen windows and sessions next time")
+        #expect(QuitPolicy.promptCheckboxTitle == "Reopen them next time")
+        #expect(QuitPolicy.promptText(["/a/app", "/a/api"]) == "Your windows, tabs and agent sessions in “app” and “api” can come back when you open it again.")
+        #expect(QuitPolicy.promptText([]) == "Your windows, tabs and agent sessions can come back when you open it again.")
     }
 
     @Test func eachButtonAnswersForItself() {
