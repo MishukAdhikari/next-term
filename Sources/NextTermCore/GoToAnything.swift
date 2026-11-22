@@ -57,6 +57,9 @@ public enum GoToAnything {
             case project(String)
         }
 
+        /// What the row is, for its symbol: a command, a shell, an agent, or a project.
+        public enum Kind: Equatable, Sendable { case command, shell, agent, project }
+
         public let target: Target
         public let title: String
         /// The dim words after it: the window and folder, what runs, or the project's folder.
@@ -64,32 +67,59 @@ public enum GoToAnything {
         public let state: String?
         /// What a search matches: the name last, which the matcher favours as a path's file name.
         public let searched: String
+        public var kind: Kind = .shell
+    }
+
+    /// Programs that are coding agents: their tabs show an agent's symbol.
+    public static let agents: Set<String> = ["claude", "codex", "cmd", "command-code", "gemini", "qwen", "opencode", "cursor-agent", "copilot", "kimi", "amp", "aider", "goose"]
+
+    /// A path as the user reads it: ~ for the home folder.
+    public static func shown(_ path: String, home: String = NSHomeDirectory()) -> String {
+        path == home ? "~" : path.hasPrefix(home + "/") ? "~" + path.dropFirst(home.count) : path
     }
 
     public static let clearTitle = "Clear Terminal"
 
     /// Everything, in its order. `current`: the window ⌘K came from (its tabs first), or nil; `others`: the other
     /// windows, last used first; `closed`: projects used before, newest first (any that is open is left out).
-    public static func items(current: Window?, others: [Window], closed: [Project], clearsTerminal: Bool) -> [Item] {
+    public static func items(current: Window?, others: [Window], closed: [Project], clearsTerminal: Bool,
+                             home: String = NSHomeDirectory()) -> [Item] {
         var items: [Item] = []
         if clearsTerminal, current?.tabs.isEmpty == false {
-            items.append(Item(target: .clearTerminal, title: clearTitle, detail: "the terminal tab in front, \u{2318}K there",
-                              state: nil, searched: "clear terminal/" + clearTitle))
+            var clear = Item(target: .clearTerminal, title: clearTitle, detail: "The terminal tab in front",
+                             state: nil, searched: "clear terminal/" + clearTitle)
+            clear.kind = .command
+            items.append(clear)
         }
         for window in (current.map { [$0] } ?? []) + others {
+            var made: [Item] = []
             for tab in window.tabs {
                 var parts: [String] = [window.name]
                 if let program = tab.program, !program.isEmpty, program != tab.title { parts.append(program) }
                 if tab.folder != window.name { parts.append(tab.folder) }
                 let searched: String = ([window.name, tab.folder, tab.program ?? ""].joined(separator: " ")) + "/" + tab.title
-                items.append(Item(target: .tab(window: window.id, tab: tab.id), title: tab.title,
-                                  detail: parts.joined(separator: " \u{00B7} "), state: tab.state, searched: searched))
+                var item = Item(target: .tab(window: window.id, tab: tab.id), title: tab.title,
+                                detail: parts.joined(separator: " \u{00B7} "), state: tab.state, searched: searched)
+                let program = tab.program.map { ($0.split(separator: " ").first.map(String.init) ?? $0) } ?? ""
+                item.kind = agents.contains((program as NSString).lastPathComponent) ? .agent : .shell
+                made.append(item)
             }
+            // Tabs that would read the same (three xCloud shells in one window) say which tab they are.
+            let same = made
+            for (index, item) in same.enumerated() where same.filter({ $0.title == item.title && $0.detail == item.detail }).count > 1 {
+                var numbered = Item(target: item.target, title: item.title, detail: item.detail + " \u{00B7} tab \(index + 1)",
+                                    state: item.state, searched: item.searched)
+                numbered.kind = item.kind
+                made[index] = numbered
+            }
+            items += made
         }
         let openNames: Set<String> = Set(([current].compactMap { $0 } + others).map(\.name))
         for project in closed where !openNames.contains(project.name) {
-            items.append(Item(target: .project(project.path), title: project.name, detail: "closed \u{00B7} " + project.path,
-                              state: nil, searched: project.path))
+            var item = Item(target: .project(project.path), title: project.name, detail: "Not open \u{00B7} " + shown(project.path, home: home),
+                            state: nil, searched: project.path)
+            item.kind = .project
+            items.append(item)
         }
         return items
     }
