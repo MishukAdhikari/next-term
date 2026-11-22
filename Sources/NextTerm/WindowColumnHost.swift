@@ -226,6 +226,13 @@ final class WindowColumnHost: NSView {
     /// Its own frames for both, never the autoresizing mask's: one change each, in one pass.
     override func resizeSubviews(withOldSize oldSize: NSSize) { place(force: true) }
 
+    /// The window's look changed (AppKit tells each window's views when it applies it): the window's layers and
+    /// terminals take it (ThemeWatch.windowChanged).
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        ThemeWatch.windowChanged(self)
+    }
+
     override func layout() {
         super.layout()
         place()

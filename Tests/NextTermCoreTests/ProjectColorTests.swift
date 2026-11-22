@@ -34,6 +34,53 @@ import Testing
         }
     }
 
+    // MARK: the light look
+
+    /// Next Term Light's bar, paper and text (ThemePalette.nextLight).
+    static let lightBar: UInt32 = ThemePalette.nextLight.bar
+    static let lightPaper: UInt32 = ThemePalette.nextLight.background
+    static let lightSurfaces: [UInt32] = [lightBar, lightPaper, ThemePalette.nextLight.tabHover]
+
+    @Test func onLightEveryColoursMarkStandsThreeToOneAndTheyStayApart() {
+        let marks: [UInt32] = ProjectColor.allCases.map { $0.swatch(onLight: Self.lightSurfaces) }
+        for (color, mark) in zip(ProjectColor.allCases, marks) {
+            for surface in Self.lightSurfaces {
+                let ratio: Double = ProjectColor.contrast(mark, surface)
+                #expect(ratio >= 3, "\(color.name): #\(String(mark, radix: 16)) is \(ratio):1 on #\(String(surface, radix: 16))")
+            }
+            // Still the hue, not a grey: a mark keeps colour.
+            #expect(OKLab(rgb: mark).chroma > 0.08, "\(color.name): chroma \(OKLab(rgb: mark).chroma)")
+        }
+        let labs: [OKLab] = marks.map { OKLab(rgb: $0) }
+        for i in labs.indices { for j in labs.indices where i < j {
+            let d: Double = ((labs[i].a - labs[j].a) * (labs[i].a - labs[j].a) + (labs[i].b - labs[j].b) * (labs[i].b - labs[j].b)).squareRoot()
+            #expect(d > 0.04, "\(ProjectColor.allCases[i].name) and \(ProjectColor.allCases[j].name) are told apart (\(d))")
+        } }
+    }
+
+    @Test func onLightTheGlowIsSofterAndTheBarsTextStillReads() {
+        let text: UInt32 = ThemePalette.nextLight.text, dim: UInt32 = ThemePalette.nextLight.textDim
+        let barLightness: Double = OKLab(rgb: Self.lightBar).l
+        for color in ProjectColor.allCases {
+            let peak: UInt32 = color.glow(on: Self.lightBar)
+            let lab = OKLab(rgb: peak)
+            #expect(abs(lab.l - barLightness) < 0.005, "\(color.name): the bar's lightness, \(lab.l)")
+            #expect(abs(lab.chroma - ProjectColor.glowChromaLight) < 0.006, "\(color.name): chroma \(lab.chroma)")
+            #expect(ProjectColor.glowChromaLight < ProjectColor.glowChroma)
+            #expect(ProjectColor.contrast(text, peak) >= 4.5 && ProjectColor.contrast(dim, peak) >= 4.5, "\(color.name): text on #\(String(peak, radix: 16))")
+        }
+    }
+
+    @Test func theDarkLookIsUnchanged() {
+        // The dark glow and swatch as 0.11.78 drew them: existing users see no change.
+        #expect(ProjectColor.allCases.map { $0.glow(on: Self.bar) } == ProjectColor.allCases.map {
+            OKLab(lightness: OKLab(rgb: Self.bar).l, chroma: ProjectColor.glowChroma, hue: $0.hue).rgb
+        })
+        #expect(ProjectColor.allCases.map(\.swatch) == ProjectColor.allCases.map {
+            OKLab(lightness: ProjectColor.swatchLightness, chroma: ProjectColor.swatchChroma, hue: $0.hue).rgb
+        })
+    }
+
     @Test func theBarsTextReadsOnEveryColoursPeak() {
         for color in ProjectColor.allCases {
             let peak: UInt32 = color.glow(on: Self.bar)

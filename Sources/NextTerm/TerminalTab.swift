@@ -28,6 +28,13 @@ final class NextTermView: LocalProcessTerminalView {
     }
     private var hintView: NSTextField?
 
+    /// Its look changed (Settings › General › Appearance, the Mac's under Match System): its palette follows, as it sees
+    /// the look itself, in a window in front or behind (a merged window's other tab). ThemeWatch's pass covers the rest.
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        Theme.applyColours(to: self)
+    }
+
     private func showChoiceHint() {
         hintView?.removeFromSuperview()
         hintView = nil
@@ -1421,7 +1428,8 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         restoreNote = nil
         guard !started else { return }
         if let restored {
-            view.feed(text: ScrollbackText.preface(restored.text, savedAt: restored.savedAt))
+            view.feed(text: ScrollbackText.preface(restored.text, savedAt: restored.savedAt,
+                                                   light: !Theme.isDark(MainActor.assumeIsolated { Theme.appearance(of: view) })))
             restoreDivider = (restored.savedAt.divider, lastTextRow(), view.getTerminal().cols)
         }
         if let note { view.feed(text: RestoreLayout.noteLine(note)) }

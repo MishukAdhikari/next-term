@@ -10,6 +10,8 @@ public enum ProjectColor: Int, CaseIterable, Sendable {
     /// once it has been seen: 0.04 is a quarter to a half of what the IDEs' dark headers use. Raise it (up to about 0.06)
     /// rather than the lightness, and the contrast test says whether the bar's text still reads.
     public static let glowChroma: Double = 0.04
+    /// The same on a light bar: softer, as a tint on paper reads stronger than the same chroma on a dark bar.
+    public static let glowChromaLight: Double = 0.028
     /// The menus' circles and the Welcome window's dots: light enough to be read as the hue on a dark row.
     static let swatchLightness: Double = 0.74
     static let swatchChroma: Double = 0.12
@@ -55,8 +57,26 @@ public enum ProjectColor: Int, CaseIterable, Sendable {
     /// The glow's strongest colour on a bar of colour `bar` (0xRRGGBB): the bar's own lightness, so its text reads as it
     /// does on the bar, in this hue at `glowChroma`.
     public func glow(on bar: UInt32) -> UInt32 {
-        OKLab(lightness: OKLab(rgb: bar).l, chroma: Self.glowChroma, hue: hue).rgb
+        let lightness: Double = OKLab(rgb: bar).l
+        return OKLab(lightness: lightness, chroma: lightness > 0.6 ? Self.glowChromaLight : Self.glowChroma, hue: hue).rgb
     }
+
+    /// The colour as a mark on light surfaces (`surfaces`: the bars and paper it sits on): the hue darkened from a mid
+    /// lightness until it stands 3:1 on every one, so a window's dot reads on light as the dark look's swatch reads on
+    /// dark. The dark look keeps `swatch`.
+    public func swatch(onLight surfaces: [UInt32]) -> UInt32 {
+        var lightness: Double = Self.lightSwatchLightness
+        var colour: UInt32 = OKLab(lightness: lightness, chroma: Self.lightSwatchChroma, hue: hue).rgb
+        while lightness > 0.3, !surfaces.allSatisfy({ Self.contrast(colour, $0) >= 3 }) {
+            lightness -= 0.01
+            colour = OKLab(lightness: lightness, chroma: Self.lightSwatchChroma, hue: hue).rgb
+        }
+        return colour
+    }
+
+    /// Where a light mark starts, before it is darkened to read: as light as a mark on paper can be and still be a colour.
+    static let lightSwatchLightness: Double = 0.62
+    static let lightSwatchChroma: Double = 0.13
 
     /// The colour as a swatch: a menu item's circle, a Welcome row's dot, a window's dot in the window column.
     public var swatch: UInt32 {

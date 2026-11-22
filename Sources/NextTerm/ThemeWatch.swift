@@ -40,6 +40,15 @@ enum ThemeWatch {
         }
     }
 
+    /// One window's look changed, as AppKit changed it (its root view's viewDidChangeEffectiveAppearance): what under
+    /// `root` doesn't follow by itself is set again. Each window does this for itself, when its own look changes, so one
+    /// behind another, merged behind a tab, on another Space or minimized is right however late AppKit gets to it. The
+    /// app-wide pass (`changed`) sets everything at once as well, by the look each part is about to have.
+    static func windowChanged(_ root: NSView) {
+        ThemeLayers.refresh(in: root)
+        for terminal in terminals(in: root) { Theme.applyColours(to: terminal) }
+    }
+
     /// The look changed: what doesn't follow by itself is set again.
     static func changed() {
         ThemeLayers.refresh()
@@ -81,19 +90,21 @@ enum ThemeLayers {
         view.layer?.borderColor = color.map { resolved($0, for: view) }
     }
 
-    static func refresh() {
-        for view in backgrounds.keyEnumerator().allObjects.compactMap({ $0 as? NSView }) {
+    /// Every such layer set again; with `root`, only those under it (one window, as its look changes).
+    static func refresh(in root: NSView? = nil) {
+        for view in backgrounds.keyEnumerator().allObjects.compactMap({ $0 as? NSView }) where root.map(view.isDescendant(of:)) ?? true {
             if let color = backgrounds.object(forKey: view) { view.layer?.backgroundColor = resolved(color, for: view) }
         }
-        for view in borders.keyEnumerator().allObjects.compactMap({ $0 as? NSView }) {
+        for view in borders.keyEnumerator().allObjects.compactMap({ $0 as? NSView }) where root.map(view.isDescendant(of:)) ?? true {
             if let color = borders.object(forKey: view) { view.layer?.borderColor = resolved(color, for: view) }
         }
     }
 
-    /// `color` as `view` looks now (a dynamic colour's CGColor is otherwise the app's look's, or the last drawn one's).
+    /// `color` as `view` looks now (a dynamic colour's CGColor is otherwise the app's look's, or the last drawn one's),
+    /// by the look it is in now, not its `effectiveAppearance`, which lags a change (Theme.appearance(of:)).
     static func resolved(_ color: NSColor, for view: NSView) -> CGColor {
         var cg = color.cgColor
-        view.effectiveAppearance.performAsCurrentDrawingAppearance { cg = color.cgColor }
+        Theme.appearance(of: view).performAsCurrentDrawingAppearance { cg = color.cgColor }
         return cg
     }
 }
@@ -129,7 +140,10 @@ extension Preferences {
         get { AppAppearance(stored: UserDefaults.standard.string(forKey: "appearance")) }
         set {
             UserDefaults.standard.set(newValue.rawValue, forKey: "appearance")
-            MainActor.assumeIsolated { ThemeWatch.apply(newValue) }
+            MainActor.assumeIsolated {
+                ThemeWatch.apply(newValue)
+                ThemeWatch.changed() // at once, not only when the watch on the app's look reports it
+            }
         }
     }
 }

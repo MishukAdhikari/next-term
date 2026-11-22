@@ -698,10 +698,16 @@ final class WindowColumnButton: NSButton {
         paintDot(fading: animated && !WindowColumnHost.reducesMotion() ? (newAwake ? 0.15 : 0.35) : 0)
     }
 
+    /// The look changed: the dot's colour is a layer's, fixed when it was set, so it is set again in the new look.
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        paintDot()
+    }
+
     /// The dot where and how it shows, hidden while a mark stands in its place; `fading` its colour over that long.
     private func paintDot(fading: TimeInterval = 0) {
         let shows: Bool = row != nil && railMark == nil
-        let color: CGColor = dotColor.cgColor
+        let color: CGColor = MainActor.assumeIsolated { ThemeLayers.resolved(dotColor, for: self) } // in this row's look
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         if dotLayer.isHidden == shows { dotLayer.isHidden = !shows }
