@@ -340,7 +340,7 @@ final class WindowColumnView: NSView, ProjectGlowing {
     }
 
     /// The guide's colour: a step lighter than the bar, plainer with Increase Contrast.
-    private static var guideColor: NSColor { DisplayOptions.increasesContrast ? Theme.textDim : Theme.pair(light: NSColor(hex: 0xCDD0D6), dark: NSColor(hex: 0x45474D)) }
+    private static var guideColor: NSColor { DisplayOptions.increasesContrast ? Theme.textDim : Theme.pair(light: Theme.dynamic(\.divider), dark: NSColor(hex: 0x45474D)) }
 
     /// The "+N": how many windows do not fit, in the colour of the most urgent mark among them; unfolded, "All Windows…"
     /// beside it with ⌘O's key. Its tooltip names them.

@@ -1,4 +1,7 @@
 import AppKit
+import ObjectiveC
+
+nonisolated(unsafe) private var everVisibleKey: UInt8 = 0
 
 extension NSWindow {
     /// Whether anyone can see the window: not when it is minimized, the app hidden, the window covered by
@@ -8,21 +11,38 @@ extension NSWindow {
     var canBeSeen: Bool {
         if isBackgroundTab { return false }
         if Self.selfTestRun { return isVisible && !isMiniaturized }
-        return occlusionState.contains(.visible)
+        if occlusionState.contains(.visible) {
+            everReportedVisible = true
+            return true
+        }
+        // A window macOS has never marked visible (one that first came in behind a tab, as a merged window brought back
+        // by an update's restore) is seen while it has the keyboard; its terminals otherwise drew nothing at all. Once
+        // occlusion has spoken for it, it alone decides, so a locked screen, a sleeping display or another Space stop
+        // the drawing as before.
+        return !everReportedVisible && isKeyWindow && isVisible && !isMiniaturized && NSApp.isActive
     }
 
     /// Posted for a window merged with others when its tab came to the front or went behind one (TerminalWindowController
     /// watches its group): macOS posts no occlusion change for it while the screen is locked or the window covered.
     static let tabSelectionDidChange = Notification.Name("NextTerm.windowTabSelectionDidChange")
 
+    /// Whether macOS has ever reported the window visible.
+    private var everReportedVisible: Bool {
+        get { objc_getAssociatedObject(self, &everVisibleKey) as? Bool ?? false }
+        set { objc_setAssociatedObject(self, &everVisibleKey, newValue, .OBJC_ASSOCIATION_RETAIN_NONATOMIC) }
+    }
+
     /// Read once: each terminal asks at every change it draws.
     private static let selfTestRun = SelfTest.isRequested
 
-    /// What changes `canBeSeen`, to observe for a window: occlusion covers them all; minimizing and hiding are
-    /// observed too, for a self-test run.
+    /// What changes `canBeSeen`, to observe for a window: occlusion covers most; minimizing and hiding are observed too,
+    /// for a self-test run, and the keyboard and the app's activity for a window macOS never marked visible.
     static let visibilityNotifications: [(name: Notification.Name, ofApp: Bool)] = [
         (NSWindow.didChangeOcclusionStateNotification, false), (NSWindow.didMiniaturizeNotification, false),
         (NSWindow.didDeminiaturizeNotification, false), (NSApplication.didHideNotification, true),
         (NSApplication.didUnhideNotification, true), (tabSelectionDidChange, false),
+        // The keyboard and the app's being in front decide for a window macOS never marked visible.
+        (NSWindow.didBecomeKeyNotification, false), (NSWindow.didResignKeyNotification, false),
+        (NSApplication.didBecomeActiveNotification, true), (NSApplication.didResignActiveNotification, true),
     ]
 }

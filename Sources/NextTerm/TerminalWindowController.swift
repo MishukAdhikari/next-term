@@ -202,7 +202,7 @@ final class ThemedSplitView: HairlineSplitView {}
 /// Between the editor and the terminal: both have the same background, so the line between them must
 /// show (a hairline a few shades lighter), and it is easy to grab (see effectiveRect).
 final class WorkSplitView: HairlineSplitView {
-    static let line = Theme.pair(light: NSColor(hex: 0xDFE1E5), dark: NSColor(hex: 0x393B40))
+    static let line = Theme.divider
     override var lineColor: NSColor { Self.line }
 
     /// A drag of the divider ended: the user pressed, moved it and let go (a window resize never calls it).
@@ -3042,6 +3042,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     }
 
     func windowDidBecomeKey(_ notification: Notification) {
+        for tab in tabs { tab.view.drawIfSeenAgain() } // seen once it has the keyboard, whatever its occlusion says
         if !keyingForAgent { lastKey = Date() } // brought forward for an agent: not a window the user went to
         if !keyingForAgent { userTouched() }
         watchTabGroup()

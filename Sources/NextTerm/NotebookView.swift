@@ -450,7 +450,7 @@ enum NotebookRenderer {
     }
 
     static let codeFill = Theme.bar
-    static let codeStroke = Theme.pair(light: NSColor(hex: 0xE1E3E8), dark: NSColor(hex: 0x35373B))
+    static let codeStroke = Theme.pair(light: Theme.dynamic(\.divider), dark: NSColor(hex: 0x35373B))
     static let stderrFill = Theme.pair(light: NSColor(hex: 0xFDF0F0), dark: NSColor(hex: 0x33282A))
     static let errorFill = Theme.pair(light: NSColor(hex: 0xFBE3E3), dark: NSColor(hex: 0x3A2527))
     static let errorText = Theme.pair(light: NSColor(hex: 0xB42318), dark: NSColor(hex: 0xF0928D))

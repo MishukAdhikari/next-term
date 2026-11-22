@@ -307,10 +307,10 @@ final class GoToAnythingPanel: NSPanel, NSTableViewDataSource, NSTableViewDelega
     /// A tab's mark as its colour: amber for a decision, red for a failure, green done, blue working.
     private static func color(_ state: String?) -> NSColor {
         switch state {
-        case "attention": return .systemOrange
-        case "failed": return .systemRed
-        case "done": return .systemGreen
-        case "working": return .systemBlue
+        case "attention": return Theme.attention // the tab bar's own colours, so a state reads the same here
+        case "failed": return Theme.failed
+        case "done": return Theme.done
+        case "working": return Theme.working
         default: return .clear
         }
     }
