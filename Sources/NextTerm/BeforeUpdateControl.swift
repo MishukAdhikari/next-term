@@ -47,8 +47,9 @@ enum BeforeUpdateControl {
         guard let files = SessionRestore.shared.files, let snapshot = read(files) else { return 0 }
         recheck(snapshot)
         let app: AppDelegate = AppDelegate.shared
-        var opened: [(controller: TerminalWindowController, group: Int?)] = []
-        for window in missing {
+        let reopening: [SessionSnapshot.Window] = missing
+        var opened: [TerminalWindowController] = [] // one for each window in `reopening`, in its order
+        for window in reopening {
             let panes: [SessionSnapshot.Pane] = window.groups.compactMap { $0.root.panes.first }.filter { $0.remote == nil }
             let first: String = window.project ?? panes.first?.folder ?? NSHomeDirectory()
             let controller: TerminalWindowController = window.project != nil
@@ -59,13 +60,19 @@ enum BeforeUpdateControl {
                 if let title = pane.userTitle { tab.userTitle = title }
             }
             controller.refresh()
-            opened.append((controller, window.windowTab?.group))
+            opened.append(controller)
         }
-        // Merged before the update, merged again.
-        for group in Set(opened.compactMap(\.group)) {
-            let members: [NSWindow] = opened.filter { $0.group == group }.compactMap { $0.controller.window }
-            guard let host = members.first else { continue }
-            for member in members.dropFirst() { host.addTabbedWindow(member, ordered: .above) }
+        // Merged before the update, merged again, as the launch restore merges them (RestoreLayout.units): the tabs in
+        // their saved order, the one saved in front in front.
+        WindowTabbing.withoutAutomaticTabbing {
+            for unit in RestoreLayout.units(reopening) where unit.members.count > 1 {
+                guard let host = opened[unit.front].window, let group = host.tabGroup else { continue }
+                for (place, member) in unit.members.enumerated() where member != unit.front {
+                    guard let window = opened[member].window else { continue }
+                    group.insertWindow(window, at: min(place, group.windows.count))
+                }
+                group.selectedWindow = host
+            }
         }
         recheck(snapshot)
         if missing.isEmpty {

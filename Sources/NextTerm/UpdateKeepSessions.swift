@@ -611,7 +611,7 @@ final class UpdateSheetController: NSWindowController, NSWindowDelegate {
     private var busyShown: [UUID] = []
     private var detailsDrawn: [UpdateDetail]?
     private var decisionsShown: [String]?
-    private weak var parentWindow: NSWindow?
+    private let attachment = ProjectWindowAttachment()
 
     var busyStack: NSStackView { busyList.stack }
     var detailsStack: NSStackView { detailsList.stack }
@@ -793,7 +793,7 @@ final class UpdateSheetController: NSWindowController, NSWindowDelegate {
             list.maxHeight = height
             list.fit()
         }
-        let screen = (window.screen ?? parentWindow?.screen ?? NSScreen.main)?.visibleFrame
+        let screen = (window.screen ?? attachment.parent?.screen ?? NSScreen.main)?.visibleFrame
         let chrome = window.frame.height - window.contentLayoutRect.height
         if let screen {
             var excess = content.fittingSize.height + chrome + 24 - screen.height
@@ -822,41 +822,9 @@ final class UpdateSheetController: NSWindowController, NSWindowDelegate {
             window.orderFront(nil)
             return
         }
-        if let parent, parent.isVisible, !parent.isMiniaturized {
-            let size = window.frame.size
-            var origin = NSPoint(x: parent.frame.midX - size.width / 2, y: parent.contentTop - size.height - 64)
-            if let screen = (parent.screen ?? NSScreen.main)?.visibleFrame {
-                origin.x = min(max(origin.x, screen.minX), screen.maxX - size.width)
-                origin.y = min(max(origin.y, screen.minY), screen.maxY - size.height)
-            }
-            window.setFrameOrigin(origin)
-            parent.addChildWindow(window, ordered: .above)
-            parentWindow = parent
-            NotificationCenter.default.addObserver(self, selector: #selector(parentWillClose(_:)), name: NSWindow.willCloseNotification,
-                                                   object: parent)
-            NotificationCenter.default.addObserver(self, selector: #selector(parentTabChanged(_:)), name: NSWindow.tabSelectionDidChange,
-                                                   object: parent)
-        } else {
-            window.center()
-        }
+        if !attachment.attach(window, over: parent) { window.center() }
         window.orderFront(nil)
         if !NSApp.isActive { NSApp.requestUserAttention(.informationalRequest) }
-    }
-
-    /// Its window closing would take this one with it: it stays, on its own.
-    @objc private func parentWillClose(_ note: Notification) {
-        guard let window, let parent = note.object as? NSWindow else { return }
-        NotificationCenter.default.removeObserver(self, name: NSWindow.willCloseNotification, object: parent)
-        NotificationCenter.default.removeObserver(self, name: NSWindow.tabSelectionDidChange, object: parent)
-        parent.removeChildWindow(window)
-        parentWindow = nil
-    }
-
-    /// Its window went behind another project's tab in the same window: it stays in sight, on its own, still unanswered.
-    @objc private func parentTabChanged(_ note: Notification) {
-        guard let window, let parent = note.object as? NSWindow, parent.isBackgroundTab else { return }
-        parentWillClose(Notification(name: NSWindow.willCloseNotification, object: parent))
-        window.orderFront(nil)
     }
 
     @objc private func keepChanged() {
@@ -882,11 +850,7 @@ final class UpdateSheetController: NSWindowController, NSWindowDelegate {
     }
 
     override func close() {
-        if let parent = parentWindow, let window {
-            NotificationCenter.default.removeObserver(self, name: NSWindow.willCloseNotification, object: parent)
-            parent.removeChildWindow(window)
-        }
-        parentWindow = nil
+        attachment.detach()
         window?.delegate = nil
         super.close()
     }

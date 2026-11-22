@@ -3042,7 +3042,6 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     }
 
     func windowDidBecomeKey(_ notification: Notification) {
-        for tab in tabs { tab.view.drawIfSeenAgain() } // seen once it has the keyboard, whatever its occlusion says
         if !keyingForAgent { lastKey = Date() } // brought forward for an agent: not a window the user went to
         if !keyingForAgent { userTouched() }
         watchTabGroup()
