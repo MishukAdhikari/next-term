@@ -12,6 +12,9 @@ enum CommandLineTool {
         // `nxtrm agent NAME`: an agent session over ACP in this tab (AgentSessionCLI, plan 030). `nxtrm ./agent` opens a
         // file named agent.
         if arguments.first == "agent" { AgentSessionCLI.run(Array(arguments.dropFirst())) }
+        // `nxtrm call TOOL ['{json}']`: one of Next Term's MCP tools, its answer printed (JSON for most), for scripts and
+        // launchers (Raycast, Alfred, the Shortcuts app's Run Shell Script). `nxtrm call` alone lists the tools.
+        if arguments.first == "call", arguments.count <= 3 { CommandLineCall.run(Array(arguments.dropFirst())) }
         // The self-test's stand-in for opencode, run from a tab (SelfTestIDELinks.swift).
         if arguments.count == 3, arguments[0] == "--self-test-ide-client" { SelfTest.runIDEStandIn(port: arguments[1], output: arguments[2]) }
         // `nxtrm secret run …`, `nxtrm secret import …` and `nxtrm secret help` (Secrets). `nxtrm secret` alone still
@@ -596,5 +599,39 @@ final class MCPBridgeHub: @unchecked Sendable {
 
     static func toolName(_ message: [String: Any]) -> String {
         (message["params"] as? [String: Any])?["name"] as? String ?? ""
+    }
+}
+
+/// `nxtrm call`: an MCP tool of the running Next Term, through its socket as an agent's calls go, so a tool that asks the
+/// user on the Mac asks here too.
+enum CommandLineCall {
+    static let usage = """
+        usage: nxtrm call TOOL ['{"argument": "value"}']
+          nxtrm call list_tabs
+          nxtrm call show_tab '{"tab_id": "…"}'
+        Prints the tool's answer; exits 1 when the tool refuses. nxtrm call lists the tools.
+        """
+
+    static func run(_ arguments: [String]) -> Never {
+        guard let tool = arguments.first, !["-h", "--help", "help"].contains(tool) else {
+            print(usage + "\n\n" + MCPServer.tools.map(\.name).sorted().joined(separator: "\n"))
+            exit(0)
+        }
+        var input: [String: Any] = [:]
+        if arguments.count > 1 {
+            guard let object = try? JSONSerialization.jsonObject(with: Data(arguments[1].utf8)) as? [String: Any] else {
+                FileHandle.standardError.write(Data("nxtrm call: the arguments are one JSON object, such as '{\"tab_id\": \"…\"}'\n".utf8))
+                exit(2)
+            }
+            input = object
+        }
+        let socket = ProcessInfo.processInfo.environment[MCPServer.socketVariable].flatMap { $0.isEmpty ? nil : $0 } ?? MCPServer.socketPath()
+        let result = MCPBridge.forward(tool, input, socket: socket)
+        if result.isError {
+            FileHandle.standardError.write(Data(("nxtrm call: " + result.text + "\n").utf8))
+            exit(1)
+        }
+        print(result.text)
+        exit(0)
     }
 }
