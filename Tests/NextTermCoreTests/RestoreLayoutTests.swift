@@ -49,6 +49,12 @@ import Testing
         #expect(RestoreLayout.units(left) == [RestoreLayout.Unit(members: [1, 0], front: 0)])
         // Nothing merged: each window on its own, in order.
         #expect(RestoreLayout.units([window(nil), window(nil)]).map(\.members) == [[0], [1]])
+        // Reopen after an update brings back only the windows missing, so their places have gaps: still in tab order, the
+        // one saved in front in front when it is among them.
+        let someWithFront = [window(Tab(group: 5, place: 3, front: false)), window(Tab(group: 5, place: 1, front: true))]
+        #expect(RestoreLayout.units(someWithFront) == [RestoreLayout.Unit(members: [1, 0], front: 1)])
+        let someWithoutFront = [window(Tab(group: 6, place: 4, front: false)), window(Tab(group: 6, place: 2, front: false))]
+        #expect(RestoreLayout.units(someWithoutFront) == [RestoreLayout.Unit(members: [1, 0], front: 0)])
     }
 
     @Test func windowsAreListedInTheOrderTheyOpenedWhicheverWasUsedLast() {
