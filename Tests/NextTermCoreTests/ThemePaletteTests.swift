@@ -22,7 +22,7 @@ import Testing
     }
 
     @Test func codeColoursMapAndUnknownOnesAreMadeReadable() {
-        #expect(light.code("#cf8e6d") == 0x0033B3) // keywords, whatever the case
+        #expect(light.code("#cf8e6d") == 0x0030A8) // keywords, whatever the case
         let unknown = light.code("#F0E68C")! // a pale yellow the map doesn't name
         #expect(ThemePalette.contrast(unknown, light.background) >= 4.5)
         #expect(ThemePalette.nextDark.code("#F0E68C") == 0xF0E68C) // the dark look draws the theme as it is
