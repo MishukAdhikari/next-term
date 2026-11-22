@@ -664,9 +664,12 @@ import Testing
         _ = write(pair.caller, "x", 1)
         #expect(recv(pair.served, &byte, 1, MSG_PEEK | MSG_DONTWAIT) == 1)
         calls.end(call)
-        let flags = fcntl(pair.served, F_GETFD)
-        let flagsError = errno
-        #expect(flags < 0 && flagsError == EBADF, "closed as its call ended")
+        // Read from the wrapper's end, which no other test can be given: a descriptor's number is reused at once while
+        // tests run in parallel, so asking whether the served number is still open would race.
+        var rest = [UInt8](repeating: 0, count: 8)
+        var got = 0
+        repeat { got = recv(pair.caller, &rest, rest.count, MSG_DONTWAIT) } while got > 0 // never blocks: open, it says EAGAIN
+        #expect(got == 0, "closed as its call ended: the wrapper reads the end of its connection")
         // A second end closes nothing: not a descriptor another connection was given since.
         let reused = try socketPair()
         defer { [reused.served, reused.caller].forEach { Darwin.close($0) } }

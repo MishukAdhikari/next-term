@@ -39,3 +39,34 @@ import Testing
         #expect(AppAppearance(stored: "nonsense") == .dark)
     }
 }
+
+@Suite struct NamedThemesTests {
+    /// The code's colours are looked up by the dark syntax theme's "#RRGGBB": a key written any other way is never used.
+    @Test func everyThemesCodeKeysAreTheDarkThemesHex() {
+        for palette in ThemePalette.builtIn {
+            for key in palette.code.keys {
+                #expect(key.hasPrefix("#") && key.count == 7 && key == key.uppercased(), "\(palette.name): \(key)")
+            }
+            if palette.id != ThemePalette.nextDark.id { #expect(palette.code("#cf8e6d") == palette.code["#CF8E6D"], "\(palette.name)") }
+        }
+    }
+
+    @Test func eachSideOffersItsOwnThemesAndFallsBackToNextTerms() {
+        #expect(ThemePalette.lightThemes.map(\.id) == ["next-term-light", "linen", "sage"])
+        #expect(ThemePalette.darkThemes.map(\.id) == ["next-term-dark", "copper", "harbor", "dusk"])
+        #expect(ThemePalette.theme("linen", dark: false) == .linen)
+        #expect(ThemePalette.theme("linen", dark: true) == .nextDark) // a light theme is never the dark side's
+        #expect(ThemePalette.theme("gone", dark: false) == .nextLight)
+    }
+
+    @Test func newThemesReadOnTheirOwnPaper() {
+        let ratio = ThemePalette.contrast
+        for p in [ThemePalette.copper, .harbor, .dusk, .linen, .sage] {
+            for (name, c) in [("text", p.text), ("textDim", p.textDim), ("accent", p.accent), ("working", p.working), ("failed", p.failed)] {
+                #expect(ratio(c, p.background) >= 4.5 && ratio(c, p.bar) >= 4.5, "\(p.name) \(name)")
+            }
+            for value in p.code.values { #expect(ratio(value, p.background) >= 4.5, "\(p.name) code") }
+            #expect(p.terminal.background == p.background)
+        }
+    }
+}

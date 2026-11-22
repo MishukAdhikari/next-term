@@ -749,6 +749,7 @@ enum SelfTest {
         case "agentScratch": return await agentScratchChecks(c) // an agent's scratch window: kept out of the lists, closed once quiet
         case "firstRun": return await firstRunChecks() // the first run's agent setup: the cards and the apply_setup window
         case "theme": return await themeChecks(c) // the light look: its contrast, and Light and Dark switched live (plan 049)
+        case "themes": return await themeGalleryChecks(c) // every theme shipped, one by one: its colours, chosen live, screenshots
         case "layoutPicker": return await layoutPickerChecks(c, proj: proj) // "How do you like to work?": its sheet, Skip, each card's layout
         case "windowTabs": return await windowTabsChecks(c) // a system tab bar over a project window: everything moves below it
         case "database": // the SQLite viewer and the data head view: their cells, the value pane, editing a SQLite file

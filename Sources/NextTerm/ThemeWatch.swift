@@ -61,6 +61,20 @@ enum ThemeWatch {
         NotificationCenter.default.post(name: didChange, object: nil)
     }
 
+    /// A theme was chosen in Settings: the look stays light or dark, so AppKit redraws nothing by itself. Everything is
+    /// set again as for a change of look, and every view drawn again, so colours that resolve as they draw (the
+    /// editor's code, text, marks) take the new theme's at once.
+    static func themeChanged() {
+        changed()
+        for window in NSApp.windows {
+            var queue: [NSView] = [window.contentView?.superview ?? window.contentView].compactMap { $0 }
+            while let view = queue.popLast() {
+                view.needsDisplay = true
+                queue.append(contentsOf: view.subviews)
+            }
+        }
+    }
+
     /// Every terminal view under `view`.
     static func terminals(in view: NSView) -> [TerminalView] {
         var found: [TerminalView] = []
@@ -124,6 +138,7 @@ extension Preferences {
         set {
             UserDefaults.standard.set(newValue, forKey: "lightTheme")
             Theme.palettes.light = ThemePalette.theme(newValue, dark: false)
+            MainActor.assumeIsolated { ThemeWatch.themeChanged() }
         }
     }
 
@@ -132,6 +147,7 @@ extension Preferences {
         set {
             UserDefaults.standard.set(newValue, forKey: "darkTheme")
             Theme.palettes.dark = ThemePalette.theme(newValue, dark: true)
+            MainActor.assumeIsolated { ThemeWatch.themeChanged() }
         }
     }
 
