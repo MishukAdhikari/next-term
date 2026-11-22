@@ -16,6 +16,9 @@ final class GoToAnythingPanel: NSPanel, NSTableViewDataSource, NSTableViewDelega
     private var items: [GoToAnything.Item] = []
     private weak var origin: TerminalWindowController?
 
+    /// Whether it is open now (a nextterm://goto link opens it only when it isn't).
+    static var isOpen: Bool { shown != nil }
+
     /// Opens over `controller`'s window (or alone with none), or closes it when it is open already.
     static func toggle(from controller: TerminalWindowController?) {
         if let open = shown {

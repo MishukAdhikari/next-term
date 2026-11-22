@@ -30,7 +30,7 @@ enum LinkHandler {
             bring(tab)
         case .goTo:
             NSApp.activate(ignoringOtherApps: true)
-            if GoToAnythingPanel.open == nil { app.goToAnything(nil) }
+            if !GoToAnythingPanel.isOpen { app.goToAnything(nil) }
         case .agent(let path, let agent):
             guard isFolder(path) else { return tell("There is no folder at \(GoToAnything.shown(path)).") }
             NSApp.activate(ignoringOtherApps: true)
