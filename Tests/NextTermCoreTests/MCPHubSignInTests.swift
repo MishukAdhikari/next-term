@@ -100,6 +100,22 @@ import Testing
         #expect(other.port != first.port && other.port != 0)
     }
 
+    @Test func aLocalhostCallbackArrivesOverIPv6Too() throws {
+        // A callback registered as http://localhost:<port>/callback: a browser may try ::1 before 127.0.0.1.
+        let listener = try MCPHubLoopback { query in query.contains { $0 == ("state", "s") } ? "ok" : nil }
+        defer { listener.close() }
+        var status = 0
+        let done = DispatchSemaphore(value: 0)
+        URLSession(configuration: .ephemeral).dataTask(with: URL(string: "http://[::1]:\(listener.port)/callback?state=s&code=c")!) { _, response, _ in
+            status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            done.signal()
+        }.resume()
+        _ = done.wait(timeout: .now() + 5)
+        #expect(status == 200)
+        #expect(listener.wait(until: Date().addingTimeInterval(1))?.contains { $0 == ("code", "c") } == true)
+        #expect(listener.isClosed)
+    }
+
     @Test func aServerThatHoldsThePortGetsTheSamePortAgain() throws {
         let setup = try Setup()
         setup.auth.exactRedirects = true

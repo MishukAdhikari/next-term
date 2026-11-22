@@ -4,7 +4,8 @@ import Darwin
 #endif
 
 /// The one-shot loopback listener a sign-in's browser comes back to (RFC 8252 §7.3): `http://127.0.0.1:<port>/callback`,
-/// bound to 127.0.0.1 only, one per sign-in, closed after the callback or after its life: at the port its client was
+/// bound to 127.0.0.1, and to ::1 at the same port when it's free (a callback registered as `localhost` reaches it
+/// whichever address the browser tries first), one per sign-in, closed after the callback or after its life: at the port its client was
 /// registered with when it's free (a server may hold the redirect to it), else at one the system picks.
 ///
 /// - Only `GET /callback` whose query `accepts` takes (its `state` is this sign-in's) ends the wait; it is answered
@@ -21,6 +22,8 @@ public final class MCPHubLoopback: @unchecked Sendable {
 
     private let lock = NSLock()
     private var listener: Int32 = -1
+    /// The same port on ::1, when it could be had: -1 otherwise.
+    private var listener6: Int32 = -1
     public private(set) var port: UInt16 = 0
     private let accepts: Accepts
     private let arrived = DispatchSemaphore(value: 0)
@@ -58,7 +61,29 @@ public final class MCPHubLoopback: @unchecked Sendable {
             $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(listener, $0, &size) }
         }
         port = UInt16(bigEndian: address.sin_port)
-        let fd = listener
+        listener6 = Self.open6(port)
+        for fd in [listener, listener6] where fd >= 0 { serveAll(fd) }
+    }
+
+    /// A listener on [::1]:`port` (IPv6 only), or -1 when the port is taken there or the Mac has no IPv6 loopback.
+    static func open6(_ port: UInt16) -> Int32 {
+        let fd = socket(AF_INET6, SOCK_STREAM, 0)
+        guard fd >= 0 else { return -1 }
+        var on: Int32 = 1
+        setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, socklen_t(MemoryLayout<Int32>.size))
+        setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &on, socklen_t(MemoryLayout<Int32>.size))
+        var address = sockaddr_in6()
+        address.sin6_family = sa_family_t(AF_INET6)
+        address.sin6_addr = in6addr_loopback
+        address.sin6_port = port.bigEndian
+        let bound = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in6>.size)) }
+        }
+        guard bound == 0, listen(fd, 8) == 0 else { Darwin.close(fd); return -1 }
+        return fd
+    }
+
+    private func serveAll(_ fd: Int32) {
         Thread { [weak self] in
             while true {
                 let client = accept(fd, nil, nil)
@@ -85,12 +110,13 @@ public final class MCPHubLoopback: @unchecked Sendable {
     /// Stops listening; a wait ends with nil.
     public func close() {
         lock.lock()
-        let fd = listener
+        let fds = [listener, listener6]
         listener = -1
+        listener6 = -1
         let wasEnded = ended
         ended = true
         lock.unlock()
-        if fd >= 0 { shutdown(fd, SHUT_RDWR); Darwin.close(fd) }
+        for fd in fds where fd >= 0 { shutdown(fd, SHUT_RDWR); Darwin.close(fd) }
         if !wasEnded { arrived.signal() }
     }
 
@@ -131,10 +157,11 @@ public final class MCPHubLoopback: @unchecked Sendable {
         lock.lock()
         self.query = query
         ended = true
-        let listening = listener
+        let listening = [listener, listener6]
         listener = -1
+        listener6 = -1
         lock.unlock()
-        if listening >= 0 { shutdown(listening, SHUT_RDWR); Darwin.close(listening) }
+        for fd in listening where fd >= 0 { shutdown(fd, SHUT_RDWR); Darwin.close(fd) }
         arrived.signal()
     }
 
