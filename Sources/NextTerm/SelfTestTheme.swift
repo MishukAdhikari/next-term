@@ -179,6 +179,7 @@ extension SelfTest {
             want("\(w) tab bar", layerHex(c.tabBar.layer?.backgroundColor), palette.bar)
             want("\(w) selected tab", layerHex(c.tabBar.tabView(at: c.tabBar.selectedIndex)?.layer?.backgroundColor), palette.background)
             if c.isSidebarVisible { want("\(w) sidebar", layerHex(c.sidebar.layer?.backgroundColor), palette.bar) }
+            #if DEBUG // the dot's colour is read through a debug-only accessor
             // The window column's dots: none in the other look's colours (a light dot is a darker shade than a dark one).
             let light = ThemePalette.nextLight
             let others: Set<UInt32> = Set(ProjectColor.allCases.map {
@@ -191,6 +192,7 @@ extension SelfTest {
                 }
                 queue.append(contentsOf: view.subviews)
             }
+            #endif
             if let color = c.projectColor, let drawn = c.tabBar.projectGlow.drawnPeak {
                 want("\(w) glow", drawn, color.glow(on: palette.bar))
             }
