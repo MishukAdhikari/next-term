@@ -477,6 +477,9 @@ final class MCPServerSheet: NSWindowController, NSWindowDelegate, NSTextFieldDel
             if cantRegister, secretName == nil, discoveredIssuer.flatMap({ URL(string: $0)?.host }) == "github.com" {
                 return "GitHub needs the app\u{2019}s client secret too."
             }
+            if secretName == nil, guide.provider == "Slack" {
+                return "Slack needs the app\u{2019}s client secret too: put it in Secret."
+            }
         } else if cantRegister, offersSignIn {
             return "" // nothing to sign in as until the app is given
         }
