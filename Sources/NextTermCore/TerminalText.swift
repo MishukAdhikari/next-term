@@ -647,11 +647,15 @@ public enum ScrollbackText {
 
     /// What a restored tab shows before its shell starts: the saved scrollback, sanitized again (its file is read as
     /// untrusted) with each newline as CR LF, then the divider for the quit it was saved at, dim.
-    public static func preface(_ scrollback: String, savedAt: SavedAt) -> String {
+    public static func preface(_ scrollback: String, savedAt: SavedAt, light: Bool = false) -> String {
         let text = TerminalText.feedable(scrollback)
         let lines = text.isEmpty || text.hasSuffix("\r\n") ? text : text + "\r\n"
-        return lines + "\u{1B}[2m" + TerminalText.oneLine(savedAt.divider) + "\u{1B}[0m\r\n"
+        return lines + dividerStyle(light: light) + TerminalText.oneLine(savedAt.divider) + "\u{1B}[0m\r\n"
     }
+
+    /// How the divider is set apart: faint on a dark terminal, as it always was; on a light one, faint (half way to the
+    /// paper) reads about 3:1, so it is the palette's bright black instead, a quiet grey that reads 4.5:1 and more.
+    public static func dividerStyle(light: Bool) -> String { light ? "\u{1B}[90m" : "\u{1B}[2m" }
 
     /// The rows of `tail`, the screen's last, below the last divider in it: a question replayed above it asks nothing.
     /// In a narrow pane the divider wraps over rows, and the row before the wrap loses its trailing blank, so blanks are

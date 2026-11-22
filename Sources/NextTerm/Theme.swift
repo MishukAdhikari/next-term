@@ -16,6 +16,20 @@ enum Theme {
         appearance.bestMatch(from: [.darkAqua, .aqua, .vibrantDark, .vibrantLight]).map { $0 == .darkAqua || $0 == .vibrantDark } ?? true
     }
 
+    /// The look `view` is drawn in, as it is now: the nearest appearance set on it, a view above it or its window, else
+    /// the app's. AppKit updates a view's own `effectiveAppearance` only on its next layout or display, so read just
+    /// after the app's look changed it is still the old one: what set a colour from it then stayed in the old look
+    /// (a terminal, a layer's fill) while the rest of the window changed.
+    @MainActor
+    static func appearance(of view: NSView) -> NSAppearance {
+        var next: NSView? = view
+        while let current = next {
+            if let set = current.appearance { return set }
+            next = current.superview
+        }
+        return view.window?.appearance ?? NSApp.effectiveAppearance
+    }
+
     /// The palette for `appearance` (the app's, when none is given).
     static func palette(for appearance: NSAppearance? = nil) -> ThemePalette {
         isDark(appearance ?? NSApp.effectiveAppearance) ? palettes.dark : palettes.light
@@ -143,7 +157,7 @@ enum Theme {
     /// The terminal's colours: the user's own (Settings › Terminal › Colours) over Next Term's for the view's look.
     /// ThemeWatch applies them again when the look changes.
     static func applyColours(to view: TerminalView) {
-        let colours = terminalColours(Preferences.terminalPalette, base: terminalDefaults(for: view.effectiveAppearance))
+        let colours = terminalColours(Preferences.terminalPalette, base: terminalDefaults(for: MainActor.assumeIsolated { appearance(of: view) }))
         view.nativeForegroundColor = NSColor(hex: colours.foreground)
         view.nativeBackgroundColor = NSColor(hex: colours.background)
         view.caretColor = NSColor(hex: colours.cursor)
