@@ -591,6 +591,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// What `application(_:open:)` names, by when it comes (R32): held until the launch hook has built the restored
     /// windows, then opened in front of them as `nxtrm` opens it until the launch has shown what it shows.
     private var requests = ProjectOpening.LaunchRequests()
+    /// Links that came before the launch's windows were built; nil once they have been followed.
+    private var pendingLinks: [URL]? = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Single clicks in the sidebar: on for a new install, kept as it was for one used before. First, before this
@@ -643,6 +645,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // too and opens in front of it (R32). From here on the session is saved, and at the quit.
         let restore = MainActor.assumeIsolated { SessionRestore.shared.launch(settings: LaunchSettings(defaults: launchDefaults)) }
         let named = requests.restored()
+        if let links = pendingLinks {
+            pendingLinks = nil
+            DispatchQueue.main.async { links.forEach(LinkHandler.follow) }
+        }
         NSApp.activate(ignoringOtherApps: true)
         // `nxtrm` in a terminal, while Next Term runs.
         DistributedNotificationCenter.default().addObserver(self, selector: #selector(commandLineRequest(_:)),
@@ -1573,6 +1579,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     /// Folders dropped on the Dock icon, or `open -a "Next Term" ~/Code/app`.
     func application(_ application: NSApplication, open urls: [URL]) {
+        // nextterm:// links (a launcher's quick actions): followed once the launch's windows are built.
+        let links = urls.filter { $0.scheme?.lowercased() == NextTermLink.scheme }
+        if !links.isEmpty {
+            if pendingLinks != nil { pendingLinks?.append(contentsOf: links) } else { links.forEach(LinkHandler.follow) }
+        }
+        let urls = urls.filter { $0.scheme?.lowercased() != NextTermLink.scheme }
+        guard !urls.isEmpty else { return }
         // Read as the launch finishes: it named something, even when every item below is skipped. It then goes on
         // as a normal launch, without the first run's import offer.
         openedAtLaunch = true

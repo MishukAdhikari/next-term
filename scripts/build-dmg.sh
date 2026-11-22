@@ -116,6 +116,13 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>NSBluetoothAlwaysUsageDescription</key><string>Next Term, or a command running in it, wants to use Bluetooth.</string>
   <key>NSSystemAdministrationUsageDescription</key><string>Next Term, or a command running in it, wants to change system settings.</string>
   <!-- Folders can be dropped on the Dock icon (or opened with "Open With") to open them as projects. -->
+  <key>CFBundleURLTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleURLName</key><string>Next Term link</string>
+      <key>CFBundleURLSchemes</key><array><string>nextterm</string></array>
+    </dict>
+  </array>
   <key>CFBundleDocumentTypes</key>
   <array>
     <dict>
