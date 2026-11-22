@@ -98,6 +98,9 @@ extension SelfTest {
               "window tabs: two project windows merged share one tab bar, each laid out below it, the one behind known as behind",
               "merged \(merged), group \(host.tabGroup?.windows.count ?? 0), covers \(c.columnHost.topCover) and \(other.columnHost.topCover), "
                   + "measured \(WindowTabbing.measuredCover ?? -1), behind \(host.isBackgroundTab)")
+        // Unseen once macOS reports it covered: on screen is seen whatever the tab group says (WindowSeen), and the occlusion
+        // change comes a moment after the tab group's.
+        _ = await wait(3) { !host.canBeSeen }
         check(!host.canBeSeen && TerminalWindow.front === second && second.shownWindow === second && host.shownWindow === second,
               "window tabs: the project behind counts as unseen, and the one in front is the front window",
               "host seen \(host.canBeSeen), front \(TerminalWindow.front?.title ?? "none")")

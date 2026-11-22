@@ -1,4 +1,5 @@
 import AppKit
+import NextTermCore
 import ObjectiveC
 
 nonisolated(unsafe) private var everVisibleKey: UInt8 = 0
@@ -7,19 +8,14 @@ extension NSWindow {
     /// Whether anyone can see the window: not when it is minimized, the app hidden, the window covered by
     /// others, on another Space or a tab behind another, or the screen locked or asleep. In a self-test run, whether
     /// it is on screen at all: the run takes half an hour, and a check must not fail because the Mac locked meanwhile.
-    /// The sidebar's git refresh (GitMonitor) and the terminals' drawing (NextTermView) go by it.
+    /// The sidebar's git refresh (GitMonitor) and the terminals' drawing (NextTermView) go by it; WindowSeen decides.
     var canBeSeen: Bool {
-        if isBackgroundTab { return false }
-        if Self.selfTestRun { return isVisible && !isMiniaturized }
-        if occlusionState.contains(.visible) {
-            everReportedVisible = true
-            return true
-        }
-        // A window macOS has never marked visible (one that first came in behind a tab, as a merged window brought back
-        // by an update's restore) is seen while it has the keyboard; its terminals otherwise drew nothing at all. Once
-        // occlusion has spoken for it, it alone decides, so a locked screen, a sleeping display or another Space stop
-        // the drawing as before.
-        return !everReportedVisible && isKeyWindow && isVisible && !isMiniaturized && NSApp.isActive
+        let occluded: Bool = !occlusionState.contains(.visible)
+        if !occluded { everReportedVisible = true }
+        return WindowSeen.seen(WindowSeen.Facts(
+            occlusionVisible: !occluded, backgroundTab: isBackgroundTab, selfTestRun: Self.selfTestRun, visible: isVisible,
+            miniaturized: isMiniaturized, everReportedVisible: everReportedVisible,
+            key: isKeyWindow, appActive: NSApp.isActive))
     }
 
     /// Posted for a window merged with others when its tab came to the front or went behind one (TerminalWindowController
