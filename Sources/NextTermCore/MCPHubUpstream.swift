@@ -7,6 +7,12 @@ import Darwin
 /// stdout, one JSON-RPC message a line. It starts on first need (`tools`, `call`), and ends with the bridge (`stop`),
 /// or when it stops by itself; the next need starts it again.
 ///
+/// One that keeps failing waits before it is started again (`Limits.backoff`): two failures in a row (a start that fails
+/// once the program ran, or a run that ends by itself within `Limits.steady` of its start) and each need is told at once
+/// why and when it is tried again, 5 seconds after the second, doubling to 5 minutes. No need pays for a start that is
+/// sure to fail, and a server started through `nxtrm secret run` doesn't ask the user for its keys over and over. A
+/// run that lasts, or a call it answers, clears the count.
+///
 /// Everything that can go wrong ends in a sentence for the agent, never a hang or a crash: a program not found, no answer
 /// within the limits, an exit (with the last of what it wrote to stderr), output that isn't MCP (counted, the first line
 /// quoted), an MCP version Next Term doesn't speak, a message over `Limits.message`, and one Next Term couldn't finish
@@ -20,11 +26,26 @@ public final class MCPHubUpstream: @unchecked Sendable {
         public var call: TimeInterval = 50
         /// The longest message read: a server past it is stopped.
         public var message = 32 * 1024 * 1024
+        /// The wait after the second failure in a row; each failure after doubles it, to `backoffMost`.
+        public var backoff: TimeInterval = 5
+        public var backoffMost: TimeInterval = 300
+        /// A run that ends by itself sooner than this after its start is a failure; one that lasted clears the count.
+        public var steady: TimeInterval = 60
 
-        public init(start: TimeInterval = 30, call: TimeInterval = 50, message: Int = 32 * 1024 * 1024) {
+        public init(start: TimeInterval = 30, call: TimeInterval = 50, message: Int = 32 * 1024 * 1024,
+                    backoff: TimeInterval = 5, backoffMost: TimeInterval = 300, steady: TimeInterval = 60) {
             self.start = start
             self.call = call
             self.message = message
+            self.backoff = backoff
+            self.backoffMost = backoffMost
+            self.steady = steady
+        }
+
+        /// The wait before the next start after `failures` failures in a row, or nil to start at once.
+        public func wait(after failures: Int) -> TimeInterval? {
+            guard failures >= 2 else { return nil }
+            return min(backoffMost, backoff * pow(2, Double(min(failures - 2, 16))))
         }
 
         public static let standard = Limits()
@@ -76,6 +97,10 @@ public final class MCPHubUpstream: @unchecked Sendable {
     private var firstGarbage: String?
     /// Ended for good (`retire`): the session it was started for is over, so no need starts it again.
     private var retired = false
+    /// Failures in a row, when this run started, and the earliest the next start may be (the backoff).
+    private var failures = 0
+    private var startedAt: Date?
+    private var retryAt: Date?
 
     public init(name: String, launch: Launch, limits: Limits = .standard, clientVersion: String) {
         self.name = name
@@ -114,18 +139,40 @@ public final class MCPHubUpstream: @unchecked Sendable {
         lock.lock()
         if let listed, ended == nil { lock.unlock(); return .success(listed) }
         if retired { lock.unlock(); return .failure(Failure("\(name) was stopped.")) }
+        if let retryAt, retryAt > Date() {
+            let seconds = Int(retryAt.timeIntervalSinceNow.rounded(.up))
+            let last = lastFailure.map { " The last time: " + $0 } ?? ""
+            let text = "\(name) failed \(failures) times in a row, so Next Term waits before starting it again: "
+                + "in \(seconds) second\(seconds == 1 ? "" : "s").\(last)"
+            lock.unlock()
+            return .failure(Failure(text))
+        }
         lock.unlock()
-        let result = start(until: min(deadline, Date().addingTimeInterval(limits.start)))
+        let (result, ran) = start(until: min(deadline, Date().addingTimeInterval(limits.start)))
         lock.lock()
         switch result {
         case .success(let tools):
             listed = tools
             lastFailure = nil
+            startedAt = Date()
         case .failure(let failure):
             lastFailure = failure.text
+            if ran { failed() } // a program not found, or its folder gone, costs nothing to try again
         }
         lock.unlock()
         return result
+    }
+
+    /// One more failure in a row (call with `lock` held).
+    private func failed() {
+        failures += 1
+        retryAt = limits.wait(after: failures).map { Date().addingTimeInterval($0) }
+    }
+
+    /// It works: the count starts again (call with `lock` held).
+    private func cleared() {
+        failures = 0
+        retryAt = nil
     }
 
     /// Calls one of its tools: the result object it answered (content, isError, structuredContent), as it is.
@@ -141,6 +188,9 @@ public final class MCPHubUpstream: @unchecked Sendable {
             guard let result = answer["result"] as? [String: Any] else {
                 return .failure(Failure("\(name) answered \(tool) with something that isn't a tool's result."))
             }
+            lock.lock()
+            cleared()
+            lock.unlock()
             return .success(result)
         }
     }
@@ -177,15 +227,20 @@ public final class MCPHubUpstream: @unchecked Sendable {
 
     // MARK: starting
 
-    private func start(until deadline: Date) -> Result<[[String: Any]], Failure> {
+    /// Starts it: its tool list, or why not, and whether its program ran (a failure after it did counts for the backoff).
+    private func start(until deadline: Date) -> (Result<[[String: Any]], Failure>, ran: Bool) {
         stop() // what is left of the last run
         guard FileManager.default.isExecutableFile(atPath: launch.executable) else {
-            return .failure(Failure("\(name) didn't start: \(launch.executable) is not a program this Mac can run."))
+            return (.failure(Failure("\(name) didn't start: \(launch.executable) is not a program this Mac can run.")), false)
         }
         var isFolder: ObjCBool = false
         guard FileManager.default.fileExists(atPath: launch.directory, isDirectory: &isFolder), isFolder.boolValue else {
-            return .failure(Failure("\(name) didn't start: its folder, \(launch.directory), is not there."))
+            return (.failure(Failure("\(name) didn't start: its folder, \(launch.directory), is not there.")), false)
         }
+        return (run(until: deadline), true)
+    }
+
+    private func run(until deadline: Date) -> Result<[[String: Any]], Failure> {
         let child = Process()
         child.executableURL = URL(fileURLWithPath: launch.executable)
         child.arguments = launch.arguments
@@ -472,6 +527,11 @@ public final class MCPHubUpstream: @unchecked Sendable {
         // process: nothing of this one's is left to tell.
         guard process === child || process == nil else { lock.unlock(); return }
         if process === child {
+            // It ended by itself. Once started (`listed`; a start that fails is counted by `tools`): soon after its
+            // start, one more failure; after a run that lasted, the count starts again.
+            if listed != nil, let startedAt {
+                if Date().timeIntervalSince(startedAt) < limits.steady { failed() } else { cleared() }
+            }
             ended = why
             lastFailure = why
             listed = nil

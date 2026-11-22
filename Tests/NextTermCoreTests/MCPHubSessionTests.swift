@@ -283,6 +283,44 @@ import Testing
         #expect(text(hub.call("mcp_call", ["server": "fake", "tool": "echo"])) == ("hello from fake", false))
     }
 
+    @Test func aServerThatKeepsFailingWaitsBeforeStartingAgain() throws {
+        let hub = session(plan([fakeServer()]), limits: MCPHubUpstream.Limits(backoff: 1, backoffMost: 4))
+        defer { hub.stop() }
+        // Two quick ends in a row: the next need is told at once why, and when, with no start.
+        _ = hub.call("mcp_call", ["server": "fake", "tool": "die"])
+        _ = hub.call("mcp_call", ["server": "fake", "tool": "die"])
+        let started = Date()
+        let (said, isError) = text(hub.call("mcp_call", ["server": "fake", "tool": "echo"]))
+        #expect(isError && said.contains("fake failed 2 times in a row, so Next Term waits before starting it again: in 1 second."))
+        #expect(said.contains("The last time: fake stopped (exit status 3)"))
+        #expect(Date().timeIntervalSince(started) < 0.5)
+        // Once the wait is over it starts, and a call it answers clears the count.
+        Thread.sleep(forTimeInterval: 1.1)
+        #expect(text(hub.call("mcp_call", ["server": "fake", "tool": "echo"])) == ("hello from fake", false))
+        _ = hub.call("mcp_call", ["server": "fake", "tool": "die"])
+        #expect(text(hub.call("mcp_call", ["server": "fake", "tool": "echo"])) == ("hello from fake", false))
+    }
+
+    @Test func aServerThatNeverStartsWaitsLongerEachTime() throws {
+        let broken = (script as NSString).deletingLastPathComponent + "/broken-again.sh"
+        try "#!/bin/sh\necho 'missing module' >&2\nexit 1\n".write(toFile: broken, atomically: true, encoding: .utf8)
+        let hub = session(plan([fakeServer("broken", script: broken)]), limits: MCPHubUpstream.Limits(backoff: 1, backoffMost: 4))
+        defer { hub.stop() }
+        _ = hub.call("mcp_tools", ["server": "broken"])
+        _ = hub.call("mcp_tools", ["server": "broken"])
+        #expect(text(hub.call("mcp_tools", ["server": "broken"])).0.contains("in 1 second"))
+        Thread.sleep(forTimeInterval: 1.1)
+        _ = hub.call("mcp_tools", ["server": "broken"]) // the third failure doubles the wait
+        #expect(text(hub.call("mcp_tools", ["server": "broken"])).0.contains("failed 3 times in a row"))
+        #expect(text(hub.call("mcp_tools", ["server": "broken"])).0.contains("in 2 seconds"))
+    }
+
+    @Test func theBackoffDoublesToItsMost() {
+        let limits = MCPHubUpstream.Limits.standard
+        #expect(limits.wait(after: 1) == nil)
+        #expect([2, 3, 4, 8, 9, 40].map { limits.wait(after: $0) } == [5, 10, 20, 300, 300, 300])
+    }
+
     @Test func outputThatIsntMCPIsQuotedWhenTheWaitRunsOut() throws {
         let noisy = (script as NSString).deletingLastPathComponent + "/noisy.sh"
         try "#!/bin/sh\necho 'Server listening on stdio'\ncat >/dev/null\n".write(toFile: noisy, atomically: true, encoding: .utf8)
