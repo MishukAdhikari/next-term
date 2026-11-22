@@ -189,13 +189,21 @@ extension SelfTest {
         let prompt = QuitReopenPrompt(projects: [app, api, app], checked: true)
         let dontAsk = prompt.alert.showsSuppressionButton && prompt.alert.suppressionButton?.title == "Don’t ask again"
         let box = prompt.checkbox
-        let boxShown = prompt.alert.accessoryView === box && box.title == QuitPolicy.checkboxTitle && box.state == .on
+        let boxShown = box.superview === prompt.alert.accessoryView && box.title == QuitPolicy.promptCheckboxTitle && box.state == .on
         let named = (box.toolTip ?? "").contains("“app” and “api”")
-        check(prompt.alert.messageText == "Quit Next Term?" && prompt.alert.informativeText.isEmpty && dontAsk && boxShown && named,
-              "the plain quit dialog reads Quit Next Term?, with the resume checkbox naming each open project once, and Don’t ask again",
+        let text = "Your windows, tabs and agent sessions in “app” and “api” can come back when you open it again."
+        check(prompt.alert.messageText == "Quit Next Term?" && prompt.alert.informativeText == text && dontAsk && boxShown && named,
+              "the plain quit dialog reads Quit Next Term?, names what can come back once a project, then Reopen them next time and Don’t ask again",
               "\(prompt.alert.messageText) “\(prompt.alert.informativeText)”, Don’t ask again \(dontAsk), box \(boxShown), tooltip \(box.toolTip ?? "none")")
+        // The box lines up with Don’t ask again, not centred under the text.
+        prompt.alert.layout()
+        if let suppression = prompt.alert.suppressionButton {
+            let boxX = box.convert(box.bounds, to: nil).minX, suppressionX = suppression.convert(suppression.bounds, to: nil).minX
+            check(abs(boxX - suppressionX) <= 2, "the plain quit dialog's reopen box lines up with Don’t ask again",
+                  "box \(boxX), Don’t ask again \(suppressionX)")
+        }
         let unchecked = QuitReopenPrompt(projects: [app], checked: false)
-        check(unchecked.checkbox.state == .off, "the plain dialog's box starts as the policy says: unchecked under Welcome")
+        check(unchecked.checkbox.state == .off, "the plain dialog's box starts as it is given: unchecked when asked so")
         promptButtonChecks()
 
         let save = AppDelegate.saveBeforeQuittingAlert(["notes.md"])
@@ -254,7 +262,7 @@ extension SelfTest {
         let tip = box.toolTip ?? ""
         let state = box.state == .on
         let named = tip.contains(projects.count > 1 ? "“app” and “api”" : "“app”")
-        check(box.title == QuitPolicy.checkboxTitle && state == checked && named && alert.accessoryView === box
+        check(box.title == QuitPolicy.checkboxTitle && state == checked && named && box.superview === alert.accessoryView
               && !alert.showsSuppressionButton,
               "\(name) carries the resume checkbox, \(checked ? "checked" : "unchecked") as the policy says, naming the projects, with no Don’t ask again",
               "\(box.title), on \(state), tooltip \(tip), suppression \(alert.showsSuppressionButton)")
