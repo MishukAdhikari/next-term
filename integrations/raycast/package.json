@@ -2,10 +2,11 @@
   "$schema": "https://www.raycast.com/schemas/extension.json",
   "name": "next-term",
   "title": "Next Term",
-  "description": "Jump to a Next Term tab or project, find the agent waiting for you, and start Claude Code, Codex or OpenCode in a project.",
+  "description": "Search Next Term tabs and projects, start coding agents, and see waiting agents in the menu bar, with Next Term 0.11.80 or later.",
   "icon": "icon.png",
   "author": "mishuk_adhikari",
   "categories": ["Developer Tools", "Productivity"],
+  "platforms": ["macOS"],
   "license": "MIT",
   "commands": [
     {
@@ -19,8 +20,16 @@
       "name": "search-projects",
       "title": "Search Projects",
       "subtitle": "Next Term",
-      "description": "Open and recent Next Term projects; Return opens one.",
-      "mode": "view"
+      "description": "Open and recent Next Term projects; type part of a name and Return opens it.",
+      "mode": "view",
+      "arguments": [
+        {
+          "name": "query",
+          "placeholder": "Project",
+          "type": "text",
+          "required": false
+        }
+      ]
     },
     {
       "name": "start-agent",
@@ -56,10 +65,9 @@
     {
       "name": "nxtrm",
       "title": "nxtrm Path",
-      "description": "Next Term's command line tool. Leave empty to use the one inside Next Term.app.",
-      "type": "textfield",
-      "required": false,
-      "default": ""
+      "description": "Next Term's command line tool, nxtrm. Leave empty to use the one inside Next Term.app.",
+      "type": "file",
+      "required": false
     }
   ],
   "dependencies": {
