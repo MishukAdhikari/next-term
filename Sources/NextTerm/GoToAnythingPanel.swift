@@ -5,10 +5,11 @@ import NextTermCore
 /// over the window that lists every terminal tab, this window's first, then projects used before (GoToAnything), with a
 /// search field: Return goes there, Escape or a click elsewhere closes it. Its first row is Clear Terminal, so ⌘K and
 /// Return, pressed with the editor in front, still clears.
-final class GoToAnythingPanel: NSPanel, NSTableViewDataSource, NSTableViewDelegate, NSSearchFieldDelegate {
+final class GoToAnythingPanel: NSPanel, NSTableViewDataSource, NSTableViewDelegate, NSTextFieldDelegate {
     private static var shown: GoToAnythingPanel?
 
-    private let search = NSSearchField()
+    private let search = NSTextField()
+    private let glass = NSImageView(image: NSImage(systemSymbolName: "magnifyingglass", accessibilityDescription: nil) ?? NSImage())
     private let table = NSTableView()
     private let empty = NSTextField(labelWithString: "No tab or project matches.")
     private var all: [GoToAnything.Item] = []
@@ -28,7 +29,7 @@ final class GoToAnythingPanel: NSPanel, NSTableViewDataSource, NSTableViewDelega
 
     private init(origin: TerminalWindowController?) {
         self.origin = origin
-        super.init(contentRect: NSRect(x: 0, y: 0, width: 560, height: 380), styleMask: [.titled, .fullSizeContentView],
+        super.init(contentRect: NSRect(x: 0, y: 0, width: 560, height: 400), styleMask: [.titled, .fullSizeContentView],
                    backing: .buffered, defer: false)
         titleVisibility = .hidden
         titlebarAppearsTransparent = true
@@ -52,8 +53,7 @@ final class GoToAnythingPanel: NSPanel, NSTableViewDataSource, NSTableViewDelega
         let open: [TerminalWindowController] = app.controllers.filter { !$0.hasClosed }
         let front: [TerminalWindowController] = NSApp.orderedWindows.compactMap { $0.windowController as? TerminalWindowController }
         let ordered: [TerminalWindowController] = front.filter { open.contains($0) } + open.filter { !front.contains($0) }
-        let home: String = NSHomeDirectory()
-        func shown(_ path: String) -> String { path.hasPrefix(home) ? "~" + path.dropFirst(home.count) : path }
+        func shown(_ path: String) -> String { GoToAnything.shown(path) }
         func window(_ c: TerminalWindowController) -> GoToAnything.Window {
             let name: String = c.project.map { ($0 as NSString).lastPathComponent } ?? "~"
             let tabs: [GoToAnything.Tab] = c.tabs.map { tab in
@@ -125,17 +125,30 @@ final class GoToAnythingPanel: NSPanel, NSTableViewDataSource, NSTableViewDelega
     private func build() {
         let content = NSView()
         contentView = content
+        // One field, Spotlight's way: large type on the panel itself, a hairline under it, no box drawn inside the box.
         search.placeholderString = "Go to a tab or project"
         search.delegate = self
         search.focusRingType = .none
+        search.font = .systemFont(ofSize: 18)
+        search.isBezeled = false
+        search.isBordered = false
+        search.drawsBackground = false
+        search.cell?.usesSingleLineMode = true
+        search.cell?.isScrollable = true
+        glass.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 16, weight: .regular)
+        glass.contentTintColor = .secondaryLabelColor
+        let rule = NSBox()
+        rule.boxType = .separator
         search.setAccessibilityLabel("Go to a tab or project")
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("item"))
         table.addTableColumn(column)
         table.headerView = nil
-        table.rowHeight = 36
+        table.rowHeight = 40
+        table.intercellSpacing = NSSize(width: 0, height: 2)
         table.dataSource = self
         table.delegate = self
-        table.style = .plain
+        // Inset: rounded selections that line up with the field above.
+        table.style = .inset
         table.backgroundColor = .clear
         table.target = self
         table.doubleAction = #selector(rowDoubleClicked)
@@ -146,18 +159,24 @@ final class GoToAnythingPanel: NSPanel, NSTableViewDataSource, NSTableViewDelega
         scroll.drawsBackground = false
         empty.textColor = .secondaryLabelColor
         empty.isHidden = true
-        for view in [search, scroll, empty] as [NSView] {
+        for view in [glass, search, rule, scroll, empty] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             content.addSubview(view)
         }
         NSLayoutConstraint.activate([
-            search.topAnchor.constraint(equalTo: content.topAnchor, constant: 20),
-            search.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 20),
-            search.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -20),
-            scroll.topAnchor.constraint(equalTo: search.bottomAnchor, constant: 12),
-            scroll.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 12),
-            scroll.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -12),
-            scroll.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -12),
+            glass.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 18),
+            glass.centerYAnchor.constraint(equalTo: search.centerYAnchor),
+            glass.widthAnchor.constraint(equalToConstant: 20),
+            search.topAnchor.constraint(equalTo: content.topAnchor, constant: 18),
+            search.leadingAnchor.constraint(equalTo: glass.trailingAnchor, constant: 8),
+            search.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -14),
+            rule.topAnchor.constraint(equalTo: search.bottomAnchor, constant: 12),
+            rule.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            rule.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            scroll.topAnchor.constraint(equalTo: rule.bottomAnchor, constant: 6),
+            scroll.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            scroll.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            scroll.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -6),
             empty.centerXAnchor.constraint(equalTo: scroll.centerXAnchor),
             empty.topAnchor.constraint(equalTo: scroll.topAnchor, constant: 24),
         ])
@@ -222,11 +241,10 @@ final class GoToAnythingPanel: NSPanel, NSTableViewDataSource, NSTableViewDelega
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         let item: GoToAnything.Item = items[row]
         let cell = NSTableCellView()
-        let dot = NSView()
-        dot.wantsLayer = true
-        dot.layer?.cornerRadius = 4
-        dot.layer?.backgroundColor = Self.color(item.state).cgColor
-        dot.isHidden = item.state == nil
+        // What the row is, as a symbol in the gutter: a command, a shell, an agent or a project.
+        let icon = NSImageView(image: NSImage(systemSymbolName: Self.symbol(item.kind), accessibilityDescription: nil) ?? NSImage())
+        icon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 14, weight: .regular)
+        icon.contentTintColor = .secondaryLabelColor
         let title = NSTextField(labelWithString: item.title)
         title.font = .systemFont(ofSize: 13, weight: .medium)
         title.lineBreakMode = .byTruncatingTail
@@ -234,24 +252,53 @@ final class GoToAnythingPanel: NSPanel, NSTableViewDataSource, NSTableViewDelega
         detail.font = .systemFont(ofSize: 11)
         detail.textColor = .secondaryLabelColor
         detail.lineBreakMode = .byTruncatingMiddle
-        for view in [dot, title, detail] as [NSView] {
+        let lines = NSStackView(views: [title, detail])
+        lines.orientation = .vertical
+        lines.alignment = .leading
+        lines.spacing = 1
+        // On the right: the tab's state as a dot, or Clear Terminal's key.
+        let trailing: NSView
+        if item.kind == .command {
+            let key = NSTextField(labelWithString: KeyboardShortcuts.shared.chord(for: "clearBuffer:")?.display ?? "")
+            key.font = .systemFont(ofSize: 12)
+            key.textColor = .tertiaryLabelColor
+            trailing = key
+        } else {
+            let dot = NSView()
+            dot.wantsLayer = true
+            dot.layer?.cornerRadius = 4
+            dot.layer?.backgroundColor = Self.color(item.state).cgColor
+            dot.isHidden = item.state == nil
+            dot.widthAnchor.constraint(equalToConstant: 8).isActive = true
+            dot.heightAnchor.constraint(equalToConstant: 8).isActive = true
+            trailing = dot
+        }
+        for view in [icon, lines, trailing] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             cell.addSubview(view)
         }
+        trailing.setContentCompressionResistancePriority(.required, for: .horizontal)
         NSLayoutConstraint.activate([
-            dot.widthAnchor.constraint(equalToConstant: 8),
-            dot.heightAnchor.constraint(equalToConstant: 8),
-            dot.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 8),
-            dot.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
-            title.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 24),
-            title.topAnchor.constraint(equalTo: cell.topAnchor, constant: 2),
-            title.trailingAnchor.constraint(lessThanOrEqualTo: cell.trailingAnchor, constant: -8),
-            detail.leadingAnchor.constraint(equalTo: title.leadingAnchor),
-            detail.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 1),
-            detail.trailingAnchor.constraint(lessThanOrEqualTo: cell.trailingAnchor, constant: -8),
+            icon.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 6),
+            icon.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+            icon.widthAnchor.constraint(equalToConstant: 18),
+            lines.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 10),
+            lines.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+            lines.trailingAnchor.constraint(lessThanOrEqualTo: trailing.leadingAnchor, constant: -10),
+            trailing.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -10),
+            trailing.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
         ])
         cell.setAccessibilityLabel(item.title + ", " + item.detail + (item.state.map { ", " + $0 } ?? ""))
         return cell
+    }
+
+    private static func symbol(_ kind: GoToAnything.Item.Kind) -> String {
+        switch kind {
+        case .command: return "eraser"
+        case .shell: return "apple.terminal"
+        case .agent: return "sparkles"
+        case .project: return "folder"
+        }
     }
 
     /// A tab's mark as its colour: amber for a decision, red for a failure, green done, blue working.

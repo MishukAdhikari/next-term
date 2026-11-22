@@ -27,6 +27,20 @@ import Testing
         #expect(GoToAnything.initialSelection(items) == 0)
     }
 
+    @Test func kindsSameLookingTabsAndHomeShortened() {
+        let shells = GoToAnything.Window(id: 4, name: "xCloud", tabs: [
+            .init(id: "x", title: "xCloud", folder: "~/Code/xCloud", program: nil, state: nil),
+            .init(id: "y", title: "xCloud", folder: "~/Code/xCloud", program: nil, state: nil),
+            .init(id: "z", title: "Fix it", folder: "~/Code/xCloud", program: "claude --resume", state: nil),
+        ])
+        let items = GoToAnything.items(current: shells, others: [], closed: [.init(path: "/Users/me/Code", name: "Code")],
+                                       clearsTerminal: true, home: "/Users/me")
+        #expect(items.map(\.kind) == [.command, .shell, .shell, .agent, .project])
+        #expect(items[1].detail.hasSuffix("tab 1") && items[2].detail.hasSuffix("tab 2") && !items[3].detail.contains("tab "))
+        #expect(items[4].detail == "Not open \u{00B7} ~/Code")
+        #expect(GoToAnything.shown("/Users/me", home: "/Users/me") == "~" && GoToAnything.shown("/Users/meow", home: "/Users/me") == "/Users/meow")
+    }
+
     @Test func clearTerminalOnlyWhereThereIsATerminal() {
         let noClear = GoToAnything.items(current: here, others: [], closed: [], clearsTerminal: false)
         #expect(noClear.first?.title == "claude")
