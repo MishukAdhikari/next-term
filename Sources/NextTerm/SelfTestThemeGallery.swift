@@ -39,9 +39,12 @@ extension SelfTest {
             await screenshot(c, suffix: "-themes-\(palette.id)")
             await screenshotParts(c, suffix: "-themes-\(palette.id)")
         }
+        #if DEBUG // its database helpers are a debug build's only
         await themedSelectionChecks(c, root: root)
+        #endif
     }
 
+    #if DEBUG
     /// Selected rows in every theme: a database's grid and its record list, one focused and one not. Both are drawn
     /// in the theme's selection tint with the text keeping its colour, never AppKit's saturated accent fill (dark
     /// text on a strong blue was unreadable in light themes).
@@ -74,6 +77,7 @@ extension SelfTest {
             await screenshot(c, suffix: "-themes-selection-\(palette.id)")
         }
     }
+    #endif
 
     /// One theme's colours against its own paper and bars: text 4.5:1, quiet marks 3:1, the terminal's and the code's.
     static func paletteChecks(_ p: ThemePalette) {
