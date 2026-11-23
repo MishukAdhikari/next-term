@@ -1459,16 +1459,17 @@ extension SelfTest {
     static func secretsRunRefusalChecks(folder: URL, value: String, arguments: [String: Any], before: Set<UUID>) async {
         let requests = SecretRequests.shared
         let store = SecretsStore.shared
-        func tabCount() -> Int { AppDelegate.shared.controllers.flatMap(\.tabs).count }
-        let count = tabCount()
+        // No tab here that wasn't before, by id: a count would drop when a tab run_with_secrets opened above closes by
+        // itself after its command finished well (CommandPaneAutoClose), which it may do in the middle of these checks.
+        func opensNone() -> Bool { AppDelegate.shared.controllers.flatMap(\.tabs).allSatisfy { before.contains($0.id) } }
         let holding = await secretsTool("run_with_secrets", ["secrets": ["TOOL_KEY"], "command": "echo \(value)", "directory": folder.path])
-        check(holding["status"] as? String == "value_in_command" && tabCount() == count && !secretsJSON(holding).contains(value),
+        check(holding["status"] as? String == "value_in_command" && opensNone() && !secretsJSON(holding).contains(value),
               "secrets: a command holding a stored value gets value_in_command, and no tab opens", secretsJSON(holding))
         let unknown = await secretsTool("run_with_secrets", ["secrets": ["NOT_STORED"], "command": "true", "directory": folder.path])
-        check(unknown["status"] as? String == "unknown" && tabCount() == count, "secrets: a name not stored gets unknown, and no tab opens")
+        check(unknown["status"] as? String == "unknown" && opensNone(), "secrets: a name not stored gets unknown, and no tab opens")
         // "\r\n" is one Character: the one-line check goes by scalar, so /bin/sh never gets a second line.
         let twoLines = await secretsTool("run_with_secrets", ["secrets": ["TOOL_KEY"], "command": "true\r\necho second", "directory": folder.path])
-        check(twoLines["status"] as? String == "refused" && tabCount() == count,
+        check(twoLines["status"] as? String == "refused" && opensNone(),
               "secrets: a command with a CRLF in it is refused, and no tab opens", secretsJSON(twoLines))
 
         // The asker's count: ten declines, then limited, with no tab.
@@ -1479,7 +1480,7 @@ extension SelfTest {
             request.panel?.declineButton.performClick(nil)
         }
         let limited = await secretsTool("run_with_secrets", arguments)
-        check(limited["status"] as? String == "limited" && tabCount() == count,
+        check(limited["status"] as? String == "limited" && opensNone(),
               "secrets: with the asker's count reached, run_with_secrets gets limited and opens no tab", secretsJSON(limited))
         requests.resetForSelfTest()
 
@@ -1493,7 +1494,7 @@ extension SelfTest {
             try? store.folder.write(SecretFolder.vaultName, data: foreign)
             await store.load()
             let cant = await secretsTool("run_with_secrets", arguments)
-            check(store.protection == .cantOpen && cant["status"] as? String == "cant_open" && tabCount() == count,
+            check(store.protection == .cantOpen && cant["status"] as? String == "cant_open" && opensNone(),
                   "secrets: with a vault the keyring can't open, run_with_secrets gets cant_open and opens no tab", secretsJSON(cant))
             try? store.folder.write(SecretFolder.vaultName, data: original)
             await store.load()
