@@ -398,8 +398,8 @@ public final class RemoteAccessCalls: @unchecked Sendable { // its state lives u
         case batch
         /// Not a JSON object: 400.
         case invalid
-        /// An `MCP-Protocol-Version` the server does not speak: 400.
-        case badVersion
+        /// An `MCP-Protocol-Version` the server does not speak, as sent (cut to 32 characters), and the method: 400.
+        case badVersion(String, method: String)
 
         /// The status to answer with and no body, or nil for a message the door answers with JSON-RPC.
         public var status: Int? {
@@ -416,7 +416,8 @@ public final class RemoteAccessCalls: @unchecked Sendable { // its state lives u
             case .call, .request, .notification: return nil
             case .batch: return "A JSON-RPC batch: the door reads one message per request."
             case .invalid: return "Not a JSON-RPC message."
-            case .badVersion: return "An MCP-Protocol-Version the door does not speak."
+            case .badVersion(let version, let method):
+                return "An MCP-Protocol-Version the door does not speak: \(version)" + (method.isEmpty ? "." : ", on \(method).")
             }
         }
     }
@@ -427,10 +428,11 @@ public final class RemoteAccessCalls: @unchecked Sendable { // its state lives u
     /// first requests were refused).
     public static func read(_ body: Data, protocolVersion: String?) -> Incoming {
         let unspoken = protocolVersion.map { !MCPServer.supportedVersions.contains($0) } ?? false
-        guard let parsed = try? JSONSerialization.jsonObject(with: body) else { return unspoken ? .badVersion : .invalid }
-        if parsed is [Any] { return unspoken ? .badVersion : .batch }
-        guard let message = parsed as? [String: Any] else { return unspoken ? .badVersion : .invalid }
-        if unspoken, message["method"] as? String != "initialize" { return .badVersion }
+        let bad = { (method: String) in Incoming.badVersion(String((protocolVersion ?? "").prefix(32)), method: String(method.prefix(40))) }
+        guard let parsed = try? JSONSerialization.jsonObject(with: body) else { return unspoken ? bad("") : .invalid }
+        if parsed is [Any] { return unspoken ? bad("") : .batch }
+        guard let message = parsed as? [String: Any] else { return unspoken ? bad("") : .invalid }
+        if unspoken, message["method"] as? String != "initialize" { return bad(message["method"] as? String ?? "") }
         guard let method = message["method"] as? String else { return .notification }
         guard let id = message["id"], !(id is NSNull) else { return .notification }
         guard method == "tools/call" else { return .request(message) }
