@@ -50,6 +50,8 @@ final class LiveChatView: NSView {
     private var shownBudget: (spent: Int?, tokens: Int)?
     private var expanded: Set<String> = []
     private var timer: Timer?
+    /// The window and app notifications that change whether the chat can be seen.
+    private var visibilityObservers: [NSObjectProtocol] = []
     private var shownQuestion: String?
     /// The terminal button: the pane goes back to the agent's own screen.
     var onShowTerminal: (() -> Void)?
@@ -166,19 +168,66 @@ final class LiveChatView: NSView {
 
     static var sizes: ChatTextSizes { ChatTextSizes(base: Double(AppDelegate.shared?.fontSize ?? Theme.defaultFontSize)) }
 
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        super.viewWillMove(toWindow: newWindow)
+        visibilityObservers.forEach(NotificationCenter.default.removeObserver)
+        visibilityObservers = []
+    }
+
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         timer?.invalidate()
         timer = nil
-        guard window != nil else { return }
-        // The tab's state (working, a question) is read from its screen: looked at while the chat shows.
+        guard let window else { return }
+        // Its window minimized, covered or on another Space, or the app hidden: the look stops, and starts again when
+        // the chat can be seen.
+        visibilityObservers = NSWindow.visibilityNotifications.map { name, ofApp in
+            NotificationCenter.default.addObserver(forName: name, object: ofApp ? NSApp : window, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.updateLook() }
+            }
+        }
+        updateLook(catchUp: false)
+        refresh()
+    }
+
+    override func viewDidHide() {
+        super.viewDidHide()
+        updateLook()
+    }
+
+    override func viewDidUnhide() {
+        super.viewDidUnhide()
+        updateLook()
+    }
+
+    deinit {
+        timer?.invalidate()
+        visibilityObservers.forEach(NotificationCenter.default.removeObserver)
+    }
+
+    /// Whether anyone can see the chat: not hidden itself or inside a hidden view, and its window can be seen.
+    private var canBeSeen: Bool {
+        guard let window, !isHiddenOrHasHiddenAncestor else { return false }
+        return window.canBeSeen
+    }
+
+    /// The tab's state (working, a question) is read from its screen: looked at twice a second while the chat can be
+    /// seen, and not at all while it can't. When it shows again, it is read at once (`catchUp`), so it never shows a
+    /// state that is out of date.
+    private func updateLook(catchUp: Bool = true) {
+        guard canBeSeen else {
+            timer?.invalidate()
+            timer = nil
+            return
+        }
+        guard timer == nil else { return }
         let timer = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.refreshState() }
         }
         timer.tolerance = 0.1
         RunLoop.main.add(timer, forMode: .common)
         self.timer = timer
-        refresh()
+        if catchUp { refreshState() }
     }
 
     override func viewDidChangeEffectiveAppearance() {

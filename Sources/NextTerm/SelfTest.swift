@@ -731,6 +731,7 @@ enum SelfTest {
         case "closeWorktree": return await closeWorktreeChecks()
         case "moveTab": return await moveTabChecks() // a tab moved live into another window: same process, output, scrollback, draft
         case "worktreeStrip": return await worktreeStripChecks() // the strip offering Open as Project above an agent's pane in another worktree
+        case "drawing": return await drawingChecks(c) // terminals draw only what can be seen, and background windows at 30 frames a second
         case "parallel":
             await parallelTabsChecks(c, proj: proj)
             await arrivalChecks(c, proj: proj)

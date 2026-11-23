@@ -110,6 +110,7 @@ final class RestoreActions {
         let timer = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.tick() }
         }
+        timer.tolerance = 0.02 // its wakeups may join the system's others
         // The common modes include a modal panel's: a resume does not wait for a dialog to close.
         RunLoop.main.add(timer, forMode: .common)
         self.timer = timer
@@ -403,6 +404,7 @@ final class StartWatcher {
                 self.tick()
             }
         }
+        timer.tolerance = 0.02 // its wakeups may join the system's others
         RunLoop.main.add(timer, forMode: .common)
         self.timer = timer
     }

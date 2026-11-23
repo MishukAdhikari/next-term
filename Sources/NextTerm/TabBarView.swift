@@ -591,6 +591,7 @@ final class TabBarView: NSView, ProjectGlowing {
         let timer = Timer(timeInterval: Self.pointerLooks, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.followPointer() }
         }
+        timer.tolerance = 0.01 // a hundredth of a second: the light still follows the pointer at once
         RunLoop.main.add(timer, forMode: .common)
         pointerWatch = timer
     }

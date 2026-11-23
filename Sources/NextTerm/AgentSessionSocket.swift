@@ -173,7 +173,9 @@ enum AgentSessionSocket {
         report.journal = (arguments["journal"] as? String).flatMap {
             ACPSessionJournal.isJournal($0, socket: MCPControlServer.shared.path) ? $0 : nil
         }
+        let journalBefore = reports[tab.id]?.journal
         reports[tab.id] = report
+        if report.journal != journalBefore { AgentChatWatch.journalReported(tab.id) }
         guard let agentID, let version = report.version else { return nil }
         let stored = versionStore.dictionary(forKey: versionsKey) as? [String: String] ?? [:]
         let seen = AgentSessionVersion.remember(version, for: agentID, in: stored)

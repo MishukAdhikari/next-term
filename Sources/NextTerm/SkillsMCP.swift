@@ -341,7 +341,7 @@ enum SkillsMCP {
     /// While the request is open, notices the asking tab closing.
     static func watchRequester(_ request: Request) {
         guard let tab = request.callerTab else { return }
-        Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { timer in
+        let watch = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { timer in
             MainActor.assumeIsolated {
                 guard request.answer == nil, let window = request.window else { return timer.invalidate() }
                 if !AppDelegate.shared.controllers.flatMap(\.tabs).contains(where: { $0.id == tab }) {
@@ -350,6 +350,7 @@ enum SkillsMCP {
                 }
             }
         }
+        watch.tolerance = 0.5 // its wakeups may join the system's others
     }
 
     // MARK: install

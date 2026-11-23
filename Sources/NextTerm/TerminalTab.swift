@@ -166,6 +166,7 @@ final class NextTermView: LocalProcessTerminalView {
         hasOutput = true
         super.dataReceived(slice: slice) // parse first: OSC marks in this chunk update the status
         outputBytes &+= slice.count
+        WindowTicker.shared.noteOutput() // while idle, a command may have started: the beat looks again
         if sequences != nil { watched(slice) }
         onOutput?()
     }
@@ -311,7 +312,44 @@ final class NextTermView: LocalProcessTerminalView {
 
     override func setNeedsDisplay(_ invalidRect: NSRect) {
         guard mayDraw() else { return }
-        super.setNeedsDisplay(invalidRect)
+        // A tab behind another in its window draws nothing now; the whole of it is drawn when it shows (viewDidUnhide).
+        if isHiddenOrHasHiddenAncestor {
+            drawnWhenShown = true
+            return
+        }
+        guard paced else { return super.setNeedsDisplay(invalidRect) }
+        // A window you aren't typing in, or Next Term not the app in use: its changes are gathered and drawn at most
+        // 30 times a second. What shows in the end is the same; an agent printing 60 times a second costs half.
+        pacedRect = pacedRect.isEmpty ? invalidRect : pacedRect.union(invalidRect)
+        guard !paceQueued else { return }
+        paceQueued = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.pacedFrame) { [weak self] in self?.drawPaced() }
+    }
+
+    /// The paced frame is due: what gathered since the last is drawn, if the terminal can still be seen.
+    private func drawPaced() {
+        paceQueued = false
+        let rect = pacedRect
+        pacedRect = .zero
+        guard !rect.isEmpty, mayDraw() else { return }
+        if isHiddenOrHasHiddenAncestor { drawnWhenShown = true } else { super.setNeedsDisplay(rect) }
+    }
+
+    /// The longest a paced window waits to draw its terminal's changes: 30 frames a second.
+    private static let pacedFrame: TimeInterval = 1.0 / 30
+    private var pacedRect = NSRect.zero
+    private var paceQueued = false
+    /// Changes came while this tab was behind another: it is drawn whole when it shows.
+    private var drawnWhenShown = false
+
+    /// Drawing waits for a paced frame: the window isn't the key window of the app in use.
+    private var paced: Bool { !(NSApp.isActive && window?.isKeyWindow == true) }
+
+    override func viewDidUnhide() {
+        super.viewDidUnhide()
+        guard drawnWhenShown else { return }
+        drawnWhenShown = false
+        needsDisplay = true
     }
 
     /// Asked at each mark, so a window seen again draws its next change even before its notification comes.
@@ -621,6 +659,8 @@ final class NextTermView: LocalProcessTerminalView {
 protocol TerminalTabDelegate: AnyObject {
     func tabDidChange(_ tab: TerminalTab)
     func tabDidExit(_ tab: TerminalTab)
+    /// Only the spinner frame at the start of the program's title turned (AgentTitle.withoutSpinnerFrame).
+    func tabSpinnerTurned(_ tab: TerminalTab)
 }
 
 /// One tab: a shell in a pty, its terminal view and its status. A remote tab runs ssh in the pty instead,
@@ -1877,7 +1917,12 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     }
 
     func setTerminalTitle(source: LocalProcessTerminalView, title: String) {
+        guard title != programTitle else { return } // the same title again: nothing changed
+        // An agent turns a spinner at the start of its title several times a second while it works: when that frame
+        // is all that changed, only the tab strip needs drawing, and only where the frame shows.
+        let frameOnly = programTitle.map { AgentTitle.withoutSpinnerFrame($0) == AgentTitle.withoutSpinnerFrame(title) } ?? false
         programTitle = title
+        if frameOnly { return delegate?.tabSpinnerTurned(self) ?? () }
         matchShownSession()
         delegate?.tabDidChange(self)
     }
