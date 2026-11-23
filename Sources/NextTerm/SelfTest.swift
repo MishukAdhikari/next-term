@@ -737,6 +737,7 @@ enum SelfTest {
         case "mouse": return await mouseReportChecks(c) // right and middle clicks for a program that reads the mouse
         case "remote": return await remoteChecks(c) // servers on the stand-in ssh: tabs, tmux and herdr
         case "mcp": return await mcpChecks(c, proj: proj) // the MCP tools that drive tabs, read files and git
+        case "deletedFiles": return await deletedFileChecks(c, proj: proj) // the sidebar's rows for deleted files and folders
         case "newTerminal": return await newTerminalChecks() // a window with no project: "No project open", no protected place read
         case "cellSnap": return await cellSnapChecks(c) // a terminal's cells follow its window's display (two displays)
         case "projectColor": return await projectColorChecks() // View › Project Color: the glow, worktrees, None, the switch
@@ -2079,7 +2080,8 @@ enum SelfTest {
         check(await wait(8) { row("gone.txt").map { outline.item(atRow: $0) is DeletedEntry } == true && row("olddir") != nil },
               "a deleted file and a deleted folder keep rows where they were")
         if let at = row("gone.txt"), let cell = outline.view(atColumn: 0, row: at, makeIfNecessary: true) as? FileCellView {
-            check(cell.isDeletedRow && cell.statsText == "−3", "struck through, with the lines it had", cell.statsText)
+            check(cell.isDeletedRow && cell.statsText == "−3", "struck through, with the lines it had",
+                  "\(type(of: outline.item(atRow: at)!)) \(cell.statsText)")
             // Its menu: each item a command showing its key.
             let menu = sidebarMenuKeyAudit([(sidebarMenu(c.sidebar, row: at), "gone.txt")])
             check(menu.wrong.isEmpty && menu.titles == ["Show What Was Deleted", "Rollback…", "Copy Path", "Copy Relative Path"],
