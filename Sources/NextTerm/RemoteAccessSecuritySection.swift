@@ -19,6 +19,8 @@ final class RemoteAccessSecuritySection: NSStackView {
     var showConnections: () -> Void = {}
 
     private static var systemFacts: (fileVault: Bool?, firewall: Bool?, read: Date)?
+    /// FileVault and the firewall as last read here, for MCP's remote_access_guide; nil until Settings read them.
+    static var lastSystemFacts: (fileVault: Bool?, firewall: Bool?)? { systemFacts.map { ($0.fileVault, $0.firewall) } }
     private var actions: [ObjectIdentifier: RemoteAccessChecklist.Action] = [:]
 
     init() {
