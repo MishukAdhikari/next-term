@@ -46,7 +46,18 @@ enum Theme {
     /// A part's colour (`UIToken`) in the palette its view is drawn in. A part the Mac draws in Next Term's own looks
     /// (a selected row) is the Mac's colour there, `system`.
     static func ui(_ token: UIToken, system: NSColor = .selectedContentBackgroundColor) -> NSColor {
-        NSColor(name: nil) { appearance in palette(for: appearance).ui(token).map { NSColor(hex: $0) } ?? system }
+        NSColor(name: nil) { appearance in palette(for: appearance).ui(token).map(colour) ?? system }
+    }
+
+    /// A token's value as a colour. Pure white and pure black are the Mac's own `white` and `black`, as the literals
+    /// they replaced were: at an alpha, an sRGB white blends a step apart from the Mac's white on screen, and Next
+    /// Term Dark must not move by one pixel.
+    static func colour(_ rgb: UInt32) -> NSColor {
+        switch rgb {
+        case 0xFFFFFF: .white
+        case 0x000000: .black
+        default: NSColor(hex: rgb)
+        }
     }
 
     /// A colour the Mac names by its purpose (a label, a separator, red for a failure), on the window's own paper: in
@@ -144,7 +155,7 @@ enum Theme {
     static func overlay(_ alpha: CGFloat) -> NSColor {
         NSColor(name: nil) { appearance in
             let palette = palette(for: appearance)
-            return NSColor(hex: palette.ui(.ink) ?? 0).withAlphaComponent(palette.isDark ? alpha : alpha * 0.8)
+            return colour(palette.ui(.ink) ?? 0).withAlphaComponent(palette.isDark ? alpha : alpha * 0.8)
         }
     }
 
