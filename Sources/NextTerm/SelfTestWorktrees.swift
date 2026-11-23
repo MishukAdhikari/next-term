@@ -212,7 +212,7 @@ extension SelfTest {
                 check(await wait(30) { worktreeWindow(path) != nil } && sh(path, "rev-parse", "--abbrev-ref", "HEAD") == "feat/aichat",
                       "worktrees: Create makes ~/Code/xCloud-wt-aichat2 (AE2)", sh(path, "rev-parse", "--abbrev-ref", "HEAD"))
                 made.append(path)
-                worktreeWindow(path)?.window?.performClose(nil)
+                worktreeWindow(path)?.window?.close() // tidying up: a person's close now asks about the worktree
             }
         }
         GitToast.dismiss()
@@ -235,7 +235,7 @@ extension SelfTest {
                           && sh(path, "rev-parse", "--abbrev-ref", "@{upstream}") == "origin/rakib/new-panel" && window.attachedSheet == nil,
                           "worktrees: the local rakib/new-panel tracks origin/rakib/new-panel, without another question (AE4)",
                           sh(path, "rev-parse", "--abbrev-ref", "@{upstream}"))
-                    worktreeWindow(path)?.window?.performClose(nil)
+                    worktreeWindow(path)?.window?.close() // tidying up: a person's close now asks about the worktree
                 }
             }
         } else {
@@ -272,7 +272,7 @@ extension SelfTest {
                 check(read(path + "/.env") == "SECRET=1\n" && !fm.fileExists(atPath: path + "/debug.log") && sh(repo, "diff", "--stat") == changes,
                       "worktrees: the ignored .env it lists is copied, and nothing else (AE7)",
                       ((try? fm.contentsOfDirectory(atPath: path)) ?? []).sorted().joined(separator: ", "))
-                worktreeWindow(path)?.window?.performClose(nil)
+                worktreeWindow(path)?.window?.close() // tidying up: a person's close now asks about the worktree
             }
         }
         try? fm.removeItem(atPath: repo + "/.worktreeinclude")
@@ -326,7 +326,7 @@ extension SelfTest {
                     _ = await wait(5) { GitToast.text?.contains("ignored item") == true }
                     check(GitToast.text?.contains("left out") == true && GitToast.text?.contains("php artisan storage:link") == true,
                           "worktrees: the notice counts what was copied and left out, and names storage:link (AE12)", GitToast.text ?? "no notice")
-                    worktreeWindow(path)?.window?.performClose(nil)
+                    worktreeWindow(path)?.window?.close() // tidying up: a person's close now asks about the worktree
                     window.makeKeyAndOrderFront(nil)
                     // Remembered: the next sheet in this repository has Copy chosen.
                     actions.openInNewWorktree(.branch("fix/7050-pr"))
@@ -388,7 +388,7 @@ extension SelfTest {
                     let cell = node.flatMap { sidebar.outline.view(atColumn: 0, row: sidebar.outline.row(forItem: $0), makeIfNecessary: true) as? FileCellView }
                     check(cell?.showsLinkMark == true && cell?.tipText.contains("Linked to " + canonicalPath(repo) + "/build") == true,
                           "worktrees: the sidebar marks the link and says where it leads (AE13)", cell?.tipText ?? "no row")
-                    linked.window?.performClose(nil)
+                    linked.window?.close()
                     _ = await wait(5) { worktreeWindow(path) == nil }
                 }
                 window.makeKeyAndOrderFront(nil)
@@ -435,7 +435,7 @@ extension SelfTest {
                 check(shown && hooked.map(sheetText)?.contains("hook says no") == true,
                       "worktrees: when a hook fails after the folder is made, its window opens with the hook's output (AE8)", hooked.map(sheetText) ?? "no window")
                 if let hooked { await endSheets(over: hooked) }
-                hooked?.performClose(nil)
+                hooked?.close()
             }
         }
         try? fm.removeItem(atPath: hooks + "/post-checkout")
@@ -496,7 +496,7 @@ extension SelfTest {
         // AE11: Open in New Window twice on a row: one window.
         _ = await rows("")
         if let item = menu("worktree xCloud-wt-7027-sso")?.items.first(where: { $0.title == "Open in New Window" }) {
-            worktreeWindow(sibling)?.window?.performClose(nil)
+            worktreeWindow(sibling)?.window?.close()
             _ = await wait(5) { worktreeWindow(sibling) == nil }
             run(item)
             _ = await wait(10) { worktreeWindow(sibling) != nil }
@@ -520,7 +520,7 @@ extension SelfTest {
               sheetText(window))
         _ = await press("Go There")
         check(await wait(5) { NSApp.keyWindow === worktreeWindow(sibling)?.window }, "worktrees: Go There brings that window forward (AE9)")
-        worktreeWindow(sibling)?.window?.performClose(nil)
+        worktreeWindow(sibling)?.window?.close()
         _ = await wait(5) { worktreeWindow(sibling) == nil }
         window.makeKeyAndOrderFront(nil)
         _ = await rows("")
@@ -543,7 +543,7 @@ extension SelfTest {
         for tab in agentTabs { tab.view.send(txt: "\u{03}") }
         _ = await wait(5) { agentTabs.allSatisfy { !$0.status.running } }
         agentTabs = []
-        for path in made { worktreeWindow(path)?.window?.performClose(nil) }
+        for path in made { worktreeWindow(path)?.window?.close() // tidying up: a person's close now asks about the worktree }
         holder.window?.performClose(nil)
         _ = await wait(5) { !app.controllers.contains { $0 === holder } }
         for path in made + [code + "/xcloud-wt-aichat"] { sh(repo, "worktree", "remove", "--force", path) }
