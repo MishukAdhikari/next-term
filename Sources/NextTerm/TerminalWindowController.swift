@@ -1154,12 +1154,13 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     /// A command or an agent runs in one of this window's tabs: the beat watches it (WindowTicker).
     var runsSomething: Bool { tabs.contains { $0.status.running } }
 
-    /// One beat of the shared clock (WindowTicker), `interval` seconds after the last.
-    func tick(interval: TimeInterval) {
+    /// One beat of the shared clock (WindowTicker), `interval` seconds after the last; `prompted` by output while
+    /// idle, it looks at each tab's foreground process at once (a command may have started there).
+    func tick(interval: TimeInterval, prompted: Bool = false) {
         guard !hasClosed else { return }
         tickCount += 1
         let now = TerminalTab.now
-        let half = now - choresRan.half >= 0.45, second = now - choresRan.second >= 0.95
+        let half = prompted || now - choresRan.half >= 0.45, second = now - choresRan.second >= 0.95
         if half { choresRan.half = now }
         if second { choresRan.second = now }
         refreshVisibility()

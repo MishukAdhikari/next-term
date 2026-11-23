@@ -30,13 +30,17 @@ final class WindowTicker {
         DispatchQueue.main.async { [weak self] in self?.retune() }
     }
 
-    /// Output came in somewhere: while idle, the pace is looked at again (a command may have started).
+    /// Output came in somewhere while idle: a command may have started where the shell doesn't say so, and only a
+    /// beat's look at the tab's foreground process sees it. One beat comes a quarter of a second later, as it would
+    /// at the watching pace, and the pace is looked at again after it.
     func noteOutput() {
         guard pace == .idle || timer == nil, !retuneQueued else { return }
         retuneQueued = true
-        DispatchQueue.main.async { [weak self] in
-            self?.retuneQueued = false
-            self?.retune()
+        DispatchQueue.main.asyncAfter(deadline: .now() + Pace.watching.rawValue) { [weak self] in
+            guard let self else { return }
+            self.retuneQueued = false
+            guard !AppDelegate.shared.controllers.isEmpty else { return self.stop() }
+            self.fire(prompted: true)
         }
     }
 
@@ -60,9 +64,11 @@ final class WindowTicker {
         pace = nil
     }
 
-    private func fire() {
+    /// One beat for every window; `prompted` by output (`noteOutput`), it looks at foreground processes whenever the
+    /// last look was.
+    private func fire(prompted: Bool = false) {
         let interval = pace?.rawValue ?? Pace.watching.rawValue
-        for controller in AppDelegate.shared.controllers { controller.tick(interval: interval) }
+        for controller in AppDelegate.shared.controllers { controller.tick(interval: interval, prompted: prompted) }
         retune()
     }
 }
