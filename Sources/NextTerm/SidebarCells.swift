@@ -693,7 +693,7 @@ final class FileCellView: NSTableCellView {
         if isRoot {
             let home = canonicalPath(NSHomeDirectory())
             let shown = node.path == home || node.path.hasPrefix(home + "/") ? "~" + node.path.dropFirst(home.count) : node.path
-            let text = NSMutableAttributedString(string: node.name, attributes: [
+            let text = NSMutableAttributedString(string: CellText.line(node.name), attributes: [
                 .font: NSFont.systemFont(ofSize: 12.5, weight: .semibold), .foregroundColor: Theme.text,
             ])
             text.append(Typography.gap(7, font: .systemFont(ofSize: 12)))
@@ -703,7 +703,9 @@ final class FileCellView: NSTableCellView {
             // The project name stays whole; its path gives way at the end.
             setName(Typography.truncating(text, .byTruncatingTail))
         } else {
-            setName(NSAttributedString(string: node.name, attributes: [
+            // One line whatever the name holds: a line break or a control character shows as its mark (⏎, ␕), as a
+            // database cell's does, so a name can never spill over the row below or hide its own end.
+            setName(NSAttributedString(string: CellText.line(node.name), attributes: [
                 .font: NSFont.systemFont(ofSize: 12.5), .foregroundColor: color,
                 .paragraphStyle: Typography.paragraph(.byTruncatingMiddle),
             ]))
@@ -757,7 +759,7 @@ final class FileCellView: NSTableCellView {
         icon.image = FileIcons.image(forDeleted: entry.name, parent: entry.url.deletingLastPathComponent().lastPathComponent,
                                      isDirectory: entry.isDirectory, expanded: expanded)
         icon.alphaValue = 0.45
-        setName(NSAttributedString(string: entry.name, attributes: [
+        setName(NSAttributedString(string: CellText.line(entry.name), attributes: [
             .font: NSFont.systemFont(ofSize: 12.5), .foregroundColor: Theme.linesRemoved,
             .strikethroughStyle: NSUnderlineStyle.single.rawValue,
             .paragraphStyle: Typography.paragraph(.byTruncatingMiddle),

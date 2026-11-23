@@ -477,6 +477,33 @@ enum SelfTest {
         // … a dropped file name cannot run a command, …
         let trap = dir.appendingPathComponent("notes\u{15} touch PWNED\r.txt")
         try? Data().write(to: trap)
+        // The sidebar shows such a name on one line, its control characters as marks, as a database cell does: a copy in
+        // the folder the sidebar shows (the trap itself is outside it), revealed there.
+        let shown = (c.sidebar.root?.url ?? dir).appendingPathComponent(trap.lastPathComponent)
+        try? Data().write(to: shown)
+        c.sidebar.reloadAll()
+        c.sidebar.reveal(shown.path)
+        func trapRow() -> FileCellView? {
+            let outline = c.sidebar.outline
+            guard let row = (0..<outline.numberOfRows).first(where: { (outline.item(atRow: $0) as? FileNode)?.name == shown.lastPathComponent })
+            else { return nil }
+            return outline.view(atColumn: 0, row: row, makeIfNecessary: true) as? FileCellView
+        }
+        if await wait(5, { trapRow() != nil }), let cell = trapRow() {
+            check(cell.renameText == "notes␕ touch PWNED ⏎ .txt", "a file name with control characters shows on one line, as marks", cell.renameText)
+        } else {
+            check(false, "a file name with control characters shows on one line, as marks", "the sidebar didn't list it")
+        }
+        try? FileManager.default.removeItem(at: shown) // gone again before the sidebar's own checks
+        c.sidebar.reloadAll()
+        // … and so does its tab in the editor.
+        if c.editorArea.open(trap, focus: false) == .opened {
+            let titles = c.editorArea.tabBar.items.map(\.title)
+            check(titles.contains("notes␕ touch PWNED ⏎ .txt"), "a file name with control characters shows on one line in its editor tab", titles.joined(separator: " | "))
+            c.editorArea.closeAll()
+        } else {
+            note("hostile file name tab: the editor didn't open it, so its tab title wasn't checked")
+        }
         second.view.send(txt: "cd \(ShellQuote.quote(dir.path))\r")
         _ = await wait(3) { !second.status.running }
         second.view.typeIn("ls -l " + ShellQuote.quote(trap.path))

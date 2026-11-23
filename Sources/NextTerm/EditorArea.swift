@@ -768,11 +768,12 @@ final class EditorArea: NSView, TabBarViewDelegate {
         let names = Dictionary(grouping: paths, by: { ($0 as NSString).lastPathComponent })
         func title(_ url: URL) -> String {
             let name = url.lastPathComponent
-            return (names[name]?.count ?? 0) > 1 ? name + " — " + url.deletingLastPathComponent().lastPathComponent : name
+            // One line in the tab bar, marks for any line break or control character in a name.
+            return CellText.line((names[name]?.count ?? 0) > 1 ? name + " — " + url.deletingLastPathComponent().lastPathComponent : name)
         }
         var items = panes.map { pane -> TabBarItem in
             if let diff = pane as? DiffPane {
-                return TabBarItem(title: diff.title, state: .idle, tooltip: diff.tooltip, accessibilityStatus: "changes",
+                return TabBarItem(title: CellText.line(diff.title), state: .idle, tooltip: diff.tooltip, accessibilityStatus: "changes",
                                   icon: FileIcons.icon(for: URL(fileURLWithPath: diff.absolutePath), size: 16), modified: false)
             }
             if let log = pane as? GitLogPane {
@@ -794,7 +795,7 @@ final class EditorArea: NSView, TabBarViewDelegate {
             }
             if let database = pane as? DatabasePane {
                 let state = database.isEditingAllowed ? "editing allowed" : "read-only"
-                return TabBarItem(title: database.name, state: .idle, tooltip: RecentProjects.abbreviate(database.path) + " (SQLite, \(state))",
+                return TabBarItem(title: CellText.line(database.name), state: .idle, tooltip: RecentProjects.abbreviate(database.path) + " (SQLite, \(state))",
                                   accessibilityStatus: "database, \(state)" + (database.hasDraft ? ", unsaved change" : ""),
                                   icon: FileIcons.icon(for: database.url, size: 16), modified: database.hasDraft)
             }
