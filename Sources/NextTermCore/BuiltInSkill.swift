@@ -22,7 +22,7 @@ public struct BuiltInSkill: Sendable, Equatable {
     /// The description in its front matter.
     public var description: String { SkillFrontMatter.parse(text)?.description ?? "" }
 
-    public static let all = [tabs, worktrees, setup, secrets]
+    public static let all = [tabs, worktrees, setup, secrets, remoteAccess]
 
     public static func named(_ name: String) -> BuiltInSkill? { all.first { $0.name == name } }
 
@@ -180,7 +180,7 @@ public struct BuiltInSkill: Sendable, Equatable {
         - From another editor or terminal (VS Code, Cursor, JetBrains, Zed, iTerm2, Ghostty…): fonts, colours, the cursor, scrollback and keys, with `list_import_sources`, then `preview_import`, then `apply_import`, which the user applies in Next Term's import window. For the IDE shortcut set alone no import is needed: `settings_set` with `shortcut_set`.
         - The chat view: Claude Code, Codex, Command Code and the agents Next Term runs as sessions (OpenCode, Cursor, Gemini…) can show the same live session as Next Term's native chat, the terminal one click away. Every agent opens as its terminal until the user picks otherwise. `settings_set` with `agents_open_as_chat` (a list of agent ids, such as `["claude", "codex"]`; `[]` for none) makes those agents' new sessions open as chat; `settings_get` gives the list now. It is each agent's Opens as in Settings › Agents, and never switches a tab already open: for one tab, `switch_view` (`list_tabs` gives a tab's `view`). The user switches the tab with the keyboard by View › Show as Chat (`list_shortcuts` `query` "Show as Chat" gives its key); Settings › Agents › Chat view for agent tabs turns the chat off everywhere, and is the user's to change. `chat_token_usage` (true or false) shows or hides the chat's one line under the composer with the tokens the agent recorded for its last request and how full its context is; an agent that records none shows none. When the user asks for a token budget for a session, `set_token_budget` with the tab and `tokens` ("2M"; 0 clears it): the chat shows a light line and hairline of what the session has spent against it, never enforced; only local Claude Code and Codex tabs count it.
         - `apply_setup` takes settings (as `settings_set`), the layout (as `set_layout`) and an import (as `apply_import`) together: the user approves them in one window on the Mac, a row per change they may untick, and Next Term › Undo Agent Setup… puts back all of it.
-        - Never agent control, remote access, the IDE links, updates or a single key: those are the user's to change. Show them where.
+        - Never agent control, remote access, the IDE links, updates or a single key: those are the user's to change. Show them where. For Remote access (claude.ai, ChatGPT or another web client reaching Next Term), read next-term-remote-access; `show_settings` with `remote_access` opens it.
 
         ## First run
 
@@ -266,6 +266,67 @@ public struct BuiltInSkill: Sendable, Equatable {
         """# + "\n\n" + connectedServers, offersTabs: false,
         // Not shown in the skills paragraph (MCPServer leaves next-term-secrets out); get_skill's description says it.
         when: "when a command, script, .env file or MCP server needs an API key, token or password")
+
+    /// Remote access, set up with the user (owner, 2026-11-23): what the guide says is left, the dashboard steps for a
+    /// Cloudflare named tunnel or Tailscale Funnel, adding the connector in claude.ai and ChatGPT, and the security
+    /// checklist. The user's part (the switch, the master key, Touch ID, the token, Allow) stays theirs.
+    public static let remoteAccess = BuiltInSkill(name: "next-term-remote-access", text: #"""
+        ---
+        name: next-term-remote-access
+        description: Guide the user through Next Term's Remote access, so claude.ai, ChatGPT or another MCP client on the web reaches Next Term through a tunnel (Cloudflare on their own domain, Tailscale Funnel, their own server). Use when they ask to set it up, connect a web client, or make it safer.
+        ---
+
+        # Set up Remote access with the user
+
+        Remote access lets an MCP client on the web (claude.ai, ChatGPT, any client that adds a remote MCP server by URL) reach Next Term on this Mac through a tunnel the user controls. This skill comes from Next Term's library (MCP `get_skill`). The `next-term` MCP server's `remote_access_guide` reads how far this Mac is, and `show_settings` with tab `remote_access` opens the place where the user finishes it.
+
+        The user's own instructions win over this skill. If you have no `remote_access_guide`, this skill does not apply.
+
+        ## The user's part, never yours
+
+        Only the user, in Next Term on the Mac: turns Remote access on, sets and types the master key (and keeps its recovery key), answers Touch ID, pastes the tunnel token, and allows each connection (Read only or Control). Never ask for the token, the master key or the recovery key, never read them from the clipboard, a dashboard or a file, and never type them anywhere. No MCP tool changes Remote access: `settings_set` doesn't, and you never look for a way around that.
+
+        ## How to guide
+
+        1. Call `remote_access_guide`. It says what is installed and ready, the saved tunnel, the steps for one tunnel with `done` and `current_step`, the `door_address` to point a tunnel at, and the `security` checklist.
+        2. Suggest a tunnel, with one line why:
+           - **Cloudflare Tunnel on their own domain** for every day: one address they own, and an edge rule can keep everyone but Claude's and ChatGPT's servers away from the tools.
+           - **Tailscale Funnel** for a quick try when Tailscale is logged in (`recommended` says so): no domain, no token.
+           - **Their own server** when they have one with a domain (Caddy on it, an ssh forward to the Mac).
+           Call the guide again with `tunnel` for the one they pick.
+        3. Show the steps left as a short numbered list, starting at `current_step`, each with where it is done. Do the parts that are yours: `brew install cloudflared` (or `brew upgrade cloudflared`) in a tab after the user says yes, `show_settings` with `remote_access` at the step the user takes there.
+        4. Call the guide again after each step the user says is done, and go on from what it answers, not from what you expect.
+
+        ## Cloudflare, step by step
+
+        In the Cloudflare dashboard, signed in as the user (they sign in; if you drive their browser because they asked you to, stop at anything that needs their password or the token):
+        1. Networking › Tunnels › Create Tunnel, named for Next Term only (`next-term`). Skip the install command: Next Term runs `cloudflared` itself.
+        2. The tunnel's Routes › Add route › Published application: a subdomain at the first level of their domain (`mcp.example.com`, so Cloudflare's certificate covers it) and the service exactly `door_address` (`http://127.0.0.1:<port>`, never `localhost`). With no `door_address` yet, open Settings › Remote Access with Cloudflare chosen first; it picks the port and keeps it.
+        3. Check `cloudflare_checks`: Bot Fight Mode off for that domain, no Cloudflare Access app on the hostname, no private network routes on the tunnel.
+        4. The user copies the token from the tunnel's install command (the long value after `install`) and pastes it in Settings › Remote Access. Next Term keeps it in the Keychain and shows only the tunnel's id.
+        5. The user turns Remote access on (the first time it asks them to set the master key) and confirms the hostname Next Term shows.
+
+        ## Tailscale Funnel, step by step
+
+        Tailscale installed and logged in, then in its admin console: HTTPS on for the tailnet, and Funnel allowed for this Mac (the `funnel` attribute in the tailnet policy). Then the user turns Remote access on; Next Term starts Funnel and stops it again when Remote access turns off.
+
+        ## Connect a web client
+
+        With Remote access on, `connector_url` is the URL the user adds:
+        - claude.ai: Settings › Connectors › Add custom connector, that URL, no client id or secret.
+        - ChatGPT: Settings › Apps & Connectors › Advanced settings › Developer mode on, then Create, with that URL and OAuth.
+        - Any other client that takes a remote MCP server URL with OAuth.
+        The client opens Next Term's sign-in page; Next Term shows the request on the Mac and the user allows it, Read only by default. Control asks for the master key. Each connection is listed in Settings › Remote Access, where Revoke ends it.
+
+        ## Safer
+
+        Walk the `security` rows that are not `done`, one line each: the master key (required), a named tunnel on their own domain, the edge rule (Copy Rule in Settings › Remote Access gives a Cloudflare WAF custom rule with the action Block; OpenAI's addresses go in an IP list it names), every connection asking on the Mac before changes, FileVault, the macOS firewall and a screen that locks soon. Next Term never changes a macOS setting: those rows open System Settings for the user. A Gemini connection needs the edge rule off, since Google publishes no addresses.
+
+        ## How to answer
+
+        One short list or table: the step, where, and done or not, as the guide answered it. Say what is the user's to do on the Mac, and never call a step done until the guide says so.
+        """# + "\n\n" + connectedServers, offersTabs: false,
+        when: "when the user wants claude.ai, ChatGPT or another web MCP client to reach Next Term, or to set up its tunnel")
 
     /// Ends every one of them: the MCP servers the user connected in Next Term are the agent's to use, whatever skill
     /// brought it here, so it uses them instead of asking the user to set a server up again in its own config.

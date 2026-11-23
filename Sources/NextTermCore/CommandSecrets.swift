@@ -263,8 +263,10 @@ public enum CommandSecrets {
         hereDocument, extraHeader, header,
     ]
 
-    static func apply(_ rule: Rule, to text: inout String, complete: inout Bool) {
-        _ = MCPRedaction.replace(rule.expression, in: &text, complete: &complete) { (match: NSTextCheckingResult, ns: NSString) -> String? in
+    /// Masks what `rule` finds in `text`, and says how many it masked (the remote door counts them).
+    @discardableResult
+    static func apply(_ rule: Rule, to text: inout String, complete: inout Bool) -> Int {
+        MCPRedaction.replace(rule.expression, in: &text, complete: &complete) { (match: NSTextCheckingResult, ns: NSString) -> String? in
             let taken = (1..<match.numberOfRanges).filter { (group: Int) -> Bool in match.range(at: group).location != NSNotFound }
             guard let last = taken.last else { return nil }
             let range = match.range(at: last)

@@ -51,11 +51,12 @@ public enum MCPServer {
     /// Right after Secrets' first line when the agent runs in a Next Term tab: each of Next Term's own skills offered
     /// (BuiltInSkill.offered), with when to read it; get_skill gives the rules. next-term-tabs leads, while Settings ›
     /// Editor › "Agents offer to run parallel work in tabs" is on. next-term-secrets is left out: the first line already
-    /// tells every agent when to look in Secrets, and the 2,048 characters have no room for it. Since Secrets' line went
+    /// tells every agent when to look in Secrets, and the 2,048 characters have no room for it. next-term-remote-access
+    /// too: remote_access_guide's description names it, and it is needed only while Remote access is set up. Since Secrets' line went
     /// first (2026-10-31), the paragraph no longer ends within the first 512 characters: Codex shows a deferred server's
     /// first line, and that line is the one about keys.
     public static func skillsParagraph(offeringTabs: Bool) -> String {
-        let offered = BuiltInSkill.offered(tabs: offeringTabs).filter { $0 != .secrets }.map { $0.name + " " + $0.when }
+        let offered = BuiltInSkill.offered(tabs: offeringTabs).filter { $0 != .secrets && $0 != .remoteAccess }.map { $0.name + " " + $0.when }
         return "This agent runs in a Next Term tab. Read get_skill " + offered.joined(separator: "; ") + ". Not in a tab with opened_by."
     }
 
@@ -288,11 +289,11 @@ public enum MCPServer {
              inputSchema: #"{"type": "object", "properties": {\#(hostRef), "directory": {"type": "string", "description": "Folder on the host. Default: the host's folder."}, "diff": {"type": "boolean", "description": "Include the diff. Default true."}, "max_bytes": {"type": "integer", "minimum": 1000, "maximum": 2000000, "description": "Longest diff to return. Default 200000."}}, "required": ["host"], "additionalProperties": false}"#,
              readOnly: false, destructive: true, idempotent: true, timeout: 60, openWorld: true),
         Tool(name: "list_skills", title: "List agent skills",
-             description: "Lists the agent skills you can use here, found as your agent finds them: the project's (.agents/skills, .claude/skills, .codex/skills, .commandcode/skills, .opencode/skills in your folder and each above it to the repository's top), the user's (the same in the home folder, OpenCode's in ~/.config/opencode/skills, with which of Claude Code, Codex, Command Code and OpenCode loads each, its source and updates), and Next Term's own (next-term-tabs: parallel work in tabs; next-term-worktrees: going on in a worktree the project has; next-term-setup: changing Next Term for the user; next-term-secrets: using the user's keys by name). One entry a name, by your agent's rule for duplicates (also: the other copies). Each has name, description, scope, place, and native: your agent loads it itself. get_skill gives the others' instructions.",
+             description: "Lists the agent skills you can use here, found as your agent finds them: the project's (.agents/skills, .claude/skills, .codex/skills, .commandcode/skills, .opencode/skills in your folder and each above it to the repository's top), the user's (the same in the home folder, OpenCode's in ~/.config/opencode/skills, with which of Claude Code, Codex, Command Code and OpenCode loads each, its source and updates), and Next Term's own (next-term-tabs: parallel work in tabs; next-term-worktrees: going on in a worktree the project has; next-term-setup: changing Next Term for the user; next-term-secrets: using the user's keys by name; next-term-remote-access: setting up Remote access with the user). One entry a name, by your agent's rule for duplicates (also: the other copies). Each has name, description, scope, place, and native: your agent loads it itself. get_skill gives the others' instructions.",
              inputSchema: #"{"type": "object", "properties": {"project": {"type": "string", "description": "A folder in an open project. Default: your tab's folder."}}, "additionalProperties": false}"#,
              readOnly: true, destructive: false, idempotent: true, timeout: 15),
         Tool(name: "get_skill", title: "Get a skill",
-             description: "A skill's instructions (its SKILL.md), its folder and its other files, from Next Term's library: the project's skills, the user's and Next Term's own, the copy your agent's rule picks; works for any agent. Read one when its description fits the task and your agent doesn't load it itself (list_skills: native false). Read Next Term's next-term-tabs before running work in parallel in Next Term tabs, next-term-worktrees when the user pastes a repo, branch or PR the project has a worktree or branch for, next-term-setup before changing Next Term for the user, and next-term-secrets when something needs an API key, token or password.",
+             description: "A skill's instructions (its SKILL.md), its folder and its other files, from Next Term's library: the project's skills, the user's and Next Term's own, the copy your agent's rule picks; works for any agent. Read one when its description fits the task and your agent doesn't load it itself (list_skills: native false). Read Next Term's next-term-tabs before running work in parallel in Next Term tabs, next-term-worktrees when the user pastes a repo, branch or PR the project has a worktree or branch for, next-term-setup before changing Next Term for the user, next-term-secrets when something needs an API key, token or password, and next-term-remote-access when the user wants a web client such as claude.ai or ChatGPT to reach Next Term.",
              inputSchema: #"{"type": "object", "properties": {"name": {"type": "string", "description": "The skill's name, as list_skills gives it."}, "scope": {"type": "string", "enum": ["project", "personal", "next-term"], "description": "That scope's copy instead of the one your agent's rule picks."}, "project": {"type": "string", "description": "A folder in an open project. Default: your tab's folder."}}, "required": ["name"], "additionalProperties": false}"#,
              readOnly: true, destructive: false, idempotent: true, timeout: 15),
         Tool(name: "list_shortcuts", title: "List keyboard shortcuts",
@@ -300,6 +301,10 @@ public enum MCPServer {
              inputSchema: #"{"type": "object", "properties": {"query": {"type": "string", "description": "Words in the command's title or menu path (\"split\", \"terminal position\"), or a key such as ⌘T. Default: every command."}}, "additionalProperties": false}"#,
              readOnly: true, destructive: false, idempotent: true, timeout: 15),
         showSettings,
+        Tool(name: "remote_access_guide", title: "Guide Remote access setup",
+             description: "How far this Mac is in setting up Remote access, which lets claude.ai, ChatGPT and other MCP clients on the web reach Next Term through a tunnel, and the steps left, as Settings › Remote Access's guide shows them. Read-only: it turns nothing on. Answers on and status; tunnel (the saved one), recommended (the tunnel ready now) and why; tunnels (funnel, cloudflare, own_server, advanced: label, ready, needs, traffic); guide_for, steps (title, detail, done) and current_step for one tunnel (tunnel, else the saved one, else the recommended one, else cloudflare); door_address (the address to point a Cloudflare route or your own tunnel at) or a note when no port is picked yet; cloudflare_checks; host and connector_url (what the user adds in claude.ai or ChatGPT); security, the checklist (master key, own domain, edge rule, asks before changes, FileVault, firewall, screen lock: done, suggested or not_checked) and can_turn_on; users_part, what only the user does. Read get_skill next-term-remote-access first.",
+             inputSchema: #"{"type": "object", "properties": {"tunnel": {"type": "string", "enum": ["funnel", "cloudflare", "own_server", "advanced"], "description": "The tunnel to give the steps for. Default: the saved one, else the one ready now, else cloudflare."}}, "additionalProperties": false}"#,
+             readOnly: true, destructive: false, idempotent: true, timeout: 20),
         Tool(name: "list_agent_clis", title: "List the coding agents' CLIs",
              description: "The coding agents' command-line tools on this Mac, as Settings › Agents shows them: each one's id, name, path (the copy a shell runs first, and other_copies after it), version, installed_by (npm, pnpm, Yarn, Bun, Volta, Homebrew, uv, pipx, Go, Own installer, npx or Unknown), latest (as last checked; Settings › Agents checks again) with update_available, updates_itself (true, false or notifies, and its_own_switch), auto_update (off, daily, weekly, or not offered), update_command, and a note when Next Term can't update it (an administrator's folder: it never uses sudo). Read-only: changing a schedule or updating is the user's, in Settings › Agents (show_settings with tab agents). all: also the agents not installed.",
              inputSchema: #"{"type": "object", "properties": {"all": {"type": "boolean", "description": "Also list the agents not installed. Default false."}}, "additionalProperties": false}"#,
@@ -327,9 +332,12 @@ public enum MCPServer {
         let schema = #"{"type": "object", "properties": {"tab": {"type": "string", "enum": ["# + tabs.map { "\"\($0)\"" }.joined(separator: ", ")
             + #"], "description": "The Settings tab."}}, "required": ["tab"], "additionalProperties": false}"#
         return Tool(name: "show_settings", title: "Show Settings",
-                    description: "Opens Next Term's Settings at a tab, in front of the user, for what agents don't change themselves: general, editor, terminal, notifications, keys (Keyboard Shortcuts), import, \(named) (where the todo folder is) or secrets. It changes no setting (settings_set and set_layout change the ones agents may). front is false when Next Term isn't the app in front: its Dock icon bounces instead.",
+                    description: "Opens Next Term's Settings at a tab, in front of the user, for what agents don't change themselves: general, editor, terminal, notifications, keys (Keyboard Shortcuts), import, \(named) (where the todo folder is), secrets or remote_access (Remote Access: the tunnel, the master key, the connections; remote_access_guide says what to do there). It changes no setting (settings_set and set_layout change the ones agents may). front is false when Next Term isn't the app in front: its Dock icon bounces instead.",
                     inputSchema: schema, readOnly: false, destructive: false, idempotent: true, timeout: 15)
     }
+
+    /// The `tools/list` entries for these tools (the remote door lists only what a connection's options admit).
+    static func listing(of offered: [Tool]) -> [[String: Any]] { listing(offered) }
 
     static func listing(_ listed: [Tool] = tools) -> [[String: Any]] {
         listed.map { tool in
@@ -377,6 +385,16 @@ public enum MCPServer {
     public static func respond(to message: [String: Any], version: String, instructions said: String = instructions,
                                extra: [Tool] = [], callExtra: (_ name: String, _ arguments: [String: Any]) -> [String: Any] = { _, _ in [:] },
                                call: (_ name: String, _ arguments: [String: Any]) -> CallResult) -> [String: Any]? {
+        respond(to: message, version: version, tools: tools, instructions: said, listChanged: false, extra: extra, callExtra: callExtra, call: call)
+    }
+
+    /// The same, offering only `offered` with these instructions: a name outside `offered` is an unknown tool
+    /// and never reaches `call`. The remote door passes a connection's tools and `listChanged: true`, and no `extra`:
+    /// the MCP hub's catalog is never offered remotely.
+    public static func respond(to message: [String: Any], version: String, tools offered: [Tool],
+                               instructions text: String, listChanged: Bool,
+                               extra: [Tool] = [], callExtra: (_ name: String, _ arguments: [String: Any]) -> [String: Any] = { _, _ in [:] },
+                               call: (_ name: String, _ arguments: [String: Any]) -> CallResult) -> [String: Any]? {
         guard let method = message["method"] as? String else { return nil } // a response to us: none expected
         guard let id = message["id"], !(id is NSNull) else { return nil } // a notification
         func result(_ value: Any) -> [String: Any] { ["jsonrpc": "2.0", "id": id, "result": value] }
@@ -389,19 +407,19 @@ public enum MCPServer {
             let asked = params["protocolVersion"] as? String ?? ""
             return result([
                 "protocolVersion": supportedVersions.contains(asked) ? asked : supportedVersions[0],
-                "capabilities": ["tools": ["listChanged": false], "prompts": ["listChanged": false]],
+                "capabilities": ["tools": ["listChanged": listChanged], "prompts": ["listChanged": false]],
                 "serverInfo": ["name": name, "title": "Next Term", "version": version],
-                "instructions": said,
+                "instructions": text,
             ])
         case "ping":
             return result([String: Any]())
         case "tools/list":
-            return result(["tools": listing() + listing(extra)])
+            return result(["tools": listing(offered) + listing(extra)])
         case "tools/call":
             if let name = params["name"] as? String, extra.contains(where: { $0.name == name }) {
                 return result(callExtra(name, params["arguments"] as? [String: Any] ?? [:]))
             }
-            guard let name = params["name"] as? String, tool(named: name) != nil else {
+            guard let name = params["name"] as? String, offered.contains(where: { $0.name == name }) else {
                 return error(-32602, "Unknown tool: \(params["name"] as? String ?? "")")
             }
             let outcome = call(name, params["arguments"] as? [String: Any] ?? [:])
