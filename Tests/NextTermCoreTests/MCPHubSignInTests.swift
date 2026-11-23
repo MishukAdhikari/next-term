@@ -281,6 +281,34 @@ import Testing
 
     // MARK: refreshing
 
+    /// A need reads the file without its lock while another thread writes it. The bytes it read may be one write
+    /// behind by the time it checks them, and that is not an older copy put back: it must read as the sign-ins, never
+    /// as tampered (which a need answers as signed out).
+    @Test func aReadRacingAWriteIsNeverTakenForAnOlderCopy() throws {
+        let setup = try Setup()
+        let record = try setup.signIn().get()
+        let done = DispatchSemaphore(value: 0)
+        let tampered = Outcomes()
+        let readers = DispatchGroup()
+        for _ in 0..<4 {
+            DispatchQueue.global().async(group: readers) {
+                while done.wait(timeout: .now()) == .timedOut {
+                    if case .failure = setup.store.read() { tampered.add(.tampered) }
+                }
+                done.signal()
+            }
+        }
+        for turn in 0..<300 { try setup.store.setConsent(id: record.id, agent: "codex", allowed: turn % 2 == 0) }
+        done.signal()
+        readers.wait()
+        #expect(tampered.all.isEmpty, "\(tampered.all.count) reads were taken for an older copy")
+        // An older copy really put back still reads as tampered.
+        let older = try #require(try setup.folder.read(SignInFile.name, cap: SignInFile.maxSize))
+        try setup.store.setConsent(id: record.id, agent: "claude", allowed: true)
+        try setup.folder.write(SignInFile.name, data: older)
+        #expect(setup.store.read() == .failure(.tampered))
+    }
+
     @Test func twentyNeedsAtOnceMakeOneRefresh() throws {
         let setup = try Setup()
         setup.auth.accessLife = 30 // inside the minute's margin: the first need refreshes
@@ -290,7 +318,7 @@ import Testing
         let outcomes = Outcomes()
         DispatchQueue.concurrentPerform(iterations: 20) { _ in outcomes.add(refresher.token()) }
         #expect(setup.auth.count("/token") == 2) // the code's, then one refresh
-        #expect(Set(outcomes.all).count == 1)
+        #expect(Set(outcomes.all).count == 1, "\(outcomes.all)")
         guard case .token(let access)? = outcomes.all.first else { Issue.record("no token"); return }
         #expect((try? setup.call(access).get()) != nil)
         let now = try setup.store.read().get().record(id: record.id)
@@ -308,7 +336,7 @@ import Testing
         DispatchQueue.concurrentPerform(iterations: 2) { index in outcomes.add((index == 0 ? first : second).token()) }
         #expect(setup.auth.count("/token") == 2)
         #expect(first.sent + second.sent == 1)
-        #expect(Set(outcomes.all).count == 1)
+        #expect(Set(outcomes.all).count == 1, "\(outcomes.all)")
     }
 
     @Test func aFlightACrashLeftNeverSendsItsTokenAgain() throws {

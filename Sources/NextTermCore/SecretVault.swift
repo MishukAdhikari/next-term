@@ -1354,7 +1354,7 @@ public final class SecretFolder: @unchecked Sendable {
         defer { close(descriptor) }
         var info = stat()
         guard fstat(descriptor, &info) == 0 else { throw Failure.system(errno) }
-        guard isOwnFile(info) else { throw Failure.refused }
+        guard isOwnFile(info, opened: true) else { throw Failure.refused }
         guard info.st_size <= cap else { throw Failure.tooLarge }
         var data = Data()
         var buffer = [UInt8](repeating: 0, count: 64 * 1024)
@@ -1543,8 +1543,10 @@ public final class SecretFolder: @unchecked Sendable {
         throw Failure.system(EEXIST)
     }
 
-    /// A plain file of this user's with no other name.
-    func isOwnFile(_ info: stat) -> Bool {
-        info.st_mode & S_IFMT == S_IFREG && info.st_uid == owner && info.st_nlink == 1
+    /// A plain file of this user's with no other name. `opened`: `info` is an open file's, which a write's rename may
+    /// have replaced since it was opened, leaving it no name at all; its bytes are then still the whole version before
+    /// that write, as a reader racing the write should get, and never a hard link's (which has two names).
+    func isOwnFile(_ info: stat, opened: Bool = false) -> Bool {
+        info.st_mode & S_IFMT == S_IFREG && info.st_uid == owner && (info.st_nlink == 1 || opened && info.st_nlink == 0)
     }
 }

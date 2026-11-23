@@ -309,8 +309,10 @@ public final class SignInStore: @unchecked Sendable {
     /// The sign-ins now; `tampered` when the file was changed outside Next Term.
     public func read() -> Result<SignInFile.Body, SignInFile.Failure> {
         guard folder.exists else { return .success(SignInFile.Body()) }
+        // Taken before the bytes: this read holds no lock, so a write may land between reading them and checking them.
+        let least = leastSequence()
         guard let data = try? folder.read(SignInFile.name, cap: SignInFile.maxSize) else { return .failure(.tampered) }
-        return SignInFile.read(data, key: key).flatMap(current)
+        return SignInFile.read(data, key: key).flatMap { current($0, least: least) }
     }
 
     /// The highest `sequence` read or written this launch, for each file and key: a body below it is an older copy put
@@ -323,13 +325,24 @@ public final class SignInStore: @unchecked Sendable {
         return folder.path(SignInFile.name) + "\u{0}" + Data(mark).base64EncodedString()
     }
 
-    /// `body`, or `tampered` when it is older than one already seen.
-    private func current(_ body: SignInFile.Body) -> Result<SignInFile.Body, SignInFile.Failure> {
-        let sequence = body.sequence ?? 0
+    /// The lowest sequence a body read from now on may have: the floor, or the highest seen this launch. A file only
+    /// moves forward, so bytes read after this was taken are at least this new unless an older copy was put back.
+    private func leastSequence() -> Int {
         Self.seenLock.lock()
         defer { Self.seenLock.unlock() }
-        if sequence < max(floor, Self.seen[seenKey, default: 0]) { return .failure(.tampered) }
-        Self.seen[seenKey] = sequence
+        return max(floor, Self.seen[seenKey, default: 0])
+    }
+
+    /// `body`, or `tampered` when it is older than `least` (`leastSequence()` as it was before its bytes were read).
+    /// Not the highest seen now: a write of this launch that landed after the bytes were read raised that, and the
+    /// bytes are only behind it, not an older copy.
+    private func current(_ body: SignInFile.Body, least: Int) -> Result<SignInFile.Body, SignInFile.Failure> {
+        let sequence = body.sequence ?? 0
+        if sequence < least { return .failure(.tampered) }
+        Self.seenLock.lock()
+        defer { Self.seenLock.unlock() }
+        // Only ever raised: a read behind a write that just landed mustn't lower what that write recorded.
+        Self.seen[seenKey] = max(sequence, Self.seen[seenKey, default: 0])
         return .success(body)
     }
 
@@ -345,9 +358,10 @@ public final class SignInStore: @unchecked Sendable {
 
     /// `update`'s work, for a caller already holding the lock.
     func locked<T>(startsOver: Bool = false, _ change: (inout SignInFile.Body) throws -> (write: Bool, value: T)) throws -> T {
+        let least = leastSequence()
         let stored = try folder.read(SignInFile.name, cap: SignInFile.maxSize)
         var body: SignInFile.Body
-        switch SignInFile.read(stored, key: key).flatMap(current) {
+        switch SignInFile.read(stored, key: key).flatMap({ current($0, least: least) }) {
         case .success(let read): body = read
         case .failure(let failure):
             guard startsOver else { throw failure }
@@ -361,7 +375,7 @@ public final class SignInStore: @unchecked Sendable {
             body.sequence = (body.sequence ?? 0) + 1
             try folder.write(SignInFile.name, data: try SignInFile.encode(body, key: key),
                              expecting: stored.map { .contents($0) } ?? .noFile)
-            _ = current(body)
+            _ = current(body, least: 0) // just written: recorded as seen, nothing to check
         }
         return value
     }
