@@ -25,6 +25,9 @@ import Testing
     /// native windows (Settings, sheets, alerts, the system `/` menu), where the Mac's colours are the right ones.
     /// A count may only go down.
     static let allowedSystem: [String: Int] = [
+        // The sidebar is a source list: AppKit draws a selected row in the Mac's accent in every theme, so its name is
+        // the Mac's text for that fill (alternateSelectedControlTextColor), not a theme's.
+        "SidebarCells.swift": 1,
         "AcknowledgementsWindow.swift": 2, "AddTaskDestinationViews.swift": 1, "AddTaskSheet.swift": 3,
         "AgentApprovalWindow.swift": 2, "AgentSessionSheet.swift": 1, "AgentsSettingsView.swift": 3,
         "AlternativeAlert.swift": 4, "AppDelegate.swift": 1, "Appearance.swift": 3, "ApprovalLayout.swift": 17,
