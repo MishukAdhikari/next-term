@@ -53,7 +53,7 @@ extension MCPServer {
         let read = ["list_tabs", "read_tab", "wait_for_tab", "list_projects", "get_editor_selection", "get_open_files",
                     "read_file", "find_in_files", "git_status", "get_diff", "list_hosts", "check_host", "host_sessions",
                     "host_changes", "list_skills", "get_skill", "list_shortcuts", "list_agent_clis", "settings_get", "list_import_sources",
-                    "preview_import", "list_secrets", "list_mcp_servers",
+                    "preview_import", "list_secrets", "list_mcp_servers", "remote_access_guide",
                     "mcp_servers"] // the MCP hub's catalog (MCPHubCatalog), listed only once a server applies
         let write = ["open_project", "new_tab", "send_to_tab", "press_keys", "answer_agent", "show_tab", "switch_view", "set_token_budget", "close_tab", "rename_tab", "start_agent",
                      "add_host", "remove_host", "edit_host", "end_session", "new_remote_tab", "install_skill", "remove_skill", "open_in_editor", "show_settings",

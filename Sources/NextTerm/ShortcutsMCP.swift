@@ -27,7 +27,7 @@ enum ShortcutsMCP {
         guard MCPShortcuts.settingsTabs.contains(tab) else {
             return MCPControl.fail("tab is one of " + MCPShortcuts.settingsTabs.joined(separator: ", ") + ".")
         }
-        AppDelegate.shared.showSettings(tab: tab, forAgent: true)
+        AppDelegate.shared.showSettings(tab: tab == "remote_access" ? RemoteAccessSettingsView.tabID : tab, forAgent: true)
         let front = NSApp.isActive
         if !front { NSApp.requestUserAttention(.informationalRequest) }
         return MCPControl.ok(["tab": tab, "shown": true, "front": front])
