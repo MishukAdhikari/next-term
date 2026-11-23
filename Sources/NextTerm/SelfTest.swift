@@ -1681,7 +1681,8 @@ enum SelfTest {
         let def = text.range(of: "def answer")
         let defColor = (notebook.textView.layoutManager?.temporaryAttribute(.foregroundColor, atCharacterIndex: def.location, effectiveRange: nil) as? NSColor)?
             .usingColorSpace(.sRGB).map { String(format: "%02X%02X%02X", Int(round($0.redComponent * 255)), Int(round($0.greenComponent * 255)), Int(round($0.blueComponent * 255))) }
-        check(defColor == "CF8E6D", "code cells are coloured in the kernel's language", defColor ?? "none")
+        let keyword = Theme.palette(for: Theme.appearance(of: notebook.textView)).code("CF8E6D").map { String(format: "%06X", $0) }
+        check(defColor != nil && defColor == keyword, "code cells are coloured in the kernel's language", "\(defColor ?? "none"), want \(keyword ?? "?")")
         check(!notebook.textView.isEditable && notebook.textView.usesFindBar, "read-only, with ⌘F")
         if let window = c.window, let on = replaceIsOn(with: notebook.textView, in: window) { check(!on, "and no Replace…") }
         await screenshot(c, suffix: "-notebook")
@@ -3957,25 +3958,32 @@ enum SelfTest {
               finder.shownPaths.prefix(3).joined(separator: ", "))
         finder.close()
         // A file git ignores is left out, until you open it: then it is listed with the recent files. A name no
-        // earlier section opened (they open the project's .env, which is then rightly among the recent files).
+        // earlier section opened. The .env files git ignores are the exception: Go to File lists them, though the MCP
+        // tools still refuse to read them.
         let exclude = proj.appendingPathComponent(".git/info/exclude")
         let excluded = try? String(contentsOf: exclude, encoding: .utf8)
-        try? ((excluded ?? "") + "\n.env.goto\n").write(to: exclude, atomically: true, encoding: .utf8)
+        try? ((excluded ?? "") + "\nignored.goto\n.env.goto\n").write(to: exclude, atomically: true, encoding: .utf8)
+        let ignored = proj.appendingPathComponent("ignored.goto")
+        try? "selftest\n".write(to: ignored, atomically: true, encoding: .utf8)
         let env = proj.appendingPathComponent(".env.goto")
         try? "APP_NAME=selftest\n".write(to: env, atomically: true, encoding: .utf8)
         finder.show(root: proj.path, recent: c.recentFiles, over: window)
-        finder.query = "env.goto"
+        finder.query = "ignored.goto"
         await pause(1)
-        check(!finder.shownPaths.contains(".env.goto"), "⌘P leaves out a file git ignores", finder.shownPaths.prefix(3).joined(separator: ", "))
-        finder.close()
-        c.openFile(env)
-        finder.show(root: proj.path, recent: c.recentFiles, over: window)
-        check(await wait(5) { finder.shownPaths.first == ".env.goto" }, "once opened, it comes first with nothing typed",
-              finder.shownPaths.prefix(3).joined(separator: ", "))
+        check(!finder.shownPaths.contains("ignored.goto"), "⌘P leaves out a file git ignores", finder.shownPaths.prefix(3).joined(separator: ", "))
         finder.query = "env.goto"
-        check(await wait(5) { finder.shownPaths.first == ".env.goto" }, "and its name finds it", finder.shownPaths.prefix(3).joined(separator: ", "))
+        check(await wait(5) { finder.shownPaths.contains(".env.goto") }, "but lists a .env file git ignores",
+              finder.shownPaths.prefix(3).joined(separator: ", "))
         finder.close()
-        if let editor = c.editorArea.editors.first(where: { $0.document.path == canonicalPath(env.path) }) { c.editorArea.close(editor) }
+        c.openFile(ignored)
+        finder.show(root: proj.path, recent: c.recentFiles, over: window)
+        check(await wait(5) { finder.shownPaths.first == "ignored.goto" }, "once opened, it comes first with nothing typed",
+              finder.shownPaths.prefix(3).joined(separator: ", "))
+        finder.query = "ignored.goto"
+        check(await wait(5) { finder.shownPaths.first == "ignored.goto" }, "and its name finds it", finder.shownPaths.prefix(3).joined(separator: ", "))
+        finder.close()
+        if let editor = c.editorArea.editors.first(where: { $0.document.path == canonicalPath(ignored.path) }) { c.editorArea.close(editor) }
+        try? FileManager.default.removeItem(at: ignored)
         try? FileManager.default.removeItem(at: env)
         if let excluded { try? excluded.write(to: exclude, atomically: true, encoding: .utf8) } else { try? FileManager.default.removeItem(at: exclude) }
         // Selected text starts the search, as for Find.
@@ -4154,10 +4162,13 @@ enum SelfTest {
             return String(format: "%02X%02X%02X", Int(round(rgb.redComponent * 255)), Int(round(rgb.greenComponent * 255)), Int(round(rgb.blueComponent * 255)))
         }
         _ = await wait(5) { doc.highlighter?.pendingLines == 0 }
-        check(color(of: "function") == "CF8E6D", "keywords are coloured", color(of: "function") ?? "none")
-        check(color(of: "\"Hello") == "6AAB73", "strings are coloured", color(of: "\"Hello") ?? "none")
-        check(color(of: "// hi") == "7A7E85", "comments are coloured", color(of: "// hi") ?? "none")
-        check(color(of: "greet") == "56A8F5", "function names are coloured", color(of: "greet") ?? "none")
+        // In the palette the editor is drawn in: the dark theme's own colours, or what the light palette maps them to.
+        let palette = Theme.palette(for: Theme.appearance(of: editor.textView))
+        func expected(_ dark: String) -> String { String(format: "%06X", palette.code(dark) ?? 0) }
+        check(color(of: "function") == expected("CF8E6D"), "keywords are coloured", color(of: "function") ?? "none")
+        check(color(of: "\"Hello") == expected("6AAB73"), "strings are coloured", color(of: "\"Hello") ?? "none")
+        check(color(of: "// hi") == expected("7A7E85"), "comments are coloured", color(of: "// hi") ?? "none")
+        check(color(of: "greet") == expected("56A8F5"), "function names are coloured", color(of: "greet") ?? "none")
 
         // Typing, auto-indent, undo back to clean.
         let view = editor.textView
