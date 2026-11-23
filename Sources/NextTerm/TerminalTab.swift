@@ -312,7 +312,44 @@ final class NextTermView: LocalProcessTerminalView {
 
     override func setNeedsDisplay(_ invalidRect: NSRect) {
         guard mayDraw() else { return }
-        super.setNeedsDisplay(invalidRect)
+        // A tab behind another in its window draws nothing now; the whole of it is drawn when it shows (viewDidUnhide).
+        if isHiddenOrHasHiddenAncestor {
+            drawnWhenShown = true
+            return
+        }
+        guard paced else { return super.setNeedsDisplay(invalidRect) }
+        // A window you aren't typing in, or Next Term not the app in use: its changes are gathered and drawn at most
+        // 30 times a second. What shows in the end is the same; an agent printing 60 times a second costs half.
+        pacedRect = pacedRect.isEmpty ? invalidRect : pacedRect.union(invalidRect)
+        guard !paceQueued else { return }
+        paceQueued = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.pacedFrame) { [weak self] in self?.drawPaced() }
+    }
+
+    /// The paced frame is due: what gathered since the last is drawn, if the terminal can still be seen.
+    private func drawPaced() {
+        paceQueued = false
+        let rect = pacedRect
+        pacedRect = .zero
+        guard !rect.isEmpty, mayDraw() else { return }
+        if isHiddenOrHasHiddenAncestor { drawnWhenShown = true } else { super.setNeedsDisplay(rect) }
+    }
+
+    /// The longest a paced window waits to draw its terminal's changes: 30 frames a second.
+    private static let pacedFrame: TimeInterval = 1.0 / 30
+    private var pacedRect = NSRect.zero
+    private var paceQueued = false
+    /// Changes came while this tab was behind another: it is drawn whole when it shows.
+    private var drawnWhenShown = false
+
+    /// Drawing waits for a paced frame: the window isn't the key window of the app in use.
+    private var paced: Bool { !(NSApp.isActive && window?.isKeyWindow == true) }
+
+    override func viewDidUnhide() {
+        super.viewDidUnhide()
+        guard drawnWhenShown else { return }
+        drawnWhenShown = false
+        needsDisplay = true
     }
 
     /// Asked at each mark, so a window seen again draws its next change even before its notification comes.
