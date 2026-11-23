@@ -3,7 +3,8 @@ import NextTermCore
 
 /// Runs work that file changes set off when a `RefreshGate` says: the sidebar's git refresh and its Databases scan.
 /// A burst is one run, a steady writer gets one every `interval` at most and a slow run earns a rest, and a window
-/// nobody can see gets none until it shows again. It keeps the gate's one timer and watches the window.
+/// nobody can see gets none until it shows again. Runs that find nothing new back the pace off to `maxInterval`.
+/// It keeps the gate's one timer and watches the window.
 final class GatedRefresh {
     private var gate: RefreshGate
     private var timer: DispatchWorkItem?
@@ -28,8 +29,8 @@ final class GatedRefresh {
         }
     }
 
-    init(interval: TimeInterval, settle: TimeInterval) {
-        gate = RefreshGate(interval: interval, settle: settle)
+    init(interval: TimeInterval, settle: TimeInterval, maxInterval: TimeInterval = 10) {
+        gate = RefreshGate(interval: interval, settle: settle, maxInterval: maxInterval)
     }
 
     deinit {
@@ -52,9 +53,10 @@ final class GatedRefresh {
         timer = nil
     }
 
-    /// The run that started last ended: the next one, if a change came meanwhile, after its rest.
-    func finished() {
-        schedule(gate.finished(at: Self.now))
+    /// The run that started last ended: the next one, if a change came meanwhile, after its rest. `unchanged` when
+    /// the gate started it and it found what the one before found, which backs the pace off.
+    func finished(unchanged: Bool = false) {
+        schedule(gate.finished(at: Self.now, unchanged: unchanged))
     }
 
     /// Nothing due or owed any more: the folder changed, or the window closed.

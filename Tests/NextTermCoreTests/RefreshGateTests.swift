@@ -12,6 +12,10 @@ struct GateClock {
     var runs: [TimeInterval] = []
     /// When the timer went off while a refresh ran.
     var firedWhileRunning: [TimeInterval] = []
+    /// Refreshes the gate starts find what the one before found (a writer in a file git ignores).
+    var findsNothingNew = false
+    /// The refresh going on was asked for directly.
+    var runIsDirect = false
 
     init(runTime: TimeInterval = 0) { self.runTime = runTime }
 
@@ -20,7 +24,7 @@ struct GateClock {
         while true {
             if let end = runEnd, end <= time, timer.map({ end <= $0 }) ?? true {
                 runEnd = nil
-                if let due = gate.finished(at: end) { timer = due }
+                if let due = gate.finished(at: end, unchanged: findsNothingNew && !runIsDirect) { timer = due }
                 continue
             }
             guard let due = timer, due <= time else { return }
@@ -35,12 +39,13 @@ struct GateClock {
         }
     }
 
-    mutating func start(at time: TimeInterval) {
+    mutating func start(at time: TimeInterval, direct: Bool = false) {
         gate.started(at: time)
         runs.append(time)
+        runIsDirect = direct
         if runTime > 0 {
             runEnd = time + runTime
-        } else if let due = gate.finished(at: time) {
+        } else if let due = gate.finished(at: time, unchanged: findsNothingNew && !direct) {
             timer = due
         }
     }
@@ -62,7 +67,7 @@ struct GateClock {
     /// A refresh asked for directly (a commit made here, a fetch): it runs now, whatever the gate says.
     mutating func refreshNow(at time: TimeInterval) {
         advance(to: time)
-        start(at: time)
+        start(at: time, direct: true)
         timer = gate.due
     }
 }
@@ -267,5 +272,68 @@ func same(_ a: [TimeInterval], _ b: [TimeInterval]) -> Bool {
         hidden.show(true, at: 10)
         hidden.advance(to: 20)
         #expect(same(hidden.runs, [0.4, 10]))
+    }
+
+    /// A writer that first adds a file (the first refresh finds it), then keeps rewriting one git ignores, ten
+    /// times a second from 0 to `end`: every refresh after the first finds what the one before found.
+    static func ignoredWriter(until end: TimeInterval) -> (GateClock, TimeInterval) {
+        var clock = GateClock()
+        clock.change(at: 0)
+        clock.advance(to: 0.5)
+        clock.findsNothingNew = true
+        var t = 0.5
+        while t < end {
+            clock.change(at: t)
+            t += 0.1
+        }
+        return (clock, t)
+    }
+
+    /// The pace backs off from 2.5 s to 5 s to 10 s and stays there.
+    @Test func refreshesThatFindNothingNewBackOff() {
+        var (clock, t) = Self.ignoredWriter(until: 60)
+        clock.advance(to: 80)
+        let gaps = zip(clock.runs, clock.runs.dropFirst()).map { $1 - $0 }
+        #expect(same(Array(gaps.prefix(4)), [2.5, 5, 10, 10]))
+        #expect(gaps.allSatisfy { $0 <= 10 + 1e-6 }, "capped at 10 s")
+        #expect(clock.runs.filter { $0 < 60 }.count == 8, "24 at the steady 2.5 s pace")
+        #expect((clock.runs.last ?? 0) > t - 0.1, "still one after the last change")
+    }
+
+    /// A refresh that finds something new brings the pace back to 2.5 s at once.
+    @Test func aRefreshThatFindsSomethingNewResetsThePace() {
+        var (clock, t) = Self.ignoredWriter(until: 20)
+        clock.advance(to: 20)
+        #expect(same(clock.runs, [0.4, 2.9, 7.9, 17.9]))
+        clock.findsNothingNew = false // the writer now touches a tracked file
+        while t < 40 {
+            clock.change(at: t)
+            t += 0.1
+        }
+        clock.advance(to: 40)
+        #expect(same(Array(clock.runs.prefix(7)), [0.4, 2.9, 7.9, 17.9, 27.9, 30.4, 32.9]))
+    }
+
+    /// A git command run here (a commit, a fetch) refreshes at once and brings the pace back to 2.5 s.
+    @Test func aDirectRefreshResetsThePace() {
+        var (clock, t) = Self.ignoredWriter(until: 20)
+        clock.refreshNow(at: 20)
+        while t < 24 {
+            clock.change(at: t)
+            t += 0.1
+        }
+        clock.advance(to: 24)
+        #expect(same(clock.runs, [0.4, 2.9, 7.9, 17.9, 20, 22.5]))
+    }
+
+    /// Backed off, then quiet: the next change still shows after the settle, not the backed-off pace.
+    @Test func aChangeAfterQuietIsQuickEvenBackedOff() {
+        var (clock, _) = Self.ignoredWriter(until: 20)
+        clock.advance(to: 40)
+        #expect(clock.gate.pace == 10)
+        let before = clock.runs.count
+        clock.change(at: 40)
+        clock.advance(to: 41)
+        #expect(clock.runs.count == before + 1 && same([clock.runs.last ?? 0], [40.4]))
     }
 }

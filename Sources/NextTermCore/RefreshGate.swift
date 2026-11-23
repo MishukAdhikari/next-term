@@ -9,6 +9,11 @@ import Foundation
 /// after it ended, so in a repository where `git status` takes seconds a steady writer keeps git busy a quarter of
 /// the time at most, not all of it. A quick one (a few tenths of a second) leaves the pace at `interval`.
 ///
+/// A refresh that finds nothing new (a writer in a file git ignores, an editor saving what was there) backs the
+/// pace off: twice `interval`, then four times, up to `maxInterval`, so a steady writer that changes nothing git
+/// shows costs a few git runs a minute, not two dozen. One that finds something new, or one asked for directly,
+/// brings it back to `interval`. The first change after a quiet spell still waits only `settle`.
+///
 /// A refresh asked for directly (after a commit made here, a fetch) runs at once whatever this says, and counts:
 /// tell it with `started` and `finished`. Pure: it is told the time (seconds on any steady clock), and the caller
 /// keeps one timer for `due`.
@@ -16,6 +21,10 @@ public struct RefreshGate: Sendable {
     public let interval: TimeInterval
     public let settle: TimeInterval
     public let restFactor: Double
+    /// The longest the pace backs off to.
+    public let maxInterval: TimeInterval
+    /// The least time from one refresh's start to the next: `interval`, longer while refreshes find nothing new.
+    public private(set) var pace: TimeInterval
     public private(set) var isVisible = true
     /// When the next refresh is due, if one is.
     public private(set) var due: TimeInterval?
@@ -27,16 +36,18 @@ public struct RefreshGate: Sendable {
     /// A change came while the window was hidden, and no refresh has started since.
     private var owed = false
 
-    public init(interval: TimeInterval = 2.5, settle: TimeInterval = 0.4, restFactor: Double = 3) {
+    public init(interval: TimeInterval = 2.5, settle: TimeInterval = 0.4, restFactor: Double = 3, maxInterval: TimeInterval = 10) {
         self.interval = interval
         self.settle = settle
         self.restFactor = restFactor
+        self.maxInterval = max(interval, maxInterval)
+        pace = interval
     }
 
     /// The earliest a refresh may start, after one due at `time`.
     private func earliest(_ time: TimeInterval) -> TimeInterval {
         var start = time
-        if let lastStart { start = max(start, lastStart + interval) }
+        if let lastStart { start = max(start, lastStart + pace) }
         if let restedAt { start = max(start, restedAt) }
         return start
     }
@@ -72,11 +83,12 @@ public struct RefreshGate: Sendable {
         owed = false
     }
 
-    /// The refresh that started last ended at `now`. The time to start the next at, when a change came while it
-    /// ran (it may not have seen it).
-    public mutating func finished(at now: TimeInterval) -> TimeInterval? {
+    /// The refresh that started last ended at `now`; `unchanged` when the gate started it and it found what the one
+    /// before found. The time to start the next at, when a change came while it ran (it may not have seen it).
+    public mutating func finished(at now: TimeInterval, unchanged: Bool = false) -> TimeInterval? {
         guard isRunning else { return nil }
         isRunning = false
+        pace = unchanged ? min(pace * 2, maxInterval) : interval
         if let lastStart { restedAt = now + restFactor * max(0, now - lastStart) }
         guard let time = due else { return nil }
         due = earliest(time)

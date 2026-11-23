@@ -26,7 +26,7 @@ public struct LineStats: Equatable, Sendable {
 
 /// One read of a repository's state: branch, upstream, and every changed path with its line counts,
 /// rolled up to folders. Paths are relative to the work-tree root, without a leading or trailing "/".
-public struct GitSnapshot: Sendable {
+public struct GitSnapshot: Equatable, Sendable {
     public var root: String
     /// nil when HEAD is detached.
     public var branch: String?
