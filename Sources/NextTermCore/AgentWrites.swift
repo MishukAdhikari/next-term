@@ -278,8 +278,23 @@ public enum AgentWrites {
     private static func resolve(_ path: String, from base: String?) -> String? {
         guard !path.isEmpty else { return nil }
         let expanded = (path as NSString).expandingTildeInPath
-        if expanded.hasPrefix("/") { return URL(fileURLWithPath: expanded).standardized.path }
+        if expanded.hasPrefix("/") { return normalized(expanded) }
         guard let base else { return nil }
-        return URL(fileURLWithPath: expanded, relativeTo: URL(fileURLWithPath: base, isDirectory: true)).standardized.path
+        return normalized(base + "/" + expanded)
+    }
+
+    /// `.` and `..` worked out by the path's own words, as git and a shell would: no file is looked at and no link
+    /// followed. Not URL.standardized, which on some macOS versions leaves a `..` that climbs out of a relative URL's
+    /// base in place (`/Code/app/app-wt` for `../app-wt` from `/Code/app`).
+    private static func normalized(_ absolute: String) -> String {
+        var parts: [Substring] = []
+        for part in absolute.split(separator: "/", omittingEmptySubsequences: true) {
+            switch part {
+            case ".": continue
+            case "..": if !parts.isEmpty { parts.removeLast() }
+            default: parts.append(part)
+            }
+        }
+        return "/" + parts.joined(separator: "/")
     }
 }
