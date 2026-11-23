@@ -87,7 +87,7 @@ public final class MCPHubFakeAuth: @unchecked Sendable {
         Thread { [weak self] in
             while true {
                 let client = accept(fd, nil, nil)
-                if client < 0 { if errno == EINTR { continue } else { return } }
+                if client < 0 { if errno == EINTR { continue } else { ListenerRetire.loopEnded(fd); return } }
                 guard let self else { close(client); return }
                 Thread { self.serve(client) }.start()
             }
@@ -101,7 +101,7 @@ public final class MCPHubFakeAuth: @unchecked Sendable {
         let fd = listener
         listener = -1
         lock.unlock()
-        if fd >= 0 { shutdown(fd, SHUT_RDWR); close(fd) }
+        ListenerRetire.retire(fd)
     }
 
     public var origin: String { "http://127.0.0.1:\(port)" }
