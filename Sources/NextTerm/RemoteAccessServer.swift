@@ -467,12 +467,25 @@ final class RemoteAccessServer: @unchecked Sendable { // connections live on `qu
         guard case .valid(let grant) = state.validate(token) else {
             return finish(connection, with: challenge(request, tokenSent: token != nil))
         }
-        let incoming = RemoteAccessCalls.read(request.body, protocolVersion: request.header("mcp-protocol-version"))
+        // MCP 2026-07-28 or earlier (RemoteAccessModern): a stateless request is served with that revision's shapes.
+        var modern: String?
+        switch RemoteAccessModern.era(request.body, version: request.header("mcp-protocol-version"),
+                                      method: request.header("mcp-method"), name: request.header("mcp-name")) {
+        case .refused(let body, let reason):
+            return refusedModern(body, reason: reason, grant: grant, request: request, on: connection)
+        case .modern(let method):
+            modern = method
+        case .legacy:
+            break
+        }
+        let incoming = RemoteAccessCalls.read(request.body,
+                                              protocolVersion: modern == nil ? request.header("mcp-protocol-version") : nil)
         switch incoming {
         case .request(let message):
-            reply(answer(message, grant: grant), on: connection)
+            reply(answer(message, grant: grant, modern: modern), on: connection)
         case .call(let id, let name, let arguments):
-            call(Call(id: id, tool: name, arguments: arguments, grant: grant, request: request, started: state.now),
+            call(Call(id: id, tool: name, arguments: arguments, grant: grant, request: request, started: state.now,
+                      modern: modern != nil),
                  on: connection)
         case .notification:
             reply(RemoteAccessHTTP.response(status: 202), on: connection)
@@ -483,20 +496,45 @@ final class RemoteAccessServer: @unchecked Sendable { // connections live on `qu
 
     /// `initialize`, `ping`, `tools/list` and the rest: answered as `nxtrm mcp` answers them, with the tools the
     /// grant's options admit now, the remote instructions for them and `listChanged: true` (R20, R26).
-    private func answer(_ message: [String: Any], grant: RemoteAccessOAuth.Grant) -> Data {
+    private func answer(_ message: [String: Any], grant: RemoteAccessOAuth.Grant, modern: String? = nil) -> Data {
         // A tools/list gives the client the new list, so the mark for a changed list goes in the same step as the
         // options are read (R20).
         let listed = message["method"] as? String == "tools/list"
         let options = state.options(of: grant.id, listed: listed) ?? grant.options
         let tools = RemoteAccessTools.tools(for: options)
         let instructions = RemoteAccessTools.instructions(for: options)
+        if modern == "server/discover", let id = message["id"] {
+            return RemoteAccessHTTP.json(status: 200, body: RemoteAccessModern.discover(id: id, instructions: instructions,
+                                                                                         serverVersion: version))
+        }
         let response = MCPServer.respond(to: message, version: version, tools: tools, instructions: instructions,
                                          listChanged: true) { _, _ in
             // Tool calls never come here: the door runs them itself.
             MCPServer.CallResult(text: RemoteAccessText.notAvailable, isError: true)
         }
         guard let response else { return RemoteAccessHTTP.response(status: 202) }
-        return RemoteAccessHTTP.json(status: 200, body: RemoteAccessCalls.encode(response))
+        let body = RemoteAccessCalls.encode(response)
+        guard let modern else { return RemoteAccessHTTP.json(status: 200, body: body) }
+        return RemoteAccessHTTP.json(status: 200, body: RemoteAccessModern.shape(body, method: modern, serverVersion: version))
+    }
+
+    /// A 2026-07-28 request refused before it is read: a version neither era speaks, or a header that doesn't match
+    /// the body. Its JSON-RPC error goes out with 400, as that revision asks, and it counts and is audited as an
+    /// unreadable request is.
+    private func refusedModern(_ body: Data, reason: String, grant: RemoteAccessOAuth.Grant,
+                               request: RemoteAccessHTTP.Request, on connection: Connection) {
+        if calls.countRefused(grant: grant.id) == .tooMany {
+            state.countOverLimit(grant, tool: "")
+        } else {
+            state.audit([RemoteAccessAuditEntry.call(time: state.now, grant: grant, tool: "", arguments: nil,
+                                                     decision: .refused, reason: reason, forwarded: request.forwarded)])
+        }
+        finish(connection, with: RemoteAccessHTTP.json(status: 400, body: body, close: true))
+    }
+
+    /// A call's answer as its era wants it: shaped for 2026-07-28 when it came that way.
+    private func body(_ call: Call, _ message: Data) -> Data {
+        call.modern ? RemoteAccessModern.shape(message, method: "tools/call", serverVersion: version) : message
     }
 
     /// An authenticated POST the door can't read: a batch, not JSON-RPC, or a protocol version it doesn't speak.
@@ -523,13 +561,16 @@ final class RemoteAccessServer: @unchecked Sendable { // connections live on `qu
         let grant: RemoteAccessOAuth.Grant
         let forwarded: RemoteAccessHTTP.Forwarded
         let streamed: Bool
+        /// It came as MCP 2026-07-28: its answer carries resultType, and its stream no list-changed event.
+        let modern: Bool
         let started: Date
         /// Its id in the registry, once it is open. Set and read only on the door's queue.
         var callID: RemoteAccessCalls.ID?
 
         init(id: Any, tool: String, arguments: [String: Any], grant: RemoteAccessOAuth.Grant,
-             request: RemoteAccessHTTP.Request, started: Date) {
+             request: RemoteAccessHTTP.Request, started: Date, modern: Bool = false) {
             self.id = id
+            self.modern = modern
             self.tool = tool
             self.arguments = arguments
             self.grant = grant
@@ -560,7 +601,7 @@ final class RemoteAccessServer: @unchecked Sendable { // connections live on `qu
         case .counted:
             let ending = RemoteAccessCalls.Ending.refused(refusal)
             audit(call, ending)
-            reply(json(RemoteAccessCalls.answer(id: call.id, ending)), on: connection)
+            reply(json(body(call, RemoteAccessCalls.answer(id: call.id, ending))), on: connection)
         case .tooMany:
             tooMany(call, on: connection)
         case .closed:
@@ -571,13 +612,13 @@ final class RemoteAccessServer: @unchecked Sendable { // connections live on `qu
     /// Past R27's limits: the too-many text, and one summed audit line a minute for the grant (R39).
     private func tooMany(_ call: Call, on connection: Connection) {
         state.countOverLimit(call.grant, tool: call.tool)
-        reply(json(RemoteAccessCalls.result(id: call.id, failure(RemoteAccessText.tooManyCalls))), on: connection)
+        reply(json(body(call, RemoteAccessCalls.result(id: call.id, failure(RemoteAccessText.tooManyCalls)))), on: connection)
     }
 
     /// Remote access turned off after the call's token was checked: the revoke text, and the connection closes.
     private func turnedOff(_ call: Call, on connection: Connection) {
         audit(call, .turnedOff)
-        finish(connection, with: json(RemoteAccessCalls.answer(id: call.id, .turnedOff), close: true))
+        finish(connection, with: json(body(call, RemoteAccessCalls.answer(id: call.id, .turnedOff)), close: true))
     }
 
     private func open(_ call: Call, on connection: Connection) {
@@ -594,7 +635,7 @@ final class RemoteAccessServer: @unchecked Sendable { // connections live on `qu
         case .call(let callID, let listChanged):
             call.callID = callID
             if call.streamed {
-                send(RemoteAccessCalls.streamStart(listChanged: listChanged), on: connection)
+                send(RemoteAccessCalls.streamStart(listChanged: listChanged && !call.modern), on: connection)
                 startKeepAlive(connection)
             }
             startDeadline(callID)
@@ -766,7 +807,7 @@ final class RemoteAccessServer: @unchecked Sendable { // connections live on `qu
         if case .result = ending { state.noteUse(call.grant.id) }
         guard let connection, !connection.ending else { return }
         stopKeepAlive(connection)
-        let message = RemoteAccessCalls.answer(id: call.id, ending)
+        let message = body(call, RemoteAccessCalls.answer(id: call.id, ending))
         if call.streamed {
             return finish(connection, with: RemoteAccessHTTP.event(message))
         }
