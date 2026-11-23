@@ -6,7 +6,8 @@ import NextTermCore
 /// watching, so an idle Next Term costs the Mac almost nothing (Energy Impact counts wakeups as much as CPU time):
 ///
 /// - `watching`, 4 times a second: Next Term is the app in use and a window someone can see runs a command or an
-///   agent. Marks and questions show up as fast as they did with a ticker per window.
+///   agent, or printed in the last two seconds. Marks, questions and what follows a keystroke show up as fast as
+///   they did with a ticker per window.
 /// - `background`, once a second: something runs, but in a window no one is looking at, or with another app in use.
 ///   Notices and the Dock badge still come within a second.
 /// - `idle`, every 2 seconds: nothing runs anywhere. Output in any tab (a command starting where the shell reports
@@ -30,11 +31,17 @@ final class WindowTicker {
         DispatchQueue.main.async { [weak self] in self?.retune() }
     }
 
-    /// Output came in somewhere while idle: a command may have started where the shell doesn't say so, and only a
-    /// beat's look at the tab's foreground process sees it. One beat comes a quarter of a second later, as it would
-    /// at the watching pace, and the pace is looked at again after it.
+    /// When a terminal last printed (TerminalTab.now): output keeps the watching pace for `TickerPace.afterOutput`.
+    private var lastOutput: TimeInterval = -.infinity
+
+    /// Output came in somewhere. Slower than watching, a command may have started where the shell doesn't say so, and
+    /// only a beat's look at the tab's foreground process sees it: one beat comes a quarter of a second later, and
+    /// the pace is looked at again after it (watching, for a moment, in a window someone can see).
     func noteOutput() {
-        guard pace == .idle || timer == nil, !retuneQueued else { return }
+        lastOutput = TerminalTab.now
+        // Agents printing while another app is in use keep the background pace: only idle, stopped, or the app in use
+        // brings a prompted beat.
+        guard pace == .idle || timer == nil || (pace == .background && NSApp.isActive), !retuneQueued else { return }
         retuneQueued = true
         DispatchQueue.main.asyncAfter(deadline: .now() + Pace.watching.rawValue) { [weak self] in
             guard let self else { return }
@@ -48,7 +55,8 @@ final class WindowTicker {
     func retune() {
         let controllers = AppDelegate.shared.controllers
         guard !controllers.isEmpty else { return stop() }
-        let wanted = Pace.pace(active: NSApp.isActive, windows: controllers.map { ($0.canBeSeen, $0.runsSomething) })
+        let recent = TerminalTab.now - lastOutput < Pace.afterOutput
+        let wanted = Pace.pace(active: NSApp.isActive, windows: controllers.map { ($0.canBeSeen, $0.runsSomething) }, recentOutput: recent)
         guard wanted != pace || timer == nil else { return }
         timer?.invalidate()
         pace = wanted

@@ -10,9 +10,14 @@ public enum TickerPace: TimeInterval, Sendable {
     /// Nothing runs anywhere.
     case idle = 2
 
-    /// The pace for these windows: each one whether it can be seen and whether something runs in it.
-    public static func pace(active: Bool, windows: [(seen: Bool, runs: Bool)]) -> TickerPace {
-        if active && windows.contains(where: { $0.seen && $0.runs }) { return .watching }
+    /// How long output keeps the beat at the watching pace, so what follows a keystroke (a command starting, a `cd`
+    /// the sidebar follows, a file appearing) shows as quickly as it always has.
+    public static let afterOutput: TimeInterval = 2
+
+    /// The pace for these windows: each one whether it can be seen and whether something runs in it; `recentOutput`
+    /// when a terminal printed within `afterOutput`.
+    public static func pace(active: Bool, windows: [(seen: Bool, runs: Bool)], recentOutput: Bool = false) -> TickerPace {
+        if active && windows.contains(where: { $0.seen && ($0.runs || recentOutput) }) { return .watching }
         return windows.contains(where: \.runs) ? .background : .idle
     }
 
