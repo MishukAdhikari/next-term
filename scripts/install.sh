@@ -1,17 +1,21 @@
 #!/bin/bash
-# Installs Next Term (https://nxtrm.mishuk.me) from its GitHub release:
+# Installs Next Term (https://nxtrm.mishuk.me) from its release:
 #
 #     curl -fsSL https://nxtrm.mishuk.me/install.sh | bash
 #
-# It downloads the disk image and its SHA-256, checks that the checksum is signed with the Next Term
-# release key (below; the key never leaves the maintainer's Mac, so a release changed on GitHub is
-# refused) and that the download matches it, checks the app's bundle and signature are intact, and
+# It installs the version the site names, which moves only once a release is signed and checked, so a
+# release GitHub has just published is not offered before its signature is up. It downloads the disk
+# image and its SHA-256 from GitHub, or from the site's own copy when GitHub can't be reached or stalls,
+# checks that the checksum is signed with the Next Term release key (below; the key never leaves the
+# maintainer's Mac, so a release changed on GitHub or on the site is refused) and that the download
+# matches it, checks the app's bundle and signature are intact, and
 # copies it to /Applications (or ~/Applications when /Applications isn't writable). It never uses sudo
 # and never replaces a Next Term that is running. Besides the app it adds only the nxtrm command, as a
 # link in the first folder on your PATH meant for commands that you can write (~/.local/bin, ~/bin,
 # /opt/homebrew/bin, /usr/local/bin); it never changes PATH or touches anyone else's nxtrm.
 #
-#     NEXTTERM_VERSION=0.7.0    a particular version instead of the latest
+#     NEXTTERM_VERSION=0.7.0    a particular version instead of the latest (the site keeps copies of the
+#                               last few; older ones come from GitHub only)
 #     NEXTTERM_DIR=~/Apps       another folder
 #
 # Source: https://github.com/MishukAdhikari/next-term/blob/main/scripts/install.sh
@@ -20,6 +24,7 @@
 nt_work=""
 nt_mount=""
 nt_lock=""
+nt_takeover=""
 nt_created_dir=""
 nt_done=""
 nt_staged=""
@@ -40,7 +45,8 @@ nt_cleanup() {
         fi
         if ! [ -d "${nt_previous}/Next Term.app" ]; then rm -rf "${nt_previous}"; fi
     fi
-    if [ -n "${nt_lock:-}" ]; then rmdir "${nt_lock}" 2>/dev/null || true; fi
+    if [ -n "${nt_lock:-}" ]; then rm -f "${nt_lock}/pid"; rmdir "${nt_lock}" 2>/dev/null || true; fi
+    if [ -n "${nt_takeover:-}" ]; then rmdir "${nt_takeover}" 2>/dev/null || true; fi
     # Folders this run made for nothing go again, innermost first, up to the first one it made.
     if [ -z "${nt_done:-}" ] && [ -n "${nt_created_dir:-}" ]; then
         local dir="${nt_destination%/*}"
@@ -79,22 +85,29 @@ main() {
         command -v "${tool}" >/dev/null 2>&1 || fail "${tool} is missing."
     done
 
-    # The oldest release "latest" may resolve to: GitHub decides which release is latest, the release
-    # key does not, so a GitHub account could otherwise point "latest" at an old signed release.
+    # The version the site serves, and so the one installed. The site sets it only after the release is
+    # signed and checked: GitHub calls a release latest minutes before its signature is up, doesn't answer
+    # when it is down, and decides which release is latest without the release key, so a GitHub account
+    # could point "latest" at an old signed release. Only this script run from the repository, with the
+    # slot unfilled, asks GitHub.
     local min_version="@@MIN_VERSION@@" # the site fills in its current version
+    local site_version=""
+    case "${min_version}" in @*) ;; *) site_version="${min_version}" ;; esac
     local version="${NEXTTERM_VERSION:-}"
     version="${version#v}"
     local pinned="${version}"
-    if [ -z "${version}" ]; then
+    if [ -z "${version}" ] && [ -n "${site_version}" ]; then
+        version="${site_version}"
+    elif [ -z "${version}" ]; then
         local latest_url
-        latest_url="$(curl -fsS --proto '=https' --tlsv1.2 --connect-timeout 20 -o /dev/null -w '%{redirect_url}' "https://github.com/${repo}/releases/latest")" \
+        latest_url="$(curl -fsS --proto '=https' --tlsv1.2 --connect-timeout 20 --max-time 60 --retry 2 --retry-connrefused --retry-max-time 20 -o /dev/null -w '%{redirect_url}' "https://github.com/${repo}/releases/latest")" \
             || fail "the latest release could not be found."
         version="${latest_url##*/releases/tag/v}"
     fi
     local pattern='^[0-9]+(\.[0-9]+){1,3}(-[A-Za-z0-9.]+)?$'
     [[ ${version} =~ ${pattern} ]] || fail "“${version}” isn’t a version number."
     if [ -z "${pinned}" ]; then
-        case "${version}" in *-*) fail "GitHub’s latest is the pre-release ${version}; set NEXTTERM_VERSION=${version} to install it." ;; esac
+        case "${version}" in *-*) fail "the latest is the pre-release ${version}; set NEXTTERM_VERSION=${version} to install it." ;; esac
     fi
     # True when $1 comes before $2. A pre-release (0.8.0-rc1) comes before its release (0.8.0).
     nt_older() {
@@ -108,10 +121,9 @@ main() {
         fi
         [ "$(printf '%s\n%s\n' "${a}" "${b}" | sort -t. -k1,1n -k2,2n -k3,3n -k4,4n | head -1)" = "${a}" ]
     }
-    if [ -z "${pinned}" ] && nt_older "${version}" "${min_version}"; then
-        fail "GitHub says the latest release is ${version}, older than ${min_version}; refusing a rollback."
-    fi
-    local base="https://github.com/${repo}/releases/download/v${version}"
+    # Where each file comes from, in order: GitHub, then the site's own copy of the release. Either may
+    # serve anything; only what the release key signed is installed.
+    local bases=("https://github.com/${repo}/releases/download/v${version}" "https://nxtrm.mishuk.me/releases/v${version}")
     local dmg_name="NextTerm-${version}.dmg"
 
     local target="${NEXTTERM_DIR:-/Applications}"
@@ -154,37 +166,125 @@ PROCESSES
     }
     nt_refuse_if_running
 
-    # One install into a folder at a time. nt_lock is set only once the lock is ours.
+    # One install into a folder at a time. nt_lock is set only once the lock is ours. The lock holds the
+    # installing shell's process id, so a lock left by a killed install (no trap ran) is taken over
+    # instead of blocking every install after it. Taking one over happens under a second lock, so two
+    # installers can't both take over the same stale one.
     local lock="${target}/.Next Term.install.lock"
-    mkdir "${lock}" 2>/dev/null || fail "another install into ${target} is running (if not, remove “${lock}”)."
+    local holder=""
+    # A process's identity: its id and when it started, so an id the system reused is told apart.
+    nt_identity() { printf '%s %s\n' "$1" "$(ps -o lstart= -p "$1" 2>/dev/null | tr -s ' ')"; }
+    # True when no running installer holds the lock: the process that wrote it is gone (its id is free,
+    # or now names a process that started later); a lock without an id (0.11.83 and before) after ten minutes.
+    nt_lock_is_stale() {
+        local written
+        written="$(head -1 "${lock}/pid" 2>/dev/null || true)"
+        holder="${written%% *}"
+        case "${holder}" in '' | *[!0-9]*) holder="" ;; esac
+        if [ -n "${holder}" ]; then
+            [ "$(nt_identity "${holder}")" != "${written}" ]
+            return
+        fi
+        [ -d "${lock}" ] && [ -n "$(find "${lock}" -maxdepth 0 -mmin +10 2>/dev/null)" ]
+    }
+    if ! mkdir "${lock}" 2>/dev/null; then
+        local takeover="${lock%.lock}.takeover"
+        if ! mkdir "${takeover}" 2>/dev/null; then
+            # Another installer is looking at the same lock, or one was killed doing it (minutes ago): a
+            # stale one is renamed away first, so of two installers breaking it only one can.
+            if [ -n "$(find "${takeover}" -maxdepth 0 -mmin +2 2>/dev/null)" ] && mv "${takeover}" "${takeover}.stale.$$" 2>/dev/null; then
+                rmdir "${takeover}.stale.$$" 2>/dev/null || true
+            fi
+            mkdir "${takeover}" 2>/dev/null || fail "another install into ${target} is running; if not, remove “${lock}”."
+        fi
+        nt_takeover="${takeover}"
+        if nt_lock_is_stale; then rm -rf "${lock}" 2>/dev/null || true; fi
+        local got=0
+        mkdir "${lock}" 2>/dev/null || got=1
+        rmdir "${takeover}" 2>/dev/null || true
+        nt_takeover=""
+        [ "${got}" = 0 ] || fail "another install into ${target} is running${holder:+ (process ${holder})}; if not, remove “${lock}”."
+    fi
     nt_lock="${lock}"
+    nt_identity "$$" > "${lock}/pid" || fail "can’t write to ${target}."
+
+    # An install killed between its two renames (no trap ran) may have left the old app aside: it goes
+    # back, and what such a run left behind goes. Only this script makes these names, and the lock is ours.
+    local leftover
+    for leftover in "${target}/.Next Term.previous."* "${target}/.Next Term.installing."*; do
+        [ -d "${leftover}" ] || continue
+        if ! [ -e "${destination}" ] && [ -d "${leftover}/${app_name}" ] \
+            && [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "${leftover}/${app_name}/Contents/Info.plist" 2>/dev/null || true)" = "${bundle_id}" ]; then
+            case "${leftover}" in */.Next\ Term.previous.*)
+                mv "${leftover}/${app_name}" "${destination}" \
+                    || fail "a stopped install left Next Term in ${leftover}; move it back to ${destination}."
+                say "Put back the Next Term that a stopped install had moved aside." ;;
+            esac
+        fi
+        rm -rf "${leftover}" 2>/dev/null || say "Could not remove ${leftover}."
+    done
 
     nt_work="$(mktemp -d "${TMPDIR:-/tmp}/next-term-install.XXXXXX")"
     local work="${nt_work}"
 
     say "Downloading Next Term${version:+ ${version}}…"
-    local get=(curl -fL --proto '=https' --tlsv1.2 --retry 2 --connect-timeout 20 --silent --show-error)
-    "${get[@]}" -o "${work}/${dmg_name}" "${base}/${dmg_name}" || fail "the download failed."
-    "${get[@]}" -o "${work}/${dmg_name}.sha256" "${base}/${dmg_name}.sha256" || fail "its checksum could not be downloaded."
-    "${get[@]}" -o "${work}/${dmg_name}.sha256.sig" "${base}/${dmg_name}.sha256.sig" \
-        || fail "its checksum’s signature could not be downloaded (a release that was just published is signed a few minutes later)."
-
     printf '%s %s\n' "${signer}" "${release_key}" > "${work}/allowed_signers"
-    ssh-keygen -Y verify -f "${work}/allowed_signers" -I "${signer}" -n next-term-release -s "${work}/${dmg_name}.sha256.sig" \
-        < "${work}/${dmg_name}.sha256" >/dev/null 2>&1 || fail "the checksum is not signed with the Next Term release key."
-    local expected actual
-    expected="$(awk 'NR == 1 { print tolower($1) }' "${work}/${dmg_name}.sha256")"
-    actual="$(shasum -a 256 "${work}/${dmg_name}" | awk '{ print tolower($1) }')"
-    local hex='^[0-9a-f]{64}$'
-    [[ ${expected} =~ ${hex} ]] || fail "the published checksum is not a SHA-256."
-    [ "${expected}" = "${actual}" ] || fail "the download does not match its signed SHA-256."
-    # The signed text names the file, and the file name names the version: a signature from another release is refused.
-    [ "$(cat "${work}/${dmg_name}.sha256")" = "${actual}  ${dmg_name}" ] || fail "the signed checksum is not for ${dmg_name}."
-    say "Checked: signed by the Next Term release key, SHA-256 ${actual}"
+    local get=(curl -fL --proto '=https' --tlsv1.2 --retry 1 --retry-connrefused --retry-max-time 20 --connect-timeout 10
+        --speed-limit 2048 --speed-time 30 --silent --show-error) # a stalled download moves on
+    local why="" expected="" actual=""
+    # Downloads the three files from one place ($1) into $2 and checks them as one set: a page a captive
+    # portal or a broken mirror returns, or a file cut short, fails here and the next place is tried.
+    # Sets why when it fails.
+    nt_try() {
+        local from="$1" into="$2" name err
+        rm -rf "${into}"; mkdir "${into}"
+        # The signature first: it is the file a release gets last, and the smallest.
+        local cap
+        for name in "${dmg_name}.sha256.sig" "${dmg_name}.sha256" "${dmg_name}"; do
+            cap=60 # the two small files: a slow or throttled host doesn't hold the fallback back
+            [ "${name}" = "${dmg_name}" ] && cap=3600
+            if ! err="$("${get[@]}" --max-time "${cap}" -o "${into}/${name}" "${from}/${name}" 2>&1)"; then
+                err="${err##*curl: }"
+                err="${err#(*) }"
+                why="${name} could not be downloaded: ${err:-no answer}"
+                return 1
+            fi
+        done
+        if ! ssh-keygen -Y verify -f "${work}/allowed_signers" -I "${signer}" -n next-term-release -s "${into}/${dmg_name}.sha256.sig" \
+            < "${into}/${dmg_name}.sha256" >/dev/null 2>&1; then
+            why="its checksum is not signed with the Next Term release key"; return 1
+        fi
+        expected="$(awk 'NR == 1 { print tolower($1) }' "${into}/${dmg_name}.sha256")"
+        actual="$(shasum -a 256 "${into}/${dmg_name}" | awk '{ print tolower($1) }')"
+        local hex='^[0-9a-f]{64}$'
+        [[ ${expected} =~ ${hex} ]] || { why="its published checksum is not a SHA-256"; return 1; }
+        [ "${expected}" = "${actual}" ] || { why="the download does not match its signed SHA-256"; return 1; }
+        # The signed text names the file, and the file name names the version: a signature from another release is refused.
+        [ "$(cat "${into}/${dmg_name}.sha256")" = "${actual}  ${dmg_name}" ] || { why="the signed checksum is not for ${dmg_name}"; return 1; }
+    }
+    # GitHub, then the site, and the round once more for a connection that dropped midway.
+    local round each place="" n=0
+    for round in 1 2; do
+        for each in "${bases[@]}"; do
+            n=$((n + 1))
+            case "${each}" in https://github.com/*) place="GitHub" ;; *) place="the site" ;; esac
+            if nt_try "${each}" "${work}/try${n}"; then
+                mv "${work}/try${n}/"* "${work}/"
+                break 2
+            fi
+            say "From ${place}: ${why}."
+            place=""
+        done
+    done
+    [ -n "${place}" ] || fail "${version} could not be downloaded and checked from GitHub or from the site (last: ${why})."
+    say "Checked: signed by the Next Term release key, SHA-256 ${actual}${place:+ (from ${place})}"
 
     nt_mount="${work}/mount"
     mkdir "${nt_mount}"
-    hdiutil attach "${work}/${dmg_name}" -nobrowse -readonly -noautoopen -quiet -mountpoint "${nt_mount}" || fail "the disk image could not be opened."
+    # Once more after a pause: Spotlight or a virus scanner sometimes still holds a just-written image.
+    hdiutil attach "${work}/${dmg_name}" -nobrowse -readonly -noautoopen -quiet -mountpoint "${nt_mount}" </dev/null 2>/dev/null \
+        || { sleep 3; hdiutil attach "${work}/${dmg_name}" -nobrowse -readonly -noautoopen -quiet -mountpoint "${nt_mount}" </dev/null; } \
+        || fail "the disk image could not be opened."
     local source="${nt_mount}/${app_name}"
     [ -d "${source}" ] || fail "the disk image has no ${app_name}."
     local plist="${source}/Contents/Info.plist"
@@ -198,7 +298,7 @@ PROCESSES
         local installed
         installed="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "${destination}/Contents/Info.plist" 2>/dev/null || true)"
         if [ -n "${installed}" ] && nt_older "${version}" "${installed}"; then
-            fail "Next Term ${installed} is installed and GitHub's latest is the older ${version}; set NEXTTERM_VERSION=${version} to install it anyway."
+            fail "Next Term ${installed} is installed and the latest release is the older ${version}; set NEXTTERM_VERSION=${version} to install it anyway."
         fi
     fi
     codesign --verify --deep --strict "${source}" 2>/dev/null || fail "the app’s signature is broken."
