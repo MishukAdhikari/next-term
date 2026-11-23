@@ -91,6 +91,10 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
     private(set) var rotateSheet: SecretRotateSheet?
     private(set) var revealPopover: NSPopover?
     private(set) var revealField: NSTextField?
+    /// The copy button at the revealed value's right edge, and the value it copies: held only while it shows.
+    private(set) var revealCopy: NSButton?
+    private var revealedValue: SecretBytes?
+    private var revealedName: String?
     private(set) var importSheet: SecretImportSheet?
     /// Import From › A File…'s sheet, while it is open.
     var fileImportSheet: SecretFileImportSheet?
@@ -1034,14 +1038,37 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
         field.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
         field.isSelectable = false
         field.lineBreakMode = .byCharWrapping
-        field.preferredMaxLayoutWidth = 360
+        field.preferredMaxLayoutWidth = 320
         field.setAccessibilityLabel("The value of \(name)")
-        let close = NSButton(title: "Close", target: self, action: #selector(hideReveal))
+        // The value in a box, as a field shows it, with Copy at its right edge: one click puts it on the clipboard (cleared
+        // after 60 seconds), with no second Touch ID, as it is already shown.
+        let copy = NSButton(image: Self.copySymbol, target: self, action: #selector(copyRevealed))
+        copy.isBordered = false
+        copy.bezelStyle = .regularSquare
+        copy.contentTintColor = .secondaryLabelColor
+        copy.keyEquivalent = "c"
+        copy.keyEquivalentModifierMask = .command
+        copy.toolTip = "Copy \(name)"
+        copy.setAccessibilityLabel("Copy \(name)")
+        let box = NSStackView(views: [field, copy])
+        box.alignment = .top
+        box.spacing = 8
+        box.edgeInsets = NSEdgeInsets(top: 7, left: 9, bottom: 7, right: 7)
+        box.wantsLayer = true
+        box.layer?.cornerRadius = 6
+        box.layer?.borderWidth = 1
+        box.themedBackground(.textBackgroundColor)
+        box.themedBorder(.separatorColor)
+        field.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        let close = NSButton(title: "Done", target: self, action: #selector(hideReveal))
         close.bezelStyle = .rounded
-        let stack = NSStackView(views: [field, close])
+        close.keyEquivalent = "\u{1b}"
+        let stack = NSStackView(views: [box, close])
         stack.orientation = .vertical
         stack.alignment = .trailing
-        stack.edgeInsets = NSEdgeInsets(top: 10, left: 12, bottom: 10, right: 12)
+        stack.spacing = 10
+        stack.edgeInsets = NSEdgeInsets(top: 12, left: 12, bottom: 12, right: 12)
+        box.widthAnchor.constraint(greaterThanOrEqualToConstant: 280).isActive = true
         let controller = NSViewController()
         controller.view = stack
         let popover = NSPopover()
@@ -1053,6 +1080,22 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
         popover.contentViewController?.view.window?.sharingType = .none
         revealPopover = popover
         revealField = field
+        revealCopy = copy
+        revealedValue = value
+        revealedName = name
+    }
+
+    private static let copySymbol = NSImage(systemSymbolName: "doc.on.doc", accessibilityDescription: "Copy") ?? NSImage()
+
+    /// Copy beside a revealed value: the value shown, to the clipboard, and a check mark for a moment to say so.
+    @objc private func copyRevealed() {
+        guard let value = revealedValue, let name = revealedName, SecretClipboard.shared.copy(value) else { return }
+        // In the log as Copy is, though no second Touch ID was asked: the reveal before it was.
+        SecretsStore.shared.record(SecretAudit.Line(event: .copy, names: [name]))
+        say(SecretClipboard.copiedLine)
+        guard let button = revealCopy else { return }
+        button.image = NSImage(systemSymbolName: "checkmark", accessibilityDescription: "Copied")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak button] in button?.image = Self.copySymbol }
     }
 
     @objc private func hideReveal() { closeReveal() }
@@ -1068,6 +1111,9 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
     func closeReveal() {
         revealField?.stringValue = ""
         revealField = nil
+        revealCopy = nil
+        revealedValue = nil
+        revealedName = nil
         revealPopover?.close()
         revealPopover = nil
     }
