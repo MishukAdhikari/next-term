@@ -23,6 +23,19 @@ import Testing
         #expect(notice.message == "Next Term added its tools to Codex, so you can ask it to set it up or run tabs. One entry; nothing else changed.")
     }
 
+    /// Removing is not recommended: the question says what the agents lose, and its primary keeps the tools.
+    @Test func removingAsksFirstAndRecommendsKeeping() throws {
+        let three = try #require(MCPRegistrationNotice.due(["claude": .registered, "codex": .registered, "commandcode": .registered],
+                                                           shown: [], home: home))
+        #expect(three.removeQuestion == "Remove Next Term’s tools from Claude Code, Codex and Command Code?")
+        #expect(three.removeInfo == "We recommend keeping them. Without them, your agents can’t open tabs or read their windows, "
+            + "use your Secrets by name, or reach the servers you connected in Next Term. Nothing else in their settings changes.")
+        #expect(MCPRegistrationNotice.keepButton == "Keep Tools" && MCPRegistrationNotice.removeButton == "Remove")
+        let one = try #require(MCPRegistrationNotice.due(["codex": .registered], shown: [], home: home))
+        #expect(one.removeInfo == "We recommend keeping them. Without them, Codex can’t open tabs or read its windows, "
+            + "use your Secrets by name, or reach the servers you connected in Next Term. Nothing else in its settings changes.")
+    }
+
     @Test func nothingIsDueUnlessAnAgentNotNamedBeforeWasAdded() {
         // Already there (an earlier version added it): nothing was added, so nothing is said.
         #expect(MCPRegistrationNotice.due(["claude": .alreadyRegistered, "codex": .alreadyRegistered], shown: [], home: home) == nil)

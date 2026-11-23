@@ -59,9 +59,27 @@ enum MCPRegistrationAnnouncer {
         ApprovalLayout.style(keep, look: .accent)
         alert.addButton(withTitle: "Remove")
         let done: (NSApplication.ModalResponse) -> Void = { response in
-            if response == .alertSecondButtonReturn { remove(notice, from: window) }
+            if response == .alertSecondButtonReturn { confirmRemove(notice, over: window) }
         }
         if let window, window.isVisible { alert.beginSheetModal(for: window, completionHandler: done) } else { done(alert.runModal()) }
+    }
+
+    /// Remove, asked first: removing is not recommended, so the question says what the agents lose and its primary,
+    /// Keep Tools (Return), keeps them. Only Remove goes on to take Next Term out.
+    static func confirmRemove(_ notice: MCPRegistrationNotice, over window: NSWindow?, answered: ((Bool) -> Void)? = nil) {
+        let alert = NSAlert()
+        alert.messageText = notice.removeQuestion
+        alert.informativeText = notice.removeInfo
+        let keep = alert.addButton(withTitle: MCPRegistrationNotice.keepButton)
+        ApprovalLayout.style(keep, look: .accent)
+        let remove = alert.addButton(withTitle: MCPRegistrationNotice.removeButton)
+        remove.keyEquivalent = ""
+        let done: (NSApplication.ModalResponse) -> Void = { response in
+            let removed = response == .alertSecondButtonReturn
+            if removed { Self.remove(notice, from: window) }
+            answered?(removed)
+        }
+        if let window, window.isVisible, window.attachedSheet == nil { alert.beginSheetModal(for: window, completionHandler: done) } else { done(alert.runModal()) }
     }
 
     /// Remove: agent control off, which takes Next Term out of every agent it was added to, then says so.
@@ -101,14 +119,15 @@ final class MCPRegistrationCard: NSView {
         files.isSelectable = true
         details = DisclosureRow(title: "Details", content: files)
         let remove = NSButton(title: "Remove", target: self, action: #selector(removePressed))
-        // A plain button: Keep only puts the notice away, and the window's own primary (Go to Window, Open Project) stays
-        // the one button that stands out.
+        // Keep is the recommended answer, so it is the card's primary; Remove asks first (confirmRemove). Neither takes
+        // a key, so Return stays the window's own.
         let keep = NSButton(title: "Keep", target: self, action: #selector(keepPressed))
         for button in [remove, keep] as [NSButton] {
             button.bezelStyle = .rounded
             button.controlSize = .small
             button.keyEquivalent = ""
         }
+        ApprovalLayout.style(keep, look: .accent)
         keep.refusesFirstResponder = true
         let buttons = NSStackView(views: [remove, keep])
         buttons.spacing = 8
@@ -173,9 +192,11 @@ final class MCPRegistrationCard: NSView {
 
     @objc private func keepPressed() { onDone?() }
 
+    /// Remove asks first and recommends keeping; the card goes only once the question is answered with Remove.
     @objc private func removePressed() {
-        let window = self.window
-        onDone?()
-        if let notice { MCPRegistrationAnnouncer.remove(notice, from: window) }
+        guard let notice else { return }
+        MCPRegistrationAnnouncer.confirmRemove(notice, over: window) { [weak self] removed in
+            if removed { self?.onDone?() }
+        }
     }
 }
