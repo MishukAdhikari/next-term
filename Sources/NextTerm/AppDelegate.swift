@@ -1354,24 +1354,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         return openWindow(directory: path, project: path)
     }
 
-    /// Open as Project for the linked worktree `tab`'s agent works in, from its strip or its menu: the tab moves, live,
-    /// into the worktree's own window (moveTab), and the strip's offer is answered. Nil when the move couldn't happen.
+    /// Open as Project for the linked worktree `tab`'s agent works in, from its strip, its menu or its agent (MCP
+    /// open_project with its tab): the tab moves, live, into the worktree's own window (moveTab), which comes to the front
+    /// with it selected, and the strip's offer is answered. When it can't move, the tab and its strip stay where they are
+    /// and a notice in its window says why. Nil when the move couldn't happen.
     @discardableResult
     func openAsProject(tab: TerminalTab, worktree: String) -> TerminalWindowController? {
+        if let why = moveRefusal(tab, toProject: worktree) {
+            GitToast.show(why, in: controllers.first { $0.group(of: tab) != nil }?.window, isError: true)
+            return nil
+        }
         guard let destination = moveTab(tab, toProject: worktree) else { return nil }
         AgentPlaces.shared.offerOpened(tab, worktree: worktree)
         return destination
     }
 
+    /// Why `tab` can't move into the window of the project at `path` now, in a sentence for a notice or an agent; nil
+    /// when it can. The folder must still be there (a worktree removed or moved since its strip showed would open a window
+    /// on nothing), the tab's window must not be asking something (a sheet is up), and its shell must still run.
+    func moveRefusal(_ tab: TerminalTab, toProject path: String) -> String? {
+        let name = (path as NSString).lastPathComponent
+        var isFolder: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: path, isDirectory: &isFolder), isFolder.boolValue else {
+            return "\u{201C}\(name)\u{201D} isn\u{2019}t there any more: its folder was moved or removed. The tab stays here."
+        }
+        guard let source = controllers.first(where: { $0.group(of: tab) != nil }) else { return "That tab is gone." }
+        if source.window?.attachedSheet != nil {
+            return "Its window is asking something: answer that first, then open \u{201C}\(name)\u{201D} as a project."
+        }
+        if tab.exited { return "The tab\u{2019}s shell has ended, so there is nothing to move." }
+        return nil
+    }
+
     /// Moves a tab into the window of the project at `path`, live: its program keeps running, with its scrollback, title,
     /// chat and prompt box (TerminalWindowController.attach, then detach in the window it leaves). The window already open
     /// on the project takes it; else a new one opens with no tab of its own, where ProjectOpening.openAsProject puts it,
-    /// never in place of the window the tab leaves. Nil, with a beep, while that window asks something (a sheet is up) or
-    /// once the tab's shell has ended.
+    /// never in place of the window the tab leaves. That window comes to the front with the tab selected, and the window
+    /// it leaves selects the tab beside it. Nil, with a beep, when moveRefusal says why it can't.
     @discardableResult
     func moveTab(_ tab: TerminalTab, toProject path: String) -> TerminalWindowController? {
         let path = canonicalPath(path)
-        guard let source = controllers.first(where: { $0.group(of: tab) != nil }), source.window?.attachedSheet == nil, !tab.exited else {
+        guard moveRefusal(tab, toProject: path) == nil, let source = controllers.first(where: { $0.group(of: tab) != nil }) else {
             NSSound.beep()
             return nil
         }

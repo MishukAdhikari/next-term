@@ -209,6 +209,25 @@ import Testing
         #expect(BuiltInSkill.tabs.text.contains("never quote it yourself") && !BuiltInSkill.tabs.text.contains("claude \"…\""))
     }
 
+    /// next-term-worktrees for an agent that works in a worktree its window doesn't show: one suggestion, only when its
+    /// list_tabs row says sync elsewhere and has no worktree_offer (the strip asked, the user answered, or the worktree was
+    /// the agent's before this Next Term: stay quiet), and on a yes open_project with its own tab, which moves live.
+    @Test func theWorktreeSkillOffersOpenAsProjectWhenTheStripHasNot() throws {
+        let text = BuiltInSkill.worktrees.text
+        let section = try #require(text.components(separatedBy: "## When you work in a worktree the window doesn't show").last?
+            .components(separatedBy: "\n## ").first)
+        for said in ["`sync`", "`elsewhere`", "`worktree_offer`", "`baseline`", "`offered`", "`dismissed`", "`opened`", "say nothing about it",
+                     "One message, then wait", "`open_project`", "`tab_id`", "your own row's `id`", "keeps running",
+                     "Only a message the user typed to you counts as a yes", "Never `new_tab`"] {
+            #expect(section.contains(said), "\(said)")
+        }
+        // The new section comes before the paste trigger, which stays.
+        #expect(text.range(of: "## When you work in a worktree")!.lowerBound < text.range(of: "## When the user brings work")!.lowerBound)
+        #expect(text.contains("pastes or names a repository"))
+        let description = BuiltInSkill.worktrees.description
+        #expect(description.contains("sync: elsewhere") && description.contains("its own project") && description.count <= 300)
+    }
+
     /// next-term-setup: what MCP may change, Settings for the rest, and keys only from list_shortcuts, in a table.
     @Test func theSetupSkillChangesWhatItMayAndGivesLiveKeys() {
         let text = BuiltInSkill.setup.text
@@ -247,7 +266,7 @@ import Testing
         #expect(with.hasPrefix(MCPServer.secretsLead + "\n" + MCPServer.skillsParagraph(offeringTabs: true) + " "))
         #expect(noTabs.hasPrefix(MCPServer.secretsLead + "\n" + MCPServer.skillsParagraph(offeringTabs: false) + " "))
         #expect(with.contains("get_skill next-term-tabs when the user asks for work in parallel") && with.contains("an explicit ask is the yes, else offer once")
-                && with.contains("next-term-worktrees when the user pastes a repo, branch or PR")
+                && with.contains("next-term-worktrees when the user pastes a repo, branch or PR") && with.contains("or your sync is elsewhere")
                 && with.contains("next-term-setup when the user asks to change Next Term") && with.contains("opened_by"))
         #expect(!noTabs.contains("next-term-tabs") && noTabs.contains("get_skill next-term-worktrees") && noTabs.contains("next-term-setup"))
         // next-term-secrets is not offered there: the first line already says when to look in Secrets.

@@ -6,7 +6,8 @@ import NextTermCore
 /// names the worktree and its branch, appears only once the tab has been quiet for 2 s, takes no key and leaves the
 /// terminal's size alone; Not Now hides it and the header's place label brings it back; a second worktree gets its
 /// own; it hides when the agent goes back to the main checkout; in a split tab it sits above the agent's pane only;
-/// list_tabs reports it; Open as Project moves the tab into the worktree's window. Screenshots in Light and Dark.
+/// list_tabs reports it; Open as Project with the worktree's folder gone leaves the tab and the strip and says why, and
+/// otherwise moves the tab into the worktree's window, in front with the tab selected. Screenshots in Light and Dark.
 extension SelfTest {
     static func worktreeStripChecks() async {
         guard let app = AppDelegate.shared, let git = GitRunner.locateGit() else { return }
@@ -137,11 +138,38 @@ extension SelfTest {
             check(other.worktreeStrip.worktree == nil && other.worktreeStrip.isHidden, "worktree strip: and not above the other pane")
         }
 
-        // Open as Project: the tab moves, live, into the worktree's own window, and the offer is answered.
+        // Open as Project when the worktree's folder has gone since the strip showed: the tab stays, the strip stays, and a
+        // notice in the window says why. The folder comes back under its name before the agent's place is read again.
+        let away = second + "-away"
+        let gone = (try? fm.moveItem(atPath: second, toPath: away)) != nil
+        let windowsBefore = app.controllers.count
+        strip.pressForTest("Open as Project")
+        let toast = GitToast.text ?? ""
+        let stayed = holder.tabs.contains { $0 === agent } && strip.worktree?.path == canonicalPath(second) && !strip.isHidden
+        if gone { try? fm.moveItem(atPath: away, toPath: second) }
+        check(gone && stayed && app.controllers.count == windowsBefore, "worktree strip: with its folder gone, the tab and the strip stay",
+              "\(app.controllers.count - windowsBefore) more windows")
+        check(toast.contains("shop-wt-130") && toast.contains("moved or removed"), "worktree strip: and a notice says why", toast)
+        check(AgentPlaces.shared.fields(of: agent, in: holder)["worktree_offer"] as? String == "offered",
+              "worktree strip: and the offer is still open", "\(AgentPlaces.shared.fields(of: agent, in: holder))")
+        GitToast.dismiss()
+        _ = await wait(8) { strip.worktree?.path == canonicalPath(second) && !strip.isHidden }
+
+        // Open as Project: the tab moves, live, into the worktree's own window, and the offer is answered. That window comes
+        // to the front with the tab selected; the window it left selects the pane beside it.
         strip.pressForTest("Open as Project")
         let destination = await wait(8) { app.controllers.contains { $0.project == canonicalPath(second) && $0.tabs.contains { $0 === agent } } }
         made += app.controllers.filter { $0.project == canonicalPath(second) }
         check(destination && agent.status.running, "worktree strip: Open as Project moves the agent's tab into the worktree's window")
+        if let into = app.controllers.first(where: { $0.project == canonicalPath(second) }) {
+            check(await wait(3) { into.activeTab === agent && into.window?.isKeyWindow == true },
+                  "worktree strip: the worktree's window comes to the front with the moved tab selected",
+                  "key: \(into.window?.isKeyWindow == true), active: \(into.activeTab?.title ?? "none")")
+        }
+        if let shell {
+            check(holder.activeTab === shell, "worktree strip: the window it left selects the tab beside it", holder.activeTab?.title ?? "none")
+        }
+        check(AgentPlaces.shared.offers.state(of: agent.id.uuidString, in: canonicalPath(second)) == .opened, "worktree strip: the offer reads opened")
         check(await wait(3) { holder.paneView(of: agent) == nil && strip.worktree == nil },
               "worktree strip: no strip once the window shows the worktree")
         agent.view.send(txt: "\u{03}")
