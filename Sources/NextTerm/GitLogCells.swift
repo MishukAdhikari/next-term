@@ -3,8 +3,6 @@ import NextTermCore
 
 /// How the Git Log looks: lane colours, sizes, ref badges and dates.
 enum GitLogStyle {
-    /// One colour per lane colour of CommitGraph, readable on dark and, darkened, on light.
-    static let lanes: [NSColor] = [0x6EA4F7, 0x73C27A, 0xE5A55C, 0xC28FE0, 0x5FC4C4, 0xE5736F, 0xD6C86A, 0x9AA3F5].map(Theme.mark)
     static let rowHeight: CGFloat = 24
     static let laneWidth: CGFloat = 14
     static let graphInset: CGFloat = 6
@@ -13,7 +11,8 @@ enum GitLogStyle {
     /// How far from a row's middle toward its edge a line cut at that column runs, of the half row.
     static let cutReach: CGFloat = 0.55
 
-    static func lane(_ index: Int) -> NSColor { lanes[((index % lanes.count) + lanes.count) % lanes.count] }
+    /// One colour per lane colour of CommitGraph: the theme's graph lanes, readable on dark and, darkened, on light.
+    static func lane(_ index: Int) -> NSColor { Theme.graphLane(index) }
 
     static func graphWidth(lanes: Int) -> CGFloat { graphInset * 2 + CGFloat(max(1, lanes)) * laneWidth }
 
@@ -22,7 +21,7 @@ enum GitLogStyle {
         if ref.isCurrent || ref.kind == .head { return Theme.done }
         switch ref.kind {
         case .branch: return Theme.gitModified
-        case .remote: return Theme.pair(light: NSColor(hex: 0x7A3FC2), dark: NSColor(hex: 0xB792E6))
+        case .remote: return Theme.ui(.gitRemote)
         case .tag: return Theme.attention
         case .head, .other: return Theme.textDim
         }

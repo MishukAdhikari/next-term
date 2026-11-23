@@ -284,7 +284,7 @@ final class TabListRowView: NSView, NSTextFieldDelegate {
     private static let selectedHover = NSColor(name: nil) { appearance in
         let palette = Theme.palette(for: appearance)
         let paper = NSColor(hex: palette.background)
-        return palette.isDark ? (paper.blended(withFraction: 0.08, of: .white) ?? paper) : NSColor(hex: palette.hoverFill)
+        return palette.isDark ? (paper.blended(withFraction: 0.08, of: NSColor(hex: palette.ui(.ink) ?? palette.text)) ?? paper) : NSColor(hex: palette.hoverFill)
     }
 
     /// The selected tab's place in the collapsed column, lighter under the pointer, as the rail's.

@@ -288,7 +288,7 @@ final class GoToFileController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         background.layer?.cornerRadius = 10
         background.layer?.masksToBounds = true
         background.layer?.borderWidth = 1
-        background.layer?.borderColor = WorkSplitView.line.cgColor
+        background.themedBorder(WorkSplitView.line)
         panel.contentView = background
 
         let glass = NSImageView(image: NSImage(systemSymbolName: "magnifyingglass", accessibilityDescription: nil) ?? NSImage())
@@ -299,7 +299,7 @@ final class GoToFileController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         field.font = .systemFont(ofSize: 16)
         field.textColor = Theme.text
         field.placeholderAttributedString = NSAttributedString(string: "Go to file: name, path, or name:line", attributes: [
-            .font: NSFont.systemFont(ofSize: 16), .foregroundColor: NSColor.placeholderTextColor,
+            .font: NSFont.systemFont(ofSize: 16), .foregroundColor: Theme.system(.placeholder),
         ])
         field.delegate = self
         field.cell?.isScrollable = true
@@ -391,10 +391,10 @@ final class GoToFileController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     }
 }
 
-/// The chosen row: a rounded highlight inside the panel's margins, in the theme's selection tint.
+/// The chosen row: a rounded highlight inside the panel's margins, in the theme's `listSelection`.
 final class GoToFileRowView: NSTableRowView {
     override func drawSelection(in dirtyRect: NSRect) {
-        Theme.selection.setFill()
+        Theme.ui(.listSelection).setFill()
         NSBezierPath(roundedRect: bounds.insetBy(dx: 6, dy: 1), xRadius: 5, yRadius: 5).fill()
     }
 
@@ -458,7 +458,7 @@ final class GoToFileCell: NSTableCellView {
         shownTask = task
         shown = nil
         name.attributedStringValue = NSAttributedString(string: task.paletteTitle, attributes: [
-            .font: NSFont.systemFont(ofSize: 13), .foregroundColor: backgroundStyle == .emphasized ? NSColor.white : Theme.text,
+            .font: NSFont.systemFont(ofSize: 13), .foregroundColor: backgroundStyle == .emphasized ? Theme.ui(.listChosenText) : Theme.text,
         ])
         folder.attributedStringValue = NSAttributedString(string: task.file, attributes: [
             .font: NSFont.systemFont(ofSize: 11), .foregroundColor: Theme.textDim,
@@ -481,7 +481,7 @@ final class GoToFileCell: NSTableCellView {
         name.attributedStringValue = Self.text(utf8[nameStart...], offset: nameStart, marked: marked,
                                                font: .systemFont(ofSize: 13), color: Theme.text,
                                                markFont: .systemFont(ofSize: 13, weight: .semibold),
-                                               markColor: chosen ? .white : Theme.gitModified)
+                                               markColor: chosen ? Theme.ui(.listChosenMark) : Theme.gitModified)
         let folderBytes = nameStart > 0 ? utf8[..<(nameStart - 1)] : []
         folder.attributedStringValue = folderBytes.isEmpty
             ? NSAttributedString(string: "project root", attributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: Theme.textDim])

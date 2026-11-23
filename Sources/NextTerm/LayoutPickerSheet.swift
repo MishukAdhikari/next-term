@@ -266,19 +266,16 @@ final class LayoutPreview: NSView {
         needsDisplay = true
     }
 
-    /// Each colour as Theme has it in the dark, and its light counterpart.
+    /// Each colour the theme's own for the picture (UIToken.picker*), light or dark as the window around it.
     private enum Palette {
-        static func dynamic(_ dark: NSColor, _ light: NSColor) -> NSColor {
-            NSColor(name: nil) { appearance in appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark : light }
-        }
-        static let window = dynamic(Theme.background, NSColor(hex: 0xF4F5F7))
-        static let panel = dynamic(Theme.bar, NSColor(hex: 0xE4E6EA))
-        static let editor = dynamic(NSColor(hex: 0x26282B), NSColor(hex: 0xFFFFFF))
-        static let terminal = dynamic(NSColor(hex: 0x17181A), NSColor(hex: 0xD8DBE0))
-        static let list = dynamic(NSColor(hex: 0x222326), NSColor(hex: 0xCDD0D6))
-        static let line = dynamic(NSColor.white.withAlphaComponent(0.10), NSColor.black.withAlphaComponent(0.10))
-        static let dot = dynamic(NSColor.white.withAlphaComponent(0.18), NSColor.black.withAlphaComponent(0.16))
-        static let border = dynamic(NSColor.white.withAlphaComponent(0.10), NSColor.black.withAlphaComponent(0.12))
+        static let window = Theme.ui(.pickerWindow)
+        static let panel = Theme.ui(.pickerPanel)
+        static let editor = Theme.ui(.pickerEditor)
+        static let terminal = Theme.ui(.pickerTerminal)
+        static let list = Theme.ui(.pickerList)
+        static let line = Theme.ui(.ink).withAlphaComponent(0.10)
+        static let dot = Theme.pair(light: Theme.ui(.ink).withAlphaComponent(0.16), dark: Theme.ui(.ink).withAlphaComponent(0.18))
+        static let border = Theme.pair(light: Theme.ui(.ink).withAlphaComponent(0.12), dark: Theme.ui(.ink).withAlphaComponent(0.10))
         static let accent = Theme.accent
     }
 

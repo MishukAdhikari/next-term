@@ -171,7 +171,7 @@ final class CompletionPopup: NSObject, NSTableViewDataSource, NSTableViewDelegat
         background.layer?.cornerRadius = 7
         background.layer?.masksToBounds = true
         background.layer?.borderWidth = 1
-        background.layer?.borderColor = WorkSplitView.line.cgColor
+        background.themedBorder(WorkSplitView.line)
         panel.contentView = background
 
         let column = NSTableColumn(identifier: .init("completion"))
@@ -298,7 +298,7 @@ final class CompletionCell: NSTableCellView {
             let isMarked = marked.contains(index)
             text.append(NSAttributedString(string: String(scalar), attributes: [
                 .font: isMarked ? CompletionPopup.markFont : CompletionPopup.nameFont,
-                .foregroundColor: isMarked ? (chosen ? NSColor.white : Theme.gitModified) : base,
+                .foregroundColor: isMarked ? (chosen ? Theme.ui(.listChosenMark) : Theme.gitModified) : base,
             ]))
         }
         name.attributedStringValue = text

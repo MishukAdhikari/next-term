@@ -406,7 +406,7 @@ final class BranchComparePane: NSView, NSTableViewDataSource, NSTableViewDelegat
 
     func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool { rows[safe: row]?.isSelectable ?? false }
 
-    func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? { ThemedRowView() }
+    func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? { GitLogRowView() }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         guard let item = rows[safe: row] else { return nil }

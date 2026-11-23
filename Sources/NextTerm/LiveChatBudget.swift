@@ -115,7 +115,12 @@ final class BudgetBar: NSView {
         track.cornerRadius = Self.height / 2
         fill.cornerRadius = Self.height / 2
         setAccessibilityElement(false) // the usage line says it in words
+        // A theme chosen in Settings keeps the look light or dark, so no appearance change reaches this view: its
+        // layers take the new theme's colours here.
+        NotificationCenter.default.addObserver(self, selector: #selector(themeChanged), name: ThemeWatch.didChange, object: nil)
     }
+
+    @objc private func themeChanged() { updateColours() }
 
     required init?(coder: NSCoder) { fatalError("not used") }
 
@@ -140,9 +145,9 @@ final class BudgetBar: NSView {
     }
 
     private func updateColours() {
-        effectiveAppearance.performAsCurrentDrawingAppearance {
-            track.backgroundColor = NSColor.separatorColor.withAlphaComponent(0.5).cgColor
-            fill.backgroundColor = (fraction >= TokenBudget.warnFraction ? NSColor.systemOrange : Theme.textDim).cgColor
+        Theme.appearance(of: self).performAsCurrentDrawingAppearance {
+            track.backgroundColor = Theme.system(.separator).withAlphaComponent(0.5).cgColor
+            fill.backgroundColor = (fraction >= TokenBudget.warnFraction ? Theme.system(.orange) : Theme.textDim).cgColor
         }
     }
 }

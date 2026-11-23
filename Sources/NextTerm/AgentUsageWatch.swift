@@ -172,7 +172,12 @@ final class ContextGaugeView: NSView {
         }
         isHidden = true
         setAccessibilityElement(false) // the tab's own help says it
+        // A theme chosen in Settings keeps the look light or dark, so no appearance change reaches this view: its
+        // rings take the new theme's colours here.
+        NotificationCenter.default.addObserver(self, selector: #selector(themeChanged), name: ThemeWatch.didChange, object: nil)
     }
+
+    @objc private func themeChanged() { apply() }
 
     required init?(coder: NSCoder) { fatalError("not used") }
 
@@ -199,9 +204,9 @@ final class ContextGaugeView: NSView {
         guard let usage else { return }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        effectiveAppearance.performAsCurrentDrawingAppearance {
+        Theme.appearance(of: self).performAsCurrentDrawingAppearance {
             track.strokeColor = Theme.textDim.withAlphaComponent(0.3).cgColor
-            fill.strokeColor = (usage.percent >= AgentUsage.warnPercent ? NSColor.systemOrange : Theme.textDim).cgColor
+            fill.strokeColor = (usage.percent >= AgentUsage.warnPercent ? Theme.system(.orange) : Theme.textDim).cgColor
         }
         fill.strokeEnd = CGFloat(usage.percent) / 100
         CATransaction.commit()

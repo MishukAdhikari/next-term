@@ -12,7 +12,7 @@ enum MarkdownBlocksRenderer {
         var largeHeading: CGFloat = 15
         var smallHeading: CGFloat = 13
         var code: CGFloat = 12
-        var color: NSColor = .labelColor
+        var color: NSColor = Theme.system(.label)
         var indentStep: CGFloat = 18
         var lineSpacing: CGFloat = 2
         var paragraphAfter: CGFloat = 6
@@ -120,7 +120,7 @@ enum MarkdownBlocksRenderer {
             if let intent = run.inlinePresentationIntent {
                 if intent.contains(.code) {
                     runFont = .monospacedSystemFont(ofSize: font.pointSize - 1, weight: .regular)
-                    attributes[.backgroundColor] = NSColor.quaternaryLabelColor
+                    attributes[.backgroundColor] = Theme.system(.quaternaryLabel)
                 }
                 var traits: NSFontDescriptor.SymbolicTraits = []
                 if intent.contains(.stronglyEmphasized) { traits.insert(.bold) }
@@ -205,7 +205,7 @@ enum MarkdownBlocksRenderer {
             case .quote(let text):
                 var quoted = style
                 quoted.leading += 14
-                quoted.color = .secondaryLabelColor
+                quoted.color = Theme.system(.secondaryLabel)
                 let start = out.length
                 for block in ReleaseNotes.blocks(text, keepingEverySection: true) { render(block, style: quoted, into: out) }
                 if out.length > start { out.addAttributes(quoteAttributes, range: NSRange(location: start, length: out.length - start)) }
@@ -245,7 +245,7 @@ enum MarkdownBlocksRenderer {
             let line = NSMutableAttributedString()
             if isRule[index] {
                 let rule = widths.map { String(repeating: "\u{2500}", count: max($0, 1)) }.joined(separator: "\u{2500}\u{2500}")
-                line.append(NSAttributedString(string: rule, attributes: [.font: font, .foregroundColor: NSColor.tertiaryLabelColor]))
+                line.append(NSAttributedString(string: rule, attributes: [.font: font, .foregroundColor: Theme.system(.tertiaryLabel)]))
             } else {
                 for (column, cell) in row.enumerated() {
                     if column > 0 { line.append(NSAttributedString(string: "  ", attributes: [.font: font])) }

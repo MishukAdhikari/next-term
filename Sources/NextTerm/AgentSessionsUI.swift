@@ -94,14 +94,14 @@ enum SessionStore {
 
     static func color(_ agent: AgentKind) -> NSColor {
         switch agent {
-        case .claude: return Theme.mark(0xD97757)
-        case .codex: return Theme.mark(0x6EA4F7)
-        case .commandCode: return Theme.mark(0xB48EF0)
-        case .gemini: return Theme.mark(0x4CC2A8)
-        case .qwen: return Theme.mark(0xE07AB8)
-        case .opencode: return Theme.mark(0xE2C35C)
-        case .cursor: return Theme.mark(0xA3AAB8)
-        case .copilot: return Theme.mark(0x5FC8E8)
+        case .claude: return Theme.agentMark("claude")
+        case .codex: return Theme.agentMark("codex")
+        case .commandCode: return Theme.agentMark("commandCode")
+        case .gemini: return Theme.agentMark("gemini")
+        case .qwen: return Theme.agentMark("qwen")
+        case .opencode: return Theme.agentMark("opencode")
+        case .cursor: return Theme.agentMark("cursor")
+        case .copilot: return Theme.agentMark("copilot")
         }
     }
 }
@@ -162,7 +162,7 @@ final class SessionCell: NSTableCellView {
         title.attributedStringValue = NSAttributedString(string: session.title, attributes: [
             .font: NSFont.systemFont(ofSize: 13, weight: session.named ? .semibold : .regular), .foregroundColor: Theme.text,
         ])
-        dot.layer?.backgroundColor = SessionStore.color(session.agent).cgColor
+        dot.themedBackground(SessionStore.color(session.agent))
         var parts = [session.agent.name, SessionStore.when(session.updatedAt)]
         if let project, session.cwd != project, session.cwd.hasPrefix(project + "/") {
             parts.append(String(session.cwd.dropFirst(project.count + 1))) // started in a subfolder
@@ -350,7 +350,7 @@ final class SessionsPanelController: NSObject, NSTextFieldDelegate, NSTableViewD
         background.layer?.cornerRadius = 10
         background.layer?.masksToBounds = true
         background.layer?.borderWidth = 1
-        background.layer?.borderColor = WorkSplitView.line.cgColor
+        background.themedBorder(WorkSplitView.line)
         panel.contentView = background
 
         let glass = NSImageView(image: NSImage(systemSymbolName: "bubble.left.and.text.bubble.right", accessibilityDescription: nil) ?? NSImage())
@@ -361,7 +361,7 @@ final class SessionsPanelController: NSObject, NSTextFieldDelegate, NSTableViewD
         field.font = .systemFont(ofSize: 16)
         field.textColor = Theme.text
         field.placeholderAttributedString = NSAttributedString(string: "Resume an agent session", attributes: [
-            .font: NSFont.systemFont(ofSize: 16), .foregroundColor: NSColor.placeholderTextColor,
+            .font: NSFont.systemFont(ofSize: 16), .foregroundColor: Theme.system(.placeholder),
         ])
         field.delegate = self
         field.cell?.isScrollable = true

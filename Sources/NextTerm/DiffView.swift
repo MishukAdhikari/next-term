@@ -296,7 +296,7 @@ final class DiffPane: NSView, DiffSelectionHost {
                 button.action = action
             }
             acceptKey = PartToolTip(accept, "Accept", command: "diff.accept", then: ": \(proposal.author) then writes the file")
-            accept.bezelColor = .controlAccentColor // the default button's colour, which ⌘↩ as its own key equivalent gave it
+            accept.bezelColor = Theme.system(.accent) // the default button's colour, which ⌘↩ as its own key equivalent gave it
             reject.toolTip = "Reject: the file stays as it is"
             header.setViews([pathLabel, counts, askRoom, previous, position, next, reject, accept], in: .leading)
         } else if let commit {

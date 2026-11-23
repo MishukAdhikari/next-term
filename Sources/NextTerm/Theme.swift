@@ -43,7 +43,90 @@ enum Theme {
         NSColor(name: nil) { appearance in NSColor(hex: palette(for: appearance)[keyPath: key]) }
     }
 
-    /// One colour for light windows and another for dark: for the few that are no palette's (overlays, shades).
+    /// A part's colour (`UIToken`) in the palette its view is drawn in. A part the Mac draws in Next Term's own looks
+    /// (a selected row) is the Mac's colour there, `system`.
+    static func ui(_ token: UIToken, system: NSColor = .selectedContentBackgroundColor) -> NSColor {
+        NSColor(name: nil) { appearance in palette(for: appearance).ui(token).map { NSColor(hex: $0) } ?? system }
+    }
+
+    /// A colour the Mac names by its purpose (a label, a separator, red for a failure), on the window's own paper: in
+    /// Next Term's own looks the Mac's colour, exactly as it was, with its Increase Contrast variant; in a theme, the
+    /// theme's token for that purpose, so a label reads on Linen's cream or Copper's slate as the theme meant.
+    static func system(_ role: SystemRole) -> NSColor {
+        NSColor(name: nil) { appearance in
+            let palette = palette(for: appearance)
+            return palette.usesSystemColours ? role.mac : NSColor(hex: role.value(in: palette))
+        }
+    }
+
+    /// A purpose the Mac has a colour for, and the palette's token for the same purpose.
+    enum SystemRole {
+        case label, secondaryLabel, tertiaryLabel, quaternaryLabel, placeholder, separator, windowBackground
+        case accent, focusRing, red, green, orange, blue
+        /// Text a person types or reads in a text view: opaque, where `label` is a little translucent.
+        case text
+        case link
+
+        var mac: NSColor {
+            switch self {
+            case .label: .labelColor
+            case .secondaryLabel: .secondaryLabelColor
+            case .tertiaryLabel: .tertiaryLabelColor
+            case .quaternaryLabel: .quaternaryLabelColor
+            case .placeholder: .placeholderTextColor
+            case .separator: .separatorColor
+            case .windowBackground: .windowBackgroundColor
+            case .accent: .controlAccentColor
+            case .focusRing: .keyboardFocusIndicatorColor
+            case .red: .systemRed
+            case .green: .systemGreen
+            case .orange: .systemOrange
+            case .blue: .systemBlue
+            case .text: .textColor
+            case .link: .linkColor
+            }
+        }
+
+        /// The theme's colour for the same purpose.
+        func value(in palette: ThemePalette) -> UInt32 {
+            switch self {
+            case .label, .text: palette.text
+            case .secondaryLabel, .placeholder: palette.textDim
+            case .tertiaryLabel: palette.lineNumber
+            case .quaternaryLabel: palette.hoverFill
+            case .separator: palette.divider
+            case .windowBackground: palette.bar
+            case .accent, .focusRing, .blue: palette.accent
+            case .red: palette.failed
+            case .green: palette.done
+            case .orange: palette.attention
+            case .link: palette.ui(.link) ?? palette.accent
+            }
+        }
+    }
+
+    /// An agent's mark (UIToken.agentOrder), from the palette, darkened on light paper as `mark` does.
+    static func agentMark(_ agent: String) -> NSColor {
+        let index = UIToken.agentOrder.firstIndex(of: agent) ?? 0
+        return NSColor(name: nil) { appearance in
+            let palette = palette(for: appearance)
+            return markColour(palette.agentMarks[index % palette.agentMarks.count], in: palette)
+        }
+    }
+
+    /// Git Log's lane colour for `index`, from the palette, darkened on light paper as `mark` does.
+    static func graphLane(_ index: Int) -> NSColor {
+        NSColor(name: nil) { appearance in
+            let palette = palette(for: appearance), lanes = palette.graphLanes
+            return markColour(lanes[((index % lanes.count) + lanes.count) % lanes.count], in: palette)
+        }
+    }
+
+    private static func markColour(_ rgb: UInt32, in palette: ThemePalette) -> NSColor {
+        palette.isDark ? NSColor(hex: rgb) : NSColor(hex: ThemePalette.readable(rgb, on: palette.bar, ratio: 3))
+    }
+
+    /// One colour for light windows and another for dark, each a token's (at its own alpha): never a literal.
     static func pair(light: NSColor, dark: NSColor) -> NSColor {
         NSColor(name: nil) { appearance in isDark(appearance) ? dark : light }
     }
@@ -59,7 +142,10 @@ enum Theme {
     /// A wash over a surface, as the dark look had it in white: in white on dark, in black on light at four fifths, so a
     /// hover or a selection shows on paper as plainly as it does on dark.
     static func overlay(_ alpha: CGFloat) -> NSColor {
-        pair(light: NSColor.black.withAlphaComponent(alpha * 0.8), dark: NSColor.white.withAlphaComponent(alpha))
+        NSColor(name: nil) { appearance in
+            let palette = palette(for: appearance)
+            return NSColor(hex: palette.ui(.ink) ?? 0).withAlphaComponent(palette.isDark ? alpha : alpha * 0.8)
+        }
     }
 
     static let background = dynamic(\.background)
@@ -289,13 +375,26 @@ enum DisplayOptions {
 /// A row of a list or grid drawn in the window's own colours: selected, the theme's soft selection tint (the
 /// editor's and the terminal's), so the row's text keeps its colour and reads on it in every theme. AppKit's
 /// default, a saturated accent fill that expects white text, made themed text (dark on light) unreadable.
-/// When the list isn’t focused, the quieter hover fill. Full width, so Git Log’s graph lines stay unbroken across it.
-final class ThemedRowView: NSTableRowView {
+/// When the list isn’t focused, the quieter hover fill.
+class ThemedRowView: NSTableRowView {
+    /// The palette leaves the selected row to the Mac (Next Term Dark): AppKit draws it, as it always has.
+    private var macDraws: Bool { Theme.palette(for: Theme.appearance(of: self)).ui(.rowSelection) == nil }
+
     override func drawSelection(in dirtyRect: NSRect) {
-        (isEmphasized ? Theme.selection : Theme.hoverFill).setFill()
+        if macDraws { return super.drawSelection(in: dirtyRect) }
+        (isEmphasized ? Theme.ui(.rowSelection) : Theme.hoverFill).setFill()
         bounds.fill()
     }
 
     /// The text on a selected row stays as it is: it is drawn for the tint, not for an accent fill.
-    override var interiorBackgroundStyle: NSView.BackgroundStyle { .normal }
+    override var interiorBackgroundStyle: NSView.BackgroundStyle { macDraws ? super.interiorBackgroundStyle : .normal }
+}
+
+/// Git Log's rows (and its diffs' and Branch Compare's): full width, so the graph's lines stay unbroken across the
+/// selected row; the editor's selection when focused, `listSelectionInactive` when not.
+final class GitLogRowView: NSTableRowView {
+    override func drawSelection(in dirtyRect: NSRect) {
+        (isEmphasized ? Theme.selection : Theme.ui(.listSelectionInactive)).setFill()
+        bounds.fill()
+    }
 }

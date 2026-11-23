@@ -91,7 +91,7 @@ final class MCPRegistrationCard: NSView {
         themedBackground(Theme.tabHover)
         layer?.cornerRadius = 8
         layer?.borderWidth = 1
-        layer?.borderColor = WorkSplitView.line.cgColor
+        themedBorder(WorkSplitView.line)
         message.font = .systemFont(ofSize: 12.5, weight: .medium)
         message.textColor = Theme.text
         meaning.font = .systemFont(ofSize: 12)

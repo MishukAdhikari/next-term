@@ -170,7 +170,7 @@ final class PrimaryButton: NSButton {
         wantsLayer = true
         bezelColor = look == .accent ? .controlAccentColor : .systemRed
         hasDestructiveAction = look == .destructive
-        let colour = NSColor.white.withAlphaComponent(isEnabled ? 1 : 0.6)
+        let colour = NSColor.alternateSelectedControlTextColor.withAlphaComponent(isEnabled ? 1 : 0.6)
         let paragraph = NSMutableParagraphStyle()
         paragraph.alignment = .center
         super.attributedTitle = NSAttributedString(string: title, attributes: [
@@ -205,7 +205,7 @@ final class PrimaryButton: NSButton {
 
     override func updateLayer() {
         let fill: NSColor = look == .accent ? .controlAccentColor : .systemRed
-        let shown = isHighlighted ? fill.blended(withFraction: 0.25, of: .black) ?? fill : fill
+        let shown = isHighlighted ? fill.blended(withFraction: 0.25, of: .shadowColor) ?? fill : fill
         layer?.cornerRadius = 6
         layer?.backgroundColor = shown.withAlphaComponent(isEnabled ? 1 : 0.45).cgColor
     }

@@ -159,7 +159,7 @@ enum CommandPaneAutoClose {
     private static func showBar(_ entry: Entry, _ pane: TerminalTab) {
         let label = NSTextField(labelWithString: CommandPaneClose.countdown(CommandPaneClose.delay))
         label.font = .monospacedDigitSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .medium)
-        label.textColor = .white
+        label.textColor = Theme.ui(.onToast)
         let button = KeepButton(title: "Keep Open", target: nil, action: nil)
         button.controlSize = .small
         button.bezelStyle = .push
@@ -173,7 +173,7 @@ enum CommandPaneAutoClose {
         stack.spacing = 8
         stack.edgeInsets = NSEdgeInsets(top: 3, left: 10, bottom: 3, right: 4)
         stack.wantsLayer = true
-        stack.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.72).cgColor
+        stack.themedBackground(Theme.ui(.toastFill).withAlphaComponent(0.72))
         stack.layer?.cornerRadius = 5
         stack.translatesAutoresizingMaskIntoConstraints = false
         stack.setAccessibilityLabel("This pane closes by itself")

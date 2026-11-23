@@ -50,7 +50,7 @@ final class AgentPromptBox: NSView, NSTextViewDelegate {
         textView.autoresizingMask = [.width]
         textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
         textView.font = .systemFont(ofSize: 13)
-        textView.textColor = .textColor
+        textView.textColor = Theme.system(.text)
         textView.delegate = self
         textView.owner = self
         textView.registerForDraggedTypes([.fileURL])
@@ -233,7 +233,7 @@ final class AgentPromptBox: NSView, NSTextViewDelegate {
         updateMenu()
         let ready = !textView.string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         send.isEnabled = ready
-        send.contentTintColor = ready ? .controlAccentColor : .tertiaryLabelColor
+        send.contentTintColor = ready ? Theme.system(.accent) : Theme.system(.tertiaryLabel)
         textView.needsDisplay = true
     }
 
@@ -251,10 +251,10 @@ final class AgentPromptBox: NSView, NSTextViewDelegate {
     override func draw(_ dirtyRect: NSRect) {
         let box = bounds.insetBy(dx: 0.5, dy: 0.5)
         let path = NSBezierPath(roundedRect: box, xRadius: 10, yRadius: 10)
-        NSColor.labelColor.withAlphaComponent(0.05).setFill()
+        Theme.system(.label).withAlphaComponent(0.05).setFill()
         path.fill()
         let focused = window?.firstResponder === textView && window?.isKeyWindow == true
-        (focused ? NSColor.keyboardFocusIndicatorColor.withAlphaComponent(0.6) : NSColor.separatorColor).setStroke()
+        (focused ? Theme.system(.focusRing).withAlphaComponent(0.6) : Theme.system(.separator)).setStroke()
         path.lineWidth = focused ? 1.5 : 1
         path.stroke()
     }
@@ -372,7 +372,7 @@ final class PromptTextView: NSTextView {
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
         guard string.isEmpty, !placeholder.isEmpty, let font else { return }
-        let text = NSAttributedString(string: placeholder, attributes: [.font: font, .foregroundColor: NSColor.placeholderTextColor])
+        let text = NSAttributedString(string: placeholder, attributes: [.font: font, .foregroundColor: Theme.system(.placeholder)])
         let origin = textContainerOrigin
         text.draw(with: NSRect(x: origin.x, y: origin.y, width: bounds.width - origin.x, height: bounds.height),
                   options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
