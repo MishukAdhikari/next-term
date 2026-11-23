@@ -209,4 +209,16 @@ final class ServiceCellView: NSTableCellView {
         super.setFrameSize(newSize)
         line.fit(in: self, badge: badge)
     }
+
+    /// The name is the cell's textField, so the source list sets its font and colour itself as the row is laid out and
+    /// as it is selected (13 pt, semibold while selected), after configure fitted it: the line refits to the text as
+    /// drawn each time, or a name that fits shows cut.
+    override func layout() {
+        super.layout()
+        line.fit(in: self, badge: badge)
+    }
+
+    override var backgroundStyle: NSView.BackgroundStyle {
+        didSet { line.fit(in: self, badge: badge) }
+    }
 }
