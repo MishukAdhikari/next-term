@@ -212,7 +212,9 @@ extension SelfTest {
                 check(await wait(30) { worktreeWindow(path) != nil } && sh(path, "rev-parse", "--abbrev-ref", "HEAD") == "feat/aichat",
                       "worktrees: Create makes ~/Code/xCloud-wt-aichat2 (AE2)", sh(path, "rev-parse", "--abbrev-ref", "HEAD"))
                 made.append(path)
-                worktreeWindow(path)?.window?.close() // tidying up: a person's close now asks about the worktree
+                // close(), not performClose: a person's close asks about removing the worktree, and the window would
+                // stay up behind that question. So throughout.
+                worktreeWindow(path)?.window?.close()
             }
         }
         GitToast.dismiss()
@@ -235,7 +237,7 @@ extension SelfTest {
                           && sh(path, "rev-parse", "--abbrev-ref", "@{upstream}") == "origin/rakib/new-panel" && window.attachedSheet == nil,
                           "worktrees: the local rakib/new-panel tracks origin/rakib/new-panel, without another question (AE4)",
                           sh(path, "rev-parse", "--abbrev-ref", "@{upstream}"))
-                    worktreeWindow(path)?.window?.close() // tidying up: a person's close now asks about the worktree
+                    worktreeWindow(path)?.window?.close()
                 }
             }
         } else {
@@ -272,7 +274,7 @@ extension SelfTest {
                 check(read(path + "/.env") == "SECRET=1\n" && !fm.fileExists(atPath: path + "/debug.log") && sh(repo, "diff", "--stat") == changes,
                       "worktrees: the ignored .env it lists is copied, and nothing else (AE7)",
                       ((try? fm.contentsOfDirectory(atPath: path)) ?? []).sorted().joined(separator: ", "))
-                worktreeWindow(path)?.window?.close() // tidying up: a person's close now asks about the worktree
+                worktreeWindow(path)?.window?.close()
             }
         }
         try? fm.removeItem(atPath: repo + "/.worktreeinclude")
@@ -326,7 +328,7 @@ extension SelfTest {
                     _ = await wait(5) { GitToast.text?.contains("ignored item") == true }
                     check(GitToast.text?.contains("left out") == true && GitToast.text?.contains("php artisan storage:link") == true,
                           "worktrees: the notice counts what was copied and left out, and names storage:link (AE12)", GitToast.text ?? "no notice")
-                    worktreeWindow(path)?.window?.close() // tidying up: a person's close now asks about the worktree
+                    worktreeWindow(path)?.window?.close()
                     window.makeKeyAndOrderFront(nil)
                     // Remembered: the next sheet in this repository has Copy chosen.
                     actions.openInNewWorktree(.branch("fix/7050-pr"))
@@ -543,7 +545,7 @@ extension SelfTest {
         for tab in agentTabs { tab.view.send(txt: "\u{03}") }
         _ = await wait(5) { agentTabs.allSatisfy { !$0.status.running } }
         agentTabs = []
-        for path in made { worktreeWindow(path)?.window?.close() // tidying up: a person's close now asks about the worktree }
+        for path in made { worktreeWindow(path)?.window?.close() }
         holder.window?.performClose(nil)
         _ = await wait(5) { !app.controllers.contains { $0 === holder } }
         for path in made + [code + "/xcloud-wt-aichat"] { sh(repo, "worktree", "remove", "--force", path) }
