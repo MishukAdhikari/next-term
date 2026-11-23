@@ -34,7 +34,6 @@ extension SelfTest {
             return check(false, "move tab: the source window's shells start")
         }
 
-        // A program printing all through the move, numbering its lines.
         let marker = "move line"
         mover.view.send(txt: "i=0; while :; do i=$((i+1)); echo \"\(marker) $i\"; sleep 0.05; done\r")
         func lastLine() -> Int {
@@ -54,7 +53,6 @@ extension SelfTest {
         }
         guard await wait(10, { lastLine() > 40 }) else { return check(false, "move tab: the program prints", "\(lastLine())") }
 
-        // An unsent draft in the tab's prompt box.
         let pane = source.paneView(of: mover)
         pane?.setPromptBox(shown: true)
         let draft = "a prompt not sent yet"
@@ -85,19 +83,16 @@ extension SelfTest {
         check(mover.view.window === into1.window && into1.window?.firstResponder === mover.view,
               "move tab: its terminal is in the new window, with the keyboard")
 
-        // Output goes on with no gap, the scrollback whole.
         let printing = await wait(10) { lastLine() > linesBefore + 20 }
         check(printing, "move tab: the program goes on printing in the new window", "\(linesBefore) → \(lastLine())")
         check(history() >= historyBefore, "move tab: the scrollback is at least what it was", "\(historyBefore) → \(history())")
 
-        // ⌘-click on a file in the output opens the new window's editor.
         let notes = URL(fileURLWithPath: into + "/notes.txt")
         mover.view.openFile?(notes, 2, 1)
         let opened = await wait(5) { into1.editorArea.documents.contains { $0.path == notes.path } }
         check(opened && !source.editorArea.documents.contains { $0.path == notes.path },
               "move tab: ⌘-click on a file in its output opens the new window's editor")
 
-        // A pane of a split tab moves alone: the pane beside it stays.
         guard let sibling = source.split(vertical: true, from: kept) else { return check(false, "move tab: a split to move a pane from") }
         _ = await wait(20) { sibling.status.integrated }
         let groupsBefore = source.groups.count
@@ -107,7 +102,6 @@ extension SelfTest {
               "move tab: one pane of a split moves into the window already open on the project, the pane beside it stays",
               "\(source.tabs.count) tabs left")
 
-        // A window's only tab moves: the window closes, the program in it runs on.
         let alone = app.openWindow(directory: lone, project: lone)
         made.append(alone)
         guard let solo = alone.activeTab, await wait(20, { solo.status.integrated }) else {
@@ -123,7 +117,6 @@ extension SelfTest {
               "closed \(closed), exited \(solo.exited)")
         check(ClosedTabs.entries.count == closedBefore, "move tab: nor is it listed under Reopen Closed Tab")
 
-        // Its shell ending after the move closes it in the window it moved into.
         mover.view.send(txt: "\u{03}")
         await pause(0.3)
         mover.view.send(txt: "exit\r")

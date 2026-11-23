@@ -296,9 +296,10 @@ public enum AgentLocation {
         var cwd = cwd
         var folderLine: [String: Any]?
         var writes: [DatedWrite] = []
+        let needles = kind.needles, writeNeedles = kind.writeNeedles
         for line in whole.split(separator: 0x0A) {
-            let names = kind.needles.contains { line.range(of: $0) != nil }
-            let acts = kind.writeNeedles.contains { line.range(of: $0) != nil }
+            let names = needles.contains { line.range(of: $0) != nil }
+            let acts = writeNeedles.contains { line.range(of: $0) != nil }
             guard names || acts, let json = (try? JSONSerialization.jsonObject(with: Data(line))) as? [String: Any] else { continue }
             if names, let folder = kind.cwd(json) {
                 cwd = folder

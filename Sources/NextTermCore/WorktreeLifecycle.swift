@@ -80,7 +80,7 @@ public struct WorktreeLifecycle {
         fed.agents = seen.agents.map { agent in
             var state = agents[agent.key] ?? AgentState(startedAt: agent.startedAt, repository: agent.repository)
             if state.startedAt != agent.startedAt || state.repository != agent.repository {
-                state = AgentState(startedAt: agent.startedAt, repository: agent.repository) // a new run starts over
+                state = AgentState(startedAt: agent.startedAt, repository: agent.repository)
             }
             let checkouts = seen.repositories[agent.repository] ?? []
             let folderCheckout = agent.folder.flatMap { AgentLocation.checkout(containing: $0, in: checkouts)?.path }

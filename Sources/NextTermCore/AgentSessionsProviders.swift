@@ -160,37 +160,9 @@ extension AgentKind {
         return nil
     }
 
-    /// The words of a simple command as the shell splits them: a quoted part keeps its spaces and loses its
-    /// quotes, and outside single quotes a backslash keeps the next character as it is.
+    /// The words of a simple command as the shell splits them (`CommandClassifier.words`).
     static func words(_ command: String) -> [String] {
-        var words: [String] = []
-        var word = ""
-        var inWord = false
-        var quote: Character?
-        var escaped = false
-        for ch in command {
-            if escaped {
-                word.append(ch)
-                escaped = false
-            } else if ch == "\\" && quote != "'" {
-                escaped = true
-                inWord = true
-            } else if let open = quote {
-                if ch == open { quote = nil } else { word.append(ch) }
-            } else if ch == "'" || ch == "\"" {
-                quote = ch
-                inWord = true
-            } else if ch == " " || ch == "\t" {
-                if inWord { words.append(word) }
-                word = ""
-                inWord = false
-            } else {
-                word.append(ch)
-                inWord = true
-            }
-        }
-        if inWord { words.append(word) }
-        return words
+        CommandClassifier.words(command)
     }
 }
 

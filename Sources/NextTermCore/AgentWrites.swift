@@ -146,23 +146,27 @@ public enum AgentWrites {
     }
 
     /// `workdir: "/x"`, `"workdir": '/x'`
-    private static let workdirPattern = #"["']?workdir["']?\s*:\s*["'`]([^"'`]+)["'`]"#
+    private static let workdirPattern = regex(#"["']?workdir["']?\s*:\s*["'`]([^"'`]+)["'`]"#)
     /// `cmd: "git status"`: a JavaScript string, with its escapes.
-    private static let cmdPattern = #"["']?cmd["']?\s*:\s*"((?:[^"\\]|\\.)*)""#
+    private static let cmdPattern = regex(#"["']?cmd["']?\s*:\s*"((?:[^"\\]|\\.)*)""#)
     /// The files an apply_patch names, in a real patch (newlines) or in JavaScript source (a `\n` escape ends the name).
-    private static let patchHeaderPattern = #"\*\*\* (?:Add File|Update File|Delete File|Move to): ([^\\\n"'`]+)"#
+    private static let patchHeaderPattern = regex(#"\*\*\* (?:Add File|Update File|Delete File|Move to): ([^\\\n"'`]+)"#)
+
+    private static func regex(_ pattern: String) -> NSRegularExpression? {
+        try? NSRegularExpression(pattern: pattern)
+    }
 
     private static func patchFiles(_ text: String) -> [String] {
         allMatches(patchHeaderPattern, in: text).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
     }
 
-    private static func firstMatch(_ pattern: String, in text: String) -> String? {
-        allMatches(pattern, in: text).first
+    private static func firstMatch(_ expression: NSRegularExpression?, in text: String) -> String? {
+        allMatches(expression, in: text).first
     }
 
     /// Each match's first capture group.
-    private static func allMatches(_ pattern: String, in text: String) -> [String] {
-        guard let expression = try? NSRegularExpression(pattern: pattern) else { return [] }
+    private static func allMatches(_ expression: NSRegularExpression?, in text: String) -> [String] {
+        guard let expression else { return [] }
         let range = NSRange(text.startIndex..., in: text)
         return expression.matches(in: text, range: range).compactMap { match in
             Range(match.range(at: 1), in: text).map { String(text[$0]) }
@@ -208,7 +212,7 @@ public enum AgentWrites {
         var signals: [WriteSignal] = []
         var current = start
         for segment in CommandClassifier.segments(commandLine) {
-            let words = shellWords(segment)
+            let words = CommandClassifier.words(segment)
             guard let found = CommandClassifier.program(in: words) else { continue }
             let args = Array(words[(found.index + 1)...])
             switch found.name {
@@ -265,31 +269,6 @@ public enum AgentWrites {
         }
         guard mutating.contains(args[index]), let folder else { return [] }
         return [WriteSignal(path: folder, kind: .shell)]
-    }
-
-    /// A simple command's words, with quotes taken off: `cd "/my wt"` is `cd` and `/my wt`.
-    private static func shellWords(_ command: String) -> [String] {
-        var words: [String] = []
-        var current = ""
-        var quote: Character?
-        var started = false
-        for character in command {
-            if let open = quote {
-                if character == open { quote = nil } else { current.append(character) }
-            } else if character == "'" || character == "\"" {
-                quote = character
-                started = true
-            } else if character == " " || character == "\t" {
-                if started { words.append(current) }
-                current = ""
-                started = false
-            } else {
-                current.append(character)
-                started = true
-            }
-        }
-        if started { words.append(current) }
-        return words
     }
 
     // MARK: Paths

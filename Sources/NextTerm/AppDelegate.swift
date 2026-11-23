@@ -617,7 +617,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // load check, off the main thread.
         MainActor.assumeIsolated { SecretsStore.shared.loadMarks() }
         MainActor.assumeIsolated { SecretReminders.start() } // key rotation reminders: first checked once the load is done
-        // Its own skills in the agents' skills folders, written or brought up to date (syncBuiltInSkills skips self-tests).
         syncBuiltInSkills()
         Task { @MainActor in await SecretsStore.shared.load() }
         // Every key in Next Term, in any of its windows: the typing an agent's window waits out (AgentArrival).
@@ -1354,6 +1353,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         return openWindow(directory: path, project: path)
     }
 
+    /// The open window in front: the key one, else the first still open.
+    var frontOpenController: TerminalWindowController? {
+        let open = controllers.filter { !$0.hasClosed }
+        return open.first { $0.window?.isKeyWindow == true } ?? open.first
+    }
+
+    /// The window `tab` is in.
+    func controller(of tab: TerminalTab) -> TerminalWindowController? {
+        controllers.first { $0.group(of: tab) != nil }
+    }
+
     /// Open as Project for the linked worktree `tab`'s agent works in, from its strip, its menu or its agent (MCP
     /// open_project with its tab): the tab moves, live, into the worktree's own window (moveTab), which comes to the front
     /// with it selected, and the strip's offer is answered. When it can't move, the tab and its strip stay where they are
@@ -1361,7 +1371,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     @discardableResult
     func openAsProject(tab: TerminalTab, worktree: String) -> TerminalWindowController? {
         if let why = moveRefusal(tab, toProject: worktree) {
-            GitToast.show(why, in: controllers.first { $0.group(of: tab) != nil }?.window, isError: true)
+            GitToast.show(why, in: controller(of: tab)?.window, isError: true)
             return nil
         }
         guard let destination = moveTab(tab, toProject: worktree) else { return nil }
@@ -1374,11 +1384,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// on nothing), the tab's window must not be asking something (a sheet is up), and its shell must still run.
     func moveRefusal(_ tab: TerminalTab, toProject path: String) -> String? {
         let name = (path as NSString).lastPathComponent
-        var isFolder: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: path, isDirectory: &isFolder), isFolder.boolValue else {
+        guard MCPSettings.isFolder(path) else {
             return "\u{201C}\(name)\u{201D} isn\u{2019}t there any more: its folder was moved or removed. The tab stays here."
         }
-        guard let source = controllers.first(where: { $0.group(of: tab) != nil }) else { return "That tab is gone." }
+        guard let source = controller(of: tab) else { return "That tab is gone." }
         if source.window?.attachedSheet != nil {
             return "Its window is asking something: answer that first, then open \u{201C}\(name)\u{201D} as a project."
         }
@@ -1394,7 +1403,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     @discardableResult
     func moveTab(_ tab: TerminalTab, toProject path: String) -> TerminalWindowController? {
         let path = canonicalPath(path)
-        guard moveRefusal(tab, toProject: path) == nil, let source = controllers.first(where: { $0.group(of: tab) != nil }) else {
+        guard moveRefusal(tab, toProject: path) == nil, let source = controller(of: tab) else {
             NSSound.beep()
             return nil
         }

@@ -12,7 +12,7 @@ final class WorktreeStrip: NSView {
 
     private let glyph = NSImageView()
     private let message = NSTextField(labelWithString: "")
-    private let notNow = NSButton(title: "Not Now", target: nil, action: nil)
+    private let notNow = MCPConnectorBar.quiet("Not Now")
     private let primary = PrimaryButton(title: "Open as Project", target: nil, action: nil)
 
     var onOpen: (() -> Void)?
@@ -39,10 +39,6 @@ final class WorktreeStrip: NSView {
         message.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         message.setContentHuggingPriority(.defaultLow, for: .horizontal)
 
-        notNow.isBordered = false
-        notNow.setButtonType(.momentaryChange)
-        notNow.attributedTitle = NSAttributedString(string: "Not Now", attributes: [.foregroundColor: Theme.textDim,
-                                                                                    .font: NSFont.systemFont(ofSize: 11)])
         notNow.setAccessibilityLabel("Not Now")
         notNow.target = self
         notNow.action = #selector(notNowClicked)

@@ -246,11 +246,11 @@ extension GitActions {
         removalFacts(row, leaving: leaving) { facts, goTo in done(WorktreeRemoval.verdict(facts), goTo) }
     }
 
-    /// What the verdict is made from, read as removalVerdict reads it, with the commits on its branch no remote branch
-    /// has: closing a worktree's window lists every reason it stays and notes those commits. An agent counts as
-    /// working in it when its folder is there or the record of where it works says so (a file it wrote there by its
-    /// full path, from a folder elsewhere).
-    func removalFacts(_ row: BranchPopupController.WorktreeRow, leaving: TerminalWindowController? = nil,
+    /// What the verdict is made from, read as removalVerdict reads it; `countUnpushed`: with the commits on its branch no
+    /// remote branch has, when it can go: closing a worktree's window lists every reason it stays and notes those
+    /// commits. An agent counts as working in it when its folder is there or the record of where it works says so (a file
+    /// it wrote there by its full path, from a folder elsewhere).
+    func removalFacts(_ row: BranchPopupController.WorktreeRow, leaving: TerminalWindowController? = nil, countUnpushed: Bool = false,
                       done: @escaping (WorktreeRemoval.Facts, _ goTo: @escaping () -> Void) -> Void) {
         guard let model, let git = GitWriter.git else { return NSSound.beep() }
         let w = row.worktree
@@ -287,7 +287,7 @@ extension GitActions {
             }
             // Detached: git's gc deletes a commit no branch or tag has once the worktree's reflog goes with it.
             if w.isDetached, let head = w.head { counted.headOnNoBranch = WorktreeRemoval.isOnNoBranch(head, in: root, git: git) }
-            if !w.isDetached, let branch = w.branch {
+            if countUnpushed, !w.isDetached, let branch = w.branch, WorktreeRemoval.verdict(counted) == .remove {
                 counted.unpushedCommits = WorktreeRemoval.unpushedCommits(branch: branch, in: root, git: git) ?? 0
             }
             let read = counted
@@ -351,8 +351,7 @@ extension GitActions {
         AgentPlaces.shared.noteOwnGit(steps, in: main)
         GitWriter.shared.run("Remove worktree \(folder)", in: main, repository: model.commonDir, steps: steps) { result in
             AgentPlaces.shared.noteOwnGit(steps, in: main)
-            let open = AppDelegate.shared.controllers.filter { !$0.hasClosed }
-            let front = (open.first { $0.window?.isKeyWindow == true } ?? open.first)?.window
+            let front = AppDelegate.shared.frontOpenController?.window
             guard result.ok else {
                 if let failed { return failed(tail(result.output, lines: 2)) }
                 return GitPrompt.ask("Could not remove “\(folder)”", info: tail(result.output) + "\n\nIts window is closed, and the worktree is still there.",
@@ -407,7 +406,7 @@ enum WorktreeEndOffer {
         }
         let path = pending.removeFirst()
         let open = AppDelegate.shared.controllers.filter { !$0.hasClosed }
-        guard GitWriter.git != nil, let front = open.first(where: { $0.window?.isKeyWindow == true }) ?? open.first, front.window != nil,
+        guard GitWriter.git != nil, let front = AppDelegate.shared.frontOpenController, front.window != nil,
               !open.contains(where: { AgentPlaces.shownFolder(of: $0).map { canonicalPath($0) == path || canonicalPath($0).hasPrefix(path + "/") } == true })
         else { return pump() }
         asking = true

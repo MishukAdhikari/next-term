@@ -54,8 +54,7 @@ extension TerminalWindowController {
     func addPlaceChoices(to menu: NSMenu, for group: PaneGroup) {
         let panes = [group.focused] + group.panes.filter { $0 !== group.focused }
         // Open as Project for a worktree its strip offered, or Not Now held: the keyboard's way to it.
-        if let tab = panes.first(where: { AgentPlaces.shared.offerableWorktree(of: $0, in: self) != nil }),
-           let worktree = AgentPlaces.shared.offerableWorktree(of: tab, in: self) {
+        if let (tab, worktree) = panes.lazy.compactMap({ pane in AgentPlaces.shared.offerableWorktree(of: pane, in: self).map { (pane, $0) } }).first {
             let name = (worktree.path as NSString).lastPathComponent
             menu.addBlock("Open \u{201C}\(name)\u{201D} as Project\u{2026}") { AppDelegate.shared.openAsProject(tab: tab, worktree: worktree.path) }
             menu.addItem(.separator())

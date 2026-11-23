@@ -3088,7 +3088,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
                 self.skipsWorktreeQuestion = true
                 return sender.performClose(nil)
             }
-            actions.removalFacts(row, leaving: self) { [weak self] facts, _ in
+            actions.removalFacts(row, leaving: self, countUnpushed: true) { [weak self] facts, _ in
                 guard let self else { return }
                 self.readingWorktree = false
                 guard !self.hasClosed else { return }
@@ -3133,8 +3133,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         TabHangup.finishLater(waiting) {
             actions.removalVerdict(row, leaving: self) { verdict, _ in
                 if let why = WorktreeRemoval.whyItStays(verdict) {
-                    let open = AppDelegate.shared.controllers.filter { !$0.hasClosed }
-                    let front = (open.first { $0.window?.isKeyWindow == true } ?? open.first)?.window
+                    let front = AppDelegate.shared.frontOpenController?.window
                     return GitPrompt.ask("“\(row.folder)” was kept", info: why + "\n\nIts window is closed.", buttons: ["OK"], over: front) { _ in }
                 }
                 GitActions.removeClosed(row.worktree, folder: row.folder, model: model)

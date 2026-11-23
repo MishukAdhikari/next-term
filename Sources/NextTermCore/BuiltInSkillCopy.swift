@@ -4,8 +4,7 @@ import Foundation
 /// Next Term's own skills (BuiltInSkill) on disk: a copy of each in ~/.agents/skills, which Codex (the app and the CLI),
 /// Gemini CLI, Copilot CLI, Cursor, OpenCode, Qwen Code and Command Code load themselves, and a link to it in
 /// ~/.claude/skills for Claude Code. Agents then have them even where Next Term's MCP server doesn't reach them (the
-/// Codex app, outside Next Term's tabs). The owner chose on 2026-11-23 that Next Term installs its skills for every agent
-/// and keeps them current without asking, over a one-time offer and over keeping them inside Next Term only.
+/// Codex app, outside Next Term's tabs).
 ///
 /// The rules here, with no file access: where each copy goes, whose a copy on disk is (Next Term's own by the hash it
 /// wrote, else the user's), and what to do with it. A copy that is not Next Term's own is never overwritten or removed,
