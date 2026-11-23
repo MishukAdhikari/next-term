@@ -176,6 +176,24 @@ import Testing
         #expect(box.offers.state(of: "7", in: other) == .offered)
     }
 
+    @Test func aBackgroundTabsWorktreeFromBeforeThisVersionStaysTheBaseline() {
+        let box = Box()
+        // Seen while the tab is not in front: kept as the baseline, though the strip never looked.
+        box.offers.note("7", placement: placed(sibling, baseline: true), isMain: false)
+        #expect(box.offers.state(of: "7", in: sibling) == .baseline)
+        // Brought to front later with a newer write there: still nothing to offer.
+        #expect(strip(box, sibling) == nil)
+        // The main checkout, a placement after the first run, or one already answered are left as they are.
+        box.offers.note("7", placement: placed(main, baseline: true), isMain: true)
+        #expect(box.offers.state(of: "7", in: main) == nil)
+        box.offers.note("7", placement: placed(other), isMain: false)
+        #expect(box.offers.state(of: "7", in: other) == nil)
+        #expect(strip(box, other) == other)
+        box.offers.dismiss("7", other)
+        box.offers.note("7", placement: placed(other, baseline: true), isMain: false)
+        #expect(box.offers.state(of: "7", in: other) == .dismissed)
+    }
+
     @Test func theStripWaitsUntilTheTabHasBeenQuietForTwoSeconds() {
         let box = Box()
         #expect(strip(box, sibling, sinceKey: 0.4) == nil)

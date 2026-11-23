@@ -3081,14 +3081,14 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     private func askClosingWorktree(_ path: String, _ sender: NSWindow) -> Bool {
         guard !readingWorktree else { return false }
         readingWorktree = true
-        withGit(at: path) { [weak self] actions in
+        GitActions.readWorktree(at: path) { [weak self] read in
             guard let self else { return }
-            guard let model = actions.model, let row = BranchPopupController.worktreeRow(at: path, in: model) else {
+            guard let (model, row) = read else {
                 self.readingWorktree = false
                 self.skipsWorktreeQuestion = true
                 return sender.performClose(nil)
             }
-            actions.removalFacts(row, leaving: self, countUnpushed: true) { [weak self] facts, _ in
+            GitActions.removalFacts(row, in: model, leaving: self, countUnpushed: true) { [weak self] facts, _ in
                 guard let self else { return }
                 self.readingWorktree = false
                 guard !self.hasClosed else { return }
@@ -3098,10 +3098,12 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
                         guard let self else { return }
                         switch response {
                         case .alertFirstButtonReturn:
+                            WorktreeEndOffer.answered(path) // asked here: its agents ending don't ask again
                             self.closeConfirmed = true
                             sender.close()
                         case .alertThirdButtonReturn:
-                            self.closeRemovingWorktree(row, actions: actions, model: model)
+                            WorktreeEndOffer.answered(path)
+                            self.closeRemovingWorktree(path)
                         default:
                             self.opensWelcome = false
                         }
@@ -3124,19 +3126,23 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     /// Close and Remove Worktree: the programs in the window end, it closes, and once they are gone the worktree is
     /// removed, after a last look at whether it can go (WorktreeRemoval.verdict, with this window's tabs and agents left
     /// out): something opened or changed there while the question was up keeps it, saying why.
-    private func closeRemovingWorktree(_ row: BranchPopupController.WorktreeRow, actions: GitActions, model: BranchModel) {
+    private func closeRemovingWorktree(_ path: String) {
         guard let window else { return }
         // Ended here, not by the close (it finds them ended), to know when they are gone.
         let waiting = TerminalTab.terminate(tabs, finishLater: false)
         closeConfirmed = true
         window.close()
         TabHangup.finishLater(waiting) {
-            actions.removalVerdict(row, leaving: self) { verdict, _ in
-                if let why = WorktreeRemoval.whyItStays(verdict) {
-                    let front = AppDelegate.shared.frontOpenController?.window
-                    return GitPrompt.ask("“\(row.folder)” was kept", info: why + "\n\nIts window is closed.", buttons: ["OK"], over: front) { _ in }
+            // Read again now, not kept from the question: its agents may have committed or moved HEAD while it was up.
+            GitActions.readWorktree(at: path) { read in
+                guard let (model, row) = read else { return } // gone already
+                GitActions.removalVerdict(row, in: model, leaving: self) { verdict, _ in
+                    if let why = WorktreeRemoval.whyItStays(verdict) {
+                        let front = AppDelegate.shared.frontOpenController?.window
+                        return GitPrompt.ask("“\(row.folder)” was kept", info: why + "\n\nIts window is closed.", buttons: ["OK"], over: front) { _ in }
+                    }
+                    GitActions.removeClosed(row.worktree, folder: row.folder, model: model)
                 }
-                GitActions.removeClosed(row.worktree, folder: row.folder, model: model)
             }
         }
     }

@@ -18,6 +18,9 @@ enum BuiltInSkillInstall {
     static let declinedKey = "builtInSkillsDeclined"
     /// The hash an earlier Next Term kept for its next-term-secrets copy alone, in Secrets' records.
     static let oldSecretsKey = "secretsSkillCopyHash"
+    /// The user added next-term-secrets themselves in an earlier Next Term, where it was theirs to add with agent
+    /// control off: kept while they keep it, whatever agent control is now.
+    static let secretsChosenKey = "builtInSecretsSkillChosen"
     static let changed = Notification.Name("NextTermBuiltInSkillCopiesChanged")
     /// A user's Remove sends to the Trash; the self-test deletes its scratch copy instead, leaving the user's Trash alone.
     static var trashes = true
@@ -41,6 +44,7 @@ enum BuiltInSkillInstall {
         let old: UserDefaults = SecretReminderRecords.defaults
         guard let hash = old.string(forKey: oldSecretsKey) else { return }
         written = BuiltInSkillCopy.migrate(written: written, oldSecretsHash: hash)
+        defaults.set(true, forKey: secretsChosenKey)
         old.removeObject(forKey: oldSecretsKey)
     }
 
@@ -56,8 +60,10 @@ enum BuiltInSkillInstall {
     }
 
     /// Brings the copies on disk in line with `wanted`, the skills offered now (AppDelegate.builtInSkills).
-    static func sync(wanted: [BuiltInSkill]) {
+    static func sync(wanted offered: [BuiltInSkill]) {
         migrate()
+        var wanted = offered
+        if defaults.bool(forKey: secretsChosenKey), !wanted.contains(BuiltInSkill.secrets) { wanted.append(BuiltInSkill.secrets) }
         let states: [String: BuiltInSkillCopy.State] = Dictionary(uniqueKeysWithValues: BuiltInSkill.all.map { ($0.name, state($0)) })
         let plan = BuiltInSkillCopy.plan(states: states, written: written, wanted: wanted, declined: declined)
         var touched = false
@@ -99,7 +105,9 @@ enum BuiltInSkillInstall {
     /// Settings' Restore: the user takes back their no, and the copy and its link are written. Nil when done, else why not.
     @discardableResult
     static func restore(_ skill: BuiltInSkill) -> String? {
-        guard state(skill) != .theirs else { return BuiltInSkillCopy.secretsSummary(.theirs, declined: false) }
+        guard state(skill) != .theirs else {
+            return "~/.agents/skills already has a \(skill.name) skill that isn\u{2019}t Next Term\u{2019}s: it stays as it is."
+        }
         declined.remove(skill.name)
         do {
             try write(BuiltInSkillCopy.Step(skill: skill, action: .write))
