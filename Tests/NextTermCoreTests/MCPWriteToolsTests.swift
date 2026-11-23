@@ -80,6 +80,19 @@ import Testing
         // Long enough for the user to answer, and for hooks.
         for tool in MCPServer.controlTools where tool.scope == .write { #expect(tool.timeout >= 60, "\(tool.name)") }
     }
+
+    /// open_project takes a tab to move into the project's window (an agent's yes to opening its worktree as a project): only
+    /// the folder is required, and the move is asked about on the Mac, so the call waits as long as the other asks do.
+    @Test func openProjectTakesATabToMove() throws {
+        let tool = try #require(MCPServer.tool(named: "open_project"))
+        let schema = try #require(try JSONSerialization.jsonObject(with: Data(tool.inputSchema.utf8)) as? [String: Any])
+        let properties = try #require(schema["properties"] as? [String: Any])
+        #expect(Set(properties.keys) == ["path", "tab_id", "reason"])
+        #expect((properties["tab_id"] as? [String: Any])?["type"] as? String == "string")
+        #expect(schema["required"] as? [String] == ["path"] && schema["additionalProperties"] as? Bool == false)
+        #expect(tool.description.contains("tab_id") && tool.description.contains("asked on the Mac first") && tool.description.contains("keeps running"))
+        #expect(tool.scope == .write && tool.timeout >= 60)
+    }
 }
 
 @Suite struct MCPSettingsTests {

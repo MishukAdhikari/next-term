@@ -441,6 +441,81 @@ import Testing
         #expect(WorktreeRemoval.isOnNoBranch(String(repeating: "0", count: 40), in: repo.path, git: git))
     }
 
+    // MARK: closing a worktree's window
+
+    /// The one question closing a linked worktree's window asks: Close Window (Return), Cancel (Escape) and, set
+    /// apart, Close and Remove Worktree when nothing would be lost; else only the first two, with every reason it stays.
+    @Test func closingAWorktreesWindowAsksOneQuestion() {
+        typealias F = WorktreeRemoval.Facts
+        // Idle, clean and pushed: offered, with what goes and that the branch stays.
+        let clean = WorktreeRemoval.closeQuestion(facts: F(), stops: "", branch: "agent/x")
+        #expect(clean.title == "Close this window?")
+        #expect(clean.buttons == ["Close Window", "Cancel"] && clean.alternative == "Close and Remove Worktree")
+        #expect(clean.info == "")
+        #expect(clean.note == "Deletes its folder, with the ignored files in it. The branch agent/x stays, with its commits.")
+        // One changed file: said, and only Close Window and Cancel.
+        let dirty = WorktreeRemoval.closeQuestion(facts: F(changedFiles: 1), stops: "", branch: "agent/x")
+        #expect(dirty.buttons == ["Close Window", "Cancel"] && dirty.alternative == nil && dirty.note == nil)
+        #expect(dirty.info == "The worktree can’t be removed now:\nIt has 1 changed file.")
+        // Commits not pushed never refuse it: a note line says how many the branch keeps.
+        let unpushed = WorktreeRemoval.closeQuestion(facts: F(unpushedCommits: 3), stops: "", branch: "agent/x")
+        #expect(unpushed.alternative == "Close and Remove Worktree")
+        #expect(unpushed.note == "Deletes its folder, with the ignored files in it. The branch agent/x stays, with its commits."
+            + "\nIt keeps 3 commits not pushed yet.")
+        #expect(WorktreeRemoval.closeQuestion(facts: F(unpushedCommits: 1), stops: "", branch: "agent/x").note?
+            .hasSuffix("\nIt keeps 1 commit not pushed yet.") == true)
+        // A busy window: what closing stops, and removal, on the one question.
+        let busy = WorktreeRemoval.closeQuestion(facts: F(), stops: "Closing it stops “sleep 300”.", branch: "agent/x")
+        #expect(busy.info == "Closing it stops “sleep 300”." && busy.alternative == "Close and Remove Worktree")
+        // An agent elsewhere working in it, a window, a lock and changes: every reason, in that order, under what closing stops.
+        let holder = LockHolder(pid: 7639, started: nil, program: "claude")
+        let many = WorktreeRemoval.closeQuestion(facts: F(agents: [AgentGuard.Agent(program: "claude", tab: "✳ Fix it")], windows: ["xCloud ▸ dev"],
+                                                          lockReason: "agent", holder: holder, holderAlive: true, changedFiles: 2, unpushedCommits: 4),
+                                                 stops: "Closing it stops “npm test”.", branch: "agent/x")
+        #expect(many.buttons == ["Close Window", "Cancel"] && many.alternative == nil && many.note == nil)
+        #expect(many.info == "Closing it stops “npm test”.\n\nThe worktree can’t be removed now:\n"
+            + "Claude Code is working in it, in the tab “✳ Fix it”.\nThe window “xCloud ▸ dev” is open on it.\n"
+            + "Claude Code (pid 7639) holds it.\nIt has 2 changed files.")
+        // Detached: no branch to name, and a commit only it has keeps it.
+        let sha = "4f2a9c1d0b7e6a5f4e3d2c1b0a9f8e7d6c5b4a39"
+        #expect(WorktreeRemoval.closeQuestion(facts: F(head: sha), stops: "", branch: nil).note == "Deletes its folder, with the ignored files in it.")
+        #expect(WorktreeRemoval.closeQuestion(facts: F(headOnNoBranch: true, head: sha), stops: "", branch: nil).alternative == nil)
+        // Its folder gone: nothing to delete, so nothing offered.
+        let gone = WorktreeRemoval.closeQuestion(facts: F(isMissing: true), stops: "", branch: "agent/x")
+        #expect(gone.alternative == nil && gone.info.hasSuffix("Its folder is gone already: Git › Worktrees… forgets it."))
+    }
+
+    /// Every reason removal is refused, in the verdict's order; none exactly when the verdict removes it.
+    @Test func everyReasonAWorktreeStays() {
+        typealias F = WorktreeRemoval.Facts
+        #expect(WorktreeRemoval.refusals(F()).isEmpty && WorktreeRemoval.refusals(F(unpushedCommits: 9)).isEmpty)
+        #expect(WorktreeRemoval.refusals(F(lockReason: "moving", changedFiles: 1)) == ["It is locked: moving.", "It has 1 changed file."])
+        #expect(WorktreeRemoval.refusals(F(tabs: ["zsh", "npm"], inProgress: .merge))
+            == ["The tab “zsh” is in it.", "The tab “npm” is in it.", "A merge is in progress there: finish or abort it there first."])
+        #expect(WorktreeRemoval.refusals(F(isMain: true)) == ["It is the repository’s main checkout."])
+    }
+
+    /// The commits on a worktree's branch that no remote branch has: counted, never a reason to keep it.
+    @Test func commitsNoRemoteBranchHas() throws {
+        guard let git = GitRunner.locateGit() else { return }
+        #expect(WorktreeRemoval.unpushedArguments(branch: "agent/x") == ["rev-list", "--count", "refs/heads/agent/x", "--not", "--remotes"])
+        let repo = try TemporaryRepository(git: git)
+        defer { repo.remove() }
+        let remote = repo.base + "/remote.git"
+        repo.run(["init", "-q", "--bare", remote])
+        repo.run(["remote", "add", "origin", remote])
+        let tree = repo.base + "/xCloud-wt-agent"
+        repo.run(["worktree", "add", "-q", "-b", "agent/x", tree])
+        repo.run(["push", "-q", "origin", "agent/x"])
+        #expect(WorktreeRemoval.unpushedCommits(branch: "agent/x", in: repo.path, git: git) == 0)
+        for n in 1...3 {
+            try "\(n)\n".write(toFile: tree + "/a.txt", atomically: true, encoding: .utf8)
+            repo.run(["-C", tree, "commit", "-qam", "Step \(n)"])
+        }
+        #expect(WorktreeRemoval.unpushedCommits(branch: "agent/x", in: repo.path, git: git) == 3)
+        #expect(WorktreeRemoval.unpushedCommits(branch: "no/such", in: repo.path, git: git) == nil)
+    }
+
     @Test func gitsAlreadyExistsIsItsOwnFailure() {
         #expect(GitOutput.classify("Preparing worktree (new branch 'b2')\nfatal: '/Users/me/Code/xCloud-wt-x' already exists")
             == .pathExists(path: "/Users/me/Code/xCloud-wt-x"))

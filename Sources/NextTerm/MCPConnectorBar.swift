@@ -97,7 +97,8 @@ final class MCPConnectorBar: NSView {
 
     required init?(coder: NSCoder) { fatalError("not used") }
 
-    private static func quiet(_ title: String) -> NSButton {
+    /// A quiet text button: dim, small, no border.
+    static func quiet(_ title: String) -> NSButton {
         let button = NSButton(title: title, target: nil, action: nil)
         button.isBordered = false
         button.font = .systemFont(ofSize: 11)

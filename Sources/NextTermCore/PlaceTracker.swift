@@ -69,14 +69,27 @@ public struct PlaceSighting {
         public let working: Bool
         /// When this run of the agent started: a new run in the tab starts over.
         public let startedAt: Date
+        /// What its session record says it wrote since the last look (WorktreeLifecycle reads them).
+        public let writes: [DatedWrite]
+        /// The checkout a write placed it in during this look: it counts at once, with no hold.
+        public var placed: String?
 
-        public init(key: String, title: String, repository: String, folder: String?, working: Bool, startedAt: Date = .distantPast) {
+        public init(key: String, title: String, repository: String, folder: String?, working: Bool, startedAt: Date = .distantPast,
+                    writes: [DatedWrite] = []) {
             self.key = key
             self.title = title
             self.repository = repository
             self.folder = folder
             self.working = working
             self.startedAt = startedAt
+            self.writes = writes
+        }
+
+        /// The same agent, seen in `folder`.
+        func seen(in folder: String?) -> Agent {
+            var agent = Agent(key: key, title: title, repository: repository, folder: folder, working: working, startedAt: startedAt, writes: writes)
+            agent.placed = placed
+            return agent
         }
     }
 
@@ -191,7 +204,13 @@ public struct PlaceTracker {
         let fresh = AgentState(repository: agent.repository, startedAt: agent.startedAt)
         var state = agents[agent.key] ?? fresh
         if state.repository != agent.repository || state.startedAt != agent.startedAt { state = fresh }
-        if let folder = agent.folder, let checkout = AgentLocation.checkout(containing: folder, in: repository) {
+        if let placed = agent.placed, repository.contains(where: { $0.path == placed }) {
+            // It wrote there: that counts at once, and it moved itself, as below.
+            if let move = state.location.set(placed), move.from != nil, state.hadTurn {
+                state.workingBranch = head(of: placed)
+                state.switched = nil
+            }
+        } else if let folder = agent.folder, let checkout = AgentLocation.checkout(containing: folder, in: repository) {
             if let move = state.location.see(checkout.path, at: now, blocked: checkout.busy), move.from != nil, state.hadTurn {
                 // It moved itself: its working branch is where it went.
                 state.workingBranch = head(of: checkout.path)

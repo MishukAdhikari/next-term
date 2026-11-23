@@ -231,13 +231,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             UserDefaults.standard.set(newValue, forKey: "agentControl")
             MainActor.assumeIsolated { RemoteAccess.shared.agentControlChanged(newValue) } // off: Remote access too
             if newValue { startAgentControl() } else { MCPControlServer.shared.stop(); MCPRegistration.update(on: false) }
+            syncBuiltInSkills()
         }
     }
 
     /// Settings › Editor › "Agents offer to run parallel work in tabs" (MCP: agents_offer_tabs): Next Term's next-term-tabs
     /// skill (BuiltInSkill) in its skill library over MCP (list_skills, get_skill), and its line first in the MCP
-    /// instructions an agent in a tab gets (MCPBridge). On by default; nothing is written in the agents' folders, so off
-    /// takes both out at once.
+    /// instructions an agent in a tab gets (MCPBridge), and its copy in the agents' skills folders (BuiltInSkillInstall).
+    /// On by default; off takes all three out at once.
     static let offerTabsKey = "agentsOfferTabs"
     static let offerTabsChanged = Notification.Name("NextTermAgentsOfferTabsChanged")
     var agentsOfferTabs: Bool {
@@ -245,12 +246,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         set {
             UserDefaults.standard.set(newValue, forKey: Self.offerTabsKey)
             NotificationCenter.default.post(name: Self.offerTabsChanged, object: nil)
+            syncBuiltInSkills()
         }
     }
 
     /// Next Term's own skills in its library: none while agents may not control Next Term, next-term-tabs only while
     /// agents offer tabs.
     var builtInSkills: [BuiltInSkill] { agentControl ? BuiltInSkill.offered(tabs: agentsOfferTabs) : [] }
+
+    /// The agents' skills folders get the same skills the library offers, at launch and when agent control or the tabs
+    /// setting changes. Never in a self-test, whose home is the user's own, and never from an update.
+    func syncBuiltInSkills() {
+        guard !SelfTest.isRequested else { return }
+        let wanted: [BuiltInSkill] = builtInSkills
+        MainActor.assumeIsolated { BuiltInSkillInstall.sync(wanted: wanted) }
+    }
 
     /// Settings › Editor › "When an agent opens a tab" (MCP: agents_bring_tabs_forward): its window comes forward and
     /// takes focus, comes forward only, or stays where it is (AgentArrival). The tab never takes the keyboard by itself.
@@ -608,8 +618,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // load check, off the main thread.
         MainActor.assumeIsolated { SecretsStore.shared.loadMarks() }
         MainActor.assumeIsolated { SecretReminders.start() } // key rotation reminders: first checked once the load is done
-        // Its own next-term-secrets copy, if added, brought up to date; never in a self-test, whose home is the user's own.
-        if !SelfTest.isRequested { MainActor.assumeIsolated { SecretsSkillInstall.refresh() } }
+        syncBuiltInSkills()
         Task { @MainActor in await SecretsStore.shared.load() }
         // Every key in Next Term, in any of its windows: the typing an agent's window waits out (AgentArrival).
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
@@ -1251,9 +1260,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// it), and its first tab waits for the user's choice.
     @discardableResult
     /// `tabInto`: merged into that window as a tab (plan 032), else a window of its own, never merged by macOS by itself.
+    /// `filling`: puts tabs in the window, placed at its size, before it shows (a tab moved in), in place of a first tab.
     func openWindow(directory: String?, project: String? = nil, forAgent: Bool = false,
-                    tabInto: TerminalWindowController? = nil) -> TerminalWindowController {
-        let controller = TerminalWindowController(directory: directory, project: project, byAgent: forAgent)
+                    tabInto: TerminalWindowController? = nil,
+                    filling: ((TerminalWindowController) -> Void)? = nil) -> TerminalWindowController {
+        let controller = TerminalWindowController(directory: directory, project: project, firstTab: filling == nil, byAgent: forAgent)
         controller.onClose = { [weak self] closed, welcome in self?.windowClosed(closed, welcome: welcome) }
         closeWelcome(forAgent: forAgent)
         // Cascade from the terminal window in front (not the About panel or a sheet), at its size unless it
@@ -1271,6 +1282,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         controllers.append(controller)
         indexed(controller) // in every window's column, before it shows
         if remoteRestorePending { restoreRemoteTabs() } // the launch's first terminal window
+        filling?(controller)
         projectsChanged()
         if forAgent { return controller }
         if let host = tabInto?.window, let window = controller.window, host.isVisible {
@@ -1342,6 +1354,83 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             return open
         }
         return openWindow(directory: path, project: path)
+    }
+
+    /// The open window in front: the key one, else the first still open.
+    var frontOpenController: TerminalWindowController? {
+        let open = controllers.filter { !$0.hasClosed }
+        return open.first { $0.window?.isKeyWindow == true } ?? open.first
+    }
+
+    /// The window `tab` is in.
+    func controller(of tab: TerminalTab) -> TerminalWindowController? {
+        controllers.first { $0.group(of: tab) != nil }
+    }
+
+    /// Open as Project for the linked worktree `tab`'s agent works in, from its strip, its menu or its agent (MCP
+    /// open_project with its tab): the tab moves, live, into the worktree's own window (moveTab), which comes to the front
+    /// with it selected, and the strip's offer is answered. When it can't move, the tab and its strip stay where they are
+    /// and a notice in its window says why. Nil when the move couldn't happen.
+    @discardableResult
+    func openAsProject(tab: TerminalTab, worktree: String) -> TerminalWindowController? {
+        if let why = moveRefusal(tab, toProject: worktree) {
+            GitToast.show(why, in: controller(of: tab)?.window, isError: true)
+            return nil
+        }
+        guard let destination = moveTab(tab, toProject: worktree) else { return nil }
+        AgentPlaces.shared.offerOpened(tab, worktree: worktree)
+        return destination
+    }
+
+    /// Why `tab` can't move into the window of the project at `path` now, in a sentence for a notice or an agent; nil
+    /// when it can. The folder must still be there (a worktree removed or moved since its strip showed would open a window
+    /// on nothing), the tab's window must not be asking something (a sheet is up), and its shell must still run.
+    func moveRefusal(_ tab: TerminalTab, toProject path: String) -> String? {
+        let name = (path as NSString).lastPathComponent
+        guard MCPSettings.isFolder(path) else {
+            return "\u{201C}\(name)\u{201D} isn\u{2019}t there any more: its folder was moved or removed. The tab stays here."
+        }
+        guard let source = controller(of: tab) else { return "That tab is gone." }
+        if source.window?.attachedSheet != nil {
+            return "Its window is asking something: answer that first, then open \u{201C}\(name)\u{201D} as a project."
+        }
+        if tab.exited { return "The tab\u{2019}s shell has ended, so there is nothing to move." }
+        return nil
+    }
+
+    /// Moves a tab into the window of the project at `path`, live: its program keeps running, with its scrollback, title,
+    /// chat and prompt box (TerminalWindowController.attach, then detach in the window it leaves). The window already open
+    /// on the project takes it; else a new one opens with no tab of its own, where ProjectOpening.openAsProject puts it,
+    /// never in place of the window the tab leaves. That window comes to the front with the tab selected, and the window
+    /// it leaves selects the tab beside it. Nil, with a beep, when moveRefusal says why it can't.
+    @discardableResult
+    func moveTab(_ tab: TerminalTab, toProject path: String) -> TerminalWindowController? {
+        let path = canonicalPath(path)
+        guard moveRefusal(tab, toProject: path) == nil, let source = controller(of: tab) else {
+            NSSound.beep()
+            return nil
+        }
+        let open = controllers.first { $0.project == path }
+        if let open, open === source {
+            source.show(tab)
+            return source
+        }
+        let placement = ProjectOpening.openAsProject(windowOpen: open != nil, setting: projectTarget,
+                                                     systemPrefersTabs: WindowTabbing.systemPrefersTabs(over: source))
+        let paneView = source.paneView(of: tab)
+        let destination: TerminalWindowController
+        switch (placement, open) {
+        case (.existing, let open?):
+            destination = open
+            destination.attach(tab, paneView: paneView)
+        case (.newTab, _):
+            destination = openWindow(directory: path, project: path, tabInto: source) { $0.attach(tab, paneView: paneView) }
+        default:
+            destination = openWindow(directory: path, project: path) { $0.attach(tab, paneView: paneView) }
+        }
+        source.detach(tab)
+        destination.window?.makeKeyAndOrderFront(nil)
+        return destination
     }
 
     /// Where Open in New Worktree… puts new folders (Settings › Editor › Git): beside the repository, or in

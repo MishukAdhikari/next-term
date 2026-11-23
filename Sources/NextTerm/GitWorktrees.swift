@@ -243,14 +243,54 @@ extension GitActions {
     /// window about to close, whose tabs and agents end with it (Close and Remove Worktree), so they don't count.
     func removalVerdict(_ row: BranchPopupController.WorktreeRow, leaving: TerminalWindowController? = nil,
                         done: @escaping (WorktreeRemoval.Verdict, _ goTo: @escaping () -> Void) -> Void) {
-        guard let model, let git = GitWriter.git else { return NSSound.beep() }
+        guard let model else { return NSSound.beep() }
+        Self.removalVerdict(row, in: model, leaving: leaving, done: done)
+    }
+
+    /// removalVerdict for a worktree read on its own (readWorktree), not through the branch popup.
+    static func removalVerdict(_ row: BranchPopupController.WorktreeRow, in model: BranchModel, leaving: TerminalWindowController? = nil,
+                               done: @escaping (WorktreeRemoval.Verdict, _ goTo: @escaping () -> Void) -> Void) {
+        removalFacts(row, in: model, leaving: leaving) { facts, goTo in done(WorktreeRemoval.verdict(facts), goTo) }
+    }
+
+    /// The repository of the worktree at `path` and its row, read now off the main thread, on their own: never through
+    /// a window's branch popup, which a person may have open on another repository. Nil when git can't read it or the
+    /// worktree is gone. What decides a removal is read this way at the moment it is decided, never kept from earlier.
+    static func readWorktree(at path: String, done: @escaping ((model: BranchModel, row: BranchPopupController.WorktreeRow)?) -> Void) {
+        guard let git = GitWriter.git else { return done(nil) }
+        DispatchQueue.global(qos: .userInitiated).async {
+            let model = BranchModel.read(at: path, git: git)
+            DispatchQueue.main.async {
+                guard let model, let row = BranchPopupController.worktreeRow(at: path, in: model) else { return done(nil) }
+                done((model, row))
+            }
+        }
+    }
+
+    /// What the verdict is made from, read as removalVerdict reads it; `countUnpushed`: with the commits on its branch no
+    /// remote branch has, when it can go: closing a worktree's window lists every reason it stays and notes those
+    /// commits. An agent counts as working in it when its folder is there or the record of where it works says so (a file
+    /// it wrote there by its full path, from a folder elsewhere).
+    func removalFacts(_ row: BranchPopupController.WorktreeRow, leaving: TerminalWindowController? = nil, countUnpushed: Bool = false,
+                      done: @escaping (WorktreeRemoval.Facts, _ goTo: @escaping () -> Void) -> Void) {
+        guard let model else { return NSSound.beep() }
+        Self.removalFacts(row, in: model, leaving: leaving, countUnpushed: countUnpushed, done: done)
+    }
+
+    static func removalFacts(_ row: BranchPopupController.WorktreeRow, in model: BranchModel, leaving: TerminalWindowController? = nil,
+                             countUnpushed: Bool = false, done: @escaping (WorktreeRemoval.Facts, _ goTo: @escaping () -> Void) -> Void) {
+        guard let git = GitWriter.git else { return NSSound.beep() }
         let w = row.worktree
         var known = WorktreeRemoval.Facts(isMain: model.isMainCheckout(w), isMissing: w.isPrunable,
                                           lockReason: w.lockReason, holder: row.holder, holderAlive: row.holderAlive)
         let inside = Self.inside(w, of: model)
         let open = AppDelegate.shared.controllers.filter { $0 !== leaving }
         let local = open.flatMap { c in c.tabs.filter { $0.remote == nil }.map { (c, $0) } }
-        let agents = local.filter { $0.1.status.running && $0.1.status.kind == .agent && inside(AgentPlaces.shared.agentFolder(of: $0.1)) }
+        let places = AgentPlaces.shared.places
+        let agents = local.filter { _, tab in
+            tab.status.running && tab.status.kind == .agent
+                && (inside(AgentPlaces.shared.agentFolder(of: tab)) || places[tab.id.uuidString].map { inside($0.checkout.path) } == true)
+        }
         let windows = open.filter { $0.project.map(inside) ?? false }
         let tabs = local.filter { inside($0.1.liveDirectory) }
         known.agents = agents.map { AgentGuard.Agent(program: $0.1.status.program, tab: $0.1.title) }
@@ -274,8 +314,11 @@ extension GitActions {
             }
             // Detached: git's gc deletes a commit no branch or tag has once the worktree's reflog goes with it.
             if w.isDetached, let head = w.head { counted.headOnNoBranch = WorktreeRemoval.isOnNoBranch(head, in: root, git: git) }
-            let decided = WorktreeRemoval.verdict(counted)
-            DispatchQueue.main.async { done(decided, goTo) }
+            if countUnpushed, !w.isDetached, let branch = w.branch, WorktreeRemoval.verdict(counted) == .remove {
+                counted.unpushedCommits = WorktreeRemoval.unpushedCommits(branch: branch, in: root, git: git) ?? 0
+            }
+            let read = counted
+            DispatchQueue.main.async { done(read, goTo) }
         }
     }
 
@@ -326,17 +369,18 @@ extension GitActions {
 
     /// Close and Remove Worktree, once its window has closed and the programs in it have ended: the same remove, run
     /// from the main checkout (never forced, so git still refuses a worktree that changed meanwhile), told in the
-    /// window in front now.
-    static func removeClosed(_ w: Worktree, folder: String, model: BranchModel) {
+    /// window in front now. `failed`: told git's reason in place of the question a failure asks (the notice that offered
+    /// it says it).
+    static func removeClosed(_ w: Worktree, folder: String, model: BranchModel, failed: ((String) -> Void)? = nil) {
         let main = model.mainCheckout ?? model.commonDir
         let steps = [WorktreeRemoval.arguments(path: w.path)]
         let places = [w.path, canonicalPath(w.path)]
         AgentPlaces.shared.noteOwnGit(steps, in: main)
         GitWriter.shared.run("Remove worktree \(folder)", in: main, repository: model.commonDir, steps: steps) { result in
             AgentPlaces.shared.noteOwnGit(steps, in: main)
-            let open = AppDelegate.shared.controllers.filter { !$0.hasClosed }
-            let front = (open.first { $0.window?.isKeyWindow == true } ?? open.first)?.window
+            let front = AppDelegate.shared.frontOpenController?.window
             guard result.ok else {
+                if let failed { return failed(tail(result.output, lines: 2)) }
                 return GitPrompt.ask("Could not remove “\(folder)”", info: tail(result.output) + "\n\nIts window is closed, and the worktree is still there.",
                                      buttons: ["OK", "Open Worktree", "Show Git Commands"], style: .warning, over: front) { choice in
                     if choice == 1 { _ = AppDelegate.shared.openWorktreeWindow(w.path) }
@@ -345,6 +389,108 @@ extension GitActions {
             }
             AppDelegate.shared.forgetRecentProjects(under: places)
             GitToast.show("Removed \(folder)" + (w.branch.map { "; \($0) stays" } ?? ""), in: front)
+        }
+    }
+}
+
+/// Once an agent tab's agent ends (its tab closed, its program quit, or the last agent tab ended), each worktree it
+/// worked in that no window has open is offered for removal, once ever: a notice in the window in front naming the
+/// worktree and its branch, with Remove and Keep, that stays until answered. One that would lose something (changes, a
+/// tab still in it, a lock) gets no notice and may be offered when another agent ends. The worktrees answered are kept
+/// across launches; tabs restored at launch whose agents never ran here end nothing.
+@MainActor
+enum WorktreeEndOffer {
+    private static let key = "worktreeRemovalOffered"
+    /// Worktrees waiting for their notice, first one first.
+    private static var pending: [String] = []
+    /// A verdict being read, or a notice waiting for the one up to go.
+    private static var asking = false
+    private static var waitingFree = false
+
+    /// The worktrees whose offer was answered (Remove or Keep), the newest 200.
+    static var answered: [String] { UserDefaults.standard.stringArray(forKey: key) ?? [] }
+
+    /// The worktree whose notice is up or whose verdict is being read: offered already, so another tab ending there
+    /// can't queue it again while it is asked about.
+    private static var asked: String?
+
+    /// AgentPlaces tells it which tabs' agents ended; `history` is where each tab's agent worked.
+    static func agentsEnded(_ ended: Set<String>, history: [String: [String]]) {
+        guard let app = AppDelegate.shared else { return }
+        let open = app.controllers.filter { !$0.hasClosed }.compactMap(AgentPlaces.shownFolder(of:)).map(canonicalPath)
+        let offered = Set(answered).union(pending).union(asked.map { [$0] } ?? [])
+        let offers = WorktreeLifecycle.removalOffers(ended: ended, history: history, open: open, offered: offered)
+        pending += offers.filter { FileManager.default.fileExists(atPath: $0) }
+        pump()
+    }
+
+    /// The worktree was asked about another way (closing its window asks Close Window or Close and Remove Worktree):
+    /// its agents ending must not ask again.
+    static func answered(_ path: String) {
+        let place = canonicalPath(path)
+        pending.removeAll { $0 == place }
+        spend(place)
+    }
+
+    private static func spend(_ path: String) {
+        UserDefaults.standard.set(Array((answered.filter { $0 != path } + [path]).suffix(200)), forKey: key)
+    }
+
+    /// The next worktree's notice, once no notice is up: what removing it would lose is read now, as things stand, on
+    /// its own (never through a window's branch popup, which may be open on another repository).
+    private static func pump() {
+        guard !asking, !pending.isEmpty else { return }
+        if GitToast.isShowing {
+            guard !waitingFree else { return }
+            waitingFree = true
+            return GitToast.whenFree { waitingFree = false; pump() }
+        }
+        let path = pending.removeFirst()
+        let open = AppDelegate.shared.controllers.filter { !$0.hasClosed }
+        guard !answered.contains(path), GitWriter.git != nil, AppDelegate.shared.frontOpenController?.window != nil,
+              !open.contains(where: { AgentPlaces.shownFolder(of: $0).map { canonicalPath($0) == path || canonicalPath($0).hasPrefix(path + "/") } == true })
+        else { return pump() }
+        asking = true
+        asked = path
+        GitActions.readWorktree(at: path) { read in
+            guard let (model, row) = read else {
+                asking = false
+                asked = nil
+                return pump()
+            }
+            GitActions.removalVerdict(row, in: model) { verdict, _ in
+                asking = false
+                guard verdict == .remove, let front = AppDelegate.shared.frontOpenController, let window = front.window else {
+                    asked = nil
+                    return pump()
+                }
+                let branch = row.worktree.branch.map { " \($0) stays." } ?? ""
+                GitToast.show("Remove the worktree “\(row.folder)”?" + branch, in: window, button: "Remove", action: {
+                    spend(path)
+                    remove(path, in: front)
+                }, other: "Keep", otherAction: { spend(path) }, stays: true, gone: {
+                    asked = nil
+                    DispatchQueue.main.async { pump() }
+                })
+            }
+        }
+    }
+
+    /// Remove, read and checked again first: the notice may have been up a while, and a window, a change or a commit
+    /// since keeps it.
+    private static func remove(_ path: String, in front: TerminalWindowController) {
+        GitActions.readWorktree(at: path) { read in
+            guard let (model, row) = read else { return } // gone already
+            GitActions.removalVerdict(row, in: model) { verdict, _ in
+                guard verdict == .remove else {
+                    let why = WorktreeRemoval.whyItStays(verdict) ?? ""
+                    return GitToast.show("Kept “\(row.folder)”: " + why, in: front.window, isError: true)
+                }
+                GitActions.removeClosed(row.worktree, folder: row.folder, model: model) { reason in
+                    let shown = reason.split(whereSeparator: \.isNewline).joined(separator: " ")
+                    GitToast.show("Could not remove “\(row.folder)”: " + shown, in: front.window, isError: true)
+                }
+            }
         }
     }
 }

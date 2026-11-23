@@ -496,10 +496,13 @@ public enum WorktreeRemoval {
         /// which goes with it, still has it, and git's gc then deletes it.
         public var headOnNoBranch = false
         public var head: String?
+        /// The commits on its branch that no remote branch has. Never a reason to keep it: the branch keeps them.
+        public var unpushedCommits = 0
 
         public init(isMain: Bool = false, isMissing: Bool = false, agents: [AgentGuard.Agent] = [], windows: [String] = [], tabs: [String] = [],
                     lockReason: String? = nil, holder: LockHolder? = nil, holderAlive: Bool = false, inProgress: GitInProgress? = nil,
-                    changedFiles: Int = 0, headOnNoBranch: Bool = false, head: String? = nil) {
+                    changedFiles: Int = 0, headOnNoBranch: Bool = false, head: String? = nil, unpushedCommits: Int = 0) {
+            self.unpushedCommits = unpushedCommits
             self.isMain = isMain
             self.isMissing = isMissing
             self.agents = agents
@@ -532,25 +535,44 @@ public enum WorktreeRemoval {
     /// The first reason that holds, in this order: main checkout, a lock on a missing folder, agents, windows,
     /// tabs, a lock, something in progress, changes, a commit on no branch.
     public static func verdict(_ facts: Facts) -> Verdict {
-        if facts.isMain { return .refuse("It is the repository’s main checkout.", goTo: false) }
-        if facts.isMissing, facts.lockReason == nil { return .forget(losing: facts.lostCommit) }
-        if let agent = facts.agents.first { return .refuse("\(agent.name) is working in it, in the tab “\(agent.tab)”.", goTo: true) }
-        if let window = facts.windows.first { return .refuse("The window “\(window)” is open on it.", goTo: true) }
-        if let tab = facts.tabs.first { return .refuse("The tab “\(tab)” is in it.", goTo: true) }
+        if facts.isMissing, !facts.isMain, facts.lockReason == nil { return .forget(losing: facts.lostCommit) }
+        return stays(facts).first ?? .remove
+    }
+
+    /// Every reason removal is refused, in the verdict's order: none exactly when it can go (or, its folder gone,
+    /// be forgotten). Commits not pushed are never one.
+    public static func refusals(_ facts: Facts) -> [String] {
+        stays(facts).compactMap { verdict in
+            switch verdict {
+            case let .refuse(reason, _), let .unlockFirst(reason): return reason
+            case .remove, .forget: return nil
+            }
+        }
+    }
+
+    /// Each reason the worktree stays, in order: main checkout, each agent, window and tab in it, a lock, something in
+    /// progress, changes, a commit on no branch.
+    private static func stays(_ facts: Facts) -> [Verdict] {
+        var found: [Verdict] = []
+        if facts.isMain { found.append(.refuse("It is the repository’s main checkout.", goTo: false)) }
+        for agent in facts.agents { found.append(.refuse("\(agent.name) is working in it, in the tab “\(agent.tab)”.", goTo: true)) }
+        for window in facts.windows { found.append(.refuse("The window “\(window)” is open on it.", goTo: true)) }
+        for tab in facts.tabs { found.append(.refuse("The tab “\(tab)” is in it.", goTo: true)) }
         if let reason = facts.lockReason {
             if let holder = facts.holder {
                 let who = "\(AgentName.of(program: holder.program)) (pid \(holder.pid))"
-                return facts.holderAlive ? .refuse("\(who) holds it.", goTo: false) : .unlockFirst("It is locked by \(who), which has ended.")
+                found.append(facts.holderAlive ? .refuse("\(who) holds it.", goTo: false) : .unlockFirst("It is locked by \(who), which has ended."))
+            } else {
+                found.append(.unlockFirst(reason.isEmpty ? "It is locked, with no reason given." : "It is locked: \(reason)."))
             }
-            return .unlockFirst(reason.isEmpty ? "It is locked, with no reason given." : "It is locked: \(reason).")
         }
-        if let doing = facts.inProgress { return .refuse("\(operation(doing)) is in progress there: finish or abort it there first.", goTo: false) }
-        if facts.changedFiles > 0 { return .refuse("It has \(facts.changedFiles) changed file\(facts.changedFiles == 1 ? "" : "s").", goTo: false) }
+        if let doing = facts.inProgress { found.append(.refuse("\(operation(doing)) is in progress there: finish or abort it there first.", goTo: false)) }
+        if facts.changedFiles > 0 { found.append(.refuse("It has \(facts.changedFiles) changed file\(facts.changedFiles == 1 ? "" : "s").", goTo: false)) }
         if let lost = facts.lostCommit {
-            return .refuse("It is detached at \(lost), a commit no branch or tag has: removing the worktree would lose it. New Branch… there keeps it.",
-                           goTo: false)
+            found.append(.refuse("It is detached at \(lost), a commit no branch or tag has: removing the worktree would lose it. New Branch… there keeps it.",
+                                 goTo: false))
         }
-        return .remove
+        return found
     }
 
     /// "A rebase of fix/x", "A merge".
@@ -574,8 +596,7 @@ public enum WorktreeRemoval {
     /// The third button of a worktree window's Close Window question.
     public static let closeAndRemove = "Close and Remove Worktree"
 
-    /// What that question says under the button: what goes besides the window, and that the branch stays (a detached
-    /// worktree's commit is checked once the button is pressed, as every other reason it might stay).
+    /// What that question says under the button: what goes besides the window, and that the branch stays.
     public static func closingInfo(branch: String?) -> String {
         "Deletes its folder, with the ignored files in it." + (branch.map { " The branch \($0) stays, with its commits." } ?? "")
     }
@@ -594,6 +615,36 @@ public enum WorktreeRemoval {
         case .forget:
             return "Its folder is gone already: Git › Worktrees… forgets it."
         }
+    }
+
+    /// The one question closing a linked worktree's window asks, from the facts with that window's own tabs and agents
+    /// left out (they end with it).
+    public struct CloseQuestion: Equatable, Sendable {
+        public let title: String
+        public let info: String
+        /// Close Window (Return) and Cancel (Escape).
+        public let buttons: [String]
+        /// Close and Remove Worktree, set apart and never the default; nil when removing it would lose something.
+        public let alternative: String?
+        /// Under the alternative: what goes, that the branch stays, and the commits on it not pushed yet.
+        public let note: String?
+    }
+
+    /// Asked on every close of a linked worktree's window, busy or not: the verdict comes first, so it offers
+    /// removal or says every reason it stays, never a second question. `stops`: what closing stops, empty when nothing
+    /// runs or a merged window's close asked already.
+    public static func closeQuestion(facts: Facts, stops: String, branch: String?) -> CloseQuestion {
+        let title = "Close this window?", buttons = ["Close Window", "Cancel"]
+        let decided = verdict(facts)
+        guard decided == .remove else {
+            let reasons = refusals(facts)
+            let why = reasons.isEmpty ? whyItStays(decided).map { [$0] } ?? [] : reasons
+            let info = [stops, "The worktree can’t be removed now:\n" + why.joined(separator: "\n")].filter { !$0.isEmpty }.joined(separator: "\n\n")
+            return CloseQuestion(title: title, info: info, buttons: buttons, alternative: nil, note: nil)
+        }
+        let count = facts.unpushedCommits
+        let unpushed = count > 0 ? "\nIt keeps \(count) commit\(count == 1 ? "" : "s") not pushed yet." : ""
+        return CloseQuestion(title: title, info: stops, buttons: buttons, alternative: closeAndRemove, note: closingInfo(branch: branch) + unpushed)
     }
 
     /// What the question about a branch another worktree holds offers, button by button.
@@ -638,6 +689,17 @@ public enum WorktreeRemoval {
         guard let out = GitRunner.run(git, ["-C", root, "--no-optional-locks", "rev-list", "-n", "1", commit, "--not", "--branches", "--remotes", "--tags"],
                                       timeout: 30) else { return true }
         return !String(decoding: out, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// Counts the commits on `branch` that no remote branch has.
+    public static func unpushedArguments(branch: String) -> [String] {
+        ["rev-list", "--count", "refs/heads/\(branch)", "--not", "--remotes"]
+    }
+
+    /// The commits on `branch` that no remote branch has; nil when git can't say.
+    public static func unpushedCommits(branch: String, in root: String, git: String) -> Int? {
+        GitRunner.run(git, ["-C", root, "--no-optional-locks"] + unpushedArguments(branch: branch), timeout: 30)
+            .flatMap { Int(String(decoding: $0, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)) }
     }
 
     /// Never --force: git refuses a worktree with changes, and the branch stays.

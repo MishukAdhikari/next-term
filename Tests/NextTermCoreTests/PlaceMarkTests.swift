@@ -28,6 +28,19 @@ import Testing
         #expect(there?.facts(agent: "Codex", when: when).hasPrefix("Codex works in worktree pr-7050, detached at abc1234.") == true)
     }
 
+    /// An agent whose folder stays in the main checkout but that writes in a worktree is elsewhere.
+    @Test func aWriteOnlyDriftIsElsewhere() {
+        var lifecycle = WorktreeLifecycle(since: .distantPast)
+        var seen = PlaceSighting()
+        seen.repositories[Self.repo] = [main, nested]
+        let write = DatedWrite(signal: WriteSignal(path: nested.path + "/app/a.php", kind: .file), at: Date())
+        seen.agents = [PlaceSighting.Agent(key: "7", title: "7", repository: Self.repo, folder: main.path, working: false, writes: [write])]
+        lifecycle.update(seen, at: Date()) { _, _, _ in .switched }
+        let place = lifecycle.places["7"]
+        #expect(place.map { PlaceMark.sync($0, shownRepository: Self.repo, shown: main) } == "elsewhere")
+        #expect(place.flatMap { PlaceMark.of($0, shownRepository: Self.repo, shown: main) }?.label == "this tab: fix/7027-sso")
+    }
+
     @Test func aSwitchUnderAChatSaysWhoAndWhen() {
         let now = main.on(.branch("fix/7050-pr"))
         func mark(_ by: SwitchAuthor) -> PlaceMark? {

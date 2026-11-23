@@ -10,7 +10,9 @@ import NextTermCore
 /// agent, which had a turn, with "you switched it", and not the one in the worktree, which had one too; Keep
 /// Going from the tab's right-click menu clears that (AE2a). A Claude Code whose record says its shell cd'd
 /// into the worktree is there, though its process stays in the root; a cd within the main checkout marks
-/// nothing (AE11). Session records are made by hand, in a home of its own.
+/// nothing (AE11). One whose transcript names the root on every line but writes in a worktree beside the
+/// repository is marked within seconds, and a command that only names an issue marks nothing. Session records are
+/// made by hand, in a home of its own.
 extension SelfTest {
     static func placeChecks(_ c: TerminalWindowController) async {
         guard let app = AppDelegate.shared, let git = GitRunner.locateGit() else { return }
@@ -18,8 +20,9 @@ extension SelfTest {
         let base = canonicalPath(NSTemporaryDirectory()) + "/nt-places-\(getpid())"
         try? fm.removeItem(atPath: base)
         let repo = base + "/xCloud", nested = repo + "/.claude/worktrees/pr-7050", bin = base + "/bin"
-        let controlA = base + "/control-a", controlB = base + "/control-b", controlC = base + "/control-c"
-        for folder in [repo, bin, controlA, controlB, controlC, base + "/home"] { try? fm.createDirectory(atPath: folder, withIntermediateDirectories: true) }
+        let controlA = base + "/control-a", controlB = base + "/control-b", controlC = base + "/control-c", controlD = base + "/control-d"
+        let sibling = base + "/xcloud-wt-11650"
+        for folder in [repo, bin, controlA, controlB, controlC, controlD, base + "/home"] { try? fm.createDirectory(atPath: folder, withIntermediateDirectories: true) }
         @discardableResult func sh(_ args: String...) -> String {
             let p = Process(), out = Pipe()
             p.executableURL = URL(fileURLWithPath: git)
@@ -38,6 +41,7 @@ extension SelfTest {
         sh("switch", "-q", "-c", "fix/7611-3ds")
         sh("branch", "fix/7050-pr")
         sh("worktree", "add", "-q", "-b", "fix/7027-sso", nested)
+        sh("worktree", "add", "-q", "-b", "fix/11650", sibling) // beside the repository, not in it
         // A stand-in for Claude Code: it works in the folder its control file names, once that appears, and
         // shows Claude's working hint while its working file is there.
         let script = """
@@ -254,12 +258,50 @@ extension SelfTest {
               "places: a cd into the nested worktree, as the agent's record says, is a move there though its process stays in the root",
               AgentPlaces.shared.agentFolder(of: eleven) + " " + tip(eleven))
 
+        // Claude Code in tab "twelve": every line of its transcript names the repository's root, while it writes in a
+        // sibling worktree. A command that only names an issue is no write; the write marks it, and the root named
+        // again on later lines doesn't take the mark away.
+        let twelve = holder.addTab(directory: repo)
+        opened.append(twelve)
+        await start(twelve, control: controlD, named: "twelve")
+        let twelvePid = tcgetpgrp(twelve.view.process.childfd)
+        let twelveId = "5e55a0de-0000-4000-8000-0000000000d4"
+        try? #"{"pid": \#(twelvePid), "sessionId": "\#(twelveId)", "cwd": "\#(repo)"}"#.write(toFile: home + "/.claude/sessions/\(twelvePid).json", atomically: true, encoding: .utf8)
+        let twelveTranscript = project + "/\(twelveId).jsonl"
+        func line(_ tool: (name: String, input: String)?) -> String {
+            let time = stamp.string(from: Date())
+            guard let tool else { return #"{"type":"user","cwd":"\#(repo)","timestamp":"\#(time)"}"# + "\n" }
+            return #"{"type":"assistant","cwd":"\#(repo)","timestamp":"\#(time)","message":{"content":[{"type":"tool_use","id":"t","name":"\#(tool.name)","input":\#(tool.input)}]}}"# + "\n"
+        }
+        func append(_ text: String) {
+            if !fm.fileExists(atPath: twelveTranscript) { fm.createFile(atPath: twelveTranscript, contents: nil) }
+            guard let handle = FileHandle(forWritingAtPath: twelveTranscript) else { return }
+            handle.seekToEndOfFile()
+            handle.write(Data(text.utf8))
+            handle.closeFile()
+        }
+        append(line(nil) + line((name: "Bash", input: #"{"command":"gh issue view 11650"}"#)))
+        await pause(4)
+        check(!marked(twelve), "places: a command that only names an issue marks nothing", tip(twelve))
+        append(line((name: "Write", input: #"{"file_path":"\#(sibling)/tests/Feature/A.php","content":"<?php"}"#)))
+        check(await wait(6) { marked(twelve) && tip(twelve).contains("works in worktree xcloud-wt-11650") },
+              "places: a write in a sibling worktree marks the tab within seconds, though every line names the root", tip(twelve))
+        let twelveListed = MCPControl.describe(twelve, in: holder, caller: nil)
+        check(twelveListed["checkout"] as? String == canonicalPath(sibling) && twelveListed["sync"] as? String == "elsewhere",
+              "places: list_tabs says the writing agent is elsewhere, in the sibling worktree",
+              "\(twelveListed["checkout"] ?? "-") \(twelveListed["sync"] ?? "-")")
+        append(line(nil) + line(nil))
+        await pause(4)
+        check(marked(twelve) && tip(twelve).contains("works in worktree xcloud-wt-11650"),
+              "places: the root named again on later lines doesn't take the mark away", tip(twelve))
+
         for tab in opened { tab.view.send(txt: "\u{03}") }
         _ = await wait(5) { opened.allSatisfy { !$0.status.running } }
         opened = []
         holder.window?.performClose(nil)
         _ = await wait(3) { !app.controllers.contains { $0 === holder } }
         sh("worktree", "remove", "--force", nested)
+        sh("worktree", "remove", "--force", sibling)
         try? fm.removeItem(atPath: base)
         c.window?.makeKeyAndOrderFront(nil)
     }
