@@ -490,6 +490,14 @@ enum SelfTest {
         } else {
             note("hostile file name row: the sidebar didn't list it, so its one-line drawing wasn't checked")
         }
+        // … and so does its tab in the editor.
+        if c.editorArea.open(trap, focus: false) == .opened {
+            let titles = c.editorArea.tabBar.items.map(\.title)
+            check(titles.contains("notes␕ touch PWNED ⏎ .txt"), "a file name with control characters shows on one line in its editor tab", titles.joined(separator: " | "))
+            c.editorArea.closeAll()
+        } else {
+            note("hostile file name tab: the editor didn't open it, so its tab title wasn't checked")
+        }
         second.view.send(txt: "cd \(ShellQuote.quote(dir.path))\r")
         _ = await wait(3) { !second.status.running }
         second.view.typeIn("ls -l " + ShellQuote.quote(trap.path))
