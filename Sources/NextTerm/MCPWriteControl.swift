@@ -109,7 +109,7 @@ enum MCPWriteControl {
         let details: String
         /// A command the change runs, shown in its own box as it will be typed (run_command).
         var command: String?
-        /// The primary's title.
+        /// The approve button's title: "Allow" for the remote door's own asks (R59).
         var approveTitle = "Approve"
     }
 
