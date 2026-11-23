@@ -79,11 +79,15 @@ extension SelfTest {
             check((try? String(contentsOfFile: worktrees.file, encoding: .utf8)) == edited && BuiltInSkillInstall.state(.worktrees) == .theirs
                   && BuiltInSkillInstall.remove(.worktrees) != nil,
                   "built-in skill copies: an edited copy is the user's, left as it is by the sync, agent control off and Remove")
-            // Agent control off took Next Term's own copies away; on again writes them back.
-            let gone: Bool = [BuiltInSkill.tabs, .setup, .secrets].allSatisfy { !fm.fileExists(atPath: BuiltInSkillInstall.paths($0.name).folder) }
+            // Agent control off took Next Term's own copies away; on again writes them back. next-term-secrets, added by
+            // an earlier version (its record moved over above), is the user's choice and stays, as it did there.
+            let gone: Bool = [BuiltInSkill.tabs, .setup].allSatisfy { !fm.fileExists(atPath: BuiltInSkillInstall.paths($0.name).folder) }
+            let kept: Bool = BuiltInSkillInstall.state(.secrets) == .current
             BuiltInSkillInstall.sync(wanted: BuiltInSkill.all)
             let back: Bool = [BuiltInSkill.tabs, .setup, .secrets].allSatisfy { BuiltInSkillInstall.state($0) == .current }
-            check(gone && back, "built-in skill copies: agent control off takes Next Term's own copies away, and on writes them back")
+            check(gone && kept && back,
+                  "built-in skill copies: agent control off takes Next Term's own copies away but keeps a chosen next-term-secrets, and on writes them back",
+                  "gone \(gone), secrets kept \(kept), back \(back)")
 
             // The tabs setting off takes next-term-tabs alone, and its link.
             let tabs = BuiltInSkillInstall.paths(BuiltInSkill.tabs.name)
