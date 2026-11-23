@@ -2,10 +2,8 @@ import AppKit
 import NextTermCore
 
 /// Where each local agent tab's agent works: its checkout and branch, for the one mark a tab gets when that is
-/// not what its window shows or its branch was switched under it. Once a second while something moves, slowing to
-/// every 2 and then every 4 seconds while looks find nothing new (QuietBackoff), and back to once a second when an
-/// agent starts or ends, a shell tab runs git that can move HEAD, Next Term runs such git itself, or a look finds a
-/// change. Each look reads each agent's own folder (its process's, or the one its session record names after a move the process
+/// not what its window shows or its branch was switched under it. Once a second while an agent runs in a local
+/// tab: each agent's own folder (its process's, or the one its session record names after a move the process
 /// didn't make) and what its session record says it wrote since, git's worktree list for its repository (read
 /// again only when a HEAD or a git folder changed), then WorktreeLifecycle, the one record of where each agent
 /// works. The reads run off the main thread; remote tabs get nothing.
@@ -34,11 +32,6 @@ final class AgentPlaces {
     private var commandsSeen: [String: Int] = [:]
     private var reading = false
     private var timer: Timer?
-    /// How long until the next look: longer while looks find nothing new.
-    private var pace = QuietBackoff()
-    /// The agent tabs at the last look, with their processes and whether they worked: a change is an agent that
-    /// started, ended or turned, and the looks go back to once a second.
-    private var probed: [String] = []
 
     // Read and written on `queue` only.
     private let queue = DispatchQueue(label: "nextterm.places", qos: .utility)
@@ -57,10 +50,6 @@ final class AgentPlaces {
     private var missingTranscripts: [String: Date] = [:]
     /// Command Code's session file for each agent run (by tab id), and when it was last looked for.
     private var commandCodeFiles: [String: (startedAt: Date, path: String?, looked: Date)] = [:]
-    /// Codex's rollout for each agent run (by tab id), found by listing its processes' open files: listed again every
-    /// 4 seconds, or at once when its process or folder changed; the one found last is followed in between.
-    private var codexRollouts: [String: (listing: Relisting, rollout: String?)] = [:]
-    static let codexRelisting: TimeInterval = 4
 
     /// The moment this version first followed what agents write, kept once: what they did before it is the baseline,
     /// never offered.
@@ -73,7 +62,10 @@ final class AgentPlaces {
     }()
 
     private init() {
-        schedule()
+        let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in self?.tick() }
+        timer.tolerance = 0.2 // its wakeups may join the system's others
+        RunLoop.main.add(timer, forMode: .common)
+        self.timer = timer
         agentsEnded = { [weak self] ended in
             guard let history = self?.history else { return }
             MainActor.assumeIsolated { WorktreeEndOffer.agentsEnded(ended, history: history) }
@@ -233,8 +225,6 @@ final class AgentPlaces {
         let path = canonicalPath(root)
         ownSwitches[path] = Date()
         ownTargets[path] = steps.compactMap(AgentLocation.switchTarget(arguments:)).last
-        // The switch shows in the next look, which comes within a second again.
-        if pace.reset() { schedule() }
     }
 
     private func place(of tab: TerminalTab) -> AgentPlace? {
@@ -247,22 +237,7 @@ final class AgentPlaces {
         controller.project ?? controller.sidebar.root?.path
     }
 
-    // MARK: the looks
-
-    /// Sets the clock to the pace's wait. Each wakeup has a fifth of it as tolerance, so it may join the system's others.
-    private func schedule() {
-        timer?.invalidate()
-        let interval = pace.interval
-        let timer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in self?.tick() }
-        timer.tolerance = interval / 5
-        RunLoop.main.add(timer, forMode: .common)
-        self.timer = timer
-    }
-
-    /// What a look found: a change brings the next one within a second, nothing new waits longer.
-    private func noteLook(moved: Bool) {
-        if pace.note(moved: moved) { schedule() }
-    }
+    // MARK: once a second
 
     /// One agent tab, as read on the main thread.
     private struct Probe {
@@ -278,7 +253,6 @@ final class AgentPlaces {
     private func tick() {
         guard let app = AppDelegate.shared else { return }
         let now = Date()
-        let commandsBefore = shellCommands.count
         noteShellCommands(app.controllers, at: now)
         var probes: [Probe] = []
         var windows = Set<String>()
@@ -295,11 +269,7 @@ final class AgentPlaces {
                                     shellFolder: tab.directory))
             }
         }
-        let probed = probes.map { "\($0.key) \($0.pid) \($0.working)" }
-        let started = probed != self.probed || shellCommands.count > commandsBefore
-        self.probed = probed
         guard !probes.isEmpty else {
-            noteLook(moved: started || !places.isEmpty || !folders.isEmpty)
             if !places.isEmpty || !folders.isEmpty {
                 places = [:]
                 folders = [:]
@@ -329,7 +299,6 @@ final class AgentPlaces {
             let read = self.read(probes, windows: windows, sighting: sighting, git: git, home: home, at: now)
             DispatchQueue.main.async { [self] in
                 reading = false
-                noteLook(moved: started || moved(to: read))
                 places = read.places
                 folders = read.folders
                 shown = read.shown
@@ -337,17 +306,6 @@ final class AgentPlaces {
                 noteOfferBaselines()
                 publish(history: read.history, ended: read.ended)
             }
-        }
-    }
-
-    /// Whether a look's read differs from what the last one published: a place, a placement, a worktree in an agent's
-    /// history, an agent's folder, a checkout a window shows, or an agent that ended.
-    private func moved(to read: Read) -> Bool {
-        guard read.places == places, read.placements == placements, read.history == history, read.ended.isEmpty,
-              read.folders.mapValues(\.folder) == folders.mapValues(\.folder),
-              read.shown.keys == shown.keys else { return true }
-        return read.shown.contains { folder, now in
-            shown[folder].map { $0.repository != now.repository || $0.checkout != now.checkout } ?? true
         }
     }
 
@@ -415,7 +373,6 @@ final class AgentPlaces {
         processFolders = processFolders.filter { keys.contains($0.key) }
         startRepositories = startRepositories.filter { keys.contains($0.key) }
         commandCodeFiles = commandCodeFiles.filter { keys.contains($0.key) }
-        codexRollouts = codexRollouts.filter { keys.contains($0.key) }
         lifecycle.update(sighting, at: seen) { checkout, from, commit in
             AgentLocation.change(in: checkout, from: from, commit: commit, git: git)
         }
@@ -440,7 +397,7 @@ final class AgentPlaces {
             since = last.folder == process ? last.since : Date()
         }
         processFolders[probe.key] = (probe.pid, process, since)
-        let record = recorded(probe, process: process, home: home)
+        let record = recorded(probe, home: home)
         let folder = AgentLocation.folder(process: process, processSince: since, record: record?.folder, startedAt: probe.startedAt)
         let writes = (record?.writes ?? []).map { DatedWrite(signal: WriteSignal(path: canonicalPath($0.signal.path), kind: $0.signal.kind), at: $0.at) }
         return (canonicalPath(folder ?? probe.shellFolder), writes)
@@ -450,7 +407,7 @@ final class AgentPlaces {
     /// `cd`, Codex's `/cd`, Copilot CLI's workspace) and what they write (Claude Code, Codex, Command Code). Only
     /// what was written to the record since the last look is read; the folder named before holds until a newer
     /// line names another.
-    private func recorded(_ probe: Probe, process: String?, home: String) -> RecordRead? {
+    private func recorded(_ probe: Probe, home: String) -> RecordRead? {
         switch probe.agent {
         case .claude?:
             guard let session = records.claudeSession(pid: probe.pid, home: home) else { return nil }
@@ -467,16 +424,13 @@ final class AgentPlaces {
             transcripts[session.id] = found
             return records.follow(found, kind: .claude)
         case .codex?:
-            // The rollout its process holds open (node's child, when Codex runs through npm), listed again only when
-            // its turn comes, its process or folder changed, or the file found last is gone.
-            let now = Date(), signature = "\(probe.pid)\n\(process ?? "")"
-            var known = codexRollouts[probe.key] ?? (Relisting(every: Self.codexRelisting), nil)
-            if known.listing.due(signature, at: now) || known.rollout.map(isRegularFile) == false {
-                known.rollout = Self.codexRollout(of: probe.pid, home: home)
-                known.listing.listed(signature, at: now)
+            // The rollout its process holds open (node's child, when Codex runs through npm).
+            for pid in ProcessInspector.family(of: probe.pid).prefix(12) {
+                if let rollout = ProcessInspector.openFiles(of: pid).first(where: { AgentLocation.isCodexRollout($0, home: home) }) {
+                    return records.follow(rollout, kind: .codex)
+                }
             }
-            codexRollouts[probe.key] = known
-            return known.rollout.map { records.follow($0, kind: .codex) }
+            return nil
         case .copilot?:
             return records.copilotFolder(pid: probe.pid, home: home).map { RecordRead(folder: $0) }
         case .commandCode?:
@@ -492,16 +446,6 @@ final class AgentPlaces {
         default:
             return nil
         }
-    }
-
-    /// The Codex rollout held open by `pid` or one of its children.
-    private static func codexRollout(of pid: Int32, home: String) -> String? {
-        for pid in ProcessInspector.family(of: pid).prefix(12) {
-            if let rollout = ProcessInspector.openFiles(of: pid).first(where: { AgentLocation.isCodexRollout($0, home: home) }) {
-                return rollout
-            }
-        }
-        return nil
     }
 
     /// The repository an agent run is matched against: the one holding the folder it started in, kept for
