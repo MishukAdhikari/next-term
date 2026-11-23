@@ -41,7 +41,7 @@ import Testing
         "SecretFileImportDone.swift": 2, "SecretFileImportRow.swift": 6, "SecretFileImportSheet.swift": 3,
         "SecretImportBanner.swift": 3, "SecretImportSheet.swift": 12, "SecretLinkField.swift": 2,
         "SecretManagerImportSheetBuild.swift": 2, "SecretNewKeySettingsView.swift": 1, "SecretReminders.swift": 1,
-        "SecretRequestWindow.swift": 6, "SecretRotateSheet.swift": 4, "SecretsSkillInstall.swift": 2,
+        "SecretRequestWindow.swift": 6, "SecretRotateSheet.swift": 4, "SecretsSkillSettingView.swift": 2,
         "SecretsView.swift": 15, "SecretsViewAlways.swift": 2, "SecretsViewNeverShow.swift": 1,
         "SetupWithAgent.swift": 1, "SkillsClaudeChoice.swift": 3, "SkillsReviewSheet.swift": 1,
         "SkillsSettingsView.swift": 7, "SkillsWindow.swift": 7, "SlashMenu.swift": 5, "TabBarView.swift": 2,

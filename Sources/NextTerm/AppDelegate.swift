@@ -230,13 +230,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         set {
             UserDefaults.standard.set(newValue, forKey: "agentControl")
             if newValue { startAgentControl() } else { MCPControlServer.shared.stop(); MCPRegistration.update(on: false) }
+            syncBuiltInSkills()
         }
     }
 
     /// Settings › Editor › "Agents offer to run parallel work in tabs" (MCP: agents_offer_tabs): Next Term's next-term-tabs
     /// skill (BuiltInSkill) in its skill library over MCP (list_skills, get_skill), and its line first in the MCP
-    /// instructions an agent in a tab gets (MCPBridge). On by default; nothing is written in the agents' folders, so off
-    /// takes both out at once.
+    /// instructions an agent in a tab gets (MCPBridge), and its copy in the agents' skills folders (BuiltInSkillInstall).
+    /// On by default; off takes all three out at once.
     static let offerTabsKey = "agentsOfferTabs"
     static let offerTabsChanged = Notification.Name("NextTermAgentsOfferTabsChanged")
     var agentsOfferTabs: Bool {
@@ -244,12 +245,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         set {
             UserDefaults.standard.set(newValue, forKey: Self.offerTabsKey)
             NotificationCenter.default.post(name: Self.offerTabsChanged, object: nil)
+            syncBuiltInSkills()
         }
     }
 
     /// Next Term's own skills in its library: none while agents may not control Next Term, next-term-tabs only while
     /// agents offer tabs.
     var builtInSkills: [BuiltInSkill] { agentControl ? BuiltInSkill.offered(tabs: agentsOfferTabs) : [] }
+
+    /// The agents' skills folders get the same skills the library offers, at launch and when agent control or the tabs
+    /// setting changes. Never in a self-test, whose home is the user's own, and never from an update.
+    func syncBuiltInSkills() {
+        guard !SelfTest.isRequested else { return }
+        let wanted: [BuiltInSkill] = builtInSkills
+        MainActor.assumeIsolated { BuiltInSkillInstall.sync(wanted: wanted) }
+    }
 
     /// Settings › Editor › "When an agent opens a tab" (MCP: agents_bring_tabs_forward): its window comes forward and
     /// takes focus, comes forward only, or stays where it is (AgentArrival). The tab never takes the keyboard by itself.
@@ -607,8 +617,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // load check, off the main thread.
         MainActor.assumeIsolated { SecretsStore.shared.loadMarks() }
         MainActor.assumeIsolated { SecretReminders.start() } // key rotation reminders: first checked once the load is done
-        // Its own next-term-secrets copy, if added, brought up to date; never in a self-test, whose home is the user's own.
-        if !SelfTest.isRequested { MainActor.assumeIsolated { SecretsSkillInstall.refresh() } }
+        // Its own skills in the agents' skills folders, written or brought up to date (syncBuiltInSkills skips self-tests).
+        syncBuiltInSkills()
         Task { @MainActor in await SecretsStore.shared.load() }
         // Every key in Next Term, in any of its windows: the typing an agent's window waits out (AgentArrival).
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in

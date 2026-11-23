@@ -3,9 +3,10 @@ import Foundation
 /// The skills Next Term ships in its library (SkillLibrary, over MCP's get_skill): how an agent running in a Next Term
 /// tab runs work in parallel tabs (next-term-tabs), goes on with work in a worktree the project already has, in its own
 /// window (next-term-worktrees), changes Next Term's settings and layout for the user, keys first
-/// (next-term-setup), and uses the user's keys from Secrets by name, never seeing them (next-term-secrets). Nothing is
-/// written to any agent's folders: an agent gets them from Next Term. next-term-secrets is not in the skills paragraph,
-/// since the instructions' first line already tells every agent, in a tab or not, when to look in Secrets. Settings ›
+/// (next-term-setup), and uses the user's keys from Secrets by name, never seeing them (next-term-secrets). Next Term
+/// also keeps a copy of each in the agents' skills folders (BuiltInSkillCopy), written from these same texts.
+/// next-term-secrets is not in the skills paragraph, since the instructions' first line already tells every agent, in a
+/// tab or not, when to look in Secrets. Settings ›
 /// Editor › "Agents offer to run parallel work in tabs" (MCP settings_set agents_offer_tabs) takes next-term-tabs and
 /// its offer out; the others are there whenever agents may control Next Term.
 public struct BuiltInSkill: Sendable, Equatable {

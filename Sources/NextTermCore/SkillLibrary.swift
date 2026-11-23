@@ -2,7 +2,8 @@ import Foundation
 
 /// Next Term's skill library over MCP (list_skills, get_skill): any agent in a tab, whatever it reads itself (Claude
 /// Code, Codex, Gemini CLI, OpenCode, Command Code…), can use the skills of its project, the user's, and Next Term's
-/// own. Nothing is written anywhere: the library only reads, and Next Term's own skills live in the app.
+/// own. The library only reads: Next Term's own skills live in the app, and the copies of them it keeps in the agents'
+/// skills folders (BuiltInSkillCopy) hold the same text.
 ///
 /// It finds them as the agents do (their docs, October 2026):
 /// - The project's: the skill folders in the agent's folder and each one above it up to the repository's top, at most
