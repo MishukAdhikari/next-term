@@ -472,7 +472,7 @@ final class GitToast {
         background.themedBackground(Theme.tabHover)
         background.layer?.cornerRadius = 8
         background.layer?.borderWidth = 1
-        background.layer?.borderColor = WorkSplitView.line.cgColor
+        background.themedBorder(WorkSplitView.line)
         panel.contentView = background
         stack.frame = background.bounds
         stack.autoresizingMask = [.width, .height]

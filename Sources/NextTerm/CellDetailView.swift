@@ -395,6 +395,9 @@ final class CellDetailView: NSView, NSTableViewDataSource, NSTableViewDelegate, 
 
     func numberOfRows(in tableView: NSTableView) -> Int { items.count }
 
+    /// Selected rows in the theme's selection tint, not AppKit's accent fill (see ThemedRowView).
+    func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? { ThemedRowView() }
+
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         let cell = GridCellView.make(in: tableView)
         guard items.indices.contains(row) else { return cell }

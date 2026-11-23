@@ -12,7 +12,7 @@ final class GhostTextView: NSView {
     /// The cells each character takes.
     private var widths: [Int] = []
     private var font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
-    private var colour = NSColor.gray
+    private var colour = Theme.textDim // set by show(_:) before anything is drawn
     private var underline = false
     private var cell = CGSize(width: 8, height: 16)
 
@@ -101,7 +101,7 @@ final class GhostNotice: NSView {
         self.onClose = onClose
         super.init(frame: .zero)
         wantsLayer = true
-        layer?.backgroundColor = NSColor.black.withAlphaComponent(0.78).cgColor
+        themedBackground(Theme.ui(.toastFill).withAlphaComponent(0.78))
         layer?.cornerRadius = 6
         translatesAutoresizingMaskIntoConstraints = false
         setAccessibilityElement(true)
@@ -110,7 +110,7 @@ final class GhostNotice: NSView {
 
         let label = NSTextField(wrappingLabelWithString: text)
         label.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
-        label.textColor = .white
+        label.textColor = Theme.ui(.onToast)
         label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         var views: [NSView] = [label]
         for (index, button) in buttons.enumerated() {
@@ -126,7 +126,7 @@ final class GhostNotice: NSView {
         let close = NSButton(image: NSImage(systemSymbolName: "xmark", accessibilityDescription: closeLabel) ?? NSImage(),
                              target: self, action: #selector(closed(_:)))
         close.isBordered = false
-        close.contentTintColor = NSColor.white.withAlphaComponent(0.8)
+        close.contentTintColor = Theme.ui(.onToast).withAlphaComponent(0.8)
         close.refusesFirstResponder = true
         close.setAccessibilityLabel(closeLabel)
         close.toolTip = closeLabel

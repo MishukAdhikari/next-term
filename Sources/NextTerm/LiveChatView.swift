@@ -253,7 +253,7 @@ final class LiveChatView: NSView {
         var tips: [String] = []
         func add(_ text: String, warn: Bool = false) {
             if line.length > 0 { line.append(NSAttributedString(string: " \u{00B7} ", attributes: [.font: font, .foregroundColor: Theme.textDim])) }
-            line.append(NSAttributedString(string: text, attributes: [.font: font, .foregroundColor: warn ? NSColor.systemOrange : Theme.textDim]))
+            line.append(NSAttributedString(string: text, attributes: [.font: font, .foregroundColor: warn ? Theme.system(.orange) : Theme.textDim]))
             words.append(text)
         }
         if let usage {

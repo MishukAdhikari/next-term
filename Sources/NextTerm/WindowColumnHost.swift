@@ -503,7 +503,7 @@ final class WindowColumnHost: NSView {
         let shade = NSView()
         shade.wantsLayer = true
         shade.themedBackground(Theme.bar)
-        shade.layer?.shadowColor = NSColor.black.cgColor
+        shade.layer?.shadowColor = ThemeLayers.resolved(Theme.ui(.shadow), for: shade)
         shade.layer?.shadowRadius = 5
         shade.layer?.shadowOffset = .zero
         shade.layer?.shadowOpacity = 0

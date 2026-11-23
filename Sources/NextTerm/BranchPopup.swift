@@ -797,7 +797,7 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
         background.layer?.cornerRadius = 10
         background.layer?.masksToBounds = true
         background.layer?.borderWidth = 1
-        background.layer?.borderColor = WorkSplitView.line.cgColor
+        background.themedBorder(WorkSplitView.line)
         panel.contentView = background
 
         let glass = NSImageView(image: NSImage(systemSymbolName: "magnifyingglass", accessibilityDescription: nil) ?? NSImage())
@@ -808,7 +808,7 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
         field.font = .systemFont(ofSize: 14)
         field.textColor = Theme.text
         field.placeholderAttributedString = NSAttributedString(string: "Search branches and actions", attributes: [
-            .font: NSFont.systemFont(ofSize: 14), .foregroundColor: NSColor.placeholderTextColor,
+            .font: NSFont.systemFont(ofSize: 14), .foregroundColor: Theme.system(.placeholder),
         ])
         field.delegate = self
         field.cell?.isScrollable = true
@@ -1107,7 +1107,7 @@ final class BranchCell: NSTableCellView {
             guard i >= 0, i < bytes.count else { continue }
             let start = String(decoding: bytes[..<i], as: UTF8.self).utf16.count
             let length = String(decoding: bytes[i...i], as: UTF8.self).utf16.count
-            text.addAttributes([.font: NSFont.systemFont(ofSize: 13, weight: .bold), .foregroundColor: chosen ? NSColor.white : Theme.gitModified],
+            text.addAttributes([.font: NSFont.systemFont(ofSize: 13, weight: .bold), .foregroundColor: chosen ? Theme.ui(.listChosenMark) : Theme.gitModified],
                                range: NSRange(location: start, length: length))
         }
         return text

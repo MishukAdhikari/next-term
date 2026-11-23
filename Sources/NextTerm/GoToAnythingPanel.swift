@@ -139,7 +139,7 @@ final class GoToAnythingPanel: NSPanel, NSTableViewDataSource, NSTableViewDelega
         search.cell?.usesSingleLineMode = true
         search.cell?.isScrollable = true
         glass.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 16, weight: .regular)
-        glass.contentTintColor = .secondaryLabelColor
+        glass.contentTintColor = Theme.system(.secondaryLabel)
         let rule = NSBox()
         rule.boxType = .separator
         search.setAccessibilityLabel("Go to a tab or project")
@@ -160,7 +160,7 @@ final class GoToAnythingPanel: NSPanel, NSTableViewDataSource, NSTableViewDelega
         scroll.documentView = table
         scroll.hasVerticalScroller = true
         scroll.drawsBackground = false
-        empty.textColor = .secondaryLabelColor
+        empty.textColor = Theme.system(.secondaryLabel)
         empty.isHidden = true
         for view in [glass, search, rule, scroll, empty] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
@@ -243,17 +243,15 @@ final class GoToAnythingPanel: NSPanel, NSTableViewDataSource, NSTableViewDelega
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         let item: GoToAnything.Item = items[row]
-        let cell = NSTableCellView()
+        let cell = GoToAnythingCell()
         // What the row is, as a symbol in the gutter: a command, a shell, an agent or a project.
         let icon = NSImageView(image: NSImage(systemSymbolName: Self.symbol(item.kind), accessibilityDescription: nil) ?? NSImage())
         icon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 14, weight: .regular)
-        icon.contentTintColor = .secondaryLabelColor
         let title = NSTextField(labelWithString: item.title)
         title.font = .systemFont(ofSize: 13, weight: .medium)
         title.lineBreakMode = .byTruncatingTail
         let detail = NSTextField(labelWithString: item.detail)
         detail.font = .systemFont(ofSize: 11)
-        detail.textColor = .secondaryLabelColor
         detail.lineBreakMode = .byTruncatingMiddle
         let lines = NSStackView(views: [title, detail])
         lines.orientation = .vertical
@@ -264,13 +262,13 @@ final class GoToAnythingPanel: NSPanel, NSTableViewDataSource, NSTableViewDelega
         if item.kind == .command {
             let key = NSTextField(labelWithString: KeyboardShortcuts.shared.chord(for: "clearBuffer:")?.display ?? "")
             key.font = .systemFont(ofSize: 12)
-            key.textColor = .tertiaryLabelColor
+            cell.key = key
             trailing = key
         } else {
             let dot = NSView()
             dot.wantsLayer = true
             dot.layer?.cornerRadius = 4
-            dot.layer?.backgroundColor = Self.color(item.state).cgColor
+            dot.themedBackground(Self.color(item.state))
             dot.isHidden = item.state == nil
             dot.widthAnchor.constraint(equalToConstant: 8).isActive = true
             dot.heightAnchor.constraint(equalToConstant: 8).isActive = true
@@ -291,6 +289,10 @@ final class GoToAnythingPanel: NSPanel, NSTableViewDataSource, NSTableViewDelega
             trailing.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -10),
             trailing.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
         ])
+        cell.icon = icon
+        cell.title = title
+        cell.detail = detail
+        cell.paint()
         cell.setAccessibilityLabel(item.title + ", " + item.detail + (item.state.map { ", " + $0 } ?? ""))
         return cell
     }
@@ -313,6 +315,28 @@ final class GoToAnythingPanel: NSPanel, NSTableViewDataSource, NSTableViewDelega
         case "working": return Theme.working
         default: return .clear
         }
+    }
+}
+
+/// A Go to Anything row: its words in the theme's label colours; on a row the Mac draws chosen in its accent (the list
+/// has the keyboard), in the Mac's own label colours, which AppKit turns to white there as it always did.
+private final class GoToAnythingCell: NSTableCellView {
+    var icon: NSImageView?
+    var title: NSTextField?
+    var detail: NSTextField?
+    var key: NSTextField?
+
+    override var backgroundStyle: NSView.BackgroundStyle {
+        didSet { if backgroundStyle != oldValue { paint() } }
+    }
+
+    func paint() {
+        let chosen = backgroundStyle == .emphasized
+        func color(_ role: Theme.SystemRole) -> NSColor { chosen ? role.mac : Theme.system(role) }
+        icon?.contentTintColor = color(.secondaryLabel)
+        title?.textColor = color(.label)
+        detail?.textColor = color(.secondaryLabel)
+        key?.textColor = color(.tertiaryLabel)
     }
 }
 

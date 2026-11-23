@@ -41,9 +41,9 @@ final class NextTermView: LocalProcessTerminalView {
         guard awaitsChoice else { return }
         let hint = NSTextField(labelWithString: choiceHint)
         hint.font = .systemFont(ofSize: NSFont.smallSystemFontSize, weight: .medium)
-        hint.textColor = .white
+        hint.textColor = Theme.ui(.onToast)
         hint.drawsBackground = true
-        hint.backgroundColor = NSColor.black.withAlphaComponent(0.72)
+        hint.backgroundColor = Theme.ui(.toastFill).withAlphaComponent(0.72)
         hint.alignment = .center
         hint.wantsLayer = true
         hint.layer?.cornerRadius = 5
@@ -65,9 +65,9 @@ final class NextTermView: LocalProcessTerminalView {
         noteView?.removeFromSuperview()
         let note = NSTextField(labelWithString: SecretMask.current.mask(text))
         note.font = .systemFont(ofSize: NSFont.smallSystemFontSize, weight: .medium)
-        note.textColor = .white
+        note.textColor = Theme.ui(.onToast)
         note.drawsBackground = true
-        note.backgroundColor = NSColor.black.withAlphaComponent(0.72)
+        note.backgroundColor = Theme.ui(.toastFill).withAlphaComponent(0.72)
         note.lineBreakMode = .byTruncatingTail
         note.wantsLayer = true
         note.layer?.cornerRadius = 5

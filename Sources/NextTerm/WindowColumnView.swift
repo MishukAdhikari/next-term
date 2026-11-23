@@ -340,7 +340,7 @@ final class WindowColumnView: NSView, ProjectGlowing {
     }
 
     /// The guide's colour: a step lighter than the bar, plainer with Increase Contrast.
-    private static var guideColor: NSColor { DisplayOptions.increasesContrast ? Theme.textDim : Theme.pair(light: Theme.dynamic(\.divider), dark: NSColor(hex: 0x45474D)) }
+    private static var guideColor: NSColor { DisplayOptions.increasesContrast ? Theme.textDim : Theme.ui(.guide) }
 
     /// The "+N": how many windows do not fit, in the colour of the most urgent mark among them; unfolded, "All Windows…"
     /// beside it with ⌘O's key. Its tooltip names them.
@@ -397,7 +397,7 @@ final class WindowColumnView: NSView, ProjectGlowing {
 
     /// Text that is not a window's name (the count, the heading, a detail, the foot): dim, and plainer with Increase
     /// Contrast.
-    static var secondary: NSColor { DisplayOptions.increasesContrast ? SwitcherRowStyle.selectedSecondary : Theme.textDim }
+    static var secondary: NSColor { DisplayOptions.increasesContrast ? Theme.ui(.selectedSecondary) : Theme.textDim }
 
     override func draw(_ dirtyRect: NSRect) {
         #if DEBUG
@@ -651,7 +651,7 @@ final class WindowColumnButton: NSButton {
     }
 
     /// The rail's quiet dot: a grey that is there without drawing the eye.
-    static let restingDot = Theme.pair(light: NSColor(hex: 0xA0A4AD), dark: NSColor(hex: 0x6E7178))
+    static let restingDot = Theme.ui(.restingDot)
 
     /// The dot's colour as it shows now: its project's (a neutral grey without one) while awake, else the resting grey;
     /// with Increase Contrast, its colour always.
@@ -809,7 +809,7 @@ final class WindowColumnButton: NSButton {
 
     /// A hovered or pressed row lights its dim text a step, as a selected ⌘O row does; this window's own row stays.
     private var lit: Bool { expanded && !isCurrent && (hovering || isHighlighted) }
-    private var secondaryColor: NSColor { lit ? SwitcherRowStyle.selectedSecondary : WindowColumnView.secondary }
+    private var secondaryColor: NSColor { lit ? Theme.ui(.selectedSecondary) : WindowColumnView.secondary }
     private var marksColor: NSColor { secondaryColor }
 
     /// `row` as it is now: drawn again only if what this form shows of it changed.
@@ -1159,7 +1159,7 @@ final class WindowColumnActionButton: NSButton {
             NSBezierPath(roundedRect: plate, xRadius: radius, yRadius: radius).fill()
         }
         let lit: Bool = expanded && (hovering || isHighlighted)
-        let dim: NSColor = lit ? SwitcherRowStyle.selectedSecondary : WindowColumnView.secondary
+        let dim: NSColor = lit ? Theme.ui(.selectedSecondary) : WindowColumnView.secondary
         let middle: CGFloat = bounds.height / 2
         if let lead {
             let text = NSAttributedString(string: lead, attributes: [.foregroundColor: leadColor, .font: leadFont])
@@ -1198,7 +1198,7 @@ final class WindowColumnActionButton: NSButton {
             (isHighlighted ? Theme.overlay(0.14) : Theme.overlay(0.08)).setFill()
             NSBezierPath(roundedRect: place, xRadius: WindowColumnGrid.plateRadius, yRadius: WindowColumnGrid.plateRadius).fill()
         }
-        let color: NSColor = hovering ? SwitcherRowStyle.selectedSecondary : WindowColumnView.secondary
+        let color: NSColor = hovering ? Theme.ui(.selectedSecondary) : WindowColumnView.secondary
         let line: CGFloat = lineHeight
         for (index, word) in keyLines.enumerated() {
             // A long key's name ("Space", "F10") a size smaller, to stay inside the rail.
