@@ -40,6 +40,8 @@ import Testing
         "ReviewDraft.swift": 2, "SecretApprovalPanel.swift": 11, "SecretEditSheet.swift": 7,
         "SecretFileImportDone.swift": 2, "SecretFileImportRow.swift": 6, "SecretFileImportSheet.swift": 3,
         "SecretImportBanner.swift": 3, "SecretImportSheet.swift": 12, "SecretLinkField.swift": 2,
+        "RemoteAccessActivityView.swift": 3, "RemoteAccessConnectionsView.swift": 6, "RemoteAccessOptionsView.swift": 7,
+        "RemoteAccessPairingWindow.swift": 7, "RemoteAccessSecuritySection.swift": 8, "RemoteAccessSettingsView.swift": 29, // Settings › Remote Access and its pairing window: native windows
         "SecretManagerImportSheetBuild.swift": 2, "SecretNewKeySettingsView.swift": 1, "SecretReminders.swift": 1,
         "SecretRequestWindow.swift": 6, "SecretRotateSheet.swift": 4, "SecretsSkillInstall.swift": 2,
         "SecretsView.swift": 15, "SecretsViewAlways.swift": 2, "SecretsViewNeverShow.swift": 1,
