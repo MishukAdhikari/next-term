@@ -258,6 +258,18 @@ extension SelfTest {
         check(shown && c.tabBar.showsNameCut(at: index),
               "window tabs: in a merged window, resting on a tab whose name is cut short shows its whole name",
               "showing “\(HoverTip.shared.shownText ?? "")”, state \(c.tabBar.hoverState(at: index))")
+
+        // And a name that fits shows no tip: the tip follows the cut, not every rest on a tab.
+        tab.userTitle = "Fits"
+        c.refresh()
+        await pause(0.3)
+        c.window?.layoutIfNeeded()
+        HoverTip.shared.hide()
+        c.tabBar.restPointerForTest(at: index)
+        let tipped: Bool = await wait(1) { HoverTip.shared.shownText != nil }
+        check(!tipped && !c.tabBar.showsNameCut(at: index),
+              "window tabs: in a merged window, resting on a tab whose name fits shows no tip",
+              "showing “\(HoverTip.shared.shownText ?? "")”, state \(c.tabBar.hoverState(at: index))")
     }
 
     /// The first of a window's top-row views (the terminal's and the editor's tab bars, the sidebar header, the window

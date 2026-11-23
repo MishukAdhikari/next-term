@@ -99,7 +99,11 @@ extension SelfTest {
         outline.window?.makeFirstResponder(outline)
         var selected: [String] = []
         var styles: Set<Int> = []
-        for row in rows {
+        // Only rows a person can select: the group headers refuse a selection, so their selected look never shows.
+        let selectable = rows.filter { row in
+            outline.delegate?.outlineView?(outline, shouldSelectItem: outline.item(atRow: row)) ?? true
+        }
+        for row in selectable {
             outline.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
             let one = looks()
             selected += one.problems.filter { $0.hasPrefix("row \(row):") }
@@ -109,8 +113,8 @@ extension SelfTest {
         }
         outline.selectRowIndexes(selection, byExtendingSelection: false)
         if let focus { outline.window?.makeFirstResponder(focus) }
-        check(!rows.isEmpty && selected.isEmpty, "links: a selected Databases or Services row shows its name whole as it fits",
-              selected.first ?? "\(rows.count) rows, background styles \(styles.sorted())")
+        check(!selectable.isEmpty && selected.isEmpty, "links: a selected Databases or Services row shows its name whole as it fits",
+              selected.first ?? "\(selectable.count) rows, background styles \(styles.sorted())")
     }
 
     /// Where `view` sits as the constraints place it: its alignment rect, which leaves out a label's insets.
