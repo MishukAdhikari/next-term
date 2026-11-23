@@ -68,17 +68,17 @@ final class ChatDecisionCard: ChatCardView {
             .withSymbolConfiguration(.init(pointSize: CGFloat(sizes.secondary) + 1, weight: .medium))
         icon.contentTintColor = Theme.attention
         lead.font = .systemFont(ofSize: CGFloat(sizes.secondary), weight: .medium)
-        lead.textColor = .secondaryLabelColor
+        lead.textColor = Theme.system(.secondaryLabel)
         lead.stringValue = decision.lead ?? (agent + " asks")
         hint.font = small
-        hint.textColor = .tertiaryLabelColor
+        hint.textColor = Theme.system(.tertiaryLabel)
         hint.stringValue = draftWaits && !hasKeyboard ? "Tab to answer" : ""
         title.font = decision.isQuestion ? .systemFont(ofSize: CGFloat(sizes.body), weight: .medium)
             : .monospacedSystemFont(ofSize: CGFloat(sizes.monospaced), weight: .regular)
-        title.textColor = .labelColor
+        title.textColor = Theme.system(.label)
         title.stringValue = decision.title
         keysLine.font = small
-        keysLine.textColor = .tertiaryLabelColor
+        keysLine.textColor = Theme.system(.tertiaryLabel)
         let count = decision.choices.count
         var keys = "\u{2191}\u{2193} move  \u{00B7}  Return chooses"
         if count > 1 { keys += "  \u{00B7}  1\u{2013}\(min(count, 9)) pick" }
@@ -234,9 +234,9 @@ class ChatCardView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         let box = bounds.insetBy(dx: 0.5, dy: 0.5)
         let path = NSBezierPath(roundedRect: box, xRadius: 8, yRadius: 8)
-        NSColor.windowBackgroundColor.setFill()
+        Theme.system(.windowBackground).setFill()
         path.fill()
-        NSColor.separatorColor.setStroke()
+        Theme.system(.separator).setStroke()
         path.lineWidth = 1
         path.stroke()
     }
@@ -276,7 +276,7 @@ final class ChatButtonRow: NSView {
         }
         for (button, item) in zip(buttons, items) {
             button.title = item.title
-            button.bezelColor = item.accent ? .controlAccentColor : nil
+            button.bezelColor = item.accent ? Theme.system(.accent) : nil
             button.keyEquivalent = ""
             button.toolTip = item.tip
             button.setAccessibilityLabel(item.label)
@@ -298,7 +298,7 @@ final class ChatButtonRow: NSView {
     override func draw(_ dirtyRect: NSRect) {
         guard let index = items.firstIndex(where: \.accent), buttons.indices.contains(index) else { return }
         let frame = buttons[index].frame.insetBy(dx: 1, dy: 2)
-        NSColor.controlAccentColor.setStroke()
+        Theme.system(.accent).setStroke()
         let path = NSBezierPath(roundedRect: frame, xRadius: 6, yRadius: 6)
         path.lineWidth = 2
         path.stroke()

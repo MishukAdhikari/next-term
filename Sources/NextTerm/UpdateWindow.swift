@@ -261,7 +261,8 @@ enum ReleaseNotesRenderer {
 
     private static func append(_ out: NSMutableAttributedString, _ text: String, font: NSFont, color: NSColor,
                                style: NSParagraphStyle, markdown: Bool = false) {
-        let line = markdown ? inline(text, font: font, color: color) : NSAttributedString(string: text, attributes: [.font: font, .foregroundColor: color])
+        // The update window is a native one: its code spans keep the Mac's fill, whatever the theme.
+        let line = markdown ? inline(text, font: font, color: color, codeFill: .quaternaryLabelColor) : NSAttributedString(string: text, attributes: [.font: font, .foregroundColor: color])
         let piece = NSMutableAttributedString(attributedString: line)
         piece.append(NSAttributedString(string: "\n", attributes: [.font: font]))
         piece.addAttribute(.paragraphStyle, value: style, range: NSRange(location: 0, length: piece.length))
@@ -269,7 +270,7 @@ enum ReleaseNotesRenderer {
     }
 
     /// Bold, italics, code and links inside one block. Only web links are followed.
-    static func inline(_ text: String, font: NSFont, color: NSColor) -> NSAttributedString {
+    static func inline(_ text: String, font: NSFont, color: NSColor, codeFill: NSColor = Theme.system(.quaternaryLabel)) -> NSAttributedString {
         let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
         guard let parsed = try? AttributedString(markdown: text, options: options) else {
             return NSAttributedString(string: text, attributes: [.font: font, .foregroundColor: color])
@@ -281,7 +282,7 @@ enum ReleaseNotesRenderer {
             if let intent = run.inlinePresentationIntent {
                 if intent.contains(.code) {
                     runFont = .monospacedSystemFont(ofSize: font.pointSize - 1, weight: .regular)
-                    attributes[.backgroundColor] = NSColor.quaternaryLabelColor
+                    attributes[.backgroundColor] = codeFill
                 }
                 var traits: NSFontDescriptor.SymbolicTraits = []
                 if intent.contains(.stronglyEmphasized) { traits.insert(.bold) }
@@ -319,19 +320,19 @@ final class UpdatePill: NSButton {
     }
 
     private var label: NSAttributedString {
-        NSAttributedString(string: title, attributes: [.font: NSFont.systemFont(ofSize: 11.5, weight: .semibold), .foregroundColor: NSColor.white])
+        NSAttributedString(string: title, attributes: [.font: NSFont.systemFont(ofSize: 11.5, weight: .semibold), .foregroundColor: Theme.ui(.onAccent)])
     }
 
     var width: CGFloat { (label.size().width + 12 + 5 + 2 * 10).rounded(.up) }
 
     override func draw(_ dirtyRect: NSRect) {
         let pill = NSRect(x: 0, y: ((bounds.height - Self.height) / 2).rounded(), width: bounds.width, height: Self.height)
-        let fill = isHighlighted ? Theme.accent.blended(withFraction: 0.25, of: .black) ?? Theme.accent : Theme.accent
+        let fill = isHighlighted ? Theme.accent.blended(withFraction: 0.25, of: Theme.ui(.shadow)) ?? Theme.accent : Theme.accent
         fill.setFill()
         NSBezierPath(roundedRect: pill, xRadius: Self.height / 2, yRadius: Self.height / 2).fill()
         var x: CGFloat = 10
         if let image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
-            .withSymbolConfiguration(.init(pointSize: 11, weight: .semibold).applying(.init(paletteColors: [Theme.accent, .white]))) {
+            .withSymbolConfiguration(.init(pointSize: 11, weight: .semibold).applying(.init(paletteColors: [Theme.accent, Theme.ui(.onAccent)]))) {
             let size = image.size
             image.draw(in: NSRect(x: x, y: pill.midY - size.height / 2, width: size.width, height: size.height))
             x += size.width + 5

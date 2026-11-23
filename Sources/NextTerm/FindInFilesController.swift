@@ -108,7 +108,7 @@ final class FindInFilesController: NSWindowController, NSWindowDelegate, NSOutli
         for (field, placeholder) in [(queryField, "Find"), (replaceField, "Replace with"), (maskField, "File mask, e.g. *.php, !vendor/**")] {
             // What you type is code (monospaced); the hint is interface text.
             field.placeholderAttributedString = NSAttributedString(string: placeholder, attributes: [
-                .font: NSFont.systemFont(ofSize: 12.5), .foregroundColor: NSColor.placeholderTextColor,
+                .font: NSFont.systemFont(ofSize: 12.5), .foregroundColor: Theme.system(.placeholder),
             ])
             field.delegate = self
             field.font = Theme.monoFont(size: 12)
@@ -136,7 +136,7 @@ final class FindInFilesController: NSWindowController, NSWindowDelegate, NSOutli
         replaceButton.action = #selector(replaceSelected)
         replaceAllButton.target = self
         replaceAllButton.action = #selector(replaceAll)
-        status.textColor = .secondaryLabelColor
+        status.textColor = Theme.system(.secondaryLabel)
         Typography.singleLine(status, truncation: .byTruncatingTail)
 
         let column = NSTableColumn(identifier: .init("result"))
@@ -257,11 +257,11 @@ final class FindInFilesController: NSWindowController, NSWindowDelegate, NSOutli
         do { _ = try query.expression() } catch {
             isSearching = false
             status.stringValue = "Invalid regular expression"
-            status.textColor = .systemRed
+            status.textColor = Theme.system(.red)
             updateButtons()
             return
         }
-        status.textColor = .secondaryLabelColor
+        status.textColor = Theme.system(.secondaryLabel)
         status.stringValue = "Searching…"
         isSearching = true
         let root = self.root
@@ -463,14 +463,14 @@ final class FindInFilesController: NSWindowController, NSWindowDelegate, NSOutli
             text.append(Typography.gap(6, font: .systemFont(ofSize: 13)))
             let name = (file.path as NSString).lastPathComponent
             let folder = (file.path as NSString).deletingLastPathComponent
-            text.append(NSAttributedString(string: name, attributes: [.font: NSFont.systemFont(ofSize: 13, weight: .semibold), .foregroundColor: NSColor.labelColor]))
+            text.append(NSAttributedString(string: name, attributes: [.font: NSFont.systemFont(ofSize: 13, weight: .semibold), .foregroundColor: Theme.system(.label)]))
             if !folder.isEmpty {
                 text.append(Typography.gap(8, font: .systemFont(ofSize: 12)))
-                text.append(NSAttributedString(string: folder, attributes: [.font: NSFont.systemFont(ofSize: 12), .foregroundColor: NSColor.secondaryLabelColor]))
+                text.append(NSAttributedString(string: folder, attributes: [.font: NSFont.systemFont(ofSize: 12), .foregroundColor: Theme.system(.secondaryLabel)]))
             }
             text.append(Typography.gap(10, font: .systemFont(ofSize: 12)))
             text.append(NSAttributedString(string: file.matches.count.formatted(), attributes: [
-                .font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .medium), .foregroundColor: NSColor.tertiaryLabelColor,
+                .font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .medium), .foregroundColor: Theme.system(.tertiaryLabel),
             ]))
             label.attributedStringValue = Typography.truncating(text, .byTruncatingMiddle)
             label.toolTip = file.path
@@ -505,7 +505,7 @@ final class FindInFilesController: NSWindowController, NSWindowDelegate, NSOutli
         let number = String(match.line)
         // Right-aligned with figure spaces (as wide as a digit), then one en space: a clean column.
         let text = NSMutableAttributedString(string: String(repeating: "\u{2007}", count: max(0, 5 - number.count)) + number + "\u{2002}", attributes: [
-            .font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular), .foregroundColor: NSColor.tertiaryLabelColor,
+            .font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular), .foregroundColor: Theme.system(.tertiaryLabel),
         ])
         // Trim leading indentation so the match is in view.
         let ns = match.lineText as NSString
@@ -527,7 +527,7 @@ final class FindInFilesController: NSWindowController, NSWindowDelegate, NSOutli
             ]))
         } else {
             text.append(NSAttributedString(string: match.matchedText, attributes: [
-                .font: mono, .foregroundColor: NSColor.white, .backgroundColor: Theme.accent.withAlphaComponent(0.55),
+                .font: mono, .foregroundColor: Theme.ui(.onAccent), .backgroundColor: Theme.accent.withAlphaComponent(0.55),
             ]))
         }
         let afterStart = text.length

@@ -786,6 +786,9 @@ final class DataPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMenu
 
     func numberOfRows(in tableView: NSTableView) -> Int { visible.count }
 
+    /// Selected rows in the theme's selection tint, not AppKit's accent fill (see ThemedRowView).
+    func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? { ThemedRowView() }
+
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         let cell = grid.cell(for: tableColumn, row: row)
         guard let column = tableColumn, let index = visible[safe: row], index < records.count else {

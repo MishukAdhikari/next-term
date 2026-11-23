@@ -130,7 +130,7 @@ final class ServiceCellView: NSTableCellView {
         textField = line.name
         runningDot.wantsLayer = true
         runningDot.layer?.cornerRadius = 3
-        runningDot.layer?.backgroundColor = NSColor.systemGreen.cgColor
+        runningDot.themedBackground(Theme.system(.green))
         runningDot.isHidden = true
         runningDot.translatesAutoresizingMaskIntoConstraints = false
         addSubview(runningDot)
@@ -146,11 +146,9 @@ final class ServiceCellView: NSTableCellView {
         ] + line.place(in: self, badge: badge, more: more))
     }
 
-    /// The dot's green as this appearance draws it.
+    /// The dot's green as this row's look draws it (ThemeLayers sets it again on a theme change).
     private func colourDot() {
-        effectiveAppearance.performAsCurrentDrawingAppearance {
-            runningDot.layer?.backgroundColor = NSColor.systemGreen.cgColor
-        }
+        runningDot.themedBackground(Theme.system(.green))
     }
 
     override func viewDidChangeEffectiveAppearance() {

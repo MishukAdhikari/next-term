@@ -57,6 +57,16 @@ public struct ThemePalette: Equatable, Sendable {
     public var divider: UInt32 = 0
     /// A row under the pointer, in lists and the tab list.
     public var hoverFill: UInt32 = 0
+    /// The window's smaller parts (`UIToken`), each a value only where this palette sets one: the rest come from its
+    /// own tokens (`ui(_:)`), so a new theme needs none of them to look whole.
+    public var ui: [UIToken: UInt32] = [:]
+    /// Next Term's own two looks: a part the Mac draws in its own colour (a selected row) keeps the Mac's, as it
+    /// always has, with its Increase Contrast variant. A theme takes its own instead.
+    public var usesSystemColours = false
+    /// The agents' marks (UIToken.agentOrder), made for dark: `Theme.mark` darkens each on light paper.
+    public var agentMarks: [UInt32] = [0xD97757, 0x6EA4F7, 0xB48EF0, 0x4CC2A8, 0xE07AB8, 0xE2C35C, 0xA3AAB8, 0x5FC8E8]
+    /// Git Log's graph lanes, in turn, made for dark as the agents' marks are.
+    public var graphLanes: [UInt32] = [0x6EA4F7, 0x73C27A, 0xE5A55C, 0xC28FE0, 0x5FC4C4, 0xE5736F, 0xD6C86A, 0x9AA3F5]
 
     public struct Terminal: Equatable, Sendable {
         /// ANSI colours, normal then bright.
@@ -77,6 +87,51 @@ public struct ThemePalette: Equatable, Sendable {
 
     /// A code colour as this palette draws it: its own for a colour of the dark theme it maps, the colour itself in a
     /// dark palette, else the colour darkened until it reads on a light background (4.5:1 at the least).
+    /// `token`'s colour in this palette: the one set, else the Mac's own (nil) when this is one of Next Term's looks
+    /// and the part is one the Mac draws, else one made from this palette's own tokens.
+    public func ui(_ token: UIToken) -> UInt32? {
+        if let set = ui[token] { return set }
+        if usesSystemColours && token.isSystemDrawn { return nil }
+        return derived(token)
+    }
+
+    /// A part's colour made from the palette's own tokens, for a theme that doesn't set it.
+    func derived(_ token: UIToken) -> UInt32 {
+        switch token {
+        case .listSelection, .rowSelection: return terminal.selection
+        case .listSelectionInactive: return hoverFill
+        case .listChosenText: return text
+        case .listChosenMark: return gitModified
+        case .rule, .quote, .codeStroke, .guide: return divider
+        case .link: return code("#548AF7") ?? accent
+        case .stderrFill: return Self.mix(background, failed, 0.10)
+        case .errorFill: return Self.mix(background, failed, 0.16)
+        case .errorText: return Self.readable(failed, on: ui(.errorFill) ?? background)
+        case .warningFill: return Self.mix(background, attention, 0.14)
+        case .gitRemote: return terminal.ansi[isDark ? 13 : 5]
+        case .selectedSecondary: return Self.mix(textDim, text, 0.5)
+        case .restingDot: return lineNumber
+        case .pickerWindow, .pickerEditor: return background
+        case .pickerPanel, .pickerList: return bar
+        case .pickerTerminal: return tabHover
+        case .ink: return text
+        case .toastFill, .scrim: return isDark ? Self.mix(background, 0x000000, 0.5) : text
+        case .onToast: return isDark ? text : background
+        case .shadow: return 0x000000
+        case .onAccent: return Self.contrast(0xFFFFFF, accent) >= Self.contrast(background, accent) ? 0xFFFFFF : background
+        case .onStatus: return 0xFFFFFF
+        }
+    }
+
+    /// `a` taken `amount` of the way to `b`, channel by channel.
+    public static func mix(_ a: UInt32, _ b: UInt32, _ amount: Double) -> UInt32 {
+        func channel(_ shift: UInt32) -> UInt32 {
+            let x = Double((a >> shift) & 0xFF), y = Double((b >> shift) & 0xFF)
+            return UInt32((x + (y - x) * amount).rounded()) << shift
+        }
+        return channel(16) | channel(8) | channel(0)
+    }
+
     public func code(_ darkHex: String) -> UInt32? {
         let key = darkHex.uppercased()
         if let mapped = code[key] { return mapped }
@@ -144,7 +199,16 @@ extension ThemePalette {
             0x595959, 0xFF4050, 0x4FC414, 0xE5BF00, 0x1FB0FF, 0xED7EED, 0x00E5E5, 0xFFFFFF,
         ], foreground: 0xBCBEC4, background: 0x1E1F22, cursor: 0xCED0D6, selection: 0x214283),
         code: [:],
-        divider: 0x393B40, hoverFill: 0x35373B)
+        divider: 0x393B40, hoverFill: 0x35373B,
+        ui: [
+            .listSelection: 0x2E436E, .listSelectionInactive: 0x2E3138, .listChosenText: 0xFFFFFF, .listChosenMark: 0xFFFFFF,
+            .rule: 0x43454A, .quote: 0x4E5157, .codeStroke: 0x35373B, .guide: 0x45474D, .link: 0x548AF7,
+            .stderrFill: 0x33282A, .errorFill: 0x3A2527, .errorText: 0xF0928D, .warningFill: 0x3D3223, .gitRemote: 0xB792E6,
+            .selectedSecondary: 0xB8BBC2, .restingDot: 0x6E7178,
+            .pickerEditor: 0x26282B, .pickerTerminal: 0x17181A, .pickerList: 0x222326,
+            .ink: 0xFFFFFF, .toastFill: 0x000000, .onToast: 0xFFFFFF, .scrim: 0x000000, .shadow: 0x000000, .onAccent: 0xFFFFFF, .onStatus: 0xFFFFFF,
+        ],
+        usesSystemColours: true)
 
     /// Next Term's light look, made easy on the eyes. The paper you read and write on (the terminal, the editor) is a
     /// soft cool grey at about the lightness of the Mac's own window grey (L* 93), not near-white: on light the glare
@@ -191,7 +255,18 @@ extension ThemePalette {
             "#9876AA": 0x6239B0,
             "#6897BB": 0x1748D4,
         ],
-        divider: 0xC6C9D0, hoverFill: 0xD5D8DD)
+        divider: 0xC6C9D0, hoverFill: 0xD5D8DD,
+        ui: [
+            // A database's selected rows in the terminal's selection tint, not the Mac's saturated accent, which wants
+            // white text. Go to File's chosen row keeps its text's own colours (white was unreadable on its soft blue).
+            .listSelection: 0xD6E4FF, .rowSelection: 0xC3D3EE,
+            .quote: 0xC9CCD2, .link: 0x1F5BD6,
+            .stderrFill: 0xFDF0F0, .errorFill: 0xFBE3E3, .errorText: 0xB42318, .warningFill: 0xFFF4E0, .gitRemote: 0x7A3FC2,
+            .selectedSecondary: 0x4A4F5A, .restingDot: 0xA0A4AD,
+            .pickerWindow: 0xF4F5F7, .pickerPanel: 0xE4E6EA, .pickerEditor: 0xFFFFFF, .pickerTerminal: 0xD8DBE0, .pickerList: 0xCDD0D6,
+            .ink: 0x000000, .toastFill: 0x000000, .onToast: 0xFFFFFF, .scrim: 0x000000, .shadow: 0x000000, .onAccent: 0xFFFFFF, .onStatus: 0xFFFFFF,
+        ],
+        usesSystemColours: true)
 
     /// Copper: deep slate with a copper accent and cream text, the warm dark look. Checked as Dark's colours are.
     public static let copper = ThemePalette(
@@ -344,4 +419,40 @@ public enum AppAppearance: String, CaseIterable, Sendable {
         case .dark: return "Dark"
         }
     }
+}
+
+/// The window's smaller parts that take a colour of their own: a theme sets the ones it wants, and the rest are made
+/// from its tokens (`ThemePalette.derived`). Next Term's own looks set each to the colour it has always had.
+public enum UIToken: String, CaseIterable, Sendable {
+    /// A chosen row in Go to File and the popups like it; a selected row in a list that isn't focused (Git Log).
+    case listSelection, listSelectionInactive
+    /// A selected row in a themed list or grid (a database's): the Mac's accent in Next Term Dark.
+    case rowSelection
+    /// The name and its matched letters on a chosen row in Go to File and the popups like it.
+    case listChosenText, listChosenMark
+    /// Lines: a markdown rule, a quote's bar, a notebook cell's edge, the window column's guide.
+    case rule, quote, codeStroke, guide
+    case link
+    /// A notebook's stderr and error output, and a notice's wash (an editor banner).
+    case stderrFill, errorFill, errorText, warningFill
+    /// A remote branch in Git Log.
+    case gitRemote
+    /// A chosen row's second line in the window switcher; a window's resting dot in the window column.
+    case selectedSecondary, restingDot
+    /// The layout picker's small windows.
+    case pickerWindow, pickerPanel, pickerEditor, pickerTerminal, pickerList
+    /// The colour of a wash over a surface (white on dark, black on light), at the alpha its view chooses.
+    case ink
+    /// A small notice over the terminal, and its text; the veil over a pane; a shadow.
+    case toastFill, onToast, scrim, shadow
+    /// Text or a symbol drawn on the accent (a filled button, a pill).
+    case onAccent
+    /// A state's mark drawn on its coloured dot (✓ ✕ ! on green, red, orange), in the tab bar and the menus.
+    case onStatus
+
+    /// Drawn by the Mac in Next Term's own looks (`ThemePalette.usesSystemColours`).
+    public var isSystemDrawn: Bool { self == .rowSelection }
+
+    /// The agents whose marks `ThemePalette.agentMarks` holds, in its order.
+    public static let agentOrder = ["claude", "codex", "commandCode", "gemini", "qwen", "opencode", "cursor", "copilot"]
 }

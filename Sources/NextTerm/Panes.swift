@@ -290,7 +290,7 @@ final class PaneView: NSView {
         override init(frame: NSRect) {
             super.init(frame: frame)
             wantsLayer = true
-            layer?.backgroundColor = NSColor.black.withAlphaComponent(0.28).cgColor
+            themedBackground(Theme.ui(.scrim).withAlphaComponent(0.28))
         }
 
         required init?(coder: NSCoder) { fatalError("not used") }
