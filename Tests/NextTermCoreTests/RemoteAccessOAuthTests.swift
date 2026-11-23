@@ -319,7 +319,7 @@ import Testing
 
     @Test func theChallengeOnA401NamesTheResourceMetadata() {
         let oauth = Self.authority()
-        let bare = #"Bearer resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource/mcp""#
+        let bare = #"Bearer resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource/mcp", scope="nt.observe nt.control""#
         #expect(oauth.wwwAuthenticate(tokenSent: false) == bare)
         #expect(oauth.wwwAuthenticate(tokenSent: true) == bare + #", error="invalid_token""#)
         #expect(OAuth.bearer("Bearer ntat_abc") == "ntat_abc")

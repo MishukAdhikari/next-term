@@ -15,7 +15,22 @@ enum MasterKeyGate {
     /// Asks for the master key, then Touch ID, before `reason` ("turn on Remote access"); sets the key first when
     /// none was. `done(true)` only when both passed.
     /// `presence` false: the caller asks for Touch ID itself next (pairing, Edit…), so it isn't asked twice.
+    #if DEBUG
+    /// The self-test's stand-in for the master key's windows: given the reason, the answer.
+    static var standIn: ((String) -> Bool)?
+    /// The reasons asked with since the self-test last cleared them.
+    static var reasons: [String] = []
+    #endif
+
     static func require(_ reason: String, over window: NSWindow?, presence: Bool = true, done: @escaping (Bool) -> Void) {
+        #if DEBUG
+        if SelfTest.isRequested, let standIn {
+            reasons.append(reason)
+            let answer = standIn(reason)
+            DispatchQueue.main.async { done(answer) }
+            return
+        }
+        #endif
         let finish: (Bool) -> Void = { passed in
             guard passed else { return done(false) }
             presence ? confirmPresence(reason, done: done) : done(true)

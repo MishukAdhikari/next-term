@@ -41,7 +41,7 @@ extension SelfTest {
     /// What Read only admits: the three See options' tools.
     fileprivate static let remoteReadOnlyTools: Set<String> = [
         "list_tabs", "read_tab", "wait_for_tab", "list_projects", "read_file", "find_in_files", "git_status", "get_diff",
-        "get_editor_selection", "get_open_files",
+        "get_editor_selection", "get_open_files", "list_agent_clis", "list_shortcuts",
     ]
 
     private static func remoteAccessChecksWithStandIns(_ c: TerminalWindowController, proj: URL) async {
@@ -69,6 +69,8 @@ extension SelfTest {
         shortened.wait = 3
         RemoteAccessServer.Timings.selfTest = shortened
         RemoteAccessConfirmation.standIn = { _ in true }
+        MasterKeyGate.standIn = { _ in true }
+        MasterKeyGate.reasons = []
         // A window nobody answers gives up sooner than 50 seconds, so a failed check doesn't hold the run.
         MCPWriteControl.answerWithin = 15
         await remoteAccessSteps(run)
@@ -239,8 +241,13 @@ extension SelfTest {
         window.nameField.stringValue = name
         if preset != .readOnly { window.optionsView.pick(preset) }
         let options = window.optionsView.options
+        let keyAsked = MasterKeyGate.reasons.count
         window.allowButton.performClick(nil)
         let allowed = await wait(5) { window.approved != nil }
+        let askedForKey = MasterKeyGate.reasons.count > keyAsked
+        check(askedForKey == (preset != .readOnly),
+              "\(label): Allow asks for the master key only when the preset gives more than reading",
+              "\(preset): " + (askedForKey ? "asked" : "not asked"))
         let reason = RemoteAccessConfirmation.lastReason == RemoteAccessPairingWindow.reason(name: name, options: preset.options)
         let kept = options == preset.options && window.approved?.options == preset.options && window.approved?.name == name
         check(allowed && reason && kept,
@@ -302,11 +309,11 @@ extension SelfTest {
         let unspoken = await door.mcp("ping", nil, token: token, version: "1999-01-01")
         check(unspoken?.status == 400, "\(label): an MCP-Protocol-Version the door doesn't speak gets 400", "\(unspoken?.status ?? 0)")
 
-        // tools/list: the ten tools the See options admit, and nothing else.
+        // tools/list: the tools the See options admit, and nothing else.
         let listed = await door.mcp("tools/list", [:], token: token)
         let tools = ((listed?.message?["result"] as? [String: Any])?["tools"] as? [[String: Any]]) ?? []
         let names: [String] = tools.compactMap { $0["name"] as? String }
-        check(names.count == 10 && Set(names) == remoteReadOnlyTools, "\(label): tools/list has the ten Read only tools",
+        check(names.count == remoteReadOnlyTools.count && Set(names) == remoteReadOnlyTools, "\(label): tools/list has the Read only tools",
               names.joined(separator: ", "))
 
         // list_tabs shows the stand-in claude's tab, its agent and its state.
@@ -418,7 +425,10 @@ extension SelfTest {
         sheet.present(on: nil)
         let opened = RemoteAccessEditSheet.shown === sheet && sheet.optionsView.options == RemoteAccessOptions.customStart
         sheet.optionsView.set(.rateLimit, false)
+        let keyAsked = MasterKeyGate.reasons.count
         sheet.saveButton.performClick(nil)
+        _ = await wait(5) { MasterKeyGate.reasons.count > keyAsked }
+        check(MasterKeyGate.reasons.count > keyAsked, "\(label): Edit… that widens a connection asks for the master key first")
         let saved = await wait(5) { remote.connectionOptions(paired.grant)?[.rateLimit] == false }
         let reason = RemoteAccessConfirmation.lastReason == RemoteAccessSettingsText.editReason(name: paired.name)
         let twelfth = await door.call("set_layout", layout, token: token)
@@ -782,6 +792,7 @@ extension SelfTest {
         let remote = RemoteAccess.shared
         let manager = FileManager.default
         TerminalTab.testUserZDOTDIR = nil
+        MasterKeyGate.standIn = nil
         if let asking = MCPWriteControl.pending, !asking.answered { asking.window?.close() }
         RemoteAccessPairingWindow.close()
         for window in run.windows { window.close() }

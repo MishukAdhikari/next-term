@@ -575,9 +575,10 @@ public struct RemoteAccessOAuth: Sendable {
         return Self.json(document)
     }
 
-    /// The `WWW-Authenticate` value of a 401 from `/mcp`.
+    /// The `WWW-Authenticate` value of a 401 from `/mcp`: the resource metadata, and the scopes a sign-in asks for
+    /// (MCP 2026-07-28 says a challenge should name them).
     public func wwwAuthenticate(tokenSent: Bool) -> String {
-        let value = "Bearer resource_metadata=\"\(resourceMetadataURL)\""
+        let value = "Bearer resource_metadata=\"\(resourceMetadataURL)\", scope=\"\(Self.observeScope) \(Self.controlScope)\""
         return tokenSent ? value + ", error=\"invalid_token\"" : value
     }
 
