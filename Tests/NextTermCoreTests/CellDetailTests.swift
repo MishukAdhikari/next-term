@@ -56,21 +56,35 @@ import Testing
         }
     }
 
-    @Test func largeJSONIsQuick() throws {
+    /// A JSON array of about `size` bytes, as a data grid's cell holds one.
+    static func largeJSON(_ size: Int) -> String {
         var items: [String] = []
-        var size = 0
+        var written = 0
         var i = 0
-        while size < 200_000 {
+        while written < size {
             let item = #"{"id":\#(i),"text":"message \#(i) with \"quotes\" and {braces}","tags":["a","b"],"score":\#(Double(i) / 3)}"#
             items.append(item)
-            size += item.utf8.count + 1
+            written += item.utf8.count + 1
             i += 1
         }
-        let json = "[" + items.joined(separator: ",") + "]"
-        let start = Date()
-        let pretty = JSONIndent.pretty(json)
-        let elapsed = Date().timeIntervalSince(start)
-        #expect(pretty != nil && elapsed < 0.05, "\(elapsed) s")
+        return "[" + items.joined(separator: ",") + "]"
+    }
+
+    /// A 200 KB value indents in one pass over its bytes. Measured against this machine, not the clock alone: a bound
+    /// of 50 ms (about 20 ms here, in a debug build) failed on a busy CI runner while the code was as fast as ever.
+    @Test func largeJSONIsQuick() throws {
+        let json = Self.largeJSON(200_000)
+        let fourTimes = Self.largeJSON(800_000)
+        #expect(JSONIndent.pretty(json) != nil && JSONIndent.pretty(fourTimes) != nil)
+        // In proportion to its size: four times the bytes take about four times as long (4.0 here); a step that
+        // went back over what it had written, quadratic, would take sixteen.
+        let growth = Timing.ratio({ _ = JSONIndent.pretty(fourTimes) }, to: { _ = JSONIndent.pretty(json) })
+        #expect(growth < 8, "\(growth)x for four times the bytes")
+        // In proportion to the parse it checks the value with first: about 12 times JSONSerialization's own (an
+        // optimized library against a debug build) here. A per-byte step gone slow would take several times that.
+        let data = Data(json.utf8)
+        let overParse = Timing.ratio({ _ = JSONIndent.pretty(json) }, to: { _ = try? JSONSerialization.jsonObject(with: data) })
+        #expect(overParse < 60, "\(overParse)x the parse")
     }
 
     @Test func hexLines() {

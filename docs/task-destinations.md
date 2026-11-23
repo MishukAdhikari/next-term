@@ -121,7 +121,6 @@ The lines, as they are typed:
 ```sh
 claude mcp add --transport http --scope user linear-server https://mcp.linear.app/mcp
 codex mcp add linear --url https://mcp.linear.app/mcp
-codex mcp add github --url https://api.githubcopilot.com/mcp/ --bearer-token-env-var GITHUB_PAT_TOKEN
 claude mcp add --transport http --scope user atlassian https://mcp.atlassian.com/v2/mcp
 codex mcp add atlassian --url https://mcp.atlassian.com/v2/mcp
 claude mcp add --transport http --scope user notion https://mcp.notion.com/mcp
@@ -133,13 +132,12 @@ codex mcp add ticktick --url https://mcp.ticktick.com
 claude mcp add --transport http --scope user todoist https://ai.todoist.net/mcp
 ```
 
-Codex reads GitHub's token from `GITHUB_PAT_TOKEN` in its own environment; Next Term doesn't set it or see it.
 opencode adds a server by asking its questions one by one, so its row links to opencode's own page instead. A
 tracker and agent with no line on either page are not offered: a line is never guessed.
 
 ### Not listed yet
 
-- GitHub with Claude Code: GitHub’s line writes your token into Claude Code’s settings file.
+- GitHub: GitHub’s lines put your token in Claude Code’s settings file or Codex’s environment. Keep it in Next Term’s Secrets and start the server with nxtrm secret run (nxtrm secret help).
 - Asana: Asana’s server needs an OAuth app of your own.
 - ClickUp: No line from ClickUp’s own page yet.
 - Azure DevOps: No line from Azure DevOps’s own page yet.

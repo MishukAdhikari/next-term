@@ -98,6 +98,11 @@ enum SelfTest {
         // The window column only in its own part (windowColumn): the other parts' geometry was written without it.
         WindowColumns.suppressed = true
         WindowColumns.offersSuppressed = true // and no offer to show or hide it, but in its own checks
+        HintStage.suppressed = true // nor any hint, but in their own part (hints)
+        // No window joins another as a tab, whatever this Mac's "Prefer tabs" says, but in its own part (windowTabs): the
+        // other parts' windows are each a window of their own.
+        WindowTabbing.suppressed = true
+        NSWindow.allowsAutomaticWindowTabbing = false
         Task { @MainActor in
             await launchChecks() // first: it opens the window the checks after it use
             await runAll()
@@ -140,6 +145,13 @@ enum SelfTest {
 
     static func pause(_ seconds: Double) async {
         try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+    }
+
+    /// Every item of the View menu, its submenus' too: most of its settings sit a level down (Editor, Privacy…).
+    static func viewMenuItems() -> [NSMenuItem] {
+        guard let view = NSApp.mainMenu?.items.first(where: { $0.title == "View" })?.submenu else { return [] }
+        func all(_ menu: NSMenu) -> [NSMenuItem] { menu.items.flatMap { [$0] + ($0.submenu.map(all) ?? []) } }
+        return all(view)
     }
 
     /// Brings the app to the front with `window` key, as a hand's keys and clicks need (and as a window is
@@ -306,6 +318,17 @@ enum SelfTest {
         let restoreDiffSettings = keepDiffSettings()
         defer { restoreDiffSettings() }
         DiffLayout.current = .sideBySide
+        // The MCP hub reads a list of the run's own, empty, never the user's (Application Support's mcp.json): an
+        // agent the checks start would otherwise get the user's servers and their cached tools. The parts that need
+        // servers set their own list and put this one back.
+        let hubFolder = URL(fileURLWithPath: canonicalPath(NSTemporaryDirectory())).appendingPathComponent("nt-selftest-hub-\(getpid())")
+        try? FileManager.default.createDirectory(at: hubFolder, withIntermediateDirectories: true)
+        let hubBefore = MCPHubControl.userFile
+        MCPHubControl.userFile = hubFolder.appendingPathComponent("mcp.json").path
+        defer {
+            MCPHubControl.userFile = hubBefore
+            try? FileManager.default.removeItem(at: hubFolder)
+        }
         guard let c = AppDelegate.shared.controllers.first, let window = c.window else {
             check(false, "a window opens at launch")
             return
@@ -663,12 +686,19 @@ enum SelfTest {
               "a self-test's tabs read its own zsh config, never the user's", "test config \(ownConfig): " + zdotTab.screenTail(4).joined(separator: " | "))
         c.remove(zdotTab)
         #if DEBUG
-        // One part on the project set up so far (NEXTTERM_SELFTEST_ONLY=gitAndViewKeys, import, rollback, held, closeWorktree, worktrees, markdown, mcpWrite, parallel (with scrollback), skills, notifications, services, secrets, opencode, tasks, welcome, tabList, terminalPosition, completion, ghostText, gitRefresh, clicks, mouse, remote, mcp, newTerminal, cellSnap, projectColor, windowNav, windowColumn or database), for its own failures
+        // One part on the project set up so far (NEXTTERM_SELFTEST_ONLY=gitAndViewKeys, import, rollback, held, closeWorktree, worktrees, markdown, mcpWrite, parallel (with scrollback), skills, notifications, services, runGroup, localModels, secrets, agentSession, mcpHub, mcpHubSettings, mcpHubOAuth (only when asked), opencode, tasks, welcome, tabList, terminalPosition, completion, ghostText, gitRefresh, clicks, mouse, remote, mcp, newTerminal, cellSnap, projectColor, windowNav, windowColumn, hints, settingsSections, agentsSettings, agentScratch, layoutPicker or database), for its own failures
         // without the whole run's 25 minutes.
         switch ProcessInfo.processInfo.environment["NEXTTERM_SELFTEST_ONLY"] {
         case "gitAndViewKeys": return await gitAndViewKeyChecks(c, proj: proj)
         case "import": return await importPartChecks(c, proj: proj)
         case "rollback": return await rollbackChecks(c)
+        case "promptBox": return await promptBoxChecks() // the prompt box under a tab's terminal
+        case "liveChat": return await liveChatChecks() // an agent tab's live chat view (plan 041)
+        case "agentChat": return await agentChatChecks() // an agent session as a chat, from its journal (plan 047)
+        case "pinnedTabs": return await pinnedTabsChecks() // pinned tabs: first, the pin, bulk closes leave them, ⌘W asks
+        case "contextGauge": return await contextGaugeChecks() // an agent tab's context gauge and tooltip line
+        case "reviewComments": return await reviewCommentsChecks() // review comments in a diff, sent to the agent as one prompt
+        case "sessionPreview": return await sessionPreviewChecks() // ⌥⌘O: the selected session’s last turns beside the list
         case "held": return await heldWorktreeChecks(c)
         case "closeWorktree": return await closeWorktreeChecks()
         case "parallel":
@@ -679,12 +709,23 @@ enum SelfTest {
         case "markdown": return await markdownChecks(c, proj: proj) // Live Preview: bytes kept, hiding, commands, Go to Heading
         case "skills": return await skillsChecks() // Settings › Skills, Personal and Project, and the skills MCP tools
         case "mcpWrite": return await mcpWriteChecks(c, proj: proj) // the MCP tools that ask, settings, list_shortcuts, show_settings
+        case "mcpHub": return await mcpHubChecks(c, proj: proj) // a fake local server reached through the real nxtrm mcp's catalog
+        case "mcpHubSettings": return await mcpHubSettingsChecks() // Settings › MCP Servers: add, paste a key, approve a project's list
+        case "mcpHubOAuth": return await mcpHubOAuthChecks(c) // signing in to a fake OAuth server, consent, refresh, a lapse, revoke
+        case "handover": return await handoverChecks(c) // forward_prompt: prompts typed in the wrong tab go to the right session
+        case "agentsMenu": return await agentsMenuChecks(c) // the Agents menu: Skills…, MCP Servers…, the moved commands and their keys
+        case "settingsSections": return await settingsSectionsChecks(c) // each Settings section's screenshot, one size, over full screen
+        case "agentsSettings": return await agentsSettingsChecks() // Settings › Agents with made-up agents: rows, a scheduled update, empty
         case "notifications":
             notificationsMenuChecks()
             return agentSpinnerChecks()
         case "services": return await serviceChecks(c)
+        case "runGroup": return await runGroupChecks(c) // the Run group: tasks, an offer line, ▶ runs one in a tab, ⌘P's Run lines
+        case "localModels": return await localModelsChecks(c) // Ollama in Services: row, offer, menu, pull in a tab, the up dot
         case "secrets": return await secretsChecks(c, proj: proj)
+        case "secretsApproval": return await secretsApprovalChecks() // the panel's states and Always, with screenshots
         case "opencode": return await opencodeScreenChecks(c) // its screen, answers and own notices
+        case "agentSession": return await agentSessionChecks(c) // nxtrm agent over ACP: its reports, its permission menu
         case "tasks": return await tasksChecks(c, proj: proj) // the Tasks menu, Add Task…, the todo file's bytes and add_task
         case "welcome": return await welcomePartChecks() // the Welcome window (SelfTestWelcomeSwitcher)
         case "tabList": return await tabListChecks(c, proj: proj) // the terminal's tabs in a list, its import and its smoothness
@@ -697,11 +738,22 @@ enum SelfTest {
         case "remote": return await remoteChecks(c) // servers on the stand-in ssh: tabs, tmux and herdr
         case "remoteAccess": return await remoteAccessChecks(c, proj: proj) // Remote access's door: pairing, the options, the tunnel
         case "mcp": return await mcpChecks(c, proj: proj) // the MCP tools that drive tabs, read files and git
+        case "deletedFiles": return await deletedFileChecks(c, proj: proj) // the sidebar's rows for deleted files and folders
         case "newTerminal": return await newTerminalChecks() // a window with no project: "No project open", no protected place read
         case "cellSnap": return await cellSnapChecks(c) // a terminal's cells follow its window's display (two displays)
         case "projectColor": return await projectColorChecks() // View › Project Color: the glow, worktrees, None, the switch
         case "windowNav": return await windowNavChecks() // titles, ⇧⌘U, ⌘O's rows and the Dock menu across windows
         case "windowColumn": return await windowColumnChecks() // the window column in every window, on either side, and its budget
+        case "hints": return await hintsChecks() // the window column's three hints: showing, counting, retiring, the off switch and Reset Tips
+        case "launcherLinks": return await launcherLinksChecks(c) // nextterm:// links and nxtrm call, for launchers
+        case "goToAnything": return await goToAnythingChecks(c) // ⌘K: Clear in a terminal, Go to Anything elsewhere (plan 034)
+        case "tabHover": return await tabHoverChecks(c) // a tab's whole name under it in the title strip
+        case "agentScratch": return await agentScratchChecks(c) // an agent's scratch window: kept out of the lists, closed once quiet
+        case "firstRun": return await firstRunChecks() // the first run's agent setup: the cards and the apply_setup window
+        case "theme": return await themeChecks(c) // the light look: its contrast, and Light and Dark switched live (plan 049)
+        case "themes": return await themeGalleryChecks(c) // every theme shipped, one by one: its colours, chosen live, screenshots
+        case "layoutPicker": return await layoutPickerChecks(c, proj: proj) // "How do you like to work?": its sheet, Skip, each card's layout
+        case "windowTabs": return await windowTabsChecks(c) // a system tab bar over a project window: everything moves below it
         case "database": // the SQLite viewer and the data head view: their cells, the value pane, editing a SQLite file
             await databaseChecks(c, proj: proj)
             await databaseCellChecks(c, proj: proj)
@@ -863,6 +915,14 @@ enum SelfTest {
         await gitLogPagingChecks(c)
         await gitLeftoverChecks(c)
         await placeChecks(c)
+        await promptBoxChecks()
+        await liveChatChecks()
+        #if DEBUG
+        await agentChatChecks() // plan 047
+        #endif
+        await contextGaugeChecks()
+        await reviewCommentsChecks()
+        await sessionPreviewChecks()
         await worktreeChecks(c)
         await heldWorktreeChecks(c)
         await closeWorktreeChecks()
@@ -871,6 +931,7 @@ enum SelfTest {
         await windowNavChecks()
         #if DEBUG
         await windowColumnChecks()
+        await hintsChecks()
         #endif
         await parallelTabsChecks(c, proj: proj)
         await arrivalChecks(c, proj: proj)
@@ -902,7 +963,8 @@ enum SelfTest {
 
         let lightsInset = c.tabBar.leadingInset
         c.toggleProjectSidebar(nil)
-        check(!c.isSidebarVisible && c.tabBar.leadingInset == 78, "⌘B hides the sidebar and the tabs move clear of the traffic lights")
+        check(!c.isSidebarVisible && clearsLights(c.tabBar, c), "⌘B hides the sidebar and the tabs move clear of the traffic lights",
+              lightsDetail(c.tabBar, c))
         check(c.tabBar.showsSidebarButton != c.editorArea.tabBar.showsSidebarButton, "the bar at the top-left offers a button to show it again")
         await screenshot(c, suffix: "-sidebar-hidden")
         c.toggleProjectSidebar(nil)
@@ -1062,12 +1124,19 @@ enum SelfTest {
         await cellSnapChecks(c)
         await notificationChecks(c)
         await opencodeScreenChecks(c)
+        #if DEBUG
+        await agentSessionChecks(c)
+        #endif
         notificationsMenuChecks()
         await tasksChecks(c, proj: proj)
         agentSpinnerChecks()
         await skillsChecks()
+        await agentsSettingsChecks()
         await secretsChecks(c, proj: proj)
         await mcpWriteChecks(c, proj: proj)
+        #if DEBUG
+        await mcpHubChecks(c, proj: proj) // its bridge reads the self-test's own list, which only a debug build honours
+        #endif
         await endStrayQuestions(after: "the checks before the MCP restore")
         await restoreMCPChecks(proj: proj)
         await endStrayQuestions(after: "the MCP restore checks")
@@ -1197,25 +1266,22 @@ enum SelfTest {
         let standard = CommandLineTool.standardPath
         check(standard.contains("/usr/bin") && standard.allSatisfy { $0.hasPrefix("/") }, "nxtrm: the PATH from /etc/paths is read",
               standard.joined(separator: ":"))
-        // The offer waits, however long, for a project window that is key with nothing in front of it.
+        // A notice that waits for the user goes on a project window that is key with nothing in front of it.
         if let window = c.window {
             let other = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 240, height: 120), styleMask: [.titled], backing: .buffered, defer: true)
-            let free = CommandLineTool.offerWindow(key: window, modal: nil) === window
-            let elsewhere = CommandLineTool.offerWindow(key: other, modal: nil) == nil && CommandLineTool.offerWindow(key: nil, modal: nil) == nil
-            let modal = CommandLineTool.offerWindow(key: window, modal: other) == nil
+            let free = CommandLineTool.freeProjectWindow(key: window, modal: nil) === window
+            let elsewhere = CommandLineTool.freeProjectWindow(key: other, modal: nil) == nil && CommandLineTool.freeProjectWindow(key: nil, modal: nil) == nil
+            let modal = CommandLineTool.freeProjectWindow(key: window, modal: other) == nil
             let focus = window.firstResponder
             window.beginSheet(other, completionHandler: nil)
-            let sheet = await wait(2) { window.attachedSheet != nil } && CommandLineTool.offerWindow(key: window, modal: nil) == nil
+            let sheet = await wait(2) { window.attachedSheet != nil } && CommandLineTool.freeProjectWindow(key: window, modal: nil) == nil
             window.endSheet(other)
             _ = await wait(2) { window.attachedSheet == nil }
             window.makeKeyAndOrderFront(nil)
             if let focus { window.makeFirstResponder(focus) }
-            check(free && elsewhere && modal && sheet, "nxtrm: the first-launch offer goes on the key project window, with nothing in the way",
+            check(free && elsewhere && modal && sheet, "a waiting notice goes on the key project window, with nothing in the way",
                   "free \(free), elsewhere \(elsewhere), modal \(modal), sheet \(sheet)")
         }
-        let buttons = CommandLineTool.offerAlert().buttons.map(\.title)
-        check(buttons == ["Install…", "Not Now", "Don’t Ask Again"], "nxtrm: the first-launch offer can be taken, put off or declined for good",
-              buttons.joined(separator: ", "))
     }
 
     /// Agent sessions: listed per project on the Welcome window and in ⌥⌘O, resumed in a tab in their folder.
@@ -1504,6 +1570,10 @@ enum SelfTest {
         window.tickShortcutForTest("goToFile:")
         check(window.applyTitle == "Apply \(KeymapPreset.vsCode.overrides.count + 6 - alreadySet) Changes", "the preview counts what is ticked",
               window.applyTitle)
+        let fit = window.buttonsFitForTest
+        check(fit.map { $0.bottom >= 19 && $0.emptyBelowRows <= 1 } == true,
+              "the preview's buttons sit 20 points from the bottom, with no empty space below its rows",
+              fit.map { "bottom \($0.bottom), empty \($0.emptyBelowRows)" } ?? "no preview")
         func swatches(in view: NSView?) -> [PaletteSwatches] {
             guard let view else { return [] }
             return (view as? PaletteSwatches).map { [$0] } ?? view.subviews.flatMap { swatches(in: $0) }
@@ -1613,7 +1683,8 @@ enum SelfTest {
         let def = text.range(of: "def answer")
         let defColor = (notebook.textView.layoutManager?.temporaryAttribute(.foregroundColor, atCharacterIndex: def.location, effectiveRange: nil) as? NSColor)?
             .usingColorSpace(.sRGB).map { String(format: "%02X%02X%02X", Int(round($0.redComponent * 255)), Int(round($0.greenComponent * 255)), Int(round($0.blueComponent * 255))) }
-        check(defColor == "CF8E6D", "code cells are coloured in the kernel's language", defColor ?? "none")
+        let keyword = Theme.palette(for: Theme.appearance(of: notebook.textView)).code("CF8E6D").map { String(format: "%06X", $0) }
+        check(defColor != nil && defColor == keyword, "code cells are coloured in the kernel's language", "\(defColor ?? "none"), want \(keyword ?? "?")")
         check(!notebook.textView.isEditable && notebook.textView.usesFindBar, "read-only, with ⌘F")
         if let window = c.window, let on = replaceIsOn(with: notebook.textView, in: window) { check(!on, "and no Replace…") }
         await screenshot(c, suffix: "-notebook")
@@ -2011,7 +2082,8 @@ enum SelfTest {
         check(await wait(8) { row("gone.txt").map { outline.item(atRow: $0) is DeletedEntry } == true && row("olddir") != nil },
               "a deleted file and a deleted folder keep rows where they were")
         if let at = row("gone.txt"), let cell = outline.view(atColumn: 0, row: at, makeIfNecessary: true) as? FileCellView {
-            check(cell.isDeletedRow && cell.statsText == "−3", "struck through, with the lines it had", cell.statsText)
+            check(cell.isDeletedRow && cell.statsText == "−3", "struck through, with the lines it had",
+                  "\(type(of: outline.item(atRow: at)!)) \(cell.statsText)")
             // Its menu: each item a command showing its key.
             let menu = sidebarMenuKeyAudit([(sidebarMenu(c.sidebar, row: at), "gone.txt")])
             check(menu.wrong.isEmpty && menu.titles == ["Show What Was Deleted", "Rollback…", "Copy Path", "Copy Relative Path"],
@@ -2141,7 +2213,7 @@ enum SelfTest {
 
     /// Settings › Editor › Hide values in .env files: each value is drawn as bullets, on its row, while the
     /// text stays as it is (copy, undo); the caret's line shows its value once you type in it, and only
-    /// that line of a private key; it hides again when the editor or its window loses the keyboard. View ›
+    /// that line of a private key; it hides again when the editor or its window loses the keyboard. View › Editor ›
     /// Hide .env Values for one file, with a checkmark. A .env that links to a file elsewhere counts too.
     private static func envValueChecks(_ c: TerminalWindowController, proj: URL) async {
         guard let window = c.window, let app = AppDelegate.shared else { return }
@@ -2252,12 +2324,9 @@ enum SelfTest {
                   "\(hiddenWrap.ink) pixels of ink, at the edge: \(hiddenWrap.atEdge)")
         }
 
-        // View › Hide .env Values: checked while this file's values are hidden.
-        var menuItem: NSMenuItem?
-        for top in NSApp.mainMenu?.items ?? [] where menuItem == nil {
-            menuItem = top.submenu?.items.first(where: { $0.action == #selector(TerminalWindowController.toggleEnvValues(_:)) })
-        }
-        check(menuItem?.title == "Hide .env Values", "View › Hide .env Values is in the menu", menuItem?.title ?? "missing")
+        // View › Editor › Hide .env Values: checked while this file's values are hidden.
+        let menuItem = viewMenuItems().first { $0.action == #selector(TerminalWindowController.toggleEnvValues(_:)) }
+        check(menuItem?.title == "Hide .env Values", "View › Editor › Hide .env Values is in the menu", menuItem?.title ?? "missing")
         let item = menuItem ?? NSMenuItem(title: "", action: #selector(TerminalWindowController.toggleEnvValues(_:)), keyEquivalent: "")
         check(c.validateMenuItem(item) && item.state == .on, "and is checked for a .env file whose values are hidden")
         c.toggleEnvValues(nil)
@@ -3744,7 +3813,7 @@ enum SelfTest {
         await pause(0.2)
     }
 
-    /// View › Annotate with Git Blame: who last changed each line, beside the numbers; edited lines are not
+    /// View › Diffs & Blame › Annotate with Git Blame: who last changed each line, beside the numbers; edited lines are not
     /// committed, and the lines below keep their commit.
     private static func blameChecks(_ c: TerminalWindowController, proj: URL) async {
         guard let git = GitRunner.locateGit(), let app = AppDelegate.shared else { return }
@@ -3816,7 +3885,7 @@ enum SelfTest {
         // The caret line's note.
         if !app.currentLineBlame { app.toggleCurrentLineBlame(nil) }
         let note = editor.blameNoteText(line: 3) ?? "none"
-        check(note.hasPrefix("Bob, ") && note.hasSuffix(" · Add a third line"), "View › Current Line Blame notes the caret line’s commit", note)
+        check(note.hasPrefix("Bob, ") && note.hasSuffix(" · Add a third line"), "View › Diffs & Blame › Current Line Blame notes the caret line’s commit", note)
 
         // Off again, and the file as committed.
         if app.currentLineBlame { app.toggleCurrentLineBlame(nil) }
@@ -3892,25 +3961,32 @@ enum SelfTest {
               finder.shownPaths.prefix(3).joined(separator: ", "))
         finder.close()
         // A file git ignores is left out, until you open it: then it is listed with the recent files. A name no
-        // earlier section opened (they open the project's .env, which is then rightly among the recent files).
+        // earlier section opened. The .env files git ignores are the exception: Go to File lists them, though the MCP
+        // tools still refuse to read them.
         let exclude = proj.appendingPathComponent(".git/info/exclude")
         let excluded = try? String(contentsOf: exclude, encoding: .utf8)
-        try? ((excluded ?? "") + "\n.env.goto\n").write(to: exclude, atomically: true, encoding: .utf8)
+        try? ((excluded ?? "") + "\nignored.goto\n.env.goto\n").write(to: exclude, atomically: true, encoding: .utf8)
+        let ignored = proj.appendingPathComponent("ignored.goto")
+        try? "selftest\n".write(to: ignored, atomically: true, encoding: .utf8)
         let env = proj.appendingPathComponent(".env.goto")
         try? "APP_NAME=selftest\n".write(to: env, atomically: true, encoding: .utf8)
         finder.show(root: proj.path, recent: c.recentFiles, over: window)
-        finder.query = "env.goto"
+        finder.query = "ignored.goto"
         await pause(1)
-        check(!finder.shownPaths.contains(".env.goto"), "⌘P leaves out a file git ignores", finder.shownPaths.prefix(3).joined(separator: ", "))
-        finder.close()
-        c.openFile(env)
-        finder.show(root: proj.path, recent: c.recentFiles, over: window)
-        check(await wait(5) { finder.shownPaths.first == ".env.goto" }, "once opened, it comes first with nothing typed",
-              finder.shownPaths.prefix(3).joined(separator: ", "))
+        check(!finder.shownPaths.contains("ignored.goto"), "⌘P leaves out a file git ignores", finder.shownPaths.prefix(3).joined(separator: ", "))
         finder.query = "env.goto"
-        check(await wait(5) { finder.shownPaths.first == ".env.goto" }, "and its name finds it", finder.shownPaths.prefix(3).joined(separator: ", "))
+        check(await wait(5) { finder.shownPaths.contains(".env.goto") }, "but lists a .env file git ignores",
+              finder.shownPaths.prefix(3).joined(separator: ", "))
         finder.close()
-        if let editor = c.editorArea.editors.first(where: { $0.document.path == canonicalPath(env.path) }) { c.editorArea.close(editor) }
+        c.openFile(ignored)
+        finder.show(root: proj.path, recent: c.recentFiles, over: window)
+        check(await wait(5) { finder.shownPaths.first == "ignored.goto" }, "once opened, it comes first with nothing typed",
+              finder.shownPaths.prefix(3).joined(separator: ", "))
+        finder.query = "ignored.goto"
+        check(await wait(5) { finder.shownPaths.first == "ignored.goto" }, "and its name finds it", finder.shownPaths.prefix(3).joined(separator: ", "))
+        finder.close()
+        if let editor = c.editorArea.editors.first(where: { $0.document.path == canonicalPath(ignored.path) }) { c.editorArea.close(editor) }
+        try? FileManager.default.removeItem(at: ignored)
         try? FileManager.default.removeItem(at: env)
         if let excluded { try? excluded.write(to: exclude, atomically: true, encoding: .utf8) } else { try? FileManager.default.removeItem(at: exclude) }
         // Selected text starts the search, as for Find.
@@ -4041,6 +4117,22 @@ enum SelfTest {
         }
     }
 
+    /// A bar at the window's top-left corner clear of the traffic lights: it starts where they end (16 points past the
+    /// zoom button, measured, as the lights' place changes with the macOS release; WindowColumnRail.lightsEnd), less the
+    /// window column on the left that sits before it, and in the window that is past the zoom button.
+    static func clearsLights(_ bar: TabBarView, _ c: TerminalWindowController) -> Bool {
+        let expected: CGFloat = max(8, c.lightsEnd - c.windowColumnUnderLights)
+        let start: CGFloat = bar.convert(NSPoint(x: bar.leadingInset, y: 0), to: nil).x
+        let zoom: CGFloat = c.window?.standardWindowButton(.zoomButton)?.frame.maxX ?? 0
+        return bar.leadingInset == expected && start >= zoom + 16 - 0.5
+    }
+
+    static func lightsDetail(_ bar: TabBarView, _ c: TerminalWindowController) -> String {
+        let start: CGFloat = bar.convert(NSPoint(x: bar.leadingInset, y: 0), to: nil).x
+        let zoom: CGFloat = c.window?.standardWindowButton(.zoomButton)?.frame.maxX ?? 0
+        return "inset \(bar.leadingInset), starts at \(start) in the window, lights end \(c.lightsEnd) (zoom \(zoom)), column \(c.windowColumnUnderLights)"
+    }
+
     // MARK: editor
 
     private static func editorChecks(_ c: TerminalWindowController, proj: URL, tab: TerminalTab) async {
@@ -4073,10 +4165,13 @@ enum SelfTest {
             return String(format: "%02X%02X%02X", Int(round(rgb.redComponent * 255)), Int(round(rgb.greenComponent * 255)), Int(round(rgb.blueComponent * 255)))
         }
         _ = await wait(5) { doc.highlighter?.pendingLines == 0 }
-        check(color(of: "function") == "CF8E6D", "keywords are coloured", color(of: "function") ?? "none")
-        check(color(of: "\"Hello") == "6AAB73", "strings are coloured", color(of: "\"Hello") ?? "none")
-        check(color(of: "// hi") == "7A7E85", "comments are coloured", color(of: "// hi") ?? "none")
-        check(color(of: "greet") == "56A8F5", "function names are coloured", color(of: "greet") ?? "none")
+        // In the palette the editor is drawn in: the dark theme's own colours, or what the light palette maps them to.
+        let palette = Theme.palette(for: Theme.appearance(of: editor.textView))
+        func expected(_ dark: String) -> String { String(format: "%06X", palette.code(dark) ?? 0) }
+        check(color(of: "function") == expected("CF8E6D"), "keywords are coloured", color(of: "function") ?? "none")
+        check(color(of: "\"Hello") == expected("6AAB73"), "strings are coloured", color(of: "\"Hello") ?? "none")
+        check(color(of: "// hi") == expected("7A7E85"), "comments are coloured", color(of: "// hi") ?? "none")
+        check(color(of: "greet") == expected("56A8F5"), "function names are coloured", color(of: "greet") ?? "none")
 
         // Typing, auto-indent, undo back to clean.
         let view = editor.textView
@@ -4366,17 +4461,17 @@ enum SelfTest {
             area.applyWrap()
             check(rows() == 1 && wideEditor.textView.frame.width > wideEditor.scrollView.contentSize.width,
                   "without it, the line scrolls sideways", "\(rows()) rows")
-            // The View menu shows the state (validation reaches the app delegate).
-            if let view = NSApp.mainMenu?.items.first(where: { $0.title == "View" })?.submenu,
-               let wrapItem = view.items.first(where: { $0.action == #selector(AppDelegate.toggleSoftWrap(_:)) }) {
+            // View › Editor shows the state (validation reaches the app delegate).
+            if let wrapItem = viewMenuItems().first(where: { $0.action == #selector(AppDelegate.toggleSoftWrap(_:)) }),
+               let view = wrapItem.menu {
                 app.softWrap = true
                 view.update()
                 let shownOn = wrapItem.state == .on
                 app.softWrap = false
                 view.update()
-                check(shownOn && wrapItem.state == .off, "View ▸ Soft Wrap has a checkmark exactly when it is on")
+                check(shownOn && wrapItem.state == .off, "View › Editor › Soft Wrap has a checkmark exactly when it is on")
             } else {
-                check(false, "View ▸ Soft Wrap is in the menu")
+                check(false, "View › Editor › Soft Wrap is in the menu")
             }
             app.softWrap = saved
             area.applyWrap()
@@ -4502,8 +4597,8 @@ enum SelfTest {
         shortcuts.set(nil, for: "clearBuffer:")
         check(shortcuts.commands.first { $0.id == "clearBuffer:" }?.item?.keyEquivalent == "", "a shortcut can be removed")
         AppDelegate.shared.showSettings(nil)
-        check(NSApp.windows.contains { $0.title == "Settings" && $0.isVisible }, "Settings opens with ⌘, (Editor and Keyboard Shortcuts)")
-        NSApp.windows.first { $0.title == "Settings" }?.close()
+        check(AppDelegate.shared.openSettings != nil, "Settings opens with ⌘, (Editor and Keyboard Shortcuts)")
+        AppDelegate.shared.openSettings?.window?.close()
         shortcuts.resetAll()
         check(newTabItem?.keyEquivalentModifierMask == .command && shortcuts.chord(for: "clearBuffer:")?.display == "⌘K", "Restore All Defaults")
         let sidebarKey = shortcuts.chord(for: "toggleProjectSidebar:")?.display ?? "none"
@@ -4567,7 +4662,8 @@ enum SelfTest {
         let sidebarFrame = c.sidebar.convert(c.sidebar.bounds, to: nil), editorFrame = area.convert(area.bounds, to: nil)
         check(sidebarFrame.minX >= editorFrame.maxX - 1 && abs(sidebarFrame.width - app.sidebarWidth) < 2,
               "the sidebar can go on the right, at its width", "sidebar \(sidebarFrame.integral)")
-        check(area.tabBar.leadingInset == 78 && c.sidebar.headerInset == 8, "with the sidebar on the right, the editor's tabs clear the traffic lights")
+        check(clearsLights(area.tabBar, c) && c.sidebar.headerInset == 8, "with the sidebar on the right, the editor's tabs clear the traffic lights",
+              lightsDetail(area.tabBar, c) + ", sidebar header \(c.sidebar.headerInset)")
         await screenshot(c, suffix: "-sidebar-right")
         app.terminalPosition = savedPosition
         app.sidebarSide = savedSide
@@ -5215,17 +5311,35 @@ enum SelfTest {
     static func screenshot(_ window: NSWindow, suffix: String) async {
         guard let base = reportPath else { return }
         await pause(0.4)
-        guard let image = CGWindowListCreateImage(.null, .optionIncludingWindow, CGWindowID(window.windowNumber),
-                                                  [.boundsIgnoreFraming, .bestResolution]) else {
+        var rep = CGWindowListCreateImage(.null, .optionIncludingWindow, CGWindowID(window.windowNumber),
+                                          [.boundsIgnoreFraming, .bestResolution]).map { NSBitmapImageRep(cgImage: $0) }
+        // Since macOS 27.2 the window server can hand back a wholly clear image: the window then draws itself instead.
+        if rep.map(isClear) ?? true, let view = window.contentView?.superview ?? window.contentView,
+           let drawn = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
+            view.cacheDisplay(in: view.bounds, to: drawn)
+            rep = drawn
+        }
+        guard let rep else {
             note("screenshot failed")
             return
         }
         let path = (base as NSString).deletingPathExtension + suffix + ".png"
-        try? NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+        try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
         note("screenshot: \(path)")
     }
 
-    private static var reportPath: String? {
+    /// Whether no pixel on a sparse grid shows anything.
+    private static func isClear(_ rep: NSBitmapImageRep) -> Bool {
+        let step = max(1, min(rep.pixelsWide, rep.pixelsHigh) / 40)
+        for y in stride(from: 0, to: rep.pixelsHigh, by: step) {
+            for x in stride(from: 0, to: rep.pixelsWide, by: step) where (rep.colorAt(x: x, y: y)?.alphaComponent ?? 0) > 0 {
+                return false
+            }
+        }
+        return true
+    }
+
+    static var reportPath: String? {
         let args = CommandLine.arguments
         guard let i = args.firstIndex(of: "--self-test"), i + 1 < args.count else { return nil }
         return args[i + 1]

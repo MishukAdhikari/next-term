@@ -2,10 +2,12 @@ import Foundation
 
 /// The skills Next Term ships in its library (SkillLibrary, over MCP's get_skill): how an agent running in a Next Term
 /// tab runs work in parallel tabs (next-term-tabs), goes on with work in a worktree the project already has, in its own
-/// window (next-term-worktrees), and changes Next Term's settings and layout for the user, keys first
-/// (next-term-setup). Nothing is written to any agent's folders: an agent gets them from Next Term while it runs in a
-/// tab. Settings › Editor › "Agents offer to run parallel work in tabs" (MCP settings_set agents_offer_tabs) takes
-/// next-term-tabs and its offer out; the others are there whenever agents may control Next Term.
+/// window (next-term-worktrees), changes Next Term's settings and layout for the user, keys first
+/// (next-term-setup), and uses the user's keys from Secrets by name, never seeing them (next-term-secrets). Nothing is
+/// written to any agent's folders: an agent gets them from Next Term. next-term-secrets is not in the skills paragraph,
+/// since the instructions' first line already tells every agent, in a tab or not, when to look in Secrets. Settings ›
+/// Editor › "Agents offer to run parallel work in tabs" (MCP settings_set agents_offer_tabs) takes next-term-tabs and
+/// its offer out; the others are there whenever agents may control Next Term.
 public struct BuiltInSkill: Sendable, Equatable {
     public let name: String
     /// The skill, in the Agent Skills format. Its description is what list_skills shows (at most 300 characters, as it
@@ -19,7 +21,7 @@ public struct BuiltInSkill: Sendable, Equatable {
     /// The description in its front matter.
     public var description: String { SkillFrontMatter.parse(text)?.description ?? "" }
 
-    public static let all = [tabs, worktrees, setup]
+    public static let all = [tabs, worktrees, setup, secrets]
 
     public static func named(_ name: String) -> BuiltInSkill? { all.first { $0.name == name } }
 
@@ -31,7 +33,7 @@ public struct BuiltInSkill: Sendable, Equatable {
     public static let tabs = BuiltInSkill(name: "next-term-tabs", text: #"""
         ---
         name: next-term-tabs
-        description: Run parallel work in Next Term tabs, one agent per tab, that the user can watch and answer. Use in a Next Term tab (list_tabs has a row with "you": true) when the user asks for tasks in parallel, in the background or "in tabs", or for another agent (Codex, Claude, Gemini…) to do or review part.
+        description: Run work in Next Term tabs, one agent each, the user can watch. Use in a Next Term tab when the user asks to run, orchestrate or hand off work with another agent or "in the next/another tab" (cmd, Codex, Claude Code, OpenCode, Gemini), for parallel work, or when a prompt was meant for another tab.
         ---
 
         # Parallel work in Next Term tabs
@@ -44,7 +46,7 @@ public struct BuiltInSkill: Sendable, Equatable {
 
         Offer tabs only when all of these hold:
 
-        - The user asked for parallel or background work ("in parallel", "at the same time", "meanwhile", "in the background", "fan out", "in tabs"), or for a different agent to do or review part of the work ("have Codex review it", "a second opinion").
+        - The user asked for parallel or background work ("in parallel", "at the same time", "meanwhile", "in the background", "fan out", "in tabs"), to orchestrate or hand off work ("run commandcode on the next tab", "hand this to Codex"), or for a different agent to do or review part of the work ("have Codex review it", "a second opinion").
         - You run in a Next Term tab: `list_tabs` returns a row with `"you": true`. Elsewhere, or when the `next-term` tools are missing, say nothing about tabs.
         - Your own row has no `opened_by`: you were not started by another agent. A worker never opens tabs unless the user asks it to, there.
         - The tasks are independent: they don't need each other's results and don't edit the same files.
@@ -55,7 +57,7 @@ public struct BuiltInSkill: Sendable, Equatable {
         - after the user has said no in this conversation;
         - when the user named another way to run them (subagents, teammates, a workflow, background agents): use that.
 
-        If the user asked for tabs in so many words, that is the yes: don't ask again.
+        If the user asked for tabs in so many words, or to run, hand off or orchestrate work with another agent in a tab ("run commandcode on the next tab"), that is the yes: don't ask again, and don't use your own subagents instead.
 
         ## How to offer
 
@@ -70,14 +72,23 @@ public struct BuiltInSkill: Sendable, Equatable {
         ## How to run them
 
         1. `list_tabs`: find your tab (`"you": true`) and its folder.
-        2. For each task, `new_tab` with the project's folder, a `title` naming the task, the agent as `command` (`claude`, `codex`, `opencode`, `gemini -i`) and the task as `prompt`, in plain words: Next Term quotes it for the shell (for `opencode`, after `--prompt`), so never quote it yourself. The task says what to do, which files are its, that another agent started this tab and it should open no tabs, and that it should end with a one-line result (and the branch or worktree its changes are on). Never type the task into an agent that has just started: it may be showing an update or a trust question first, and what you type answers it.
-        3. Tasks that edit files in the same checkout can overwrite each other: split them by files, or give each its own worktree (`command` `claude -w <name>` or `codex --worktree`), and say so in the offer.
-        4. `wait_for_tab` on each, calling again while it says `timed_out`; `read_tab` for its result. When one waits on a question (`state: "attention"`: a trust, update or permission question, or the agent asking something), tell the user here which tab asks what; answer with `answer_agent` only what the user told you to.
-        5. Report each result here, one line per tab, with where its changes are. Don't merge branches, close tabs or commit for the user unless they ask.
+        2. For each task, `new_tab` with the project's folder, a `title` naming the task, the agent as `command` (`claude`, `codex`, `opencode`, `gemini -i`, Command Code's `cmd`) and the task as `prompt`, in plain words: Next Term quotes it for the shell (for `opencode`, after `--prompt`), so never quote it yourself. The task says what to do, which files are its, that another agent started this tab and it should open no tabs, and that it should end with a one-line result (and the branch or worktree its changes are on). Never type the task into an agent that has just started: it may be showing an update or a trust question first, and what you type answers it.
+        3. A worker's tab shows its agent's terminal or Next Term's chat view of the same session, as its agent's Opens as in Settings › Agents says (`list_tabs` gives a tab's `view`). Both show the same session, and `send_to_tab`, `wait_for_tab`, `read_tab` and `answer_agent` work the same in either. Use `switch_view` only when the user asks; an agent session (`new_tab` with `agent_session`) takes `view: "chat"` or `"terminal"` when the user named one.
+        4. Tasks that edit files in the same checkout can overwrite each other: split them by files, or give each its own worktree (`command` `claude -w <name>` or `codex --worktree`), and say so in the offer.
+        5. `wait_for_tab` on each, calling again while it says `timed_out`; `read_tab` for its result. When one waits on a question (`state: "attention"`: a trust, update or permission question, or the agent asking something), tell the user here which tab asks what; answer with `answer_agent` only what the user told you to.
+        6. Report each result here, one line per tab, with where its changes are. Don't merge branches, close tabs or commit for the user unless they ask.
 
-        Never type into your own tab. If a tab fails or its agent isn't installed, say so and go on with the others.
-        """#, offersTabs: true,
-        when: "when the user asks for work in parallel, in the background or by another agent (Codex, Claude…): offer once, and open tabs only after the user types yes")
+        Never type into your own tab. If a tab fails or its agent isn't installed, say so and go on with the others. A tab Next Term brings back after an update or a quit keeps its id.
+
+        ## A prompt meant for another tab
+
+        When the user says prompts they gave you were meant for another session ("wrong tab", "find the cs tab", "I gave you that by mistake"), call `forward_prompt` at once, before any other work. Pass only those prompts, in order and as typed (never the user's words about the mix-up), their words about where they belong as `hint`, and in `note` what you had already done on them. Next Term finds the session, asks the user when more than one fits, and types them there when that agent is idle. Then stop work on them, keep any changes you made, and tell the user where they went and what you had changed. On `not_moved`, ask the user which candidate and call again with its `session`.
+
+        ## Inside herdr
+
+        If you run in a herdr pane (`HERDR_PANE_ID` is set), herdr's own skill (`herdr --skill`) covers splitting your herdr tab and starting agents beside you there. Next Term's tools reach the same herdr from outside: `start_agent` (`split_beside`, `worktree`), `new_tab` with `split_beside` a herdr pane's id, `wait_for_tab` (`until`, `match`), and `list_tabs` with `herdr_layout`. Use Next Term's for work across windows or hosts.
+        """# + "\n\n" + connectedServers, offersTabs: true,
+        when: "when the user asks for work in parallel, in the background or by another agent: an explicit ask is the yes, else offer once")
 
     /// A pasted repository, branch, pull request or worktree the project already has: the offer to open that worktree
     /// in its own window and go on there, with the same agent and a hand-off.
@@ -128,14 +139,14 @@ public struct BuiltInSkill: Sendable, Equatable {
         2. Say here where the work goes on (the window, the tab and the agent), and stop working on that task here. Don't close this tab, commit, merge or remove anything unless the user asks.
 
         Never start an agent with a flag that skips its permission prompts unless the user asked.
-        """#, offersTabs: false,
+        """# + "\n\n" + connectedServers, offersTabs: false,
         when: "when the user pastes a repo, branch or PR the project already has a worktree or branch for")
 
     /// Changing Next Term for the user: what MCP may change, Settings for the rest, and a table with the user's own keys.
     public static let setup = BuiltInSkill(name: "next-term-setup", text: #"""
         ---
         name: next-term-setup
-        description: Change how Next Term works for the user, keyboard first. Use when the user asks to change its settings, layout, panes, notifications or keys, to make it work like another editor, or how to do something in it: change what MCP allows, open Settings for the rest, and answer with a table of keys.
+        description: Set Next Term up or change how it works for the user, keyboard first. Use when the user asks to set it up, to change its settings, layout, panes, notifications or keys, to make it work like another editor, or how to do something in it, and answer with a table of keys.
         ---
 
         # Set Next Term up for the user
@@ -146,11 +157,24 @@ public struct BuiltInSkill: Sendable, Equatable {
 
         ## What you can change
 
-        - `settings_get` lists the settings agents may change, with their values and what each takes, and the layout as `set_layout` answers it. Change several with one `settings_set`: the user approves on the Mac, once, seeing each change.
+        - `settings_get` lists the settings agents may change, with their values and what each takes, and the layout as `set_layout` answers it: among them the terminal's font, size, colours, cursor and scrollback, where a new tab opens, what opens at launch, the notifications and the IDE shortcut set (`shortcut_set`: next_term, vscode or jetbrains). Change several with one `settings_set`: the user approves on the Mac, once, seeing each change.
         - `set_layout`: where the terminal sits (bottom, right, left or top), where its tabs show (top, or a list down its left or right), the sidebar shown or hidden, on the left or the right, the terminal folded, and the window column (a badge for every open window, at each window's edge) shown or hidden, folded or unfolded.
         - `split_pane`, `zoom_pane`, `close_pane` and `focus_tab` arrange panes and give one the keyboard; each asks the user first.
-        - From another editor or terminal (VS Code, Cursor, JetBrains, Zed, iTerm2, Ghostty…): fonts, colours, the cursor, scrollback and keys, with `list_import_sources`, then `preview_import`, then `apply_import`, which the user applies in Next Term's import window.
+        - From another editor or terminal (VS Code, Cursor, JetBrains, Zed, iTerm2, Ghostty…): fonts, colours, the cursor, scrollback and keys, with `list_import_sources`, then `preview_import`, then `apply_import`, which the user applies in Next Term's import window. For the IDE shortcut set alone no import is needed: `settings_set` with `shortcut_set`.
+        - The chat view: Claude Code, Codex, Command Code and the agents Next Term runs as sessions (OpenCode, Cursor, Gemini…) can show the same live session as Next Term's native chat, the terminal one click away. Every agent opens as its terminal until the user picks otherwise. `settings_set` with `agents_open_as_chat` (a list of agent ids, such as `["claude", "codex"]`; `[]` for none) makes those agents' new sessions open as chat; `settings_get` gives the list now. It is each agent's Opens as in Settings › Agents, and never switches a tab already open: for one tab, `switch_view` (`list_tabs` gives a tab's `view`). The user switches the tab with the keyboard by View › Show as Chat (`list_shortcuts` `query` "Show as Chat" gives its key); Settings › Agents › Chat view for agent tabs turns the chat off everywhere, and is the user's to change. `chat_token_usage` (true or false) shows or hides the chat's one line under the composer with the tokens the agent recorded for its last request and how full its context is; an agent that records none shows none. When the user asks for a token budget for a session, `set_token_budget` with the tab and `tokens` ("2M"; 0 clears it): the chat shows a light line and hairline of what the session has spent against it, never enforced; only local Claude Code and Codex tabs count it.
+        - `apply_setup` takes settings (as `settings_set`), the layout (as `set_layout`) and an import (as `apply_import`) together: the user approves them in one window on the Mac, a row per change they may untick, and Next Term › Undo Agent Setup… puts back all of it.
         - Never agent control, remote access, the IDE links, updates or a single key: those are the user's to change. Show them where.
+
+        ## First run
+
+        When the user asks you to set Next Term up (its `setup` prompt, or "set it up for me"), make one plan and apply it in one approval:
+
+        1. Read what is there: `settings_get` (the settings and the layout), `list_import_sources` (the apps the user had before, and the shortcut set in use) and `list_shortcuts`.
+        2. `preview_import` for the source the user named, or else the one `list_import_sources` shows as used last. Ask which only when two look as likely.
+        3. Propose one plan as a table, a row per change with its value now and the new one: the import's rows, the IDE shortcut set, the layout and the notification choices. Say what will not carry over, as the preview names it. Change nothing yet.
+        4. Once the user agrees, apply it with `apply_setup`: the user approves the whole plan on the Mac, once, and may untick rows. Without `apply_setup`, use `settings_set`, then `set_layout`, then `apply_import`, one ask each.
+        5. `nxtrm` for other terminals (Next Term's own tabs have it): a launch links it where no password is needed, and nothing asks for one by itself. When `ls -l /usr/local/bin/nxtrm /opt/homebrew/bin/nxtrm ~/.local/bin/nxtrm` finds no link and the user wants it, offer `run_command` with `sudo ln -sh` from the `nxtrm` that `command -v nxtrm` gives in a Next Term tab (quoted: it has a space) to /usr/local/bin/nxtrm, after `sudo mkdir -p /usr/local/bin` if it is missing, or name Next Term › Install Command Line Tool (nxtrm)…
+        6. Say what changed, as Next Term's answers give it, and how to undo it: Undo Agent Setup in the Next Term menu, or `undo_import` for the import. End with three keys from `list_shortcuts` for what the user will do most, in the table below.
 
         ## Keys
 
@@ -159,17 +183,85 @@ public struct BuiltInSkill: Sendable, Equatable {
         ## How to answer
 
         1. Say what you are about to change, then change what you can, in as few asks as you can. Count a change as made only when Next Term's answer says so; when the user declines or doesn't answer, say that.
-        2. For the rest, `show_settings` with its tab (general, editor, terminal, notifications, keys, import, skills, tasks or secrets), so it is open in front of the user.
+        2. For the rest, `show_settings` with its tab (general, editor, terminal, notifications, keys, import, skills, mcp, tasks or secrets), so it is open in front of the user.
         3. Answer with one table, the key first, of what the user asked about:
 
         | Key | What | Where | Done |
         |---|---|---|---|
         | ⌥⌘T | Open a tab on a server | File › New Remote Tab… | how to |
         | — | Terminal on the right | View › Terminal Position | changed |
-        | ⌘, | Terminal font | Settings › Terminal › Font | Settings open |
+        | ⌘, | Editor font | Settings › Editor › Font | Settings open |
         | — | Where new tasks are saved | Settings › Tasks › Todo folder | Settings open |
 
         Write "—" for a command with no key. Add only the keys that go with what was asked, not a full list: `list_shortcuts` is there when the user wants more.
-        """#, offersTabs: false,
+        """# + "\n\n" + connectedServers, offersTabs: false,
         when: "when the user asks to change Next Term (settings, layout, keys) or how to do something in it")
+
+    /// Keys from Secrets, by name: look there first, use a key without seeing it (run_with_secrets, `nxtrm secret run`
+    /// in an MCP server's config), and ask for a missing one in Next Term, never in the chat.
+    public static let secrets = BuiltInSkill(name: "next-term-secrets", text: #"""
+        ---
+        name: next-term-secrets
+        description: Use the user's API keys, tokens and passwords from Next Term's Secrets without seeing them. Use whenever a command, script, .env file, CLI or MCP server needs a key, token or password, or an OAuth login fails: check list_secrets first, before shell profiles or asking the user.
+        ---
+
+        # Keys from Next Term's Secrets
+
+        Next Term keeps the user's API keys, tokens and passwords in its Secrets, and this skill comes from Next Term (MCP `get_skill`, or a copy in your skills folder that the user added). Its MCP server (`next-term`) tells you the keys' names, never their values, and puts a key in a program's environment only after the user approves on the Mac with Touch ID or their password. You use a key by its name and never see it.
+
+        The user's own instructions win over this skill: what they told you, and their CLAUDE.md or AGENTS.md. If you have no `next-term` tools (no `list_secrets`), this skill does not apply: say nothing about Secrets.
+
+        ## Look in Secrets first
+
+        When anything needs a key, token or password, call `list_secrets` before anything else: before reading ~/.zshrc, ~/.zprofile, `env` or `.env` files for it, and before asking the user. A config that names a token counts (a `${NAME}` placeholder, an `Authorization` header): look before you try an OAuth login, and again when one fails (a 404 on registration means the server wants a token).
+
+        Match by name and by what each key is for. A program may want another name than the stored one (it reads `OPENAI_API_KEY`, stored as `OPENAI_KEY`): give it as `NAME=ENVNAME`. When two could fit, ask the user which, by name.
+
+        ## Use it by name
+
+        - A command, script or SDK call you run now: `run_with_secrets` with the names and the command, which uses the key as `$ENVNAME`. `read_tab` shows its output with stored keys masked.
+        - An MCP server every agent in Next Term should have: `add_mcp_server` (always listed, the first server included; the user's list is in Settings › MCP Servers), with its command or URL and the stored keys' names in `secrets`, never a value. The user approves on the Mac, and no agent's own config changes; `list_mcp_servers` shows the ones connected.
+        - A program another app starts later, such as an MCP server in an agent's config: make its command `nxtrm secret run NAME=ENVNAME -- command`, ENVNAME being the variable the program reads. Next Term asks the user on the Mac when it starts: each time for a key that asks for Touch ID every time (the default), otherwise once the user's allowance has run out; tell them so, and to approve promptly.
+          - A local server that reads its token from a variable: `nxtrm secret run GH_TOKEN=GITHUB_PERSONAL_ACCESS_TOKEN -- docker run -i --rm -e GITHUB_PERSONAL_ACCESS_TOKEN ghcr.io/github/github-mcp-server` (`-e` with no value takes it from the wrapper's environment)
+          - When the command's arguments need the value, as a server at a URL that wants a bearer token does, give it a name only the wrapper sets, starting with `NXTRM_`, 64 characters at most (shorten a long one: `API_TOKEN=NXTRM_TOKEN`): `nxtrm secret run API_TOKEN=NXTRM_API_TOKEN -- npx -y mcp-remote@0.15.2 https://mcp.example.com/mcp --header 'Authorization: Bearer ${NXTRM_API_TOKEN}'`. Keep the single quotes: mcp-remote fills in `${NXTRM_API_TOKEN}` itself. An agent that fills in `${…}` from its own environment then finds nothing to fill, so a value the user also exports never lands in a command line.
+          - Pin every package to an exact version (`npm view mcp-remote version`): Next Term warns the user about an unpinned `npx -y` package, which runs whatever is newest each time.
+          - Codex: `codex mcp add NAME -- nxtrm secret run …`, then ask the user to add `startup_timeout_sec = 60` under that server in ~/.codex/config.toml, as their approval takes a moment. Claude Code: `claude mcp add NAME -- nxtrm secret run …`; it lists `NXTRM_…` under missing environment variables, which is expected: never set or export it, only `nxtrm secret run` does. A JSON or TOML config: `nxtrm` as the command, the rest as its arguments.
+          - Never open, print or search an agent's MCP config as a whole (~/.codex/config.toml, ~/.claude.json, .mcp.json): other servers' entries can hold keys. Use the agent's own `mcp add` and `mcp get NAME`.
+          - If `command -v nxtrm` finds nothing, take the command of the `next-term` server's own entry (`codex mcp get next-term`, `claude mcp get next-term`): `nxtrm` by its full path, quoted in a shell (it has a space). Read only that entry: other servers' entries can hold keys.
+          - Not `--bearer-token-env-var`, `bearer_token_env_var`, `env_http_headers` or a variable in a URL server's own headers: those read your agent's own environment, which has no key.
+          - Don't check a wrapped server with `claude mcp list` or a test run: each start asks the user. Tell them it will ask when the agent next starts it.
+          - Never start the agent itself under `nxtrm secret run`: every command it runs could read the key.
+        - Setting up a program that reads a `.env` file, with the key in Secrets: leave the key out of the file and start the program with `run_with_secrets` or under `nxtrm secret run`; dotenv and most loaders keep a variable that is already set. A `.env` that already works: leave it alone, and offer `import_secrets` only when the user asks to move keys into Secrets.
+
+        ## Never
+
+        - Never ask the user to paste a key into the chat, and never propose exporting one in ~/.zshrc or typing it into a config.
+        - Never print, echo, log or copy a key's value, and never put one in a command, an argument, a file or a commit.
+        - Never read a key's value out of shell files, `.env` files or the keychain to use it yourself: start the program so it reads them itself, or use Secrets.
+
+        ## Missing or new
+
+        - Not in `list_secrets`, but the program already gets it on its own (a `.env` it loads, a variable it inherits; check by name, never the value): let it, and mention that Secrets could keep it. Otherwise `request_secret` with the name the program expects and a reason ("API_TOKEN for the docs MCP server"). The user types it into Next Term on the Mac; you get back only `saved`. If you know where the user gets one (the provider's key page), say so in a line. Then use it by name.
+        - `vault` none: the user keeps no keys in Next Term yet. Use their own setup for the key, or offer `request_secret` to keep it here. cant_open or tampered: tell the user, and stop.
+        - The user pastes a key into the chat anyway, or a CLI prints a new token: `store_secret` it right away, use it by name from then on, and never repeat it.
+        - A command that asks for the user's own password or login (sudo, `gh auth login`): `run_command` if you have it, or ask the user to run it in their tab. Never ask for that password in the chat.
+        - `declined`: the user said no. Say what you could not do, and don't ask again in this task.
+        """# + "\n\n" + connectedServers, offersTabs: false,
+        // Not shown in the skills paragraph (MCPServer leaves next-term-secrets out); get_skill's description says it.
+        when: "when a command, script, .env file or MCP server needs an API key, token or password")
+
+    /// Ends every one of them: the MCP servers the user connected in Next Term are the agent's to use, whatever skill
+    /// brought it here, so it uses them instead of asking the user to set a server up again in its own config.
+    public static let connectedServers = """
+        ## MCP servers connected in Next Term
+
+        MCP servers the user connected in Next Term (Settings › MCP Servers) are yours too. Use them before asking the user to add a server to your own config, and never ask for a server's key or sign-in yourself: Next Term holds them and never hands them to you.
+
+        - **Your own tools or `mcp_call`.** Many are listed as your own, named `<server>__<tool>`. The rest, and a server connected after you started, are reached through `mcp_servers` (what is connected, and each one's state), `mcp_tools` (with `server`, that server's tools; with `tool` too, its full input schema) and `mcp_call` (`server`, `tool`, `arguments`). `mcp_servers` says which way each server comes.
+        - **Search wisely.** `mcp_tools` with `query` and no server searches every server it can reach without asking the user, and names the ones it left out (a key from Secrets, a sign-in this agent isn't allowed yet). Name a server to search it; the user is asked then.
+        - **A state that needs the user.** When `mcp_servers` gives `needs_sign_in`, `signed_out` or `needs_more_access`, or a call says so, tell the user what its note says (sign in or reconnect in Settings › MCP Servers) and call again once they have. No restart is needed.
+        - **Asked once.** The first time you use a signed-in server, the user allows you on the Mac, in one panel for every sign-in you aren't allowed yet. A call that answers "Next Term is asking the user…" or "the approval is kept": tell the user to answer on the Mac, then call again.
+        - **Any terminal.** You get these servers in any terminal. In another terminal, the user allows a signed-in server for your session only, and is asked again next session; in a Next Term tab, once.
+        - `list_mcp_servers` shows what is connected; when a server you need isn't, `add_mcp_server` connects it for every agent once the user approves on the Mac.
+        """
 }

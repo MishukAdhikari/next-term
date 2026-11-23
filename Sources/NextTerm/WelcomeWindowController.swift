@@ -63,6 +63,11 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
     private let resumeButton = NSButton(title: "Resume", target: nil, action: nil)
     private let forkButton = NSButton(title: "Fork", target: nil, action: nil)
     private let detailPane = NSView()
+    /// Next Term added its tools to the user's agents (MCPRegistrationAnnouncer): a card over the right pane, which moves
+    /// down under it while it shows.
+    private let registrationCard = MCPRegistrationCard()
+    private var paneTop: NSLayoutConstraint!
+    private var paneTopUnderCard: NSLayoutConstraint!
 
     private var sessions: [AgentSession] = []
     private var shownSessions: [AgentSession] = []
@@ -90,6 +95,7 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
         let window = WelcomeWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 580),
                                    styleMask: [.titled, .closable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
         window.title = "Welcome to Next Term"
+        window.keepsItsOwnFrame()
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         window.isMovableByWindowBackground = true
@@ -97,7 +103,7 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
         // and clickable, their agents in view, and the Mac already shows them subdued while this one is in front. A
         // dimmed or blurred screen would say they are blocked, which they are not.
         window.backgroundColor = Theme.background
-        window.appearance = NSAppearance(named: .darkAqua)
+        window.appearance = nil // the app\'s look (Settings › General › Appearance)
         window.isReleasedWhenClosed = false
         window.minSize = NSSize(width: 720, height: 440)
         // File › Open Project… shows it from a project window in full screen too: it comes over that window, on the
@@ -137,6 +143,23 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
+
+    /// The card that says Next Term added its tools to the user's agents, at the top of the right pane.
+    func showRegistrationNotice(_ notice: MCPRegistrationNotice) {
+        registrationCard.show(notice)
+        registrationCard.isHidden = false
+        paneTop.isActive = false
+        paneTopUnderCard.isActive = true
+    }
+
+    private func hideRegistrationNotice() {
+        registrationCard.isHidden = true
+        paneTopUnderCard.isActive = false
+        paneTop.isActive = true
+    }
+
+    /// The card's sentence while it shows, for the self-test.
+    var registrationNoticeText: String? { registrationCard.isHidden ? nil : registrationCard.text }
 
     deinit {
         observers.forEach(NotificationCenter.default.removeObserver)
@@ -223,7 +246,7 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
         // Left: the app, search, projects and servers, and the three ways in.
         let left = NSView()
         left.wantsLayer = true
-        left.layer?.backgroundColor = Theme.bar.cgColor
+        left.themedBackground(Theme.bar)
         let icon = NSImageView(image: NSApp.applicationIconImage ?? NSImage())
         icon.imageScaling = .scaleProportionallyUpOrDown
         let name = NSTextField(labelWithString: "Next Term")
@@ -265,6 +288,9 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
         openButton.bezelStyle = .rounded
         openButton.target = self
         openButton.action = #selector(openSelectedProject)
+        // A long name gives way, cut in its middle; the button keeps its whole title.
+        openButton.setContentCompressionResistancePriority(.required, for: .horizontal)
+        projectName.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         sessionsTitle.attributedStringValue = Self.headingText("Agent sessions")
         filter.segmentStyle = .roundRect
         filter.target = self
@@ -308,10 +334,15 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
         serverPane.isHidden = true
         waysInCards.isHidden = true
         // The cards take the right pane's place; the footer stays under whichever pane shows.
-        for view in [left, detailPane, serverPane, waysInCards, atLaunch] as [NSView] {
+        for view in [left, detailPane, serverPane, waysInCards, atLaunch, registrationCard] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             content.addSubview(view)
         }
+        registrationCard.isHidden = true
+        registrationCard.onDone = { [weak self] in self?.hideRegistrationNotice() }
+        paneTop = detailPane.topAnchor.constraint(equalTo: content.topAnchor)
+        // The project's name stands as far under the card as it stands under the title bar without it.
+        paneTopUnderCard = detailPane.topAnchor.constraint(equalTo: registrationCard.bottomAnchor, constant: -16)
         NSLayoutConstraint.activate([
             left.topAnchor.constraint(equalTo: content.topAnchor),
             left.bottomAnchor.constraint(equalTo: content.bottomAnchor),
@@ -349,7 +380,10 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
             waysInRows.trailingAnchor.constraint(equalTo: left.trailingAnchor, constant: -6),
             waysInRows.bottomAnchor.constraint(equalTo: left.bottomAnchor, constant: -10),
 
-            detailPane.topAnchor.constraint(equalTo: content.topAnchor),
+            paneTop,
+            registrationCard.topAnchor.constraint(equalTo: content.topAnchor, constant: 36),
+            registrationCard.leadingAnchor.constraint(equalTo: left.trailingAnchor, constant: 24),
+            registrationCard.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -24),
             detailPane.bottomAnchor.constraint(equalTo: content.bottomAnchor),
             detailPane.leadingAnchor.constraint(equalTo: left.trailingAnchor),
             detailPane.trailingAnchor.constraint(equalTo: content.trailingAnchor),
@@ -683,8 +717,11 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
     private var current: String?
     var selectedProject: String? { current }
 
-    func select(project: String) {
-        guard let index = switcher.shown.index(of: .project(project)) else { return }
+    func select(project: String) { select(.project(project)) }
+
+    /// The row `id` stands for selected: a project's, a window's own or a server's.
+    func select(_ id: SwitcherEntry.ID) {
+        guard let index = switcher.shown.index(of: id) else { return }
         switcher.select(index)
         showSelection()
     }
@@ -833,12 +870,15 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
             } else if let own {
                 own.makeKeyAndOrderFront(nil)
                 close()
+                // An open project's window from the list, ⌘O then ↩ among the ways: the hint on it is done.
+                HintCenter.shared.retire(.switchBack, reason: .actionPerformed)
             } else if !project.hasProject {
                 // A window with no project, closed since the list was read: nothing to go to, and the list follows.
                 return
             } else if project.isOpen, let window = frontWindow(of: project.path) {
                 // Its window in front last: Open Project would bring the first one made.
                 window.makeKeyAndOrderFront(nil)
+                HintCenter.shared.retire(.switchBack, reason: .actionPerformed)
                 close()
             } else if WorktreeWindow.repository(ofLinkedWorktree: project.path) != nil {
                 // A linked worktree opens in a window of its own, as the Git menu opens it, and stays out of

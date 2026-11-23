@@ -52,6 +52,7 @@ extension SelfTest {
         await secretsStoreChecks(base)
         await secretsMaskingChecks(c, base: base)
         await secretsPanelChecks(base)
+        await secretsApprovalChecks()
         #if DEBUG
         await secretsAllowOnceChecks()
         await secretsAskEveryUseChecks()
@@ -59,6 +60,8 @@ extension SelfTest {
         await secretsWrapperChecks(base)
         await secretsToolChecks(c, base: base, proj: proj)
         await secretsSettingsChecks(base: base)
+        await secretsSkillCopyChecks()
+        await secretsSkillCopyEdgeChecks()
         #if DEBUG
         await secretsMenuChecks(base: base)
         #endif
@@ -654,7 +657,7 @@ extension SelfTest {
         requests.ask(wrapper) { answers.take($0) }
         guard let panel = wrapper.panel, let window = panel.window else { return check(false, "secrets: a wrapper's request shows the panel") }
         let shown = texts(window.contentView)
-        check(shown.contains("Asked through Next Term's own nxtrm (checked)") && shown.contains("Codex, going by its program's name")
+        check(shown.contains("Asked through Next Term’s own nxtrm (checked)") && shown.contains("Codex (going by its program\u{2019}s name)")
               && panel.durationChoice[.untilLock] != nil && panel.durationChoice[.once]?.state == .on,
               "secrets: a wrapper's panel shows the checked nxtrm row, the agent going by its program's name, and until the Mac locks",
               shown)
@@ -664,13 +667,19 @@ extension SelfTest {
               "secrets: a tab title's control, bidi and zero-width characters are stripped")
         check(SecretApprovalPanel.shownCommand("npm test\r\nnpx -y x\u{202E}\u{200B}", limit: 200) == "npm test\\r\\nnpx -y x\\u{202e}\\u{200b}",
               "secrets: the panel's command shows line breaks, bidi and zero-width characters escaped, never as spaces or taken out")
-        check(shown.contains("(an agent wrote this)") && shown.contains(SecretNewKeyDefaults.neverShownHelp),
+        check(shown.contains("Note by an agent: ") && shown.contains(SecretNewKeyDefaults.neverShownHelp),
               "secrets: the key's row marks an agent's purpose and that it is never shown")
         check(!window.isKeyWindow && window.collectionBehavior.contains(.canJoinAllSpaces) && window.collectionBehavior.contains(.fullScreenAuxiliary)
               && window.level == .floating && window.styleMask.contains(.nonactivatingPanel)
-              && panel.allowButton.keyEquivalent.isEmpty && panel.allowButton.refusesFirstResponder,
-              "secrets: the panel never takes the keyboard, joins every Space and full-screen windows, floats, and has no default button")
-        check(SecretApprovalPanel.title(wrapper) == "Codex asks to start npx with PANEL_KEY", "secrets: the panel's title names the agent, the program and the key",
+              && panel.allowButton.keyEquivalent == "\r" && panel.allowButton.refusesFirstResponder,
+              "secrets: the panel never takes the keyboard, joins every Space and full-screen windows, floats, and Return is Allow with Only this time once the user is in it")
+        window.layoutIfNeeded()
+        check(panel.allowButton.bezelColor == .controlAccentColor && panel.declineButton.keyEquivalent == "\u{1b}"
+              && window.titleVisibility == .hidden && panel.commandBox != nil
+              && panel.allowButton.convert(panel.allowButton.bounds, to: nil).minX > panel.declineButton.convert(panel.declineButton.bounds, to: nil).maxX,
+              "secrets: Allow is the primary (tinted and rightmost, a click only), Escape declines, the heading says the title once, and the command sits in its box")
+        await screenshot(window, suffix: "-secret-panel")
+        check(SecretApprovalPanel.title(wrapper) == "Codex wants to use PANEL_KEY", "secrets: the panel's title names the agent and the key",
               SecretApprovalPanel.title(wrapper))
 
         // "Allow for 15 minutes": the same request again needs no panel, until the Mac locks.
@@ -750,7 +759,7 @@ extension SelfTest {
         _ = try? scratch.startOver()
         check(granted && requests.grants.isEmpty, "secrets: Start Over ends every grant, so a key added again under its name asks again")
 
-        // Decline pauses that request only; Decline and Stop Asking stops the asker.
+        // Decline pauses that request only; Don’t Ask Again stops the asker.
         let tool = secretsRequest(asker: "selftest-tab-x", command: ["npm test"], source: .tool, agent: "Claude Code")
         requests.ask(tool) { answers.take($0) }
         tool.panel?.declineButton.performClick(nil)
@@ -765,13 +774,13 @@ extension SelfTest {
         other.panel?.stopButton.performClick(nil)
         let third = secretsRequest(asker: "selftest-tab-x", command: ["npm run lint"], source: .tool, agent: "Claude Code")
         requests.ask(third) { answers.take($0) }
-        check(secretsRefusal(answers.last) == .stopped, "secrets: Decline and Stop Asking refuses that agent's next, different request")
+        check(secretsRefusal(answers.last) == .stopped, "secrets: Don’t Ask Again refuses that agent's next, different request")
 
         // A remote request offers only "Allow once".
         let remote = secretsRequest(asker: "remote:grant-1", command: ["npm test"], source: .tool, remote: "Claude, phone", agent: nil)
         requests.ask(remote) { answers.take($0) }
         check(remote.panel.map { Array($0.durationChoice.keys) == [.once] } == true
-              && SecretApprovalPanel.title(remote) == "The remote connection “Claude, phone” asks to run npm with PANEL_KEY",
+              && SecretApprovalPanel.title(remote) == "The remote connection \u{201C}Claude, phone\u{201D} wants to use PANEL_KEY",
               "secrets: a remote request's panel names the connection and offers only Allow once")
         remote.panel?.declineButton.performClick(nil)
 
@@ -909,7 +918,7 @@ extension SelfTest {
         let shown = await wait(15) { requests.showing?.panel != nil }
         let panel = requests.showing?.panel
         let title = requests.showing.map(SecretApprovalPanel.title) ?? "no panel"
-        check(started && shown && title.contains("asks to start sh with WRAP_KEY"), "secrets: nxtrm secret run shows the panel", title)
+        check(started && shown && title.contains("wants to use WRAP_KEY"), "secrets: nxtrm secret run shows the panel", title)
         panel?.allowButton.performClick(nil)
         let allowedExit = await allowed.finish()
         check(allowedExit == 0 && read("len") == String(value.utf8.count) && allowed.stdout.isEmpty,
@@ -1164,11 +1173,11 @@ extension SelfTest {
             return check(false, "secrets: request_secret opens its window")
         }
         let purpose = window.purposeField.stringValue
-        check(purpose.count <= 200 && purpose.hasSuffix("…") && shown.title == "An agent outside Next Term's tabs asks you to add STRIPE_KEY",
+        check(purpose.count <= 200 && purpose.hasSuffix("…") && shown.title == "An agent outside Next Term’s tabs asks you to add STRIPE_KEY",
               "secrets: request_secret's window prefills what it's for with at most 200 characters, ending in …", "\(purpose.count): \(shown.title)")
-        check(!shown.isKeyWindow && window.saveButton.keyEquivalent.isEmpty && window.declineButton.keyEquivalent.isEmpty
-              && window.stopButton.keyEquivalent.isEmpty && !(shown is NSPanel),
-              "secrets: the request window is an ordinary window that never takes the keyboard on its own and has no default button")
+        check(!shown.isKeyWindow && window.saveButton.keyEquivalent.isEmpty && window.saveButton.refusesFirstResponder
+              && window.declineButton.keyEquivalent == "\u{1b}" && window.stopButton.keyEquivalent.isEmpty && !(shown is NSPanel),
+              "secrets: the request window is an ordinary window that never takes the keyboard on its own; only a click saves, and Escape declines")
         let pasteboard = SecretClipboard.shared.pasteboard
         let general = NSPasteboard.general.changeCount
         pasteboard.clearContents()
@@ -1211,7 +1220,7 @@ extension SelfTest {
         guard let panel = requests.showing?.panel, let window = panel.window else { return check(false, "secrets: store_secret shows the panel") }
         let shown = texts(window.contentView)
         check(shown.contains("This key is already in the agent's conversation.") && panel.durationChoice.isEmpty && panel.pauseButton.isHidden
-              && panel.allowButton.title == "Save" && window.title == "An agent outside Next Term's tabs asks to save a key it holds"
+              && panel.allowButton.title == "Save" && window.title == "An agent outside Next Term’s tabs asks to save a key it holds"
               && !shown.contains(value),
               "secrets: store_secret's panel says the value is in the agent's conversation, has Save and no How long, and never shows the value",
               shown)
@@ -1242,7 +1251,7 @@ extension SelfTest {
         _ = await wait(10) { requests.showing?.panel != nil }
         let replacing = requests.showing?.panel
         let replaceShown = texts(replacing?.window?.contentView)
-        check(replacing?.window?.title == "An agent outside Next Term's tabs asks to replace USER_KEY, a key you added"
+        check(replacing?.window?.title == "An agent outside Next Term’s tabs asks to replace USER_KEY, a key you added"
               && replaceShown.contains("This replaces the key you added on") && replaceShown.contains("will get the agent's value"),
               "secrets: store_secret replacing a key the user added says so in its title and a warning", replaceShown)
         replacing?.allowButton.performClick(nil)
@@ -1311,7 +1320,7 @@ extension SelfTest {
         // Under the command, the line that any program running as the user can read the key while it runs (review finding #14).
         let panelTexts: String = texts(panel?.window?.contentView)
         let saysReadable: Bool = panelTexts.contains(SecretRun.environmentNote(keys: 1))
-        check(title == "A program outside Next Term's tabs asks to run printf with TOOL_KEY"
+        check(title == "A program outside Next Term\u{2019}s tabs wants to use TOOL_KEY"
               && panelTexts.contains("Runs as a shell command") && panel?.durationChoice[.untilLock] == nil && saysReadable,
               "secrets: the panel shows the command as a shell command, says any program running as you can read the key while "
                   + "it runs, and has no until-the-Mac-locks choice", title)
@@ -1511,7 +1520,7 @@ extension SelfTest {
         var fromOther: SecretRun.Answer?
         if let otherTab, ticketTab != nil { requests.redeem(ticket: id, peerTab: otherTab, request: asked) { fromOther = $0 } }
         check(fromOther?.status == .refused && requests.tickets[id] != nil,
-              "secrets: a ticket redeemed from another of Next Term's tabs is refused, and its own tab can still redeem it")
+              "secrets: a ticket redeemed from another of Next Term’s tabs is refused, and its own tab can still redeem it")
         _ = await wait(15) { requests.showing?.panel != nil }
         requests.showing?.panel?.declineButton.performClick(nil)
         _ = await call.value
@@ -1898,7 +1907,7 @@ extension SelfTest {
         let call = secretsStart("run_with_secrets", arguments, requester: requester, connection: "grant-1", approval: grant)
         let shown = await wait(15) { requests.showing?.panel != nil }
         let panel = requests.showing?.panel
-        check(shown && panel?.window?.title == "The remote connection “test” asks to run printf with REMOTE_KEY"
+        check(shown && panel?.window?.title == "The remote connection \u{201C}test\u{201D} wants to use REMOTE_KEY"
               && panel?.durationChoice[.once] != nil && panel?.durationChoice[.fifteenMinutes] == nil && panel?.durationChoice[.untilLock] == nil,
               "secrets: a remote run_with_secrets shows the panel, naming the connection, with only Allow once, though its changes are pre-approved",
               panel?.window?.title ?? "no panel")

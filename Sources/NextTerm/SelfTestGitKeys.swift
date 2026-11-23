@@ -1,8 +1,8 @@
 import AppKit
 import NextTermCore
 
-/// The keys of View › Unified Diffs, Annotate with Git Blame and Current Line Blame, and of Git › Fetch, Update Project,
-/// Commit…, Push… and New Branch…: the menus as built have the keys the unit tests check for clashes (MenuKeys), each
+/// The keys of View › Diffs & Blame (Unified Diffs, Annotate with Git Blame, Current Line Blame), and of Git › Fetch, Update
+/// Project, Commit…, Push… and New Branch…: the menus as built have the keys the unit tests check for clashes (MenuKeys), each
 /// item shows its key under every set of keys, Settings says where ⌘R is the branch popup's Fetch, and a key you gave
 /// another command before it was one of these commands' default stays yours.
 extension SelfTest {
@@ -103,8 +103,8 @@ extension SelfTest {
         NSApp.sendEvent(event)
     }
 
-    /// ⌃⌘U, ⌃⇧⌘A, ⌃⇧⌘L and ⌥⌘W turn View › Unified Diffs, Annotate with Git Blame, Current Line Blame and Soft Wrap over,
-    /// and back.
+    /// ⌃⌘U, ⌃⇧⌘A, ⌃⇧⌘L and ⌥⌘W turn View › Diffs & Blame's Unified Diffs, Annotate with Git Blame and Current Line Blame, and
+    /// View › Editor › Soft Wrap, over and back: keys reach items in submenus as anywhere.
     private static func viewKeyPresses(_ window: NSWindow) async {
         let app = AppDelegate.shared!
         let layout = DiffLayout.current, annotations = app.blameAnnotations, lineBlame = app.currentLineBlame, wrap = app.softWrap

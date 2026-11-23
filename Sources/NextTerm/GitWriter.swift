@@ -323,6 +323,7 @@ final class GitCommandsWindowController: NSWindowController {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 760, height: 460), styleMask: [.titled, .closable, .resizable, .miniaturizable],
                               backing: .buffered, defer: false)
         window.title = "Git Commands"
+        window.keepsItsOwnFrame()
         window.isReleasedWhenClosed = false
         let content = NSView()
         scroll.translatesAutoresizingMaskIntoConstraints = false
@@ -398,39 +399,69 @@ final class GitToast {
         present(text, in: window, button: button, isError: isError, begun: begun, action: action, other: nil, otherAction: nil)
     }
 
-    /// A notice that offers something: its button, then `other` after it ("Don’t Ask Again").
+    /// A notice that offers something: its button, then `other` after it ("Don’t Ask Again"). `primary`: the button is
+    /// the offer's one primary, in the accent colour (the MCP hub's new-server offer). `skip`: a last button that only
+    /// puts the notice away, this time.
     static func show(_ text: String, in window: NSWindow?, button: String, action: @escaping () -> Void, other: String,
-                     otherAction: @escaping () -> Void) {
-        present(text, in: window, button: button, isError: false, begun: nil, action: action, other: other, otherAction: otherAction)
+                     otherAction: @escaping () -> Void, primary: Bool = false, skip: String? = nil) {
+        present(text, in: window, button: button, isError: false, begun: nil, action: action, other: other, otherAction: otherAction,
+                primary: primary, skip: skip)
     }
 
     private static func present(_ text: String, in window: NSWindow?, button: String?, isError: Bool, begun: Int?,
-                                action: (() -> Void)?, other: String?, otherAction: (() -> Void)?) {
+                                action: (() -> Void)?, other: String?, otherAction: (() -> Void)?, primary: Bool = false,
+                                skip: String? = nil) {
         guard let window else { return }
+        // For a project merged behind another's tab (plan 032): it waits for that tab to come to the front, and never
+        // pushes away the notice of the project in use.
+        if window.isBackgroundTab {
+            return hold(for: window) { [weak window] in
+                present(text, in: window, button: button, isError: isError, begun: begun, action: action, other: other, otherAction: otherAction,
+                        primary: primary, skip: skip)
+            }
+        }
         guard GitNotice.replaces(shown, hasButton: button != nil, isError: isError, begun: begun) else { return }
         dismiss()
         let label = NSTextField(labelWithString: text)
         label.font = .systemFont(ofSize: 12.5, weight: .medium)
         label.textColor = isError ? Theme.failed : Theme.text
         Typography.singleLine(label, truncation: .byTruncatingMiddle)
+        // In a narrow window the words give way, never the buttons.
+        label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         var views: [NSView] = [label]
         if let button {
-            let control = NSButton(title: button, target: GitToastTarget.shared, action: #selector(GitToastTarget.pressed))
-            control.bezelStyle = .rounded
-            control.controlSize = .small
+            // The notice's panel is never key, where AppKit draws no tint: a primary draws its own fill (PrimaryButton).
+            let control = primary ? PrimaryButton(title: button, target: GitToastTarget.shared, action: #selector(GitToastTarget.pressed))
+                : NSButton(title: button, target: GitToastTarget.shared, action: #selector(GitToastTarget.pressed))
+            if !primary {
+                control.bezelStyle = .rounded
+                control.controlSize = .small
+            }
             views.append(control)
         }
         if let other {
             let control = NSButton(title: other, target: GitToastTarget.shared, action: #selector(GitToastTarget.pressedOther))
             control.bezelStyle = .rounded
-            control.controlSize = .small
+            control.controlSize = primary ? .regular : .small // beside a primary, at its size
             views.append(control)
         }
+        if let skip {
+            let control = NSButton(title: skip, target: GitToastTarget.shared, action: #selector(GitToastTarget.pressedSkip))
+            control.bezelStyle = .rounded
+            control.controlSize = primary ? .regular : .small
+            views.append(control)
+        }
+        for control in views.dropFirst() { control.setContentCompressionResistancePriority(.required, for: .horizontal) }
         let stack = NSStackView(views: views)
         stack.spacing = 12
         stack.edgeInsets = NSEdgeInsets(top: 8, left: 14, bottom: 8, right: 10)
-        let size = stack.fittingSize
-        let width = min(max(size.width, 160), window.frame.width - 60)
+        var size = stack.fittingSize
+        let room = window.frame.width - 60
+        if size.width > room { // the words truncate to fit, so every button stays whole
+            label.widthAnchor.constraint(equalToConstant: max(80, label.fittingSize.width - (size.width - room))).isActive = true
+            size = stack.fittingSize
+        }
+        let width = min(max(size.width, 160), room)
         let panel = NSPanel(contentRect: NSRect(x: window.frame.midX - width / 2, y: window.frame.minY + 24, width: width, height: size.height),
                             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.isOpaque = false
@@ -438,7 +469,7 @@ final class GitToast {
         panel.hasShadow = true
         let background = NSView()
         background.wantsLayer = true
-        background.layer?.backgroundColor = Theme.tabHover.cgColor
+        background.themedBackground(Theme.tabHover)
         background.layer?.cornerRadius = 8
         background.layer?.borderWidth = 1
         background.layer?.borderColor = WorkSplitView.line.cgColor
@@ -459,6 +490,24 @@ final class GitToast {
         let work = DispatchWorkItem { dismiss() }
         hide = work
         DispatchQueue.main.asyncAfter(deadline: .now() + (button == nil ? 4 : 30), execute: work)
+    }
+
+    /// The latest notice for each window merged behind another's tab, and the watch that shows it once its tab is in front.
+    private static var held: [ObjectIdentifier: (since: Date, show: () -> Void, watch: NSObjectProtocol)] = [:]
+    /// How long a held notice stays worth showing.
+    private static let heldFor: TimeInterval = 120
+
+    private static func hold(for window: NSWindow, _ show: @escaping () -> Void) {
+        let key = ObjectIdentifier(window)
+        if let old = held[key] { NotificationCenter.default.removeObserver(old.watch) }
+        let watch = NotificationCenter.default.addObserver(forName: NSWindow.tabSelectionDidChange, object: window, queue: .main) { [weak window] _ in
+            MainActor.assumeIsolated {
+                guard let window, !window.isBackgroundTab, let entry = held.removeValue(forKey: key) else { return }
+                NotificationCenter.default.removeObserver(entry.watch)
+                if Date().timeIntervalSince(entry.since) < heldFor { entry.show() }
+            }
+        }
+        held[key] = (Date(), show, watch)
     }
 
     static func dismiss() {
@@ -493,12 +542,15 @@ final class GitToast {
     static var text: String? { (current?.contentView?.subviews.first as? NSStackView)?.views.compactMap { ($0 as? NSTextField)?.stringValue }.first }
     static func pressButtonForTest() { pressed() }
     static func pressOtherButtonForTest() { pressedOther() }
+    /// The buttons' titles of the notice up, in order, for the self-test.
+    static var buttonTitles: [String] { (current?.contentView?.subviews.first as? NSStackView)?.views.compactMap { ($0 as? NSButton)?.title } ?? [] }
 }
 
 private final class GitToastTarget: NSObject {
     static let shared = GitToastTarget()
     @objc func pressed() { GitToast.pressed() }
     @objc func pressedOther() { GitToast.pressedOther() }
+    @objc func pressedSkip() { GitToast.dismiss() }
 }
 
 /// Small sheets the git operations share: a name to type (checked as it is typed), a yes/no.
@@ -517,17 +569,22 @@ enum GitPrompt {
         problem.font = .systemFont(ofSize: 11)
         problem.textColor = Theme.failed
         problem.preferredMaxLayoutWidth = 320
+        // The field has no width of its own: it fills the accessory's 320 points, and the problem wraps within them.
+        field.widthAnchor.constraint(equalToConstant: 320).isActive = true
+        problem.widthAnchor.constraint(lessThanOrEqualToConstant: 320).isActive = true
         let stack = NSStackView(views: [field, problem])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 6
         stack.frame = NSRect(x: 0, y: 0, width: 320, height: 52)
         alert.accessoryView = stack
+        DialogFit.fitAccessory(stack, width: 320, in: nil)
         let ok = alert.addButton(withTitle: button)
         alert.addButton(withTitle: "Cancel")
         let watcher = FieldWatcher { text in
             let why = text.isEmpty ? nil : check(text)
             problem.stringValue = why ?? ""
+            DialogFit.fitAccessory(stack, width: 320, in: alert) // a two-line problem is not cut off
             ok.isEnabled = !text.isEmpty && why == nil
         }
         field.delegate = watcher

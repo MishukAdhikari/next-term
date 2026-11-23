@@ -7,16 +7,16 @@ import NextTermCore
 /// work area giving it 28 points and the hairline while the sidebar keeps its width and each terminal resizes once;
 /// closing it gives them back. With the sidebar on the right the column is at the far right, outside the project files.
 /// With the setting off no window shows one, View says Show Window Column, and choosing it brings the column back with
-/// Settings' checkbox on. Five windows show five badges in the order they opened, the worktree under its repository; a
-/// bell in the worktree's tab behind puts a dot on its badge alone, and a click on it brings that window forward with its
-/// tab as it was; a click on a window's own badge does nothing. A narrow window hides its column alone, an unfolded one
+/// Settings' checkbox on. Five windows show five rows in the order they opened, the worktree under its repository; a
+/// bell in the worktree's tab behind marks its dot alone, and a click on it brings that window forward with its
+/// tab as it was; a click on a window's own dot does nothing. A narrow window hides its column alone, an unfolded one
 /// folds first; the traffic lights keep their room; ⌘B leaves the column; ⌃⌘S folds and unfolds every window's; ⌘1 to ⌘9
 /// select tabs beside it, folded or not, and a click on it leaves the keyboard in the terminal. VoiceOver
-/// reads each badge's window and marks, and the column agrees with ⌘O's rows. Unfolded, a row whose marks change draws
+/// reads each row's window and marks, and the column agrees with ⌘O's rows. Unfolded, a row whose marks change draws
 /// again. Unfolding beside a sidebar of its usual width leaves the sidebar as it is, and the width new windows take. A
 /// restore lists its windows in the order they opened, whichever was used last, and each pane starts at its real size.
 /// ⌃⇧⌘S hides it and brings it back, set_layout changes it, and the notice offers it (SelfTestWindowColumnToggle).
-/// The budget: idle, nothing; a bell, one badge; focus and titles, no draw; a window opening or closing, one layout per
+/// The budget: idle, nothing; a bell, one row; focus and titles, no draw; a window opening or closing, one layout per
 /// column and one rebuild.
 /// NEXTTERM_SELFTEST_ONLY=windowColumn runs it alone.
 extension SelfTest {
@@ -26,7 +26,8 @@ extension SelfTest {
         let saved = (shown: defaults.object(forKey: WindowColumnSettings.shownKey), expanded: defaults.object(forKey: WindowColumnSettings.expandedKey),
                      colors: defaults.object(forKey: ProjectColors.key), next: defaults.object(forKey: ProjectColors.nextKey),
                      colorsShown: defaults.object(forKey: ProjectColors.shownKey), side: app.sidebarSide, sidebar: app.sidebarVisible,
-                     offers: WindowColumnOffer.keys.map { defaults.object(forKey: $0) })
+                     offers: WindowColumnOffer.keys.map { defaults.object(forKey: $0) },
+                     hints: HintRules.keys.map { defaults.object(forKey: $0) })
         let fm = FileManager.default
         let base = canonicalPath(NSTemporaryDirectory()) + "/nt-wincol-\(getpid())"
         try? fm.removeItem(atPath: base)
@@ -39,6 +40,9 @@ extension SelfTest {
         sh("commit", "-q", "-m", "start")
         sh("worktree", "add", "-q", "-b", "sso", tree)
         var windows: [TerminalWindowController] = []
+        // The checks' widths are the default's, whatever width the user dragged the column to.
+        let userWidth: CGFloat = WindowColumnWidth.expanded
+        WindowColumnWidth.expanded = WindowColumnWidth.defaultExpanded
         WindowColumns.suppressed = false
         app.showsWindowColumn = true
         app.windowColumnExpanded = false
@@ -54,11 +58,14 @@ extension SelfTest {
             restoreDefault(saved.shown, WindowColumnSettings.shownKey)
             restoreDefault(saved.expanded, WindowColumnSettings.expandedKey)
             for (key, value) in zip(WindowColumnOffer.keys, saved.offers) { restoreDefault(value, key) }
+            // Moving the column, pinning it and resting on it retire their hints: as they were.
+            for (key, value) in zip(HintRules.keys, saved.hints) { restoreDefault(value, key) }
             restoreDefault(saved.colors, ProjectColors.key)
             restoreDefault(saved.next, ProjectColors.nextKey)
             restoreDefault(saved.colorsShown, ProjectColors.shownKey)
             NotificationCenter.default.post(name: ProjectColorStore.changed, object: nil)
             WindowColumns.suppressed = true
+            WindowColumnWidth.expanded = userWidth
             app.windowColumns.rebuild()
         }
         func open(_ path: String?, project: Bool = false) async -> TerminalWindowController? {
@@ -108,7 +115,12 @@ extension SelfTest {
         await idleBudget(app)
         await bellChecks(app, five, worktree: worktree, tree: tree)
         await calmChecks(app, five, worktree: worktree)
+        await railChecks(app, project, others: [main, worktree, home, plain])
+        await foldChecks(app, repo: main, worktree: worktree)
+        await resizeChecks(app, project)
+        await dragFoldChecks(app, project, all: app.controllers.filter { !$0.hasClosed }) // the drag that folds it (plan 033)
         await unfoldedMarksChecks(app, worktree: worktree)
+        await detailChecks(app, plain, open: { await open(loose) }, close: closeWindow)
         await overflowChecks(app, project)
         await roomChecks(app, project)
         await sidebarKeepsItsWidthChecks(app, project)
@@ -161,8 +173,9 @@ extension SelfTest {
         let narrower: CGFloat = work - first.workSplit.frame.width
         let frontOnce: Bool = front.map { resizes.count($0) == 1 } ?? false
         let sizes: String = terminals.map { resizes.sizes($0) }.joined(separator: "; ")
-        check(abs(narrower - 29) < 0.5 && abs(first.sidebar.frame.width - sidebar) < 0.5 && frontOnce && resizes.most == 1,
-              "window column: the work area gives it 28 points and the hairline, the sidebar keeps its width, and each terminal resizes once",
+        let room: CGFloat = WindowColumnWidth.folded + WindowColumnWidth.hairline
+        check(abs(narrower - room) < 0.5 && abs(first.sidebar.frame.width - sidebar) < 0.5 && frontOnce && resizes.most == 1,
+              "window column: the work area gives it the rail's 24 points and the hairline, the sidebar keeps its width, and each terminal resizes once",
               "work \(work) → \(first.workSplit.frame.width), sidebar \(sidebar) → \(first.sidebar.frame.width), resized at most \(resizes.most): \(sizes)")
         resizes = TerminalResizes(terminals)
         second.window?.close()
@@ -180,7 +193,7 @@ extension SelfTest {
     // MARK: AE2: the sidebar on the right
 
     /// With the sidebar on the right the column is at each window's far right, outside the project files, its hairline on
-    /// its left and its chevron pointing left, into the window.
+    /// its left and its chevron pointing the way it folds, to the edge.
     private static func rightSideChecks(_ app: AppDelegate, _ first: TerminalWindowController) async {
         app.toggleSidebarSide(nil)
         defer { if app.sidebarSide == .right { app.toggleSidebarSide(nil) } }
@@ -198,16 +211,50 @@ extension SelfTest {
             let files: NSRect = c.sidebar.convert(c.sidebar.bounds, to: host)
             let work: NSRect = c.workSplit.convert(c.workSplit.bounds, to: host)
             let outside: Bool = abs(column.maxX - host.bounds.maxX) < 0.5 && files.maxX <= column.minX + 0.5 && work.maxX <= files.minX + 0.5
-            right = right && outside && c.windowColumn.onRight && !c.windowColumn.chevronPointsRight && !c.windowColumn.isHidden
+            right = right && outside && c.windowColumn.onRight && c.windowColumn.chevronPointsRight && !c.windowColumn.isHidden
             found.append("column \(column), files \(files), work \(work), on right \(c.windowColumn.onRight)")
         }
         await screenshot(second, suffix: "-column-right")
         check(right, "window column: with the sidebar on the right, the column is at each window's right edge, outside the project files, "
-              + "its hairline on its left and its chevron pointing into the window", found.joined(separator: "; "))
+              + "its hairline on its left and its chevron pointing the way it folds, to the edge", found.joined(separator: "; "))
         app.toggleSidebarSide(nil)
         first.window?.layoutIfNeeded()
-        check(first.windowColumn.frame.minX == 0 && !first.windowColumn.onRight && first.windowColumn.chevronPointsRight,
-              "window column: back on the left, it is at the left edge again, its chevron pointing right", "\(first.windowColumn.frame)")
+        check(first.windowColumn.frame.minX == 0 && !first.windowColumn.onRight && !first.windowColumn.chevronPointsRight,
+              "window column: back on the left, it is at the left edge again, its chevron pointing left", "\(first.windowColumn.frame)")
+
+        // An edge of its own: the column on the right while the project files stay on the left, the files' header clear of
+        // the traffic lights again. Back on the sidebar's side, it follows the sidebar again.
+        let savedSide = app.windowColumnSide
+        defer {
+            app.windowColumnSide = savedSide
+            app.controllers.forEach { $0.applyLayout() }
+        }
+        app.setWindowColumnSide(.right)
+        first.window?.layoutIfNeeded()
+        let host: WindowColumnHost = first.columnHost
+        let column: NSRect = first.windowColumn.frame
+        let files: NSRect = first.sidebar.convert(first.sidebar.bounds, to: host)
+        let apart: Bool = abs(column.maxX - host.bounds.maxX) < 0.5 && files.minX < 0.5 && first.windowColumn.onRight
+            && first.sidebar.headerInset > 8 && app.sidebarSide == .left
+        await screenshot(first, suffix: "-column-apart")
+        check(apart, "window column: on the right with the project files on the left, at the right edge, the files' header clear of the traffic lights",
+              "column \(column), files \(files), header inset \(first.sidebar.headerInset)")
+        app.setWindowColumnSide(.left)
+        check(app.windowColumnSide == nil && !first.windowColumn.onRight,
+              "window column: moved back to the sidebar's side, it follows the sidebar again", "side \(String(describing: app.windowColumnSide))")
+        // The mirror: the sidebar on the right, the column alone on the left, under the traffic lights with its strip over
+        // its count, and the files' header without the lights' room.
+        app.toggleSidebarSide(nil)
+        app.setWindowColumnSide(.left)
+        first.window?.layoutIfNeeded()
+        let leftColumn: NSRect = first.windowColumn.frame
+        let rightFiles: NSRect = first.sidebar.convert(first.sidebar.bounds, to: host)
+        let mirrored: Bool = leftColumn.minX < 0.5 && abs(rightFiles.maxX - (host.bounds.maxX)) < 0.5 && !first.windowColumn.onRight
+            && first.windowColumn.topInset == TabBarView.height && app.windowColumnSide == .left
+        await screenshot(first, suffix: "-column-apart-left")
+        check(mirrored, "window column: on the left with the project files on the right, at the left edge under the traffic lights",
+              "column \(leftColumn), files \(rightFiles), column inset \(first.windowColumn.topInset), side \(String(describing: app.windowColumnSide))")
+        app.toggleSidebarSide(nil)
     }
 
     // MARK: AE3: the setting off
@@ -250,26 +297,32 @@ extension SelfTest {
         settings.windowColumn.performClick(nil)
         check(offByBox && app.showsWindowColumn && defaultsValue(WindowColumnSettings.shownKey) == true,
               "window column: Settings' checkbox turns it off and on, the View menu following, the choice kept")
-        // A right-click below the top row offers the same two items.
+        // A right-click below the top row offers the column's own menu: Expand (folded here) and Move to the other edge,
+        // then Hide.
         let column: WindowColumnView = first.windowColumn
         if let event = rightClick(at: NSPoint(x: 10, y: 200), in: column) {
             let offered: [String] = (column.menu(for: event)?.items ?? []).map { (item: NSMenuItem) -> String in
+                if item.isSeparatorItem { return "—" }
                 _ = app.validateMenuItem(item)
                 return item.title
             }
-            check(offered == ["Hide Window Column", "Expand Window Column"], "window column: a right-click below its top row offers its two View items",
-                  "\(offered)")
+            let edge: String = app.windowColumnOnRight ? "Left" : "Right"
+            check(offered == ["Keep Window Column Open", "Expand Window Column", "Move to the \(edge) Edge", "—", "Merge All Windows", "—", "Hide Window Column"],
+                  "window column: a right-click below its top row offers Pin and Expand Window Column and Move to the \(edge) Edge, then Merge All Windows, then Hide",
+                  offered.joined(separator: " | "))
         }
+        if let top = column.onTopRowMenu?() { await screenshot(top, in: column, suffix: "-menu-window-column") }
+        // Merge All Windows itself is checked where windows may merge (windowTabs: columnMergeChecks).
         await close(second)
         await close(third)
     }
 
     // MARK: AE4: five windows
 
-    /// Five windows of every kind, after the window the run started with: a badge each, in the order they opened, the
-    /// worktree under its repository with its own part, each with its two letters, the worktree in its repository's colour
-    /// and the windows with no project in none; the same in every window's column, each marking its own; the same
-    /// windows as ⌘O lists, with the same marks.
+    /// Five windows of every kind, after the window the run started with: a row each, in the order they opened, the
+    /// worktree under its repository with its own part, each called by the part that tells it apart (a project's name, a
+    /// folder's), the worktree in its repository's colour and the windows with no project in none; the same in every
+    /// window's column, each marking its own; the same windows as ⌘O lists, with the same marks.
     private static func badgeChecks(_ app: AppDelegate, _ five: [TerminalWindowController]) {
         let ids: [Int] = five.map(\.indexID)
         for c in app.controllers { c.window?.layoutIfNeeded() }
@@ -277,25 +330,24 @@ extension SelfTest {
         let ours: [WindowColumnRow] = reference.rows.filter { ids.contains($0.id) }
         let order: [Int] = ours.map(\.id)
         let depths: [Int] = ours.map(\.depth)
-        let letters: [String] = ours.map(\.letters)
         let names: [String] = ours.map(\.name)
         // The ⌘N window's folder is where Settings › Terminal starts new windows: "~" at home.
-        let home: String = WindowColumnBadge.letters(name: five[3].windowName, kind: five[3].windowKind)
-        let expected: [String] = ["NT", "XC", "7S", home, "Lo"]
+        let home: String = WindowColumnName.shown(five[3].indexEntry, depth: 0).name
+        let expected: [String] = ["next-term", "xCloud", "7027-sso", home, "loose"]
         let inOrder: Bool = order == ids && depths == [0, 0, 1, 0, 0]
-        check(inOrder && letters == expected && names.count == 5 && names[2] == "7027-sso",
-              "window column: five windows show five badges in the order they opened, the worktree under its repository's",
-              "\(order) of \(ids), depths \(depths), letters \(letters), names \(names)")
+        check(inOrder && names == expected && ours.allSatisfy { $0.prefix == nil },
+              "window column: five windows show five rows in the order they opened, the worktree under its repository's by its own part",
+              "\(order) of \(ids), depths \(depths), names \(names)")
         let colors: [ProjectColor?] = ours.map(\.color)
         check(colors[0] != nil && colors[1] != nil && colors[2] == colors[1] && colors[3] == nil && colors[4] == nil,
-              "window column: a badge has its project's colour, a worktree its repository's, a window with no project none",
+              "window column: a dot has its project's colour, a worktree its repository's, a window with no project none",
               "\(colors.map { $0?.name ?? "none" })")
         let everywhere: Bool = app.controllers.filter { !$0.hasClosed }.allSatisfy { (c: TerminalWindowController) -> Bool in
             let column: WindowColumnView = c.windowColumn
             let outlined: [Int] = column.shownButtons.filter(\.isCurrent).map(\.id)
             return column.list == reference && outlined == [c.indexID] && column.shownButtons.count == reference.count
         }
-        check(everywhere, "window column: every window's column lists the same badges, each marking its own window's")
+        check(everywhere, "window column: every window's column lists the same rows, each marking its own window's")
         // ⌘O lists the same windows, from the same index, with the same marks.
         app.refreshWindowIndex()
         let index: [WindowIndex.Window] = app.windowIndex.windows
@@ -314,9 +366,9 @@ extension SelfTest {
               "⌘O \(listed.sorted()), column \(column.sorted())")
     }
 
-    /// A bell in the worktree's tab behind: a dot on its badge alone, in every column, the one button configured once and
-    /// drawn twice at most, nothing else drawn or laid out. Its badge and VoiceOver say so. A click on it in another
-    /// window's column brings the worktree's window forward with its tab as it was; a click on a window's own badge does
+    /// A bell in the worktree's tab behind: a mark on its dot alone, in every column, the one button configured once and
+    /// drawn twice at most, nothing else drawn or laid out. Its row and VoiceOver say so. A click on it in another
+    /// window's column brings the worktree's window forward with its tab as it was; a click on a window's own dot does
     /// nothing.
     private static func bellChecks(_ app: AppDelegate, _ five: [TerminalWindowController], worktree: TerminalWindowController,
                                    tree: String) async {
@@ -329,6 +381,7 @@ extension SelfTest {
         let columns: [WindowColumnView] = app.controllers.filter { !$0.hasClosed }.map(\.windowColumn)
         columns.forEach { $0.resetCounters() }
         app.windowColumns.resetCounters()
+        let rung = Date()
         behind.view.send(txt: "printf '\\a'\r")
         let rang: Bool = await wait(5) { behind.status.state == .attention }
         await pause(1.5) // every window's refresh, a hidden one's once a second
@@ -351,22 +404,24 @@ extension SelfTest {
                           + "\(column.layoutCount) layouts")
         }
         await screenshot(five[0], suffix: "-column-bell")
-        check(rang && onlyIt, "window column: a bell in the worktree's tab behind puts a dot on that badge only, in every window",
+        check(rang && onlyIt, "window column: a bell in the worktree's tab behind marks that window's dot only, in every window",
               "rang \(rang); marked \(dots.joined(separator: " "))")
         note("window column budget: a bell, in each column: " + budget.joined(separator: " | "))
-        check(rang && kept, "window column budget: a bell configures that window's badge once and draws it twice at most, and nothing else in any column",
-              budget.joined(separator: " | "))
+        checkUntouched(since: rung, rang && kept,
+                       "window column budget: a bell configures that window's row once and draws it twice at most, and nothing else in any column",
+                       budget.joined(separator: " | "))
         let button: WindowColumnButton? = five[0].windowColumn.button(for: id)
         let label: String = button?.accessibilityLabel() ?? ""
-        check(label == "xCloud ▸ 7027-sso: 1 needs you" && button?.toolTip == "xCloud ▸ 7027-sso\n1 needs you"
-              && button?.accessibilityRole() == .button,
-              "window column: VoiceOver reads the badge's window and its marks, and so does its tooltip", "\(label) / \(button?.toolTip ?? "")")
+        check(label == "xCloud ▸ 7027-sso: 1 needs you" && button?.toolTip == nil && button?.accessibilityRole() == .button,
+              "window column: VoiceOver reads the rail's window and its marks; the rail has no tooltip, as the list on hover names it",
+              "\(label) / \(button?.toolTip ?? "no tooltip")")
         let quiet: WindowColumnButton? = five[0].windowColumn.button(for: five[0].indexID)
         check(quiet?.accessibilityLabel() == five[0].window?.title && quiet?.isAccessibilitySelected() == true
+              && quiet?.accessibilityHelp() == "This window" && button?.accessibilityHelp() == "Brings this window to the front"
               && five[0].windowColumn.accessibilityLabel() == WindowColumnView.groupLabel(five[0].windowColumn.list.count)
               && five[0].windowColumn.chevronButton.accessibilityLabel() == "Expand Window Column",
-              "window column: a window with no marks is read by its title alone, its own selected, the column as “Windows, N open”",
-              "\(quiet?.accessibilityLabel() ?? "none"), \(five[0].windowColumn.accessibilityLabel() ?? "")")
+              "window column: a window with no marks is read by its title alone, its own selected as “This window”, the column as “Windows, N open”",
+              "\(quiet?.accessibilityLabel() ?? "none") (\(quiet?.accessibilityHelp() ?? "no help")), \(five[0].windowColumn.accessibilityLabel() ?? "")")
         // A click on it from another window's column.
         guard let from = five.last, let fromWindow = from.window, await bringToFront(fromWindow) else {
             return note("window column: the click not checked, as " + notFrontmost(five.last?.window ?? NSWindow()))
@@ -375,13 +430,13 @@ extension SelfTest {
         from.windowColumn.button(for: id)?.performClick(nil)
         let forward: Bool = await wait(3) { worktree.window?.isKeyWindow == true }
         check(forward && worktree.activeIndex == selected && behind.status.state == .attention,
-              "window column: a click on the worktree's badge brings its window forward with its tab as it was",
+              "window column: a click on the worktree's dot brings its window forward with its tab as it was",
               "key \(NSApp.keyWindow?.title ?? "none"), tab \(worktree.activeIndex) of \(selected), behind \(behind.status.state.rawValue)")
-        // Its own badge: nothing more.
+        // Its own dot: nothing more.
         worktree.windowColumn.button(for: id)?.performClick(nil)
         await pause(0.3)
         check(worktree.window?.isKeyWindow == true && worktree.activeIndex == selected && behind.status.state == .attention,
-              "window column: a click on the window's own badge changes nothing")
+              "window column: a click on the window's own dot changes nothing")
     }
 
     /// Unfolded, a change of a row's marks alone draws that row again, as its name's room ends where its marks start: the
@@ -397,6 +452,7 @@ extension SelfTest {
             return note("window column: unfolded marks not checked, as a window had no room to unfold its column")
         }
         await pause(1)
+        let started = Date()
         let id: Int = worktree.indexID
         var found: [String] = []
         var drawn = true
@@ -426,25 +482,42 @@ extension SelfTest {
             }
             found.append(step + ": " + marks.joined(separator: "; "))
         }
-        check(drawn, "window column: unfolded, a row whose marks alone change draws again, that row only, in every column",
-              found.joined(separator: " | "))
+        // A row the user's pointer passes over draws its hover too.
+        checkUntouched(since: started, drawn, "window column: unfolded, a row whose marks alone change draws again, that row only, in every column",
+                       found.joined(separator: " | "))
     }
 
-    /// Room for fewer badges than windows: the last place says how many more, in the colour of the most urgent of them,
+    /// Room for fewer rows than windows: the last place says how many more, in the colour of the most urgent of them,
     /// and opens ⌘O.
     private static func overflowChecks(_ app: AppDelegate, _ c: TerminalWindowController) async {
         guard let window = c.window else { return }
         let frame: NSRect = window.frame
         defer { window.setFrame(frame, display: true) }
-        window.setFrame(NSRect(x: frame.minX, y: frame.maxY - 240, width: frame.width, height: 240), display: true)
+        // Room for fewer places than windows: under the title bar's strip and the count, over the foot, places of 24 points
+        // for all but two.
+        let windows: Int = c.windowColumn.list.count
+        let height: CGFloat = TabBarView.height + WindowColumnGrid.countRow + 2 * WindowColumnGrid.margin + WindowColumnGrid.foot
+            + WindowColumnRail.slot * CGFloat(max(2, windows - 2))
+        window.setFrame(NSRect(x: frame.minX, y: frame.maxY - height, width: frame.width, height: height), display: true)
         window.layoutIfNeeded()
         let column: WindowColumnView = c.windowColumn
         let count: Int = column.list.count
         let shown: Int = column.shownButtons.count
-        let more: NSButton = column.overflowButton
-        check(!more.isHidden && more.title == "+\(count - shown)" && shown > 0 && shown < count,
-              "window column: with room for fewer badges than windows, the last place says how many more",
-              "\(shown) of \(count) shown, \(more.isHidden ? "no count" : more.title)")
+        let more: WindowColumnActionButton = column.overflowButton
+        let railWords: String = more.shownWords
+        app.windowColumnExpanded = true
+        window.layoutIfNeeded()
+        let listWords: String = more.shownWords
+        // Read while unfolded: a window with no room to unfold folds it, and the words are not asked of it then.
+        let unfoldedForm: WindowColumnShown.Form = c.columnHost.shown.form
+        let unfoldedShown: Int = column.shownButtons.count
+        let key: String = KeyboardShortcuts.shared.chord(for: "openProjectPanel:")?.display ?? ""
+        app.windowColumnExpanded = false
+        window.layoutIfNeeded()
+        let unfolded: Bool = unfoldedForm != .expanded || listWords == "+\(count - unfoldedShown)  All Windows…" + (key.isEmpty ? "" : "  " + key)
+        check(!more.isHidden && more.lead == "+\(count - shown)" && railWords == more.lead && shown > 0 && shown < count && unfolded,
+              "window column: with room for fewer rows than windows, the last place says how many more, and unfolded “All Windows…” with ⌘O's key",
+              "\(shown) of \(count) shown, rail “\(railWords)”, unfolded “\(listWords)”")
         more.performClick(nil)
         let welcome: Bool = await wait(3) { app.welcomeController?.window?.isVisible == true }
         check(welcome, "window column: its “+N” opens ⌘O, which lists every window")
@@ -552,9 +625,11 @@ extension SelfTest {
 
     // MARK: R8 and R9: the traffic lights and ⌘B
 
-    /// On the left outside full screen: folded, a strip of title bar over its chevron, the sidebar header's inset 70 less
-    /// the column, and with the sidebar hidden (⌘B, which leaves the column where it is) the corner bar's 78 less it;
-    /// unfolded, its header's words after the lights and the others at 8. In full screen it starts at the top.
+    /// On the left outside full screen: folded, a strip of title bar over its count, nothing under the lights, the sidebar
+    /// header's inset 8 less than where the lights end (16 points past the zoom button) less the column, and with the
+    /// sidebar hidden (⌘B, which leaves the column where it is) the corner bar's start, clear of the green light, less it;
+    /// unfolded, the same strip over the same count row, its heading there clear of the lights, and the others at 8. In
+    /// full screen it starts at the top.
     private static func insetChecks(_ app: AppDelegate, _ c: TerminalWindowController) async {
         guard let window = c.window else { return }
         defer {
@@ -569,35 +644,40 @@ extension SelfTest {
         let column: WindowColumnView = c.windowColumn
         let width: CGFloat = WindowColumnWidth.folded + WindowColumnWidth.hairline
         // Its hairline starts at the strip's bottom line, so none runs between the lights.
-        let foldedLights: Bool = column.topInset == TabBarView.height && c.sidebar.headerInset == max(8, 70 - width)
-            && column.hairlineRect.minY == TabBarView.height - 1
+        let end: CGFloat = c.lightsEnd
+        let zoom: CGFloat = window.standardWindowButton(.zoomButton)?.frame.maxX ?? 0
+        // The count in its own row under the title bar's strip, so nothing of the column is under the lights.
+        let countClear: Bool = column.countFrame.minY >= TabBarView.height && column.chevronButton.isHidden
+        let foldedLights: Bool = column.topInset == TabBarView.height && c.sidebar.headerInset == max(8, end - 8 - width)
+            && column.hairlineRect.minY == TabBarView.height - 1 && countClear && end >= zoom + 16
         let where1: NSRect = column.frame
         c.toggleProjectSidebar(nil) // ⌘B
         window.layoutIfNeeded()
         let corner: CGFloat = c.editorArea.isHidden ? c.tabBar.leadingInset : c.editorArea.tabBar.leadingInset
         let stays: Bool = column.frame == where1 && !column.isHidden
-        check(foldedLights && corner == max(8, 78 - width) && stays,
+        check(foldedLights && corner == max(8, end - width) && stays,
               "window column: folded on the left, its top is title bar for the traffic lights, the sidebar header's inset and the corner bar's "
                   + "make room for the column, and ⌘B leaves the column in place",
-              "top \(column.topInset), hairline from \(column.hairlineRect.minY), sidebar header \(c.sidebar.headerInset), corner \(corner), "
-                  + "column \(where1) → \(column.frame)")
+              "top \(column.topInset), hairline from \(column.hairlineRect.minY), count \(column.countFrame), sidebar header \(c.sidebar.headerInset), "
+                  + "corner \(corner), lights end \(end) (zoom \(zoom)), column \(where1) → \(column.frame)")
         c.toggleProjectSidebar(nil)
         app.windowColumnExpanded = true
         window.layoutIfNeeded()
-        let header: Bool = column.topInset == 0 && column.headerLeading == 78 && c.sidebar.headerInset == 8 && column.hairlineRect.minY == 0
+        let header: Bool = column.topInset == TabBarView.height && column.countFrame.minY >= TabBarView.height && c.sidebar.headerInset == 8
+            && column.hairlineRect.minY == TabBarView.height - 1 && column.chevronButton.frame.minY >= TabBarView.height
         c.toggleProjectSidebar(nil)
         window.layoutIfNeeded()
         let cornerOpen: CGFloat = c.editorArea.isHidden ? c.tabBar.leadingInset : c.editorArea.tabBar.leadingInset
         c.toggleProjectSidebar(nil)
-        check(header && cornerOpen == 8, "window column: unfolded on the left, its header's words come after the traffic lights and the bars beside it start at 8",
-              "top \(column.topInset), header from \(column.headerLeading), sidebar header \(c.sidebar.headerInset), corner \(cornerOpen)")
+        check(header && cornerOpen == 8, "window column: unfolded on the left, its count, heading and chevron sit under the traffic lights' strip, as folded, and the bars beside it start at 8",
+              "top \(column.topInset), count \(column.countFrame), chevron \(column.chevronButton.frame), sidebar header \(c.sidebar.headerInset), corner \(cornerOpen)")
         app.windowColumnExpanded = false
         window.layoutIfNeeded()
         c.isFullScreen = true
         c.updateInsets()
-        check(column.topInset == 0 && column.headerLeading == 8 && c.sidebar.headerInset == 8 && column.hairlineRect.minY == 0,
+        check(column.topInset == 0 && column.countFrame.minY == 0 && c.sidebar.headerInset == 8 && column.hairlineRect.minY == 0,
               "window column: in full screen it starts at the top, with no room kept for the traffic lights",
-              "top \(column.topInset), header from \(column.headerLeading), sidebar header \(c.sidebar.headerInset)")
+              "top \(column.topInset), count \(column.countFrame), sidebar header \(c.sidebar.headerInset)")
     }
 
     // MARK: R17: ⌃⌘S
@@ -628,7 +708,7 @@ extension SelfTest {
     // MARK: ⌘1 to ⌘9
 
     /// ⌘1 to ⌘8 as the keyboard sends them select a window's first eight tabs and ⌘9 its last, in a window showing the
-    /// column folded, then unfolded, then after a real click on the window's own badge: the column takes none of the
+    /// column folded, then unfolded, then after a real click on the window's own dot: the column takes none of the
     /// keys, and never the keyboard, which stays in the terminal. The keys go ⌘2 to ⌘9, then ⌘1, so each is a switch.
     /// Ten tabs; the nine added close after.
     private static func tabKeyChecks(_ app: AppDelegate, _ c: TerminalWindowController) async {
@@ -652,7 +732,7 @@ extension SelfTest {
             }
             return (tabs, keyboard)
         }
-        /// `click`: before the keys, a real click on the window's own badge, which reaches it and leaves the keyboard in the
+        /// `click`: before the keys, a real click on the window's own dot, which reaches it and leaves the keyboard in the
         /// terminal.
         func checkKeys(_ form: WindowColumnShown.Form, _ name: String, click: Bool = false) async {
             // A key sent while another app or window has the keyboard selects nothing here: the window takes it back first.
@@ -665,10 +745,10 @@ extension SelfTest {
             var clicked = true
             if click {
                 guard let own = c.windowColumn.button(for: c.indexID), !own.isHidden else {
-                    return check(false, "window column: the window's own badge shows, to click",
+                    return check(false, "window column: the window's own dot shows, to click",
                                  "\(c.windowColumn.shownButtons.map(\.id)), own \(c.indexID)")
                 }
-                // The badge's own action proves the click arrived; a click on the window's own badge does nothing more (R18),
+                // The row's own action proves the click arrived; a click on the window's own dot does nothing more (R18),
                 // so it never reaches onSelect: the window stays key, on its first tab, with the keyboard in the terminal.
                 let recorder = ClickRecorder(target: own.target, action: own.action)
                 own.target = recorder
@@ -684,14 +764,14 @@ extension SelfTest {
             check(shows && held && clicked && tabs == expected && keyboard,
                   "window column: ⌘1 to ⌘8 select the first eight tabs and ⌘9 the last, in a window showing the column \(name)",
                   "column \(c.columnHost.shown), keyboard held \(held)"
-                      + (click ? ", the click reached the badge and left the keyboard in the terminal \(clicked)" : "")
+                      + (click ? ", the click reached the dot and left the keyboard in the terminal \(clicked)" : "")
                       + "; selected \(tabs) of \(expected), the terminal kept the keyboard \(keyboard)")
         }
         await checkKeys(.folded, "folded")
         app.windowColumnExpanded = true
         await checkKeys(.expanded, "unfolded")
         app.windowColumnExpanded = false
-        await checkKeys(.folded, "folded, after a click on its own badge", click: true)
+        await checkKeys(.folded, "folded, after a click on its own dot", click: true)
         for tab in added { c.requestClose(tab) }
         let closed: Bool = await wait(5) { added.allSatisfy { (tab: TerminalTab) -> Bool in !c.tabs.contains { $0 === tab } } }
         _ = await endSheets(over: window)
@@ -718,28 +798,31 @@ extension SelfTest {
 
     // MARK: the budget
 
-    /// Five seconds of every window's tick with nothing happening: no column lays out, and no badge configures or draws.
+    /// Five seconds of every window's tick with nothing happening: no column lays out, and no row configures or draws.
     private static func idleBudget(_ app: AppDelegate) async {
         let columns: [WindowColumnView] = app.controllers.filter { !$0.hasClosed }.map(\.windowColumn)
         await pause(2)
+        let started = Date()
         columns.forEach { $0.resetCounters() }
         app.windowColumns.resetCounters()
         await pause(5)
         let layouts: Int = columns.reduce(0) { $0 + $1.layoutCount }
         let configures: Int = columns.reduce(0) { sum, column in sum + column.shownButtons.reduce(0) { $0 + $1.configureCount } }
         let draws: Int = columns.reduce(0) { sum, column in sum + column.shownButtons.reduce(0) { $0 + $1.drawCount } }
-        let numbers = "\(columns.count) columns: \(layouts) layouts, \(configures) configures, \(draws) badge draws, "
+        let numbers = "\(columns.count) columns: \(layouts) layouts, \(configures) configures, \(draws) row draws, "
             + "\(app.windowColumns.rebuildCount) rebuilds, \(app.windowColumns.passCount) passes"
         note("window column budget: idle, 5 s, " + numbers)
-        check(columns.count >= 3 && layouts == 0 && configures == 0 && draws == 0 && app.windowColumns.rebuildCount == 0,
-              "window column budget: idle, no column lays out and no badge configures or draws", numbers)
+        // A row the user's pointer passes over draws its hover: only a quiet Mac says what idle costs.
+        checkUntouched(since: started, columns.count >= 3 && layouts == 0 && configures == 0 && draws == 0 && app.windowColumns.rebuildCount == 0,
+                       "window column budget: idle, no column lays out and no row configures or draws", numbers)
     }
 
-    /// The key window switched across three windows, and a command retitling a tab: no badge draws and no column lays
+    /// The key window switched across three windows, and a command retitling a tab: no row draws and no column lays
     /// out (a tooltip may change).
     private static func focusBudget(_ app: AppDelegate, _ three: [TerminalWindowController]) async {
         let columns: [WindowColumnView] = app.controllers.filter { !$0.hasClosed }.map(\.windowColumn)
         await pause(1)
+        let started = Date()
         columns.forEach { $0.resetCounters() }
         app.windowColumns.resetCounters()
         for c in three + three {
@@ -758,11 +841,11 @@ extension SelfTest {
         let draws: Int = columns.reduce(0) { sum, column in sum + column.shownButtons.reduce(0) { $0 + $1.drawCount } }
         let configures: Int = columns.reduce(0) { sum, column in sum + column.shownButtons.reduce(0) { $0 + $1.configureCount } }
         let strips: Int = columns.reduce(0) { $0 + $1.drawCount }
-        let numbers = "\(layouts) layouts, \(draws) badge draws, \(configures) configures (tooltips), \(strips) top-row draws (the glow dims "
+        let numbers = "\(layouts) layouts, \(draws) row draws, \(configures) configures (tooltips), \(strips) top-row draws (the glow dims "
             + "with the window), \(app.windowColumns.rebuildCount) rebuilds"
         note("window column budget: focus across three windows twice and a retitled tab: " + numbers)
-        check(layouts == 0 && draws == 0 && app.windowColumns.rebuildCount == 0,
-              "window column budget: switching the key window and retitling a tab draw no badge and lay out no column", numbers)
+        checkUntouched(since: started, layouts == 0 && draws == 0 && app.windowColumns.rebuildCount == 0,
+              "window column budget: switching the key window and retitling a tab draw no row and lay out no column", numbers)
     }
 
     /// A window opening, then closing: each other window's column lays out once, the hub makes its list once, and no
@@ -859,13 +942,6 @@ extension SelfTest {
     }
 
     // MARK: helpers
-
-    /// Every item of the View menu, its submenus' too.
-    static func viewMenuItems() -> [NSMenuItem] {
-        guard let view = NSApp.mainMenu?.items.first(where: { $0.title == "View" })?.submenu else { return [] }
-        func all(_ menu: NSMenu) -> [NSMenuItem] { menu.items.flatMap { [$0] + ($0.submenu.map(all) ?? []) } }
-        return all(view)
-    }
 
     static func defaultsValue(_ key: String) -> Bool? { UserDefaults.standard.object(forKey: key) as? Bool }
 

@@ -48,6 +48,43 @@ public enum RestoreLayout {
         }.map(\.index)
     }
 
+    /// What a restore shows as one window (plan 032): a window of its own, or the windows saved merged into one, in their
+    /// tab bar's order, with the one that was in front.
+    public struct Unit: Equatable, Sendable {
+        /// Indices into the windows, in tab order.
+        public let members: [Int]
+        /// The one in front, one of `members`.
+        public let front: Int
+
+        public init(members: [Int], front: Int) {
+            self.members = members
+            self.front = front
+        }
+    }
+
+    /// `windows`, saved front to back, as the units a restore shows, front to back by each unit's front-most window. A
+    /// group's tab in front is the one saved in front, else its front-most window (that one was not built). A group left
+    /// with one window comes back as a window of its own.
+    public static func units(_ windows: [SessionSnapshot.Window]) -> [Unit] {
+        var units: [Unit] = []
+        var seen: Set<Int> = []
+        for (index, window) in windows.enumerated() {
+            guard let tab = window.windowTab else {
+                units.append(Unit(members: [index], front: index))
+                continue
+            }
+            guard seen.insert(tab.group).inserted else { continue }
+            let members: [Int] = windows.indices.filter { (other: Int) -> Bool in windows[other].windowTab?.group == tab.group }
+                .sorted { (a: Int, b: Int) -> Bool in
+                    let (left, right) = (windows[a].windowTab?.place ?? 0, windows[b].windowTab?.place ?? 0)
+                    return left != right ? left < right : a < b
+                }
+            let front: Int = members.first { (member: Int) -> Bool in windows[member].windowTab?.front == true } ?? index
+            units.append(Unit(members: members, front: front))
+        }
+        return units
+    }
+
     /// A split's divider positions as the restore builds it: those saved, when every one of its `children` was built;
     /// when the ones at `dropped` could not be (a tab on a host removed since), each one's room goes to its neighbour, as
     /// when the app closes a pane. Equal shares when the saved ones do not fit.

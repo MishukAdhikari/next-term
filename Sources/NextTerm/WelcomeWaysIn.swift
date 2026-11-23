@@ -41,9 +41,9 @@ final class SwitcherHintLine: NSTextField {
 
 // MARK: - the three ways in
 
-/// What a way in does when clicked, as the menu command does: Open… the folder panel (over the Welcome window when it
+/// What a way in does when clicked, as the menu command does: Open Project… the folder panel (over the Welcome window when it
 /// is in front), Connect to Server… the remote sheet, New Terminal a window with a shell. The key it shows is its menu
-/// command's (`SwitcherWayIn.command`): Open… is File › Open Project…'s key here.
+/// command's (`SwitcherWayIn.command`): Open Project… has File › Open Project…'s key here.
 extension SwitcherWayIn {
     var action: Selector {
         switch self {
@@ -209,7 +209,7 @@ final class WayInRow: WayInButton {
     var shownKey: String? { key.isHidden ? nil : key.stringValue }
 }
 
-/// Open…, Connect to Server… and New Terminal at the foot of the Welcome list's column, in that order, as three rows
+/// Open Project…, Connect to Server… and New Terminal at the foot of the Welcome list's column, in that order, as three rows
 /// alike. They sit outside the list, so ↑ and ↓ never land on one; their keys and Full Keyboard Access reach them.
 final class WaysInRows: NSStackView {
     let rows: [WayInRow] = SwitcherWayIn.allCases.map { (way: SwitcherWayIn) -> WayInRow in WayInRow(way) }
@@ -338,12 +338,18 @@ final class WayInCard: WayInButton {
 }
 
 /// The right pane on a launch with nothing to list: the three ways in as cards of equal width, 16 pt apart, in the
-/// rows' order, centred. A click on one, or its key, does what its row does.
+/// rows' order, centred. A click on one, or its key, does what its row does. Under them, as wide as the three, the
+/// fourth card, “Set up with your agent”, while an agent is there to offer (SetupAgentCard).
 final class WaysInCards: NSView {
     let cards: [WayInCard] = SwitcherWayIn.allCases.map { (way: SwitcherWayIn) -> WayInCard in WayInCard(way) }
+    let agentCard = SetupAgentCard()
     private let stack = NSStackView()
+    /// The three over the agent card; a hidden agent card takes no room.
+    private let column = NSStackView()
     /// As wide as three cards of about 176 pt; narrower windows narrow them.
     static let width: CGFloat = 560
+    /// The column's width, set as the view lays out (`layout`).
+    private var wide: NSLayoutConstraint!
 
     init() {
         super.init(frame: .zero)
@@ -361,23 +367,44 @@ final class WaysInCards: NSView {
         stack.setAccessibilityRole(.group)
         // Not the rows' "Start": on a first launch both show, and VoiceOver tells the two groups apart.
         stack.setAccessibilityLabel("Get started")
-        addSubview(stack)
-        let wide = stack.widthAnchor.constraint(equalToConstant: Self.width)
+        column.orientation = .vertical
+        column.alignment = .centerX
+        column.spacing = 16
+        column.setHuggingPriority(.defaultHigh, for: .vertical)
+        column.translatesAutoresizingMaskIntoConstraints = false
+        for view in [stack, agentCard] as [NSView] {
+            view.translatesAutoresizingMaskIntoConstraints = false
+            column.addArrangedSubview(view)
+            view.widthAnchor.constraint(equalTo: column.widthAnchor).isActive = true
+        }
+        addSubview(column)
+        wide = column.widthAnchor.constraint(equalToConstant: Self.width)
         wide.priority = .defaultHigh
         // A little above the middle, clear of the footer below.
-        let middle = stack.centerYAnchor.constraint(equalTo: centerYAnchor, constant: -16)
+        let middle = column.centerYAnchor.constraint(equalTo: centerYAnchor, constant: -16)
         middle.priority = .defaultHigh
         NSLayoutConstraint.activate([
-            stack.centerXAnchor.constraint(equalTo: centerXAnchor),
-            stack.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 28),
-            stack.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -28),
-            stack.topAnchor.constraint(greaterThanOrEqualTo: topAnchor, constant: 40),
+            column.centerXAnchor.constraint(equalTo: centerXAnchor),
+            column.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 28),
+            column.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -28),
+            column.topAnchor.constraint(greaterThanOrEqualTo: topAnchor, constant: 40),
             wide,
             middle,
         ])
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
+
+    /// Three cards of one width, to the pixel: the room left after the gaps divides by three, so no card is half a point
+    /// wider than the one beside it.
+    override func layout() {
+        let scale: CGFloat = window?.backingScaleFactor ?? 2
+        let room: CGFloat = min(Self.width, bounds.width - 56) - 2 * stack.spacing
+        let card: CGFloat = (room / 3 * scale).rounded(.down) / scale
+        let width: CGFloat = max(0, 3 * card + 2 * stack.spacing)
+        if wide.constant != width { wide.constant = width }
+        super.layout()
+    }
 
     func card(_ way: SwitcherWayIn) -> WayInCard {
         cards.first { (card: WayInCard) -> Bool in card.way == way } ?? cards[0]

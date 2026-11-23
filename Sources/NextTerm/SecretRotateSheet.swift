@@ -116,7 +116,7 @@ extension SecretRotateSheet {
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 12
-        stack.edgeInsets = NSEdgeInsets(top: 16, left: 18, bottom: 16, right: 18)
+        stack.edgeInsets = NSEdgeInsets(top: 20, left: 18, bottom: 20, right: 18)
         stack.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(stack)
         var constraints: [NSLayoutConstraint] = [
@@ -363,6 +363,7 @@ extension SecretRotateSheet {
         doneButton.keyEquivalent = "\r"
         setStatus("")
         refresh()
+        DialogFit.fit(window) // the save row and the status lines gone: no empty space where they were
         window?.makeFirstResponder(doneButton)
         guard let window else { return }
         NSAccessibility.post(element: window, notification: .announcementRequested,

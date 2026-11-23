@@ -31,6 +31,13 @@ enum MCPRestoredTabs {
         for pane in panes { plans[pane.tab.id] = pane.plan }
     }
 
+    /// A held pane's plan after its checks (RestoreActions): a resume when one passed, else its line back with how they
+    /// ended.
+    static func replan(_ tab: TerminalTab, _ plan: PanePlan) {
+        guard plans[tab.id] != nil else { return }
+        plans[tab.id] = plan
+    }
+
     /// The restore pressed an automatic resume's Return in the tab, and its start watch began (`watching`) or settled
     /// (RestoreActions): MCP reads the resume from its verdict.
     static func started(_ tab: TerminalTab, _ report: StartWatch.Report) {

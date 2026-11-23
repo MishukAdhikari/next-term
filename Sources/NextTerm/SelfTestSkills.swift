@@ -164,9 +164,9 @@ extension SelfTest {
         check(first["status"] as? String == "pending" && first["request_id"] as? String == request?.id,
               "skills mcp: an install request waits for the user, then answers pending with an id", "\(first)")
         let approval = request?.window
-        check(approval?.approveButton.keyEquivalent.isEmpty == true && approval?.declineButton.keyEquivalent.isEmpty == true
-              && approval?.window?.isKeyWindow == false && approval?.window?.isVisible == true,
-              "skills mcp: the request window shows without taking the keyboard, and has no Return button")
+        check(approval?.approveButton.keyEquivalent.isEmpty == true && approval?.approveButton.refusesFirstResponder == true
+              && approval?.declineButton.keyEquivalent == "\u{1b}" && approval?.window?.isKeyWindow == false && approval?.window?.isVisible == true,
+              "skills mcp: the request window shows without taking the keyboard; only a click approves, and Escape declines")
         let busy = await ask("install_skill", ["source": "example-org/other"])
         check(busy["status"] as? String == "busy", "skills mcp: a second request while one is open is told the user is busy", "\(busy)")
 
@@ -227,13 +227,16 @@ extension SelfTest {
             var info = stat()
             return lstat((home as NSString).appendingPathComponent(path), &info) == 0
         }
-        func download() -> (SkillsInstaller.Fetched, String) {
+        /// `text`: SKILL.md's body; `runs`: more executable files, by path.
+        func download(text: String = "Use it well.", runs: [String] = []) -> (SkillsInstaller.Fetched, String) {
             let scratch = SkillsInstaller.downloads.appendingPathComponent(UUID().uuidString)
             let folder = scratch.appendingPathComponent("files/skills-0123456/skills/demo-skill").path
             try? manager.createDirectory(atPath: folder + "/scripts", withIntermediateDirectories: true)
-            try? "---\nname: demo-skill\ndescription: A demo skill.\nlicense: Apache-2.0\n---\nUse it well.\n".write(toFile: folder + "/SKILL.md", atomically: true, encoding: .utf8)
-            try? "#!/bin/sh\necho hi\n".write(toFile: folder + "/scripts/run.sh", atomically: true, encoding: .utf8)
-            chmod(folder + "/scripts/run.sh", 0o755)
+            try? "---\nname: demo-skill\ndescription: A demo skill.\nlicense: Apache-2.0\n---\n\(text)\n".write(toFile: folder + "/SKILL.md", atomically: true, encoding: .utf8)
+            for path in ["scripts/run.sh"] + runs {
+                try? "#!/bin/sh\necho hi\n".write(toFile: folder + "/" + path, atomically: true, encoding: .utf8)
+                chmod(folder + "/" + path, 0o755)
+            }
             let found = SkillsGitHub.Found(path: "skills/demo-skill", tree: GitHash.folder(folder) ?? "")
             let source = SkillSource(owner: "example-org", repo: "skills", path: "skills/demo-skill")
             let resolved = SkillsGitHub.Resolved(source: source, commit: String(repeating: "0123456789", count: 4), date: nil, skills: [found], truncated: false)
@@ -269,6 +272,22 @@ extension SelfTest {
         check(!sheet.claudeLink.isHidden && sheet.choice.view.isHidden,
               "skills: a plain skill gets the checkbox for Claude Code's link, and no plugin popup",
               "checkbox hidden=\(sheet.claudeLink.isHidden) popup hidden=\(sheet.choice.view.isHidden)")
+
+        // A review whose opener let go of it (Update… clicked twice replaced it) still answers: Cancel closes it.
+        let (dropped, _) = download()
+        var held: SkillsReviewSheet? = SkillsReviewSheet(fetched: dropped) { _ in }
+        weak var kept = held
+        let keptID = held.map(ObjectIdentifier.init)
+        held = nil
+        func button(_ title: String, in view: NSView) -> NSButton? {
+            if let button = view as? NSButton, button.title == title { return button }
+            return view.subviews.lazy.compactMap { button(title, in: $0) }.first
+        }
+        let cancelButton = kept?.window?.contentView.flatMap { button("Cancel", in: $0) }
+        cancelButton?.performClick(nil)
+        check(cancelButton != nil && keptID.map { SkillsReviewSheet.open[$0] == nil } == true && !manager.fileExists(atPath: dropped.scratch.path),
+              "skills: a review its opener let go of keeps working, and Cancel closes it and removes the download",
+              "button \(cancelButton != nil), open \(SkillsReviewSheet.open.count)")
 
         guard let candidate else { return }
         if case .failure(let failure) = await SkillsInstaller.install([candidate], fetched: fetched, claude: ["demo-skill": .link]) {
@@ -332,6 +351,38 @@ extension SelfTest {
         _ = await wait(10) { answered != nil }
         check(answered == .some(nil) && !manager.fileExists(atPath: gone.scratch.path),
               "skills: a review whose download changed ends instead of offering Install again", "\(String(describing: answered))")
+
+        // Update automatically: a text change installs by itself; an update adding a script waits, saying why; Undo
+        // takes the automatic one back.
+        let (first, _) = download()
+        _ = await SkillsInstaller.install(first.candidates, fetched: first, claude: ["demo-skill": .skip])
+        let savedAuto = SkillsAutoUpdate.isOn
+        SkillsAutoUpdate.isOn = true
+        var next = download(text: "Use it better.").0
+        SkillsAutoUpdate.fetchForTest = { _ in next }
+        SkillsInstaller.updates["demo-skill"] = .available(commit: "1111111")
+        await SkillsAutoUpdate.run()
+        check(read(".agents/skills/demo-skill/SKILL.md")?.contains("Use it better.") == true && SkillsInstaller.updates["demo-skill"] == .current
+              && SkillsAutoUpdate.summary == "1 updated automatically",
+              "skills: Update automatically installs an update that changes only text", "\(String(describing: SkillsInstaller.updates["demo-skill"])) \(SkillsAutoUpdate.summary ?? "-")")
+        next = download(text: "Use it better.", runs: ["scripts/setup.sh"]).0
+        SkillsInstaller.updates["demo-skill"] = .available(commit: "2222222")
+        await SkillsAutoUpdate.run()
+        check(!exists(".agents/skills/demo-skill/scripts/setup.sh") && SkillsAutoUpdate.held["demo-skill"]?.contains("scripts/setup.sh") == true
+              && !manager.fileExists(atPath: next.scratch.path),
+              "skills: an update that adds something that runs waits for a review, says why, and leaves no download",
+              SkillsAutoUpdate.held["demo-skill"] ?? "none")
+        SkillsAutoUpdate.isOn = false
+        SkillsInstaller.updates["demo-skill"] = .available(commit: "3333333")
+        next = download(text: "Off.").0
+        await SkillsAutoUpdate.run()
+        check(read(".agents/skills/demo-skill/SKILL.md")?.contains("Use it better.") == true, "skills: with Update automatically off, nothing installs by itself")
+        next.discard()
+        _ = await SkillsStore.undo()
+        check(read(".agents/skills/demo-skill/SKILL.md")?.contains("Use it well.") == true, "skills: Undo takes an automatic update back")
+        SkillsAutoUpdate.fetchForTest = nil
+        SkillsAutoUpdate.isOn = savedAuto
+        SkillsInstaller.updates = [:]
 
         let window = SkillsWindowController()
         check(window.window?.title == "Skills" && SkillFeatured.list.count >= 10, "skills: Window › Skills opens with the Featured list")

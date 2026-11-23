@@ -10,6 +10,13 @@ public enum AgentActivity: Equatable, Sendable {
     /// itself (OpenCode, `AgentScreen.Opencode`). Once its working hint has shown this run, its screen, not its
     /// output, says when it works (TabStatus).
     case ready
+    /// The agent's own prompt is on screen without its working hint, from an agent whose working hint shows whenever it
+    /// works (Command Code, `AgentScreen.CommandCode`): it waits for your next prompt, and its screen, not its output,
+    /// says when it works, from its first frame.
+    case waiting
+    /// The screen shows nothing at all: the agent is between screens (Codex updating itself clears it). No sign either
+    /// way, so the tab stays as it was, and output going quiet ends no turn.
+    case blank
     /// None of the above: waiting for your next prompt.
     case idle
 }
@@ -61,16 +68,39 @@ public enum AgentScreen {
     /// What the form says when its question has scrolled out of reach.
     static let formFallback = "Choose one of the options"
 
+    /// An agent updating itself, in front of its own screen: Codex's "Updating Codex via `npm install -g …`…", until it
+    /// says how the update went.
+    static let updating = try! NSRegularExpression(pattern: #"^\s*Updating Codex via\b"#, options: [.caseInsensitive])
+    static let updated = try! NSRegularExpression(pattern: #"\bUpdate (?:ran successfully|failed)\b"#, options: [.caseInsensitive])
+
     /// `mask` masks stored keys in a question before it is cut or its rows are joined (`SecretMask.current` unless a test
-    /// gives its own).
+    /// gives its own). An empty cell read as U+0000 is a blank (`ScreenText`), whoever read the rows.
     public static func activity(screenLines lines: [String], mask: SecretMask = .current) -> AgentActivity {
-        let bottom = Array(lines.suffix(scannedLines))
+        let bottom = ScreenText.lines(Array(lines.suffix(scannedLines)))
+        // Nothing on screen says nothing: not a finish (Codex clears it while it updates itself).
+        if bottom.allSatisfy(ScreenText.isBlank) { return .blank }
         // A question with its choices on screen wins: the agent is blocked on you.
         if let asked = form(in: bottom, mask: mask)?.question ?? prompt(in: bottom, mask: mask)?.question { return .asking(asked) }
-        let text = bottom.suffix(promptLines).joined(separator: "\n")
+        let recent = Array(bottom.suffix(promptLines))
+        let text = recent.joined(separator: "\n")
         let range = NSRange(location: 0, length: (text as NSString).length)
         if working.contains(where: { $0.firstMatch(in: text, range: range) != nil }) { return .working }
+        if let update = recent.lastIndex(where: { matches(updating, $0) }),
+           !recent[update...].contains(where: { matches(updated, $0) }) { return .working }
         return .idle
+    }
+
+    /// `activity(screenLines:)` for a tab that shows `agent` (nil: not known): an agent with shapes of its own (OpenCode,
+    /// Command Code) is read with them too; every other agent as every agent is.
+    public static func activity(screenLines lines: [String], agent: AgentKind?, mask: SecretMask = .current) -> AgentActivity {
+        switch agent {
+        case .opencode?: return activity(screenLines: lines, opencode: true, mask: mask)
+        case .commandCode?:
+            let read = activity(screenLines: lines, mask: mask)
+            guard read == .idle, CommandCode.waits(ScreenText.lines(Array(lines.suffix(scannedLines)))) else { return read }
+            return .waiting
+        default: return activity(screenLines: lines, mask: mask)
+        }
     }
 
     /// `activity(screenLines:)` for a tab that shows OpenCode (`opencode`): OpenCode's own shapes first, then every
@@ -82,7 +112,7 @@ public enum AgentScreen {
     /// masks stored keys over the rows of OpenCode's question too, before they are joined.
     public static func activity(screenLines lines: [String], opencode: Bool, mask: SecretMask = .current) -> AgentActivity {
         guard opencode else { return activity(screenLines: lines, mask: mask) }
-        let own = Opencode.activity(lines, mask: mask)
+        let own = Opencode.activity(ScreenText.lines(lines), mask: mask)
         return own == .idle ? activity(screenLines: lines, mask: mask) : own
     }
 
@@ -90,17 +120,149 @@ public enum AgentScreen {
     /// of `lines`: the question and the row it is on.
     static func prompt(in lines: [String], mask: SecretMask = .current) -> (row: Int, question: String)? {
         let start = max(0, lines.count - promptLines)
+        // An agent session's menu (`nxtrm agent`) is read by its own hint first: its question wraps whole, and a line of
+        // the transcript above it can hold words a question starts with.
+        if let asked = sessionQuestion(in: lines, from: start, mask: mask) { return asked }
         let text = lines[start...].joined(separator: "\n")
-        guard choices.contains(where: { matches($0, text) }) else { return nil }
-        for row in start..<lines.count {
-            let line = lines[row]
-            let ns = line as NSString
-            guard let match = question.firstMatch(in: line, range: NSRange(location: 0, length: ns.length)) else { continue }
-            let asked = ns.substring(with: match.range(at: 1)).trimmingCharacters(in: .whitespaces)
-            // Masked before the cut: a stored key across it would keep its start, with no mark left to match.
-            return (row, String(mask.mask(asked).prefix(200)))
+        if choices.contains(where: { matches($0, text) }) {
+            // The lowest question is the live one: a pane shorter than the agent's frame leaves its earlier frames of the
+            // same prompt in scrollback above it (clearing the screen does not clear them), cursor on an older choice.
+            for row in (start..<lines.count).reversed() {
+                let line = lines[row]
+                let ns = line as NSString
+                guard let match = question.firstMatch(in: line, range: NSRange(location: 0, length: ns.length)) else { continue }
+                let asked = ns.substring(with: match.range(at: 1)).trimmingCharacters(in: .whitespaces)
+                // Masked before the cut: a stored key across it would keep its start, with no mark left to match.
+                return (row, String(mask.mask(asked).prefix(200)))
+            }
+        }
+        return listQuestion(in: lines, from: start, mask: mask)
+    }
+
+    /// The hint an agent draws under a list it asks you to pick from, where Return picks: Claude Code's folder trust
+    /// ("Enter to confirm · Esc to cancel"), Codex's ("enter continue · esc back", "Press enter to continue"), Command
+    /// Code's ("↑/↓ to navigate · enter to select · esc to exit", "↑↓ · enter ok · esc skip · n never").
+    static let listHint = try! NSRegularExpression(
+        pattern: #"(?:^|[·•]\s*)(?:press\s+)?enter(?:\s+to)?\s+(?:select|confirm|continue|ok)\b"#, options: [.caseInsensitive])
+    /// How far over its hint a list's last choice may be, and how far over its first choice its question.
+    static let hintGap = 3
+    static let questionGap = 12
+
+    /// A question in an agent's own words over a list it asks you to pick from, known by the list's hint under it
+    /// (`listHint`): a folder trust question ("Is this a project you created or one you trust?", "Trust this folder?",
+    /// "Do you trust the files in this folder?") or Command Code's "Build Your Coding Taste". The list is numbered from 1,
+    /// or has its cursor on a row, just over the hint; the question is the sentence ending in the nearest "?" over the list
+    /// (a wrapped one joined from its rows), else the first row of the box the list is in. The row is the question's.
+    static func listQuestion(in lines: [String], from start: Int, mask: SecretMask) -> (row: Int, question: String)? {
+        guard let hint = lines[start...].lastIndex(where: { matches(listHint, inner($0)) }) else { return nil }
+        // Up from the hint, over blank rows, to the list's last row, then to its first: option 1 of a numbered list (a
+        // long option wraps onto rows of its own), or the first row of an unnumbered one with its cursor on a row.
+        var row = hint - 1
+        while row > start, hint - row <= hintGap, inner(lines[row]).isEmpty || isBoxTop(inner(lines[row])) { row -= 1 }
+        guard row >= start, hint - row <= hintGap else { return nil }
+        var first = row, lowest: Int?, cursor = false
+        var at = row
+        while at >= start {
+            let text = inner(lines[at])
+            guard !text.isEmpty, !isBoxTop(text), !matches(listHint, text) else { break }
+            let (pointed, rest) = splitCursor(text)
+            if let (number, _) = numberedLabel(rest) {
+                guard lowest == nil || number == lowest! - 1 else { break }
+                lowest = number
+                first = at
+                cursor = cursor || pointed
+                if number == 1 { break }
+            } else if let lowest, lowest > 1 {
+                // A wrapped option's later row.
+            } else if lowest == nil {
+                first = at
+                cursor = cursor || pointed
+            } else {
+                break
+            }
+            at -= 1
+        }
+        guard lowest == 1 || (lowest == nil && cursor && row > first) else { return nil }
+        // Up from the list to its question.
+        var above = first - 1
+        while above >= max(start, first - questionGap) {
+            let line = inner(lines[above])
+            // The dialog ends at a box's edge, another list, or the transcript over it (a reply's bullet).
+            if isBoxTop(line) || numberedLabel(splitCursor(line).rest) != nil || isTranscriptRow(line) { break }
+            if let mark = line.lastIndex(of: "?") {
+                var rows = [String(line[...mark])]
+                var top = above
+                // A wrapped sentence goes on from the row over it: its row starts in lower case.
+                while let initial = rows[0].first, initial.isLowercase, top - 1 >= start {
+                    let previous = inner(lines[top - 1])
+                    guard !previous.isEmpty, !isBoxTop(previous) else { break }
+                    rows.insert(previous, at: 0)
+                    top -= 1
+                }
+                let asked = sentence(ending: maskedQuestion(rows, mask: mask))
+                return (above, String(asked.prefix(200)))
+            }
+            above -= 1
+        }
+        // No question mark: the first row of the box the list is in says what it asks ("Build Your Coding Taste"). A box,
+        // drawn from its corner: a rule across the screen (Claude Code's over its prompt) is no dialog.
+        var top = first - 1
+        while top >= start, !isBoxTop(inner(lines[top])), first - top <= questionGap { top -= 1 }
+        guard top >= start, let corner = inner(lines[top]).first, "╭┌".contains(corner),
+              let title = lines[(top + 1)..<first].firstIndex(where: { !inner($0).isEmpty }) else { return nil }
+        return (title, String(maskedQuestion([inner(lines[title])], mask: mask).prefix(200)))
+    }
+
+    /// A row of the transcript over a dialog: a reply, a tool's output or a status the agent printed ("⏺", "•", "⎿").
+    private static func isTranscriptRow(_ line: String) -> Bool {
+        guard let first = line.first else { return false }
+        return "⏺•⎿✻■".contains(first)
+    }
+
+    /// The top or bottom of a box an agent draws around a dialog, or a rule across the screen.
+    private static func isBoxTop(_ line: String) -> Bool {
+        guard let first = line.first else { return false }
+        return "╭╰┌└─━═".contains(first)
+    }
+
+    /// The last sentence of `text`, which ends in "?": what follows the last ". ", ": " or "! " before it.
+    static func sentence(ending text: String) -> String {
+        let body = text.dropLast()
+        var start = body.startIndex
+        for stop in [". ", ": ", "! ", "? "] {
+            if let found = body.range(of: stop, options: .backwards), found.upperBound > start { start = found.upperBound }
+        }
+        return String(text[start...]).trimmingCharacters(in: .whitespaces)
+    }
+
+    /// The menu an agent session (`nxtrm agent`) draws, a permission's ("Do you want to allow: …?") or a question in the
+    /// agent's own words (Claude's AskUserQuestion, plan 035): known by the session's own hint under the menu. Its question
+    /// ends in "?" just over option 1 and is whole, not cut (R5): a long one wraps, its later rows indented
+    /// (`ACPTranscript.questionIndent`), and its rows are joined with spaces. The row is the question's last, just over
+    /// the choices. When its first row is above `lines`, what shows is the question, after "…".
+    private static func sessionQuestion(in lines: [String], from start: Int, mask: SecretMask) -> (row: Int, question: String)? {
+        guard let hint = lines[start...].lastIndex(where: { $0.contains(ACPTranscript.menuHint) }) else { return nil }
+        var row = hint - 1
+        while row > start {
+            let line = inner(lines[row])
+            if let (number, _) = numberedLabel(splitCursor(line).rest), number == 1 {
+                let last = row - 1
+                guard inner(lines[last]).hasSuffix("?") else { return nil }
+                var first = last
+                while first > 0, isQuestionContinuation(lines[first]) { first -= 1 }
+                let seen = !(first == 0 && isQuestionContinuation(lines[0]))
+                let rows = lines[first...last].map(inner)
+                let asked = maskedQuestion(rows, mask: mask)
+                return (last, seen ? asked : "\u{2026}" + asked)
+            }
+            row -= 1
         }
         return nil
+    }
+
+    /// A wrapped session question's later row: indented, with words.
+    private static func isQuestionContinuation(_ line: String) -> Bool {
+        line.hasPrefix(ACPTranscript.questionIndent) && !line.trimmingCharacters(in: .whitespaces).isEmpty
     }
 
     /// Claude Code's question form, its own rows in the last `promptLines` of `lines`: the question
@@ -322,7 +484,7 @@ extension AgentScreen {
     /// The menu under the question an agent is asking (the one `activity` reports), or nil if the
     /// screen shows none.
     public static func menu(screenLines lines: [String], mask: SecretMask = .current) -> AgentMenu? {
-        let bottom = Array(lines.suffix(scannedLines))
+        let bottom = ScreenText.lines(Array(lines.suffix(scannedLines)))
         if let asked = form(in: bottom, mask: mask) {
             guard let first = asked.row else { return nil }
             return formMenu(bottom, first: first, question: asked.question)
@@ -422,7 +584,7 @@ extension AgentScreen {
         if let first = line.first, "╭╰┌└─━═".contains(first) { return true }
         let lower = line.lowercased()
         let hints = ["enter to select", "esc to cancel", "to navigate", "↑↓", "↑/↓", "esc dismiss", "⇆ select", "enter confirm"]
-        return hints.contains { lower.contains($0) }
+        return hints.contains { lower.contains($0) } || matches(listHint, line)
     }
 
     private static func splitCursor(_ line: String) -> (cursor: Bool, rest: String) {

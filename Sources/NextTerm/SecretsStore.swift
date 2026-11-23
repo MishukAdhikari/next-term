@@ -270,8 +270,13 @@ final class SecretsStore {
     let record: VaultRecord
     private let queue = DispatchQueue(label: "NextTerm.secrets")
 
-    /// The names, what each is for, flags and dates, read with no key.
+    /// The names, what each is for, flags and dates, read with no key: every key of the user's, never the sign-ins'
+    /// key (SecretVault.Index.hidingSignIns), so no list, tool, menu or release path ever sees it by its name.
     private(set) var index: SecretVault.Index?
+    /// The index as vault.json has it, the sign-ins' key among it: for its marks, and for MCPHubSignIns alone.
+    private(set) var held: SecretVault.Index? {
+        didSet { index = held?.hidingSignIns }
+    }
     private(set) var protection: Protection = .none
     /// Whether `load()` has run: until then `protection` hasn't said whether the keys open on this Mac.
     private(set) var hasLoaded = false
@@ -362,7 +367,7 @@ final class SecretsStore {
         let date = folder.modificationDate(of: SecretFolder.vaultName)
         guard folder.exists, let data = try? folder.read(SecretFolder.vaultName, cap: SecretVault.maxFileSize),
               let index = try? SecretVault.index(from: data) else { return }
-        self.index = index
+        held = index
         indexDate = date
         publishMarks()
     }
@@ -370,7 +375,7 @@ final class SecretsStore {
     /// `SecretMask.current` from the index and `mask.key`. A missing `mask.key` turns masking off until the next
     /// unlock, which makes a new one and new marks for every entry.
     func publishMarks() {
-        guard let index, let data = try? folder.read(SecretFolder.maskKeyName, cap: 64), data.count == SecretVault.maskKeyLength else {
+        guard let index = held, let data = try? folder.read(SecretFolder.maskKeyName, cap: 64), data.count == SecretVault.maskKeyLength else {
             SecretMask.current = .empty
             return
         }
@@ -398,7 +403,7 @@ final class SecretsStore {
             let opens = keyring(index).check(publicKey: index.publicKey)
             return (index, opens ? Self.protection(of: index) : .cantOpen, audit, false, date)
         }
-        index = found.0
+        held = found.0
         protection = found.1
         isUnlisted = false
         isTooLarge = found.3
@@ -433,7 +438,7 @@ final class SecretsStore {
         indexDate = date
         guard date != nil else {
             // Gone: another copy started over.
-            index = nil
+            held = nil
             protection = .none
             isUnlisted = false
             isTooLarge = false
@@ -451,7 +456,7 @@ final class SecretsStore {
         let earlier = index
         let read: SecretVault.Index? = data.flatMap { try? SecretVault.index(from: $0) }
         if let read {
-            index = read
+            held = read
             if protection == .none { protection = Self.protection(of: read) }
         } else {
             protection = .tampered
@@ -560,7 +565,7 @@ final class SecretsStore {
     /// after the lock was let go has another date, so the next check reads it.
     private func took(_ work: Work) {
         if let changed = work.index {
-            index = changed
+            held = changed
             indexDate = work.date
         }
         if let vouched = work.vouch { vouch = vouched }
@@ -1007,7 +1012,7 @@ final class SecretsStore {
         var kept: URL?
         if folder.exists { kept = try folder.retire(on: date) }
         try folder.ensure()
-        index = nil
+        held = nil
         protection = .none
         isUnlisted = false
         isTooLarge = false

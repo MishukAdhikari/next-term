@@ -28,6 +28,13 @@ final class NextTermView: LocalProcessTerminalView {
     }
     private var hintView: NSTextField?
 
+    /// Its look changed (Settings › General › Appearance, the Mac's under Match System): its palette follows, as it sees
+    /// the look itself, in a window in front or behind (a merged window's other tab). ThemeWatch's pass covers the rest.
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        Theme.applyColours(to: self)
+    }
+
     private func showChoiceHint() {
         hintView?.removeFromSuperview()
         hintView = nil
@@ -596,9 +603,9 @@ final class NextTermView: LocalProcessTerminalView {
         while row < rows {
             guard let first = terminal.getLine(row: row) else { row += 1; continue }
             var end = row
-            var text = first.translateToString(trimRight: false)
+            var text = first.screenText(trimRight: false)
             while let next = terminal.getLine(row: end + 1), next.isWrapped {
-                text += next.translateToString(trimRight: false)
+                text += next.screenText(trimRight: false)
                 end += 1
             }
             if text.contains(link) {
@@ -640,6 +647,9 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     private(set) var paneInMode = false
     /// The folder asked for was not on the host (the tab opened in the home folder).
     private(set) var remoteFolderMissing = false
+    /// The tmux session this tab came back to was gone, so this connection made a new one: the title and list_tabs say
+    /// so until the next connection.
+    private(set) var sessionCreated = false
     /// Something on the host keeps this tab's session when the connection drops.
     var isKept: Bool { (remote?.keep ?? .off) != .off && !fellBack }
     private var waitingForConnection = false
@@ -664,7 +674,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     /// The same agents followed one by one: their decisions and finishes, what is on screen, what needs you, their rows.
     private(set) var herdrTracker = HerdrAgents()
     /// herdr's client in front of this tab on this Mac (its own screen, HerdrClient), whose agents the tab follows as a
-    /// server's (LocalHerdrWatch); nil otherwise. Next Term only reads it: the tab is not kept, nor rerun on restore.
+    /// server's (LocalHerdrWatch); nil otherwise. The tab is not kept, nor rerun on restore.
     private(set) var localHerdr: LocalHerdrClient?
     /// This tab shows herdr and follows its agents one by one: herdr answers its checks.
     var followsHerdr: Bool {
@@ -719,6 +729,8 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     private(set) lazy var completion = CompletionSession(tab: self)
     /// Suggestions while typing in this tab.
     private(set) lazy var ghost = GhostSession(tab: self)
+    /// A notice of the suggestions shows in the terminal (their question about a plugin, or their first-use hint).
+    var ghostNoticeShowing: Bool { ghost.notice != nil || ghost.hint != nil }
     /// Whether this tab's zsh can take history's key now, so a line Next Term submits by itself stays out of its history
     /// (ShellHistory, submitOwnLine).
     private(set) var history = ShellHistory.Readiness()
@@ -792,6 +804,14 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(clean, forType: .string)
         }
+        // OSC 7501, program status: answered when a program asks whether it is taken, and its reports followed.
+        terminal.registerOscHandler(code: ProgramStatus.oscCode) { [weak self, weak terminal] payload in
+            guard let self, let parsed = ProgramStatus.parse(payload) else { return }
+            switch parsed {
+            case .query: terminal?.sendResponse(text: ProgramStatus.reply)
+            case .report(let report): self.programReported(report)
+            }
+        }
         // OSC 9 (iTerm2 / ConEmu) and OSC 777 (rxvt) desktop notifications mean "look at me", in the program's own
         // words when it gives some. OSC 9;4 is a progress report, not a notification.
         for code in [9, 777] {
@@ -803,6 +823,9 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     }
 
     static var now: TimeInterval { ProcessInfo.processInfo.systemUptime }
+
+    /// The agent's run here may have ended: its "Allow for this session" grants end with it (SecretRequests).
+    private func sessionsMayHaveEnded() { SecretRequests.tabRunChanged(id, tab: exited ? nil : self) }
 
     #if DEBUG
     /// For the self-test: the terminal's size as its shell started (a restored pane's is its real one).
@@ -840,9 +863,12 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             remoteConnected = false
             remoteReady = false
             // The tab script tries tmux or herdr again: whether this connection fell back, or its pane is in copy mode,
-            // is for its own reports to say (a .plain file comes back if the tool is still missing).
+            // is for its own reports to say (a .plain file comes back if the tool is still missing). A tab that only ever
+            // had a plain shell had no session to come back to, so it expects none (no false "made anew" note).
+            let wasPlain: Bool = fellBack
             fellBack = false
             fellBackReason = nil
+            sessionCreated = false
             // herdr's rows wait for its first list on this connection. Its agents are followed on from before the drop:
             // one still blocked is not news again, and one that finished or moved on meanwhile says so.
             herdrWatch = HerdrWatch()
@@ -853,7 +879,9 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             view.interceptInput = nil
             view.acceptsInput = true
             DescriptorSweep.markCloseOnExec() // ssh inherits nothing of ours (see below)
-            view.startProcess(executable: shellPath, args: RemoteConnection.tabArguments(remote, path: path, tabKey: remoteKey, token: connectionToken),
+            let args: [String] = RemoteConnection.tabArguments(remote, path: path, tabKey: remoteKey, token: connectionToken,
+                                                               reattach: everConnected && !wasPlain)
+            view.startProcess(executable: shellPath, args: args,
                               environment: RemoteConnection.environment(), execName: nil, currentDirectory: NSHomeDirectory())
             return
         }
@@ -899,7 +927,9 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         reconnectWork?.cancel()
         reconnectWork = nil
         runEnded(exit: nil)
+        SecretRequests.tabRunChanged(id, tab: nil) // the tab goes: its agent's session grants end
         MCPControl.forget(self)
+        MainActor.assumeIsolated { AgentChatWatch.closed(id) } // plan 047: its session's journal goes with it
         AppDelegate.shared?.withdrawHerdrNotices(of: self)
         if localHerdr != nil { LocalHerdrWatch.shared.follow(self, false) }
         guard !exited else { return [] }
@@ -1000,6 +1030,17 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             guard let self, !self.exited else { return }
             self.submitOwnLine(typed)
         }
+    }
+
+    /// Types a line at the prompt once the shell is ready (as `runWhenReady` waits), and leaves it there for the user to
+    /// read and run themselves.
+    func typeWhenReady(_ line: String, waited: TimeInterval = 0) {
+        guard !exited else { return }
+        if !status.integrated && waited < 3 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in self?.typeWhenReady(line, waited: waited + 0.1) }
+            return
+        }
+        _ = view.typeText(line)
     }
 
     /// Return for a line Next Term or an agent typed into this tab by itself (`typed`, as typeText or typeIn returned
@@ -1148,11 +1189,13 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         watchLocalHerdr()
         if status.integrated && !(status.running && status.kind == .command) { return }
         let before = (status.running, status.command)
+        let run = status.commandsStarted
         let wasAgent = status.running && status.kind == .agent
         let foreground = ProcessInspector.foreground(ptyFileDescriptor: view.process.childfd,
                                                      shellPid: view.process.shellPid, shellName: shellName)
         status.observe(foreground, at: Self.now)
         var changed = (status.running, status.command) != before
+        if changed || status.commandsStarted != run { sessionsMayHaveEnded() }
         if !status.integrated {
             // A prompt title ("user@host: ~/dir") is stale once a command runs, and vice versa.
             if changed { programTitle = nil }
@@ -1163,7 +1206,10 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             }
         }
         // OpenCode found behind a plain-looking command (a function that runs it) may have titled the tab already.
-        if !wasAgent, status.kind == .agent { matchShownSession() }
+        if !wasAgent, status.kind == .agent {
+            matchShownSession()
+            MCPRegistration.refresh() // an agent installed since the last look is added for its next start
+        }
         if changed { delegate?.tabDidChange(self) }
     }
 
@@ -1199,12 +1245,11 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     /// right of them, the right part trimmed, then the whole.
     private func rowText(_ row: Int, excluding ghost: [GhostScreen.Span]) -> String {
         guard let line = view.getTerminal().getScrollInvariantLine(row: row) else { return "" }
-        guard let cut = ghost.first(where: { $0.row == row }) else { return line.translateToString(trimRight: true) }
+        guard let cut = ghost.first(where: { $0.row == row }) else { return line.screenText() }
         let end = min(cut.columns.upperBound, line.count)
-        let left = line.translateToString(trimRight: false, startCol: 0, endCol: min(cut.columns.lowerBound, line.count))
-        let right = end < line.count ? line.translateToString(trimRight: true, startCol: end) : ""
-        let text = left + right
-        return String(text.reversed().drop { $0 == " " || $0 == "\u{0}" }.reversed())
+        let left = line.screenText(trimRight: false, endCol: min(cut.columns.lowerBound, line.count))
+        let right = end < line.count ? line.screenText(startCol: end) : ""
+        return ScreenText.trimmedLine(left + right)
     }
 
     /// `screenTail`, with the scroll-invariant row of its first line.
@@ -1212,7 +1257,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         let terminal = view.getTerminal()
         guard let last = lastTextRow() else { return (0, []) }
         let first = max(terminal.buffer.totalLinesTrimmed, last - count + 1)
-        return (first, (first...last).map { terminal.getScrollInvariantLine(row: $0)?.translateToString(trimRight: true) ?? "" })
+        return (first, (first...last).map { terminal.getScrollInvariantLine(row: $0)?.screenText() ?? "" })
     }
 
     /// The last line that exists, in scroll-invariant rows, found by bisection (SwiftTerm keeps the line count internal).
@@ -1248,7 +1293,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         // Skip blank rows at the bottom (at most one screen of them).
         var last = low
         while last > top, low - last < terminal.rows,
-              terminal.getScrollInvariantLine(row: last)?.translateToString(trimRight: true).isEmpty ?? true {
+              terminal.getScrollInvariantLine(row: last)?.screenText().isEmpty ?? true {
             last -= 1
         }
         return last
@@ -1310,11 +1355,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             guard let line = terminal.getScrollInvariantLine(row: span.row) else { break }
             let end = min(span.columns.upperBound, line.count)
             guard span.columns.lowerBound < end else { break }
-            read += line.translateToString(trimRight: false, startCol: span.columns.lowerBound, endCol: end,
-                                           skipNullCellsFollowingWide: true) { cell in
-                let character = cell.getCharacter()
-                return character == "\u{0}" ? " " : character
-            }
+            read += line.screenText(trimRight: false, startCol: span.columns.lowerBound, endCol: end)
             shown.append(GhostScreen.Span(row: span.row, columns: span.columns.lowerBound..<end))
         }
         let width = shown.reduce(0) { $0 + $1.columns.count }
@@ -1387,7 +1428,8 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         restoreNote = nil
         guard !started else { return }
         if let restored {
-            view.feed(text: ScrollbackText.preface(restored.text, savedAt: restored.savedAt))
+            view.feed(text: ScrollbackText.preface(restored.text, savedAt: restored.savedAt,
+                                                   light: !Theme.isDark(MainActor.assumeIsolated { Theme.appearance(of: view) })))
             restoreDivider = (restored.savedAt.divider, lastTextRow(), view.getTerminal().cols)
         }
         if let note { view.feed(text: RestoreLayout.noteLine(note)) }
@@ -1418,7 +1460,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         var lines: [String] = []
         for row in max(start, last - 60)...last {
             guard let line = terminal.getScrollInvariantLine(row: row) else { continue }
-            let text = line.translateToString(trimRight: true)
+            let text = line.screenText()
             if line.isWrapped, !lines.isEmpty { lines[lines.count - 1] += text } else { lines.append(text) }
         }
         guard let held = GitOutput.heldBranch(lines.joined(separator: "\n")) else { return }
@@ -1469,7 +1511,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         let terminal = view.getTerminal()
         let command = status.command.trimmingCharacters(in: .whitespaces)
         for row in first...last {
-            guard let text = terminal.getScrollInvariantLine(row: row)?.translateToString(trimRight: true), !text.isEmpty else { continue }
+            guard let text = terminal.getScrollInvariantLine(row: row)?.screenText(), !text.isEmpty else { continue }
             if command.count >= 6 && text.contains(command) { continue } // a URL typed in the command line is not served
             if let url = ServedURL.find(in: text) {
                 servedURL = url
@@ -1506,26 +1548,64 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     }
 
     /// For a running AI agent: read its screen (working, asking a question, or idle) so the tab's status follows the
-    /// agent itself. Not herdr's own screen, here or on a server: its agents report their states.
+    /// agent itself, or, once it has reported over OSC 7501 this run, its reports. Not herdr's own screen, here or on a
+    /// server: its agents report their states.
     func pollAgentScreen() {
         guard !exited, status.running, status.kind == .agent, remote?.keep != .herdr || fellBack else { return } // herdr reports its own
         guard status.program != "herdr" else { return }
         let before = (status.state, status.question)
-        status.observe(agentScreen: agentActivity(liveTail(agentScreenLines)), at: Self.now)
+        if programReports {
+            // Its records cleared (`clear`) say nothing either way: the status stays as it was.
+            guard let activity = reportedActivity() else { return }
+            status.observe(agentScreen: activity, at: Self.now)
+        } else {
+            status.observe(agentScreen: agentActivity(liveTail(agentScreenLines)), at: Self.now)
+        }
         if before.0 != status.state || before.1 != status.question { delegate?.tabDidChange(self) }
+    }
+
+    /// The OSC 7501 records the program in front reported (ProgramStatus), and the run they belong to: a new command
+    /// starts with none.
+    private var programRecords = ProgramStatus.Records()
+    private var programRecordsRun = -1
+
+    /// The program in front has reported its status this run, so its reports, not its screen's hints, say what it does.
+    var programReports: Bool { programRecordsRun == status.commandsStarted }
+
+    private func programReported(_ report: ProgramStatus.Report) {
+        if !programReports {
+            programRecords = ProgramStatus.Records()
+            programRecordsRun = status.commandsStarted
+        }
+        programRecords.apply(report)
+        pollAgentScreen() // at once, not at the next look
+    }
+
+    /// The records as the screen's activity would be. A question's words come from the screen when it shows one (its
+    /// menu is what answer_agent answers), else from the report.
+    private func reportedActivity() -> AgentActivity? {
+        switch programRecords.activity {
+        case nil: return nil
+        case .working: return .working
+        case .stopped: return .ready
+        case .asking(let kind, let message):
+            if case .asking(let shown) = agentActivity(liveTail(agentScreenLines)) { return .asking(shown) }
+            let words = message.map { $0.count > ProgramNotice.maxLength ? String($0.prefix(ProgramNotice.maxLength - 1)) + "\u{2026}" : $0 }
+            return .asking(words ?? ProgramStatus.words(for: kind))
+        }
     }
 
     /// The last screen read and what it says, with the masks it was read with: an agent that drew nothing new since
     /// (most of them, most of the time) is not parsed again 4 times a second. AgentScreen.activity is a function of the
-    /// lines and the masks alone (and whether they are OpenCode's), and TabStatus takes the same activity again as it did.
-    private var lastAgentRead: (lines: [String], mask: ObjectIdentifier, opencode: Bool, activity: AgentActivity)?
+    /// lines and the masks alone (and the agent whose shapes it reads), and TabStatus takes the same activity again as it did.
+    private var lastAgentRead: (lines: [String], mask: ObjectIdentifier, agent: AgentKind?, activity: AgentActivity)?
 
     private func agentActivity(_ lines: [String]) -> AgentActivity {
         let mask = ObjectIdentifier(SecretMask.current)
-        let opencode = isOpencodeScreen
-        if let last = lastAgentRead, last.mask == mask, last.opencode == opencode, last.lines == lines { return last.activity }
-        let activity = AgentScreen.activity(screenLines: lines, opencode: opencode)
-        lastAgentRead = (lines, mask, opencode, activity)
+        let agent = screenAgent
+        if let last = lastAgentRead, last.mask == mask, last.agent == agent, last.lines == lines { return last.activity }
+        let activity = AgentScreen.activity(screenLines: lines, agent: agent)
+        lastAgentRead = (lines, mask, agent, activity)
         return activity
     }
 
@@ -1610,8 +1690,10 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         return RemoteMark(host: remote.host.name, destination: remote.host.destination, link: remoteLink)
     }
 
-    /// Where a remote tab's connection stands, when it is not simply up: for the title and list_tabs.
-    var connectionNote: String? { remoteLink?.titleNote }
+    /// Where a remote tab's connection stands, when it is not simply up, or that its tmux session was made anew: for the
+    /// title and list_tabs.
+    var connectionNote: String? { remoteLink?.titleNote ?? (sessionCreated ? Self.newSessionNote : nil) }
+    static let newSessionNote = "new session: the old one was gone"
 
     /// A folder or program name keeps both ends, like Finder; a title a program sets is prose and gives
     /// way at the end.
@@ -1709,12 +1791,14 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         var lines = [title]
         if let remoteMark { lines.append(remoteMark.summary) }
         if let ownStateDescription { lines.append(ownStateDescription) }
+        if let contextUsage { lines += contextUsage.lines }
         if status.running && !status.command.isEmpty { lines.append(String(status.command.prefix(300))) }
         lines.append(remote == nil ? directory : "Folder on the host: \(directory)")
         if let servedURL { lines.append("Serving \(ServedURL.shared(servedURL))") } // its token, if any, stays out of sight
         if let openedBy, let opener = AppDelegate.shared?.controllers.flatMap(\.tabs).first(where: { $0.id == openedBy }) {
             lines.append("Started by “\(opener.title)”")
         }
+        if MCPRegistration.needsRestart(self) { lines.append(MCPRegistration.restartLine) }
         if let remote {
             lines.append(remote.keep.keptLine(fellBack: fellBack))
             if fellBack, let fellBackReason { lines.append(fellBackReason) }
@@ -1749,6 +1833,9 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             gitOutputStart = remote == nil && GitOutput.isGitCommand(expanded ?? line) ? pendingServingStart : nil
             noteEcho(line, expanded: expanded)
             status.commandStarted(line, expanded: expanded, at: Self.now)
+            sessionsMayHaveEnded()
+            // An agent starting here: one installed since the last look along PATH is added for its next start.
+            if remote == nil, status.kind == .agent { MCPRegistration.refresh() }
             // Gemini or Qwen starting (or installed since launch): their IDE switch on, for the next start too.
             if ["gemini", "gemini-cli", "qwen", "qwen-code"].contains(status.program) { AppDelegate.shared.enableAgentIDEModes() }
         case .commandFinished(let code):
@@ -1759,6 +1846,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             programTitle = nil
             runningEcho = nil
             status.commandFinished(exitCode: code, at: Self.now)
+            sessionsMayHaveEnded()
             gitCommandEnded(code)
         case .directory(let dir):
             if !dir.isEmpty { directory = dir }
@@ -1854,6 +1942,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         let reason = signal == 0 ? "exited with code \(code)" : "was ended by signal \(signal)"
         view.acceptsInput = false
         status.shellExited(code: signal == 0 ? code : 128 + signal)
+        sessionsMayHaveEnded()
         view.feed(text: "\r\n\u{1b}[2m[The shell \(reason). ⌘W closes this tab.]\u{1b}[0m\r\n")
         delegate?.tabDidChange(self)
     }
@@ -1984,11 +2073,14 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             fellBackReason = report.plainReason
         }
         if report.folderMissing { remoteFolderMissing = true }
+        if report.sessionCreated, !sessionCreated { madeNewSession(remote) }
         paneInMode = report.inMode
         // A herdr tab shows herdr: its state comes from herdr's agents (applyHerdr), not from what runs in front.
         if let foreground = report.foreground, remote.keep != .herdr || fellBack {
             if foreground.isShell { remoteReady = true }
+            let before = (status.running, status.commandsStarted)
             status.observe(foreground, at: Self.now)
+            if (status.running, status.commandsStarted) != before { sessionsMayHaveEnded() }
         }
         status.jobsChanged(count: report.jobs, summary: report.jobSummary)
         if let folder = report.directory, folder.hasPrefix("/") { directory = folder }
@@ -1996,6 +2088,17 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         // A title the remote prompt set is stale once a program runs, and the other way round.
         if (status.running, status.command) != (before.0, before.1) { programTitle = nil }
         if (status.running, status.command, directory, remoteConnected, fellBack) != before { delegate?.tabDidChange(self) }
+    }
+
+    /// The host made this tab's tmux session anew, the old one gone (ended there, or the host restarted): the title says
+    /// so, and a notification does while Next Term is not in front, as for any alert. Once per connection.
+    private func madeNewSession(_ remote: RemoteTab) {
+        sessionCreated = true
+        delegate?.tabDidChange(self)
+        guard let controller = delegate as? TerminalWindowController else { return }
+        let message = "The tmux session this tab came back to on \(remote.host.name) was gone, so this is a new one: what ran there has stopped."
+        let notice = TabNotice(state: .attention, command: "", program: "tmux", kind: .command, stillRunning: true, message: message)
+        AppDelegate.shared.post(notice, tab: self, in: controller)
     }
 
     /// What the host's status checks say about this tab's prompt, for what Next Term types in by itself (Suggest a
@@ -2215,6 +2318,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         env["TERM"] = "xterm-256color"
         env["COLORTERM"] = "truecolor"
         env["TERM_PROGRAM"] = "NextTerm"
+        env["COLORFGBG"] = Theme.isLight ? "0;15" : "15;0" // light or dark, for programs that pick colours by it (plan 049)
         env["TERM_PROGRAM_VERSION"] = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
         // OpenTUI programs (OpenCode) send their notifications as OSC 777, which a tab reads, unless the user chose.
         ProgramNotice.prepare(&env)

@@ -106,6 +106,11 @@ public enum MCPRegistrar {
             Target(id: "junie", name: "Junie", programs: ["junie"], file: path(".junie/mcp/mcp.json"),
                    format: .json(strict: false), container: "mcpServers", preamble: [:],
                    entry: { ["command": $0, "args": ["mcp"], "enabled": true] }),
+            // Kimi Code CLI reads ~/.kimi-code/mcp.json (claudedocs/research_agent-mcp-config-formats_2026-11-21); an
+            // older install's ~/.kimi/mcp.json is written when it alone is there.
+            Target(id: "kimi", name: "Kimi Code CLI", programs: ["kimi"],
+                   file: existing([path(".kimi-code/mcp.json"), path(".kimi/mcp.json")]),
+                   format: .json(strict: false), container: "mcpServers", preamble: [:], entry: standard),
             Target(id: "commandcode", name: "Command Code", programs: ["commandcode", "command-code"], file: path(".commandcode/mcp.json"),
                    format: .json(strict: true), container: "mcpServers", preamble: [:],
                    entry: { ["transport": "stdio", "command": $0, "args": ["mcp"], "enabled": true] }),
@@ -342,7 +347,6 @@ public enum MCPRegistrar {
         for target in targets(home: home) {
             names[target.id] = [target.name] + target.apps.filter { apps.contains($0) }.compactMap { appNames[$0] }
         }
-        func sortKey(_ name: String) -> String { (name.hasPrefix("the ") ? String(name.dropFirst(4)) : name).lowercased() }
         func named(_ wanted: (Status) -> Bool) -> [String] {
             let found = Set(statuses.filter { wanted($0.value) }.keys.flatMap { names[$0] ?? [] })
             return found.sorted { sortKey($0) < sortKey($1) }
@@ -1150,7 +1154,10 @@ struct TOMLOutline {
                 advance()
                 let isArray = i < scalars.endIndex && scalars[i] == "["
                 if isArray { advance() }
-                guard let path = parseKey(), take("]"), !isArray || take("]"), endOfLine() else { return nil }
+                // The second ] apart: a mutating call can't sit in ||'s autoclosure (Swift 6.4).
+                guard let path = parseKey(), take("]") else { return nil }
+                if isArray { guard take("]") else { return nil } }
+                guard endOfLine() else { return nil }
                 headers.append(Header(path: path, isArray: isArray, line: lineStart..<i))
                 table = path
                 continue

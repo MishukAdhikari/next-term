@@ -14,7 +14,7 @@ final class UpdateWindowController: NSWindowController, NSWindowDelegate {
 
     let release: ReleaseInfo
     private var onChoice: ((Choice) -> Void)?
-    private weak var parentWindow: NSWindow?
+    private let attachment = ProjectWindowAttachment()
     private(set) var notesView: NSTextView!
     private(set) var installButton: NSButton!
     private(set) var laterButton: NSButton!
@@ -26,6 +26,7 @@ final class UpdateWindowController: NSWindowController, NSWindowDelegate {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 500), styleMask: [.titled, .closable, .resizable],
                              backing: .buffered, defer: false)
         window.title = "Software Update"
+        window.keepsItsOwnFrame()
         window.minSize = NSSize(width: 460, height: 340)
         window.isReleasedWhenClosed = false
         window.animationBehavior = .alertPanel
@@ -114,7 +115,7 @@ final class UpdateWindowController: NSWindowController, NSWindowDelegate {
         stack.alignment = .leading
         stack.spacing = 14
         stack.setCustomSpacing(6, after: scroll)
-        stack.edgeInsets = NSEdgeInsets(top: 20, left: 20, bottom: 18, right: 20)
+        stack.edgeInsets = DialogFit.insets
         for view in [scroll, buttons] {
             view.translatesAutoresizingMaskIntoConstraints = false
             view.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -40).isActive = true
@@ -144,34 +145,13 @@ final class UpdateWindowController: NSWindowController, NSWindowDelegate {
             if takingFocus { NSApp.activate(ignoringOtherApps: true); window.makeKeyAndOrderFront(nil) }
             return
         }
-        if let parent, parent.isVisible, !parent.isMiniaturized {
-            let size = window.frame.size
-            var origin = NSPoint(x: parent.frame.midX - size.width / 2, y: parent.frame.maxY - size.height - 64)
-            if let screen = (parent.screen ?? NSScreen.main)?.visibleFrame {
-                origin.x = min(max(origin.x, screen.minX), screen.maxX - size.width)
-                origin.y = min(max(origin.y, screen.minY), screen.maxY - size.height)
-            }
-            window.setFrameOrigin(origin)
-            parent.addChildWindow(window, ordered: .above)
-            parentWindow = parent
-            NotificationCenter.default.addObserver(self, selector: #selector(parentWillClose(_:)), name: NSWindow.willCloseNotification, object: parent)
-        } else {
-            window.center()
-        }
+        if !attachment.attach(window, over: parent) { window.center() }
         if takingFocus {
             NSApp.activate(ignoringOtherApps: true)
             window.makeKeyAndOrderFront(nil)
         } else {
             window.orderFront(nil)
         }
-    }
-
-    /// Its window closing would take this one with it: stay, on its own.
-    @objc private func parentWillClose(_ note: Notification) {
-        guard let window, let parent = note.object as? NSWindow else { return }
-        NotificationCenter.default.removeObserver(self, name: NSWindow.willCloseNotification, object: parent)
-        parent.removeChildWindow(window)
-        parentWindow = nil
     }
 
     @objc private func openPage() { NSWorkspace.shared.open(release.pageURL) }
@@ -189,11 +169,7 @@ final class UpdateWindowController: NSWindowController, NSWindowDelegate {
     /// Closes without answering (a newer check replaced it).
     func dismiss() {
         onChoice = nil
-        if let parent = parentWindow, let window {
-            NotificationCenter.default.removeObserver(self, name: NSWindow.willCloseNotification, object: parent)
-            parent.removeChildWindow(window)
-        }
-        parentWindow = nil
+        attachment.detach()
         window?.orderOut(nil)
         window?.close()
     }
@@ -202,11 +178,7 @@ final class UpdateWindowController: NSWindowController, NSWindowDelegate {
     func windowWillClose(_ notification: Notification) {
         guard let callback = onChoice else { return }
         onChoice = nil
-        if let parent = parentWindow, let window {
-            NotificationCenter.default.removeObserver(self, name: NSWindow.willCloseNotification, object: parent)
-            parent.removeChildWindow(window)
-        }
-        parentWindow = nil
+        attachment.detach()
         callback(.later)
     }
 }

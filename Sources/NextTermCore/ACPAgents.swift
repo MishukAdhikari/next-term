@@ -1,0 +1,96 @@
+import Foundation
+
+/// The agents Next Term runs as sessions: those that speak ACP themselves, with the command that starts each in ACP mode
+/// (research Part A §3.1, the ACP Registry's commands on 2026-10-26), and Claude Code and Codex, each over its own
+/// protocol (plan 035). `nxtrm agent NAME` runs one; an agent's program has to be on the PATH, and Next Term installs
+/// nothing (R2, R4). Plan 030.
+public struct ACPAgent: Equatable, Sendable {
+    /// How Next Term talks to the agent.
+    public enum ProtocolKind: String, Equatable, Sendable {
+        /// The Agent Client Protocol, with `arguments` for its ACP mode.
+        case acp
+        /// Claude Code's `claude -p` with stream-json in and out and its control channel (`ClaudeStream`).
+        case claudeStream
+        /// Codex's `codex app-server`, JSON-RPC over stdio.
+        case codexAppServer
+    }
+
+    /// What `nxtrm agent` and `new_tab` take: gemini, qwen, opencode, ...
+    public let id: String
+    /// What the tab and the menu call it.
+    public let name: String
+    /// The program looked for on the PATH.
+    public let program: String
+    /// Its arguments for ACP mode. Empty for Claude Code and Codex, whose drivers build their own.
+    public let arguments: [String]
+    public let protocolKind: ProtocolKind
+    /// One line for the new session sheet on what still needs the agent's own terminal tab (R10), or nil.
+    public let terminalNote: String?
+
+    public init(id: String, name: String, program: String, arguments: [String], protocolKind: ProtocolKind = .acp,
+                terminalNote: String? = nil) {
+        self.id = id
+        self.name = name
+        self.program = program
+        self.arguments = arguments
+        self.protocolKind = protocolKind
+        self.terminalNote = terminalNote
+    }
+
+    /// The agents, in the order the menu lists them: Claude Code and Codex, then the native ACP agents.
+    public static let known: [ACPAgent] = [
+        ACPAgent(id: "claude", name: "Claude Code", program: "claude", arguments: [], protocolKind: .claudeStream,
+                 terminalNote: "Claude Code\u{2019}s /usage, /rewind and /login, and its plugin and MCP panels, work in a terminal tab running claude."),
+        ACPAgent(id: "codex", name: "Codex", program: "codex", arguments: [], protocolKind: .codexAppServer,
+                 terminalNote: "Codex\u{2019}s own screens, such as /status and /approvals, work in a terminal tab running codex."),
+        ACPAgent(id: "gemini", name: "Gemini CLI", program: "gemini", arguments: ["--acp"]),
+        ACPAgent(id: "qwen", name: "Qwen Code", program: "qwen", arguments: ["--acp"]),
+        ACPAgent(id: "opencode", name: "OpenCode", program: "opencode", arguments: ["acp"]),
+        ACPAgent(id: "cursor", name: "Cursor CLI", program: "cursor-agent", arguments: ["acp"]),
+        ACPAgent(id: "copilot", name: "Copilot CLI", program: "copilot", arguments: ["--acp"]),
+        ACPAgent(id: "goose", name: "goose", program: "goose", arguments: ["acp"]),
+        ACPAgent(id: "kimi", name: "Kimi CLI", program: "kimi", arguments: ["acp"]),
+        ACPAgent(id: "auggie", name: "Auggie", program: "auggie", arguments: ["--acp"]),
+        ACPAgent(id: "kiro", name: "Kiro CLI", program: "kiro-cli", arguments: ["acp"]),
+        ACPAgent(id: "cline", name: "Cline", program: "cline", arguments: ["--acp"]),
+        ACPAgent(id: "junie", name: "Junie", program: "junie", arguments: ["--acp=true"]),
+        ACPAgent(id: "droid", name: "Factory Droid", program: "droid", arguments: ["exec", "--output-format", "acp-daemon"]),
+        ACPAgent(id: "devin", name: "Devin CLI", program: "devin", arguments: ["acp"]),
+        ACPAgent(id: "vibe", name: "Mistral Vibe", program: "vibe-acp", arguments: []),
+    ]
+
+    /// The agent `id` names, by its id or its program's name (`cursor-agent`), any case.
+    public static func named(_ id: String) -> ACPAgent? {
+        let wanted = id.lowercased()
+        return known.first { $0.id == wanted || $0.program == wanted }
+    }
+
+    /// The known agents whose program is in one of `path`'s folders (`exists` checks a file there).
+    public static func installed(path: String, exists: (String) -> Bool) -> [ACPAgent] {
+        let folders = path.split(separator: ":").map(String.init).filter { !$0.isEmpty }
+        return known.filter { agent in folders.contains { exists(($0 as NSString).appendingPathComponent(agent.program)) } }
+    }
+
+    /// The line a tab runs for a session of this agent: `launcher` (Next Term's `nxtrm`, quoted, or its binary and
+    /// `--cli`), `agent ID`, and the first prompt quoted for the shell.
+    public func sessionLine(launcher: String, prompt: String?) -> String {
+        var line = launcher + " agent " + id
+        if let prompt, !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { line += " --prompt " + ShellQuote.quote(prompt) }
+        return line
+    }
+
+    /// Whether a session of this agent comes back after an update (plan 035 U7): Claude Code's by `claude --resume`,
+    /// Codex's by `thread/resume`. An ACP agent's session is a command like any other.
+    public var resumesSessions: Bool { protocolKind != .acp }
+
+    /// The line that resumes session `sessionID` of this agent in a restored tab: `launcher agent ID --resume SESSION`. The
+    /// id is one `AgentSessionVersion.isSessionID` takes, quoted all the same.
+    public func resumeLine(launcher: String, sessionID: String) -> String {
+        launcher + " agent " + id + " --resume " + ShellQuote.quote(sessionID)
+    }
+
+    /// The ids, for a refusal that says which would run.
+    public static func listed(_ agents: [ACPAgent]) -> String {
+        agents.isEmpty ? "none of them is installed here" : agents.map(\.id).joined(separator: ", ")
+    }
+}

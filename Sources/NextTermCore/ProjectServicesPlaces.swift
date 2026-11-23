@@ -66,6 +66,7 @@ extension ServiceReader {
         case .asWritten: return origin
         case .langsmithSite: host = langsmithSite(origin.host) ?? origin.host
         case .wandbApp: host = wandbApp(origin.host)
+        case .bindAddress: host = origin.host == "0.0.0.0" || origin.host == "::" ? "localhost" : origin.host
         }
         let hosted: Bool = host != origin.host && mapping == .langsmithSite
         let port: Int? = hosted ? nil : origin.port

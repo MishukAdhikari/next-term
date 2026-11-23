@@ -56,6 +56,14 @@ public enum CommandLineOpen {
       nxtrm src/app.ts:42:7     a file, at line 42, column 7
       nxtrm notes.md            a new file is created empty
 
+    Keys from Next Term's Secrets, used by name:
+      nxtrm secret run NAME -- command   a command or an MCP server with a stored key in its environment
+      nxtrm secret help                  more, with MCP server examples
+
+    An agent session, an agent run over ACP in this tab and followed exactly:
+      nxtrm agent gemini                 also qwen, opencode, cursor, copilot, goose and others
+      nxtrm agent --help                 more
+
     Options:
       -n, --new-window   open in a new window
       -h, --help         show this help

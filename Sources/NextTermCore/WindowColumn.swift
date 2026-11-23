@@ -1,23 +1,26 @@
 import Foundation
 
 // The window column: a strip at every Next Term window's outer edge, on the project sidebar's side, listing each open
-// window, folded to a badge apiece or unfolded to a row apiece. Its rows come from the index of every window
+// window, folded to its rail (a dot apiece) or unfolded to a row apiece. Its rows come from the index of every window
 // (WindowIndex), the same list ⌘O, ⇧⌘U and the Dock menu read, so they agree. Values in, rows out: the views only draw
 // them, and a change to one window's entry says which row, if any, has to be drawn again.
 
-/// One window's row in the window column: its badge when the column is folded, its row when unfolded.
+/// One window's row in the window column: its dot on the rail, its row when unfolded.
 public struct WindowColumnRow: Equatable, Sendable {
     /// The window's id in the index.
     public let id: Int
     /// 1 for a linked worktree's window under its repository's own window; 0 for every other.
     public let depth: Int
-    /// The name shown: the window's, or for a worktree nested under its repository only its own part ("7027-sso").
+    /// The name shown (WindowColumnName.shown): the project's, a worktree's own part, a folder's, a server's.
     public let name: String
-    /// The badge's two letters ("NT", "7S", "Sh", "~").
-    public let letters: String
-    /// The project's colour; nil for none (a neutral badge).
+    /// Before the name, dimmer: a worktree's repository when no window of the repository is open ("xCloud"); else nil.
+    public let prefix: String?
+    /// After the name, dimmer, only while another row shows the same name: where the window is, or else what is in front
+    /// in it (WindowColumnList.build); else nil.
+    public let detail: String?
+    /// The project's colour; nil for none (a neutral dot).
     public let color: ProjectColor?
-    /// The badge's dot: the most urgent of needs you, failed and done; nil for none (working puts no dot on a badge).
+    /// The most urgent of needs you, failed and done; nil for none (working is no dot's business).
     public let urgent: TabState?
     /// The unfolded row's marks, with counts, as ⌘O shows them.
     public let marks: [AgentMarks.Mark]
@@ -25,15 +28,23 @@ public struct WindowColumnRow: Equatable, Sendable {
     public let toolTip: String
     /// What VoiceOver reads: "xCloud ▸ 7027-sso: 1 needs you", or the title alone.
     public let label: String
+    /// On a repository's row with its worktrees' windows nested under it: the group they fold by (WindowColumnList's
+    /// `folded`); nil on every other row.
+    public let foldKey: String?
+    /// Folded, the worktrees' windows it stands for, which have no rows of their own: their marks are in its marks.
+    public let hidden: [Int]
 
-    /// What is drawn: a change here draws the badge or row again.
+    /// What is drawn: a change here draws the dot or row again.
     public struct Face: Equatable, Sendable {
         public let depth: Int
         public let name: String
-        public let letters: String
+        public let prefix: String?
+        public let detail: String?
         public let color: ProjectColor?
         public let urgent: TabState?
         public let marks: [AgentMarks.Mark]
+        public let foldKey: String?
+        public let hidden: [Int]
     }
 
     /// What is only read, by the tooltip and VoiceOver: a change here draws nothing.
@@ -42,59 +53,95 @@ public struct WindowColumnRow: Equatable, Sendable {
         public let label: String
     }
 
-    public var face: Face { Face(depth: depth, name: name, letters: letters, color: color, urgent: urgent, marks: marks) }
+    public var face: Face {
+        Face(depth: depth, name: name, prefix: prefix, detail: detail, color: color, urgent: urgent, marks: marks, foldKey: foldKey,
+             hidden: hidden)
+    }
+
+    /// Folded: it stands for windows of its own.
+    public var isFolded: Bool { !hidden.isEmpty }
     public var words: Words { Words(toolTip: toolTip, label: label) }
 
     /// `window`'s row at `depth`, in `color` (left out for a window with no project), its marks with working shown or
-    /// not as View › Agent Spinner says (`showsWorking`).
-    public init(window: WindowIndex.Window, depth: Int, color: ProjectColor?, showsWorking: Bool) {
-        let shown: String = depth > 0 ? WindowColumnBadge.ownPart(of: window.name) : window.name
-        let spoken: String? = window.marks.spoken(working: showsWorking)
+    /// not as View › Agent Spinner says (`showsWorking`), and `detail` after its name. `foldKey`: its group, on a
+    /// repository's row with worktrees nested under it; `folding`: those worktrees' windows while the group is folded,
+    /// their marks counted in its own.
+    public init(window: WindowIndex.Window, depth: Int, color: ProjectColor?, showsWorking: Bool, detail: String? = nil,
+                foldKey: String? = nil, folding: [WindowIndex.Window] = []) {
+        let shown: (prefix: String?, name: String) = WindowColumnName.shown(window, depth: depth)
+        let all: AgentMarks = folding.reduce(window.marks) { (sum: AgentMarks, other: WindowIndex.Window) -> AgentMarks in sum + other.marks }
+        let spoken: String? = all.spoken(working: showsWorking)
+        let title: String = folding.isEmpty ? window.title
+            : window.title + ", \(folding.count) worktree\(folding.count == 1 ? "" : "s") folded"
         self.id = window.id
         self.depth = depth
-        self.name = shown
-        self.letters = WindowColumnBadge.letters(name: window.name, kind: window.kind)
+        self.name = shown.name
+        self.prefix = shown.prefix
+        self.detail = detail == shown.name ? nil : detail
         self.color = window.kind.hasProject ? color : nil
-        self.urgent = WindowColumnBadge.urgent(window.marks)
-        self.marks = window.marks.shown(working: showsWorking)
-        self.toolTip = spoken.map { (words: String) -> String in window.title + "\n" + words } ?? window.title
-        self.label = spoken.map { (words: String) -> String in window.title + ": " + words } ?? window.title
+        self.urgent = Self.urgent(all)
+        self.marks = all.shown(working: showsWorking)
+        self.toolTip = spoken.map { (words: String) -> String in title + "\n" + words } ?? title
+        self.label = spoken.map { (words: String) -> String in title + ": " + words } ?? title
+        self.foldKey = foldKey
+        self.hidden = folding.map(\.id)
+    }
+
+    /// The row with `detail` after its name instead.
+    func with(detail: String?) -> WindowColumnRow {
+        WindowColumnRow(id: id, depth: depth, name: name, prefix: prefix, detail: detail == name ? nil : detail, color: color,
+                        urgent: urgent, marks: marks, toolTip: toolTip, label: label, foldKey: foldKey, hidden: hidden)
+    }
+
+    private init(id: Int, depth: Int, name: String, prefix: String?, detail: String?, color: ProjectColor?, urgent: TabState?,
+                 marks: [AgentMarks.Mark], toolTip: String, label: String, foldKey: String?, hidden: [Int]) {
+        self.id = id
+        self.depth = depth
+        self.name = name
+        self.prefix = prefix
+        self.detail = detail
+        self.color = color
+        self.urgent = urgent
+        self.marks = marks
+        self.toolTip = toolTip
+        self.label = label
+        self.foldKey = foldKey
+        self.hidden = hidden
+    }
+
+    /// What the row is known by on the screen: its prefix and its name. Two rows with the same are told apart by a detail.
+    var shownKey: String { (prefix.map { (prefix: String) -> String in prefix + WorktreeWindow.separator } ?? "") + name }
+
+    /// The dot's mark: needs you over failed over done, as Go to Next Agent Needing You goes; none for working, a lost
+    /// connection or nothing. The rail shows only needs you and failed; the list's marks say the rest.
+    public static func urgent(_ marks: AgentMarks) -> TabState? {
+        if marks.attention > 0 { return .attention }
+        if marks.failed > 0 { return .failed }
+        if marks.done > 0 { return .done }
+        return nil
     }
 }
 
-/// What a badge shows of its window.
-public enum WindowColumnBadge {
-    /// Whether the letters are set a little apart: two characters or more with no lowercase ("XC", "73", "7S"), as short
-    /// capitals and figures read best that way; mixed case ("Ag") and one character ("~") as the font sets them.
-    public static func tracks(_ letters: String) -> Bool {
-        letters.count >= 2 && !letters.contains { (character: Character) -> Bool in character.isLowercase }
-    }
-
-    /// Two letters of the window's name: the first letters of its first two words, with words split at spaces,
-    /// punctuation and lower-to-upper changes ("next-term" NT, "xCloud" XC, "7027-sso" 7S, "web-1" W1); a single word's
-    /// first two letters, the first capitalised ("shop" Sh). A worktree's own part is its name ("xCloud ▸ 7027-sso" 7S),
-    /// and a window with no project goes by its folder's name ("~/Downloads" Do); the home folder is "~".
-    public static func letters(name: String, kind: WindowKind) -> String {
-        var source: String = name
-        switch kind {
+/// What a row of the window column calls its window. The tooltip, VoiceOver, the Window menu and ⌘O keep the whole title;
+/// the row shows the part that tells it from the windows around it.
+public enum WindowColumnName {
+    /// What the row shows of `window` at `depth`: a project's or a server's name as it is; a window with no project by its
+    /// folder ("Downloads" of "~/Downloads", "~" at home); a worktree by its own part without its repository's name in front
+    /// ("cx-8858" of "xCloud ▸ xCloud-cx-8858"), under its repository's row, or with no window of the repository open after
+    /// it as a dimmer prefix ("xCloud", then "cx-8858").
+    public static func shown(_ window: WindowIndex.Window, depth: Int) -> (prefix: String?, name: String) {
+        switch window.kind {
         case .worktree:
-            source = ownPart(of: name)
+            guard let repository = repositoryPart(of: window.name) else { return (nil, window.name) }
+            let own: String = stripped(ownPart(of: window.name), repository: repository)
+            return depth > 0 ? (nil, own) : (repository, own)
         case .plain:
-            if name == "~" { return "~" }
-            source = (name as NSString).lastPathComponent
+            if window.name == "~" { return (nil, "~") }
+            let last: String = (window.name as NSString).lastPathComponent
+            return (nil, last.isEmpty ? window.name : last)
         case .project, .server:
-            break
+            return (nil, window.name)
         }
-        let found: [String] = words(source)
-        if found.count >= 2, let first = found[0].first, let second = found[1].first {
-            return (String(first) + String(second)).uppercased()
-        }
-        if let word = found.first, let first = word.first {
-            let rest: String = word.dropFirst().first.map(String.init) ?? ""
-            return String(first).uppercased() + rest
-        }
-        // Nothing to spell with ("~", "/"): its first character.
-        return source.first.map(String.init) ?? "?"
     }
 
     /// A worktree's own part of its name: "7027-sso" of "xCloud ▸ 7027-sso"; any other name as it is.
@@ -104,36 +151,37 @@ public enum WindowColumnBadge {
         return own.isEmpty ? name : own
     }
 
-    /// The badge's dot: needs you over failed over done, as Go to Next Agent Needing You goes; none for working, a lost
-    /// connection or nothing.
-    public static func urgent(_ marks: AgentMarks) -> TabState? {
-        if marks.attention > 0 { return .attention }
-        if marks.failed > 0 { return .failed }
-        if marks.done > 0 { return .done }
-        return nil
+    /// The repository's part of a worktree's name: "xCloud" of "xCloud ▸ 7027-sso"; nil for a name without one.
+    public static func repositoryPart(of name: String) -> String? {
+        guard let range = name.range(of: WorktreeWindow.separator) else { return nil }
+        let repository: String = String(name[..<range.lowerBound])
+        return repository.isEmpty || name[range.upperBound...].isEmpty ? nil : repository
     }
 
-    /// Runs of letters and digits, split again where a lower-case letter meets an upper-case one.
-    static func words(_ text: String) -> [String] {
-        var found: [String] = []
-        var current: String = ""
-        var previous: Character?
-        for character in text {
-            guard character.isLetter || character.isNumber else {
-                if !current.isEmpty { found.append(current) }
-                current = ""
-                previous = nil
-                continue
-            }
-            if let previous, previous.isLowercase, character.isUppercase, !current.isEmpty {
-                found.append(current)
-                current = ""
-            }
-            current.append(character)
-            previous = character
+    /// A worktree's own part without its repository's name and the "-", "_" or "." after it, in any case: "cx-8858" of
+    /// "xCloud-cx-8858" in xCloud. As it is when nothing would be left, or it does not start so ("7027-sso").
+    public static func stripped(_ own: String, repository: String) -> String {
+        guard !repository.isEmpty, own.count > repository.count + 1, own.lowercased().hasPrefix(repository.lowercased()) else { return own }
+        let rest: Substring = own.dropFirst(repository.count)
+        guard let joint = rest.first, "-_.".contains(joint) else { return own }
+        let left: String = String(rest.dropFirst())
+        return left.isEmpty ? own : left
+    }
+
+    /// Where a window is, to tell it from another of the same name: a project's or worktree's parent folder ("~/Code"),
+    /// a window with no project's folder's parent ("~/Work" of "~/Work/app"; none for "~" or "/"), a server's destination.
+    public static func place(of window: WindowIndex.Window, home: String) -> String? {
+        switch window.kind {
+        case .project, .worktree:
+            guard let project = window.project else { return nil }
+            let parent: String = (project as NSString).deletingLastPathComponent
+            return parent.isEmpty || parent == project ? nil : RecentProjects.abbreviate(parent, home: home)
+        case .plain:
+            let parent: String = (window.name as NSString).deletingLastPathComponent
+            return parent.isEmpty || parent == window.name ? nil : parent
+        case .server:
+            return window.destination
         }
-        if !current.isEmpty { found.append(current) }
-        return found
     }
 }
 
@@ -153,11 +201,15 @@ public struct WindowColumnList: Equatable, Sendable {
     /// The windows as the index has them, in its order, and their colours: what a later change is laid against.
     private var windows: [WindowIndex.Window] = []
     private var colors: [Int: ProjectColor] = [:]
+    /// The home folder places are shortened by ("~/Code").
+    private var home: String = NSHomeDirectory()
+    /// The groups whose worktrees are folded into their repository's row, by their rows' `foldKey`.
+    public private(set) var folded: Set<String> = []
 
     public init() {}
 
-    /// How many windows are open: the header's count.
-    public var count: Int { rows.count }
+    /// How many windows are open: the count at the column's top. Folded worktrees count, though they have no rows.
+    public var count: Int { windows.count }
 
     public func row(_ id: Int) -> WindowColumnRow? {
         rows.first { (row: WindowColumnRow) -> Bool in row.id == id }
@@ -168,7 +220,11 @@ public struct WindowColumnList: Equatable, Sendable {
     ///   project is a group of its own. Groups go in the order their first window opened.
     /// - In a group, the repository's own windows first, then its worktrees' windows, each in the order it opened; the
     ///   worktrees one deep, under the repository's, when one of its own is open, and showing only their own part.
-    public static func build(windows: [WindowIndex.Window], colors: [Int: ProjectColor], showsWorking: Bool) -> WindowColumnList {
+    /// - A group whose worktrees are nested under its repository's row can fold them into that row (`folded`): they have
+    ///   no rows then, and the row counts their marks with its own.
+    /// - Rows that show the same name get a detail apiece (`details`); `home` shortens their places.
+    public static func build(windows: [WindowIndex.Window], colors: [Int: ProjectColor], showsWorking: Bool,
+                             home: String = NSHomeDirectory(), folded: Set<String> = []) -> WindowColumnList {
         var order: [String] = []
         var members: [String: [WindowIndex.Window]] = [:]
         for window in windows {
@@ -183,37 +239,106 @@ public struct WindowColumnList: Equatable, Sendable {
             let own: [WindowIndex.Window] = group.filter { (window: WindowIndex.Window) -> Bool in window.kind != .worktree }
             let trees: [WindowIndex.Window] = group.filter { (window: WindowIndex.Window) -> Bool in window.kind == .worktree }
             let depth: Int = own.isEmpty ? 0 : 1
-            for window in own {
-                rows.append(WindowColumnRow(window: window, depth: 0, color: colors[window.id], showsWorking: showsWorking))
+            let nests: Bool = !own.isEmpty && !trees.isEmpty
+            let folds: Bool = nests && folded.contains(key)
+            for (place, window) in own.enumerated() {
+                let leads: Bool = nests && place == 0
+                rows.append(WindowColumnRow(window: window, depth: 0, color: colors[window.id], showsWorking: showsWorking,
+                                            foldKey: leads ? key : nil, folding: leads && folds ? trees : []))
             }
+            if folds { continue }
             for window in trees {
                 rows.append(WindowColumnRow(window: window, depth: depth, color: colors[window.id], showsWorking: showsWorking))
             }
         }
         var list = WindowColumnList()
-        list.rows = rows
+        list.rows = details(rows, windows: windows, home: home)
         list.windows = windows
         list.colors = colors
+        list.home = home
+        list.folded = folded
         return list
     }
 
+    /// The row a window's own row or its folded group's is: where it is in the column.
+    public func row(showing id: Int) -> WindowColumnRow? {
+        rows.first { (row: WindowColumnRow) -> Bool in row.id == id || row.hidden.contains(id) }
+    }
+
+    /// Rows that show the same name, each with a detail after it: where its window is, when those differ (its parent
+    /// folder, a server's destination); among rows still alike there, what is in front in each (its title after the name:
+    /// an agent, a command, a file), when those differ; and among rows alike in that too, a worktree's folder's name. A
+    /// row that has nothing to add at a deeper step keeps what the step before gave it. A row alone with its name has
+    /// none: the name is enough.
+    static func details(_ rows: [WindowColumnRow], windows: [WindowIndex.Window], home: String) -> [WindowColumnRow] {
+        var named: [String: [Int]] = [:]
+        for (index, row) in rows.enumerated() { named[row.shownKey, default: []].append(index) }
+        var told: [WindowColumnRow] = rows
+        for indices in named.values where indices.count > 1 {
+            let entries: [WindowIndex.Window?] = indices.map { (index: Int) -> WindowIndex.Window? in
+                windows.first { (window: WindowIndex.Window) -> Bool in window.id == rows[index].id }
+            }
+            let ways: [[String?]] = [
+                entries.map { (window: WindowIndex.Window?) -> String? in window.flatMap { WindowColumnName.place(of: $0, home: home) } },
+                entries.map { (window: WindowIndex.Window?) -> String? in window?.front },
+                zip(entries, indices).map { (window: WindowIndex.Window?, index: Int) -> String? in
+                    guard let window, window.kind == .worktree, let project = window.project else { return nil }
+                    let folder: String = (project as NSString).lastPathComponent
+                    return folder == rows[index].name ? nil : folder
+                },
+            ]
+            var chosen: [String?] = Array(repeating: nil, count: indices.count)
+            tellApart(Array(indices.indices), ways: ways[...], into: &chosen)
+            for (at, index) in indices.enumerated() { told[index] = rows[index].with(detail: chosen[at]) }
+        }
+        return told
+    }
+
+    /// `members` (places in a group of rows alike so far) told apart by the first of `ways` that differs among them; those
+    /// still alike in it, by the next.
+    private static func tellApart(_ members: [Int], ways: ArraySlice<[String?]>, into chosen: inout [String?]) {
+        guard members.count > 1, let way = ways.first else { return }
+        let values: [String?] = members.map { (member: Int) -> String? in way[member] }
+        guard Set(values).count > 1 else { return tellApart(members, ways: ways.dropFirst(), into: &chosen) }
+        var alike: [String?: [Int]] = [:]
+        for member in members {
+            chosen[member] = way[member] ?? chosen[member]
+            alike[way[member], default: []].append(member)
+        }
+        for group in alike.values where group.count > 1 { tellApart(group, ways: ways.dropFirst(), into: &chosen) }
+    }
+
     /// The list with `window`'s entry as it is now, and what that asks of a column. Only that window's row is made again:
-    /// the same row is `.none` (its lastKey, or a tab's title it does not show), a different one `.rows` with its id. A
-    /// window not listed yet, or one that moved into or out of a group, is `.structure`, with the whole list made again.
+    /// the same row is `.none` (its lastKey, or a tab's title it does not show), a different one `.rows` with its id. A row
+    /// whose shown name changed, or one sharing its name with others, makes the rows again, as their details may change
+    /// with it, and `.rows` names the ones that did. A window not listed yet, or one that moved into or out of a group, is
+    /// `.structure`, with the whole list made again.
     public func updating(_ window: WindowIndex.Window, color: ProjectColor?, showsWorking: Bool) -> (list: WindowColumnList, change: Change) {
         var next: WindowColumnList = self
         next.colors[window.id] = color
-        guard let at = windows.firstIndex(where: { (known: WindowIndex.Window) -> Bool in known.id == window.id }),
-              let place = rows.firstIndex(where: { (row: WindowColumnRow) -> Bool in row.id == window.id }) else {
+        guard let at = windows.firstIndex(where: { (known: WindowIndex.Window) -> Bool in known.id == window.id }) else {
             next.windows.append(window)
-            return (Self.build(windows: next.windows, colors: next.colors, showsWorking: showsWorking), .structure)
+            return (Self.build(windows: next.windows, colors: next.colors, showsWorking: showsWorking, home: home, folded: folded), .structure)
         }
         let old: WindowIndex.Window = windows[at]
         next.windows[at] = window
         let regrouped: Bool = Self.group(of: old) != Self.group(of: window) || (old.kind == .worktree) != (window.kind == .worktree)
-        if regrouped { return (Self.build(windows: next.windows, colors: next.colors, showsWorking: showsWorking), .structure) }
+        if regrouped {
+            return (Self.build(windows: next.windows, colors: next.colors, showsWorking: showsWorking, home: home, folded: folded), .structure)
+        }
+        // Folded into its repository's row, or the row others are folded into: that row counts them all, so it is made
+        // again with them.
+        guard let place = rows.firstIndex(where: { (row: WindowColumnRow) -> Bool in row.id == window.id }), !rows[place].isFolded else {
+            let remade = Self.build(windows: next.windows, colors: next.colors, showsWorking: showsWorking, home: home, folded: folded)
+            return (remade, Self.change(from: self, to: remade))
+        }
         let before: WindowColumnRow = rows[place]
-        let row = WindowColumnRow(window: window, depth: before.depth, color: color, showsWorking: showsWorking)
+        let row = WindowColumnRow(window: window, depth: before.depth, color: color, showsWorking: showsWorking, foldKey: before.foldKey)
+        let shared: Bool = rows.contains { (other: WindowColumnRow) -> Bool in other.id != before.id && other.shownKey == before.shownKey }
+        if row.shownKey != before.shownKey || shared {
+            let remade = Self.build(windows: next.windows, colors: next.colors, showsWorking: showsWorking, home: home, folded: folded)
+            return (remade, Self.change(from: self, to: remade))
+        }
         next.rows[place] = row
         return (next, row == before ? .none : .rows([window.id]))
     }

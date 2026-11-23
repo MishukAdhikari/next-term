@@ -35,6 +35,13 @@ import Testing
         #expect(bindings.chord(for: "find:", default: find) == nil)
         // Saved and read back.
         #expect(KeyBindings.decode(bindings.encoded()) == bindings)
+        // A key given to Close Window before its id changed (AppKit's performClose:) stays Close Window's; one already set
+        // for the new id wins.
+        let close = KeyChord(key: "w", command: true, control: true)
+        let old = KeyBindings(overrides: ["performClose:": close, "newTab:": nil])
+        #expect(KeyBindings.decode(old.encoded()).overrides == ["closeWindow:": close, "newTab:": nil])
+        let both = KeyBindings(overrides: ["performClose:": close, "closeWindow:": nil])
+        #expect(KeyBindings.decode(both.encoded()).overrides == ["closeWindow:": nil])
         // Back to the default forgets the override.
         bindings.set(newTab, for: "newTab:", default: newTab)
         #expect(bindings.overrides["newTab:"] == nil)

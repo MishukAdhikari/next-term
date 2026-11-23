@@ -27,6 +27,7 @@ final class AcknowledgementsWindowController: NSWindowController {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 640),
                               styleMask: [.titled, .closable, .resizable, .miniaturizable], backing: .buffered, defer: true)
         window.title = "Acknowledgements"
+        window.keepsItsOwnFrame()
         window.minSize = NSSize(width: 420, height: 320)
         window.isReleasedWhenClosed = false
         window.center()

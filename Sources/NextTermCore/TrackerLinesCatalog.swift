@@ -23,16 +23,18 @@ extension TrackerLines {
                        lines: [.claude: claude("linear-server", url, source), .codex: codex("linear", url, source)], notes: [:])
     }()
 
+    /// Held for both agents: GitHub's own lines put the token in Claude Code's settings file or in Codex's environment
+    /// (--bearer-token-env-var). Next Term's way is the token in Secrets and the server started by nxtrm secret run, which
+    /// a copied line can't hold (lines carry no header), so the row points there (2026-11-01).
     static let github: Tracker = {
         let url = "https://api.githubcopilot.com/mcp/"
         let guides = "https://github.com/github/github-mcp-server/blob/main/docs/installation-guides/"
-        let line = "codex mcp add github --url \(url) --bearer-token-env-var GITHUB_PAT_TOKEN"
-        let held = Cell.held("GitHub\u{2019}s line writes your token into Claude Code\u{2019}s settings file.",
-                             page: page(guides + "install-claude.md"))
-        let note = "Codex reads your token from GITHUB_PAT_TOKEN in its environment; Next Term doesn\u{2019}t set it or see it."
+        let why = "GitHub\u{2019}s lines put your token in Claude Code\u{2019}s settings file or Codex\u{2019}s environment. "
+            + "Keep it in Next Term\u{2019}s Secrets and start the server with nxtrm secret run (nxtrm secret help)."
         return Tracker(name: "GitHub", url: url, page: page(guides + "install-codex.md"), domains: ["github.com"],
-                       lines: [.claude: held, .codex: .line(line, source: page(guides + "install-codex.md"))],
-                       notes: [.codex: note])
+                       lines: [.claude: .held(why, page: page(guides + "install-claude.md")),
+                               .codex: .held(why, page: page(guides + "install-codex.md"))],
+                       notes: [:])
     }()
 
     static let jira: Tracker = {

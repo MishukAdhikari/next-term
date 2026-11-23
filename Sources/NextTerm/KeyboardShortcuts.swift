@@ -652,33 +652,57 @@ final class KeyHintOverlay: NSView {
 
 /// Settings (⌘,): every command with its shortcut. Click a shortcut and press the new one; ⌫ removes it,
 /// ⎋ cancels.
-final class SettingsWindowController: NSWindowController, NSTableViewDataSource, NSTableViewDelegate, NSSearchFieldDelegate {
+final class SettingsWindowController: NSWindowController, NSTableViewDataSource, NSTableViewDelegate, NSSearchFieldDelegate,
+                                      NSToolbarDelegate, NSTabViewDelegate {
     private let table = NSTableView()
     private let search = NSSearchField()
     private var rows: [KeyboardShortcuts.Command] = []
 
+    /// Each section's toolbar item: its name as the toolbar shows it, and its SF Symbol (all in macOS 13's set).
+    /// Keyboard Shortcuts shows as Shortcuts, so all eleven fit whole; its tooltip and the window's title name it fully.
+    static let sections: [(id: String, label: String, symbol: String)] = [
+        ("general", "General", "gearshape"), ("editor", "Editor", "doc.text"), ("terminal", "Terminal", "terminal"),
+        ("notifications", "Notifications", "bell.badge"), ("keys", "Shortcuts", "keyboard"),
+        ("import", "Import", "square.and.arrow.down"), ("agents", "Agents", "cpu"), ("skills", "Skills", "sparkles"),
+        ("mcp", "MCP Servers", "server.rack"),
+        ("tasks", "Tasks", "checklist"), ("secrets", "Secrets", "key"),
+    ]
+
+    /// The tab view the toolbar picks a section of: the window's content, with no tabs of its own.
+    private var tabs: NSTabView? { window?.contentView as? NSTabView }
+
     init() {
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 620, height: 730), styleMask: [.titled, .closable, .resizable],
+        // The panes keep the room they had inside the old bordered tab view (600 × 684); the toolbar above them is
+        // macOS's own Settings toolbar, as Safari's and Mail's are.
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 620, height: 684), styleMask: [.titled, .closable, .resizable],
                               backing: .buffered, defer: false)
         window.title = "Settings"
+        window.keepsItsOwnFrame()
+        // A Mac Settings window never goes full screen: it joins the space it opens in, over a full-screen window too.
+        window.collectionBehavior = [.fullScreenAuxiliary, .moveToActiveSpace]
         window.minSize = NSSize(width: 480, height: 320)
         window.isReleasedWhenClosed = false
+        window.toolbarStyle = .preference
         super.init(window: window)
         // What a launch shows, the editor's settings, the terminal's, notifications, every shortcut, and imports.
         // General is first, so it is the tab Settings opens on.
+        // The sections laid out top-down (General, Editor, Terminal, Notifications) each sit in a scroll view of their
+        // own, which scrolls only when the window is shorter than they are (a small screen, or the user's resize).
         let tabs = NSTabView()
+        tabs.tabViewType = .noTabsNoBorder
+        tabs.delegate = self // set first: each pane is readied as it is selected, General as it is added
         let generalTab = NSTabViewItem(identifier: "general")
         generalTab.label = "General"
-        generalTab.view = GeneralSettingsView()
+        generalTab.view = SettingsPaneScroll(pane: GeneralSettingsView())
         let editorTab = NSTabViewItem(identifier: "editor")
         editorTab.label = "Editor"
-        editorTab.view = EditorSettingsView()
+        editorTab.view = SettingsPaneScroll(pane: EditorSettingsView())
         let terminalTab = NSTabViewItem(identifier: "terminal")
         terminalTab.label = "Terminal"
-        terminalTab.view = TerminalSettingsView()
+        terminalTab.view = SettingsPaneScroll(pane: TerminalSettingsView())
         let notificationsTab = NSTabViewItem(identifier: "notifications")
         notificationsTab.label = "Notifications"
-        notificationsTab.view = NotificationSettingsView()
+        notificationsTab.view = SettingsPaneScroll(pane: NotificationSettingsView())
         let keysTab = NSTabViewItem(identifier: "keys")
         keysTab.label = "Keyboard Shortcuts"
         keysTab.view = NSView()
@@ -691,10 +715,20 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
         tabs.addTabViewItem(notificationsTab)
         tabs.addTabViewItem(keysTab)
         tabs.addTabViewItem(importTab)
+        // The coding agents' CLIs: their versions, how each was installed, and their updates (plan 038).
+        let agentsTab = NSTabViewItem(identifier: "agents")
+        agentsTab.label = "Agents"
+        agentsTab.view = AgentsSettingsView()
+        tabs.addTabViewItem(agentsTab)
         let skillsTab = NSTabViewItem(identifier: "skills")
         skillsTab.label = "Skills"
         skillsTab.view = SkillsPane()
         tabs.addTabViewItem(skillsTab)
+        // The MCP servers agents reach through Next Term, beside the skills they load.
+        let mcpTab = NSTabViewItem(identifier: "mcp")
+        mcpTab.label = "MCP Servers"
+        mcpTab.view = MCPServersSettingsView()
+        tabs.addTabViewItem(mcpTab)
         // Where the todo folder is (Tasks › Task Settings…).
         let tasksTab = NSTabViewItem(identifier: "tasks")
         tasksTab.label = "Tasks"
@@ -713,24 +747,154 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
         NotificationCenter.default.addObserver(self, selector: #selector(presetChanged), name: ImportCoordinator.changed, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(closing), name: NSWindow.willCloseNotification, object: window)
         window.contentView = tabs
+        let toolbar = NSToolbar(identifier: "Settings")
+        toolbar.delegate = self
+        toolbar.displayMode = .iconAndLabel
+        toolbar.allowsUserCustomization = false
+        window.toolbar = toolbar
+        // Never narrower than the toolbar with every name whole: no section goes into an overflow menu.
+        window.layoutIfNeeded()
+        window.minSize.width = max(window.minSize.width, toolbarFitWidth)
+        settle()
+        sectionShown()
         shortcutsContent = keysTab.view
         build()
         reload()
         window.center()
+        NotificationCenter.default.addObserver(self, selector: #selector(resized), name: NSWindow.didResizeNotification, object: window)
     }
+
+    // MARK: Toolbar
+
+    func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        Self.sections.map { NSToolbarItem.Identifier($0.id) }
+    }
+
+    func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        toolbarAllowedItemIdentifiers(toolbar)
+    }
+
+    func toolbarSelectableItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        toolbarAllowedItemIdentifiers(toolbar)
+    }
+
+    func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier itemIdentifier: NSToolbarItem.Identifier,
+                 willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
+        guard let section = Self.sections.first(where: { $0.id == itemIdentifier.rawValue }) else { return nil }
+        let full = tabs?.tabViewItems.first { $0.identifier as? String == section.id }?.label ?? section.label
+        let item = NSToolbarItem(itemIdentifier: itemIdentifier)
+        item.label = section.label
+        item.paletteLabel = full
+        item.toolTip = full
+        item.image = NSImage(systemSymbolName: section.symbol, accessibilityDescription: full)
+            ?? NSImage(systemSymbolName: "gearshape", accessibilityDescription: full)
+        item.target = self
+        item.action = #selector(pickSection(_:))
+        return item
+    }
+
+    @objc private func pickSection(_ sender: NSToolbarItem) { showTab(sender.itemIdentifier.rawValue) }
+
+    func tabView(_ tabView: NSTabView, willSelect tabViewItem: NSTabViewItem?) {
+        if let tabViewItem { ready(tabViewItem) }
+    }
+
+    func tabView(_ tabView: NSTabView, didSelect tabViewItem: NSTabViewItem?) { sectionShown() }
+
+    /// The toolbar marks the section shown and the window is titled with its whole name. The window keeps its size:
+    /// a switch never moves or resizes it.
+    private func sectionShown() {
+        guard let item = tabs?.selectedTabViewItem, let id = item.identifier as? String else { return }
+        window?.toolbar?.selectedItemIdentifier = NSToolbarItem.Identifier(id)
+        window?.title = item.label
+        ready(item)
+    }
+
+    // MARK: One steady size
+
+    /// The sections laid out from the top down: they sit at the top with the room below them left empty. The others
+    /// hold lists, which fill the window.
+    static let flowingSections: Set<String> = ["general", "editor", "terminal", "notifications"]
+    /// The least height of the sections with lists: the room Settings always gave them.
+    static let listHeight: CGFloat = 684
+    static let baseWidth: CGFloat = 620
+
+    /// The tallest content the window's screen has room for, under the title bar and the toolbar.
+    private var roomyHeight: CGFloat {
+        guard let window, let screen = window.screen ?? NSScreen.main else { return .greatestFiniteMagnitude }
+        let chrome = window.frame.height - window.contentRect(forFrameRect: window.frame).height
+        return screen.visibleFrame.height - chrome
+    }
+
+    private var contentWidth: CGFloat { window.map { $0.contentRect(forFrameRect: $0.frame).width } ?? Self.baseWidth }
+
+    /// A flowing section's own height at `width`: its lowest view's bottom, and the margin its top has.
+    static func flowingHeight(of pane: NSView, width: CGFloat) -> CGFloat {
+        let saved = pane.frame
+        let probe: CGFloat = 4000
+        pane.frame = NSRect(x: 0, y: 0, width: width, height: probe)
+        pane.layoutSubtreeIfNeeded()
+        let shown = pane.subviews.filter { !$0.isHidden }
+        let extent = pane.isFlipped ? shown.map(\.frame.maxY).max() ?? 0 : probe - (shown.map(\.frame.minY).min() ?? probe)
+        pane.frame = saved
+        pane.needsLayout = true
+        return ceil(extent + 24)
+    }
+
+    /// The one size Settings has in every section: as wide as its toolbar with every name whole, and as tall as the
+    /// tallest section laid out top-down (General), within the screen. Set once; a section switch never changes it.
+    private func settle() {
+        guard let window, let tabs else { return }
+        let width = max(Self.baseWidth, window.minSize.width)
+        let tallest = tabs.tabViewItems.filter { Self.flowingSections.contains($0.identifier as? String ?? "") }
+            .compactMap(\.pane).map { Self.flowingHeight(of: $0, width: width) }.max() ?? 0
+        window.setContentSize(NSSize(width: width, height: min(max(Self.listHeight, tallest), roomyHeight)))
+    }
+
+    /// The size Settings keeps across its sections (for the self-test).
+    var steadyContentSize: NSSize {
+        guard let window else { return .zero }
+        return window.contentRect(forFrameRect: window.frame).size
+    }
+
+    /// A flowing section's scroll view holds the section at its own height at the window's width: it scrolls only
+    /// when the window is shorter than that.
+    private func ready(_ item: NSTabViewItem) {
+        guard let scroll = item.view as? SettingsPaneScroll else { return }
+        let width = scroll.contentSize.width > 1 ? scroll.contentSize.width : contentWidth
+        scroll.paneHeight = Self.flowingHeight(of: scroll.pane, width: width)
+    }
+
+    /// Resized by the user: the section shown keeps its height right for the new width.
+    @objc private func resized() {
+        if let item = tabs?.selectedTabViewItem { ready(item) }
+    }
+
+    /// The narrowest window whose toolbar shows every item: each item's own width, and the toolbar's margins.
+    private var toolbarFitWidth: CGFloat {
+        guard let items = window?.toolbar?.items, !items.isEmpty else { return 0 }
+        let font = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
+        let labels = items.map { ($0.label as NSString).size(withAttributes: [.font: font]).width }
+        // An item is at least as wide as its icon's well (about 40 pt) and its label with a margin each side.
+        return labels.reduce(0) { $0 + max(40, ceil($1) + 16) } + CGFloat(items.count - 1) * 2 + 24
+    }
+
+    /// The toolbar's items, by section (for the self-test).
+    var toolbarItems: [NSToolbarItem] { window?.toolbar?.items ?? [] }
 
     private var shortcutsContent: NSView?
 
     @objc private func presetChanged() { reload() }
 
     func showTab(_ identifier: String) {
-        (window?.contentView as? NSTabView)?.selectTabViewItem(withIdentifier: identifier)
+        tabs?.selectTabViewItem(withIdentifier: identifier)
+        sectionShown()
     }
 
     /// Settings › Terminal.
     var terminalSettings: TerminalSettingsView? {
         let tabs = window?.contentView as? NSTabView
-        return tabs?.tabViewItems.first { $0.identifier as? String == "terminal" }?.view as? TerminalSettingsView
+        return tabs?.tabViewItems.first { $0.identifier as? String == "terminal" }?.pane as? TerminalSettingsView
     }
 
     /// Settings › Terminal at its Suggestions row, which says Suggest a Command is off and how to turn it on.
@@ -745,8 +909,14 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
         terminalSettings?.completionPane.rows.suggestions.pointOut(false)
     }
 
+    /// Settings › MCP Servers (the MCP hub's new-server offer opens its sheet there).
+    var mcpServers: MCPServersSettingsView? {
+        let tabs = window?.contentView as? NSTabView
+        return tabs?.tabViewItems.first { $0.identifier as? String == "mcp" }?.view as? MCPServersSettingsView
+    }
+
     /// The tab shown, by its identifier (for the self-test of show_settings).
-    var shownTab: String? { (window?.contentView as? NSTabView)?.selectedTabViewItem?.identifier as? String }
+    var shownTab: String? { tabs?.selectedTabViewItem?.identifier as? String }
 
     required init?(coder: NSCoder) { fatalError("not used") }
 
@@ -955,7 +1125,7 @@ final class EditorSettingsView: NSView {
     private let markdownPreview = NSButton(checkboxWithTitle: "Show Markdown files in Live Preview", target: nil, action: nil)
     private let singleClick = NSButton(checkboxWithTitle: "Open files and folders with a single click", target: nil, action: nil)
     private let dotIcons = NSButton(checkboxWithTitle: "Icons on configuration folders (.github, .claude, .idea…)", target: nil, action: nil)
-    private let claude = NSButton(checkboxWithTitle: "Agents in a tab see the editor (Claude Code, Gemini CLI, Qwen Code, OpenCode)", target: nil, action: nil)
+    private let claude = NSButton(checkboxWithTitle: "Agents in a tab see the editor (Claude Code, Gemini, Qwen, OpenCode)", target: nil, action: nil)
     private let copilot = NSButton(checkboxWithTitle: "GitHub Copilot CLI in a tab sees the editor", target: nil, action: nil)
     private let control = NSButton(checkboxWithTitle: "Let agents control Next Term (MCP: projects, tabs, prompts, the editor)", target: nil, action: nil)
     private let controlStatus = NSTextField(wrappingLabelWithString: "")
@@ -1017,7 +1187,7 @@ final class EditorSettingsView: NSView {
         envValues.toolTip = "For screen sharing: values show as dots, and the file itself does not change. The line you click or type in shows its value."
         markdownPreview.target = self
         markdownPreview.action = #selector(markdownPreviewChanged)
-        markdownPreview.toolTip = "Headings, bold, links, lists, tasks and quotes show styled where you type, with their syntax hidden except on the lines you are on. The file itself never changes. View › Markdown Live Preview switches one file to its source and back."
+        markdownPreview.toolTip = "Headings, bold, links, lists, tasks and quotes show styled where you type, with their syntax hidden except on the lines you are on. The file itself never changes. View › Editor › Markdown Live Preview switches one file to its source and back."
         singleClick.target = self
         singleClick.action = #selector(singleClickChanged)
         singleClick.toolTip = "A click opens a file in a preview tab and opens or closes a folder; a double-click keeps the file as a tab. Off: a click selects, and a double-click opens."
@@ -1052,7 +1222,7 @@ final class EditorSettingsView: NSView {
             stack.spacing = 10
             return stack
         }
-        let note = NSTextField(wrappingLabelWithString: "Line height is a multiple of the font’s own; 1.35 reads well for code. Terminals use this size unless the Terminal tab gives them their own (and their font); ⌘+ and ⌘- size what has the keyboard. Agents started in a new tab see your selected lines, never from .env files; ⌥⌘K @-mentions them in the prompt. A Markdown file shows its syntax only on the lines you are on, and its bytes never change unless you type; ⇧⌘V shows one file's source.")
+        let note = NSTextField(wrappingLabelWithString: "Line height is a multiple of the font’s own; 1.35 reads well for code. Terminals use this size unless the Terminal tab gives them their own (and their font); ⌘+ and ⌘- size what has the keyboard. Agents started in a new tab see your selected lines, never from .env files; ⌥⌘K @-mentions them in the prompt. A Markdown file shows its syntax only on the lines you are on, and its bytes never change unless you type; ⇧⌘V shows one file’s source.")
         note.textColor = .secondaryLabelColor
         note.font = .systemFont(ofSize: 11)
         note.preferredMaxLayoutWidth = 420
@@ -1208,3 +1378,42 @@ final class EditorSettingsView: NSView {
         refresh()
     }
 }
+
+/// A Settings section laid out top-down, in a scroll view: at the top of the window with the room below it empty, and
+/// scrolled when the window is shorter than it (a small screen, or the user's resize), never cut off. It takes the
+/// window's width.
+final class SettingsPaneScroll: NSScrollView {
+    let pane: NSView
+    var paneHeight: CGFloat = 0 { didSet { if paneHeight != oldValue { tile() } } }
+
+    private final class Flipped: NSView { override var isFlipped: Bool { true } }
+
+    init(pane: NSView) {
+        self.pane = pane
+        super.init(frame: pane.frame)
+        hasVerticalScroller = true
+        autohidesScrollers = true
+        drawsBackground = false
+        borderType = .noBorder
+        let document = Flipped()
+        pane.removeFromSuperview()
+        pane.translatesAutoresizingMaskIntoConstraints = true
+        document.addSubview(pane)
+        documentView = document
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    override func tile() {
+        super.tile()
+        let size = NSSize(width: contentSize.width, height: max(paneHeight, contentSize.height))
+        documentView?.frame = NSRect(origin: .zero, size: size)
+        pane.frame = NSRect(origin: .zero, size: size)
+    }
+}
+
+extension NSTabViewItem {
+    /// The section's own view: the one in its scroll view for a section laid out top-down.
+    var pane: NSView? { (view as? SettingsPaneScroll)?.pane ?? view }
+}
+

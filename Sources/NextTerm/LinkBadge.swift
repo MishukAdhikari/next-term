@@ -38,6 +38,10 @@ final class LinkBadge: NSButton {
 
     override var mouseDownCanMoveWindow: Bool { false }
 
+    /// Its frame at rest: as it was on dark; on the light bar a little firmer, or it all but vanishes.
+    static let restingFrame = Theme.pair(light: Theme.textDim.withAlphaComponent(0.6),
+                                         dark: Theme.textDim.withAlphaComponent(0.45))
+
     override var intrinsicContentSize: NSSize {
         guard !word.isEmpty else { return .zero }
         let size = (word as NSString).size(withAttributes: [.font: wordFont])
@@ -49,7 +53,7 @@ final class LinkBadge: NSButton {
         // Pressed, it darkens, as a link does while the click is down.
         let pressed = isHighlighted && link != nil
         let box = bounds.insetBy(dx: 0.5, dy: 0.5)
-        Theme.textDim.withAlphaComponent(pressed ? 0.8 : 0.45).setStroke()
+        (pressed ? Theme.textDim.withAlphaComponent(0.8) : Self.restingFrame).setStroke()
         let path = NSBezierPath(roundedRect: box, xRadius: 4, yRadius: 4)
         path.lineWidth = 1
         path.stroke()

@@ -57,7 +57,8 @@ extension SelfTest {
             await pause(0.5)
         }
         var ran = GitRunner.runs(in: repo) - runs
-        check(ran == 0, "git refresh: a writer in a gitignored .next/ runs no git (10 s, twice a second)", "\(ran) git runs")
+        check(ran == 0, "git refresh: a writer in a gitignored .next/ runs no git (10 s, twice a second)",
+              "\(ran) git runs: " + GitRunner.recentRuns(in: repo).suffix(ran).joined(separator: "; "))
         scans = w.sidebar.databaseScanToken - scans
         check(scans == 0, "Databases: writers in .next/ and .svelte-kit/ set off no scan (10 s, twice a second)", "\(scans) scans")
 
@@ -96,7 +97,8 @@ extension SelfTest {
             write("src/app.txt", "three\n")
             await pause(3)
             ran = GitRunner.runs(in: repo) - runs
-            check(hid && ran == 0, "git refresh: none while the app is hidden", "hidden \(hid), \(ran) git runs")
+            check(hid && ran == 0, "git refresh: none while the app is hidden",
+                  "hidden \(hid), \(ran) git runs: " + GitRunner.recentRuns(in: repo).suffix(ran).joined(separator: "; "))
             scans = w.sidebar.databaseScanToken - scans
             check(hid && scans == 0, "Databases: no scan while the app is hidden", "hidden \(hid), \(scans) scans")
             NSApp.unhide(nil)
@@ -120,7 +122,8 @@ extension SelfTest {
         write("src/new.txt", "new\n")
         await pause(3)
         ran = GitRunner.runs(in: repo) - runs
-        check(ran == 0, "git refresh: a closed project window runs no git when its files change", "\(ran) git runs")
+        check(ran == 0, "git refresh: a closed project window runs no git when its files change",
+              "\(ran) git runs: " + GitRunner.recentRuns(in: repo).suffix(ran).joined(separator: "; "))
         scans = w.sidebar.databaseScanToken - scans
         check(scans == 0, "Databases: a closed project window scans nothing when its files change", "\(scans) scans")
     }

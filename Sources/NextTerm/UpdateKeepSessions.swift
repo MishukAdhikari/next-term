@@ -611,7 +611,7 @@ final class UpdateSheetController: NSWindowController, NSWindowDelegate {
     private var busyShown: [UUID] = []
     private var detailsDrawn: [UpdateDetail]?
     private var decisionsShown: [String]?
-    private weak var parentWindow: NSWindow?
+    private let attachment = ProjectWindowAttachment()
 
     var busyStack: NSStackView { busyList.stack }
     var detailsStack: NSStackView { detailsList.stack }
@@ -621,6 +621,7 @@ final class UpdateSheetController: NSWindowController, NSWindowDelegate {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 320), styleMask: [.titled, .closable],
                               backing: .buffered, defer: false)
         window.title = "Software Update"
+        window.keepsItsOwnFrame()
         window.isReleasedWhenClosed = false
         window.animationBehavior = .alertPanel
         super.init(window: window)
@@ -669,7 +670,7 @@ final class UpdateSheetController: NSWindowController, NSWindowDelegate {
         stack.spacing = 10
         stack.setCustomSpacing(4, after: titleLabel)
         stack.setCustomSpacing(4, after: keepBox)
-        stack.edgeInsets = NSEdgeInsets(top: 18, left: 20, bottom: 16, right: 20)
+        stack.edgeInsets = DialogFit.insets
         // The checkbox and the buttons stay in view however long the lists get: each scrolls past its height.
         let wide: [NSView] = [subtitleLabel, busyList, refusalLabel, summaryLabel, detailsList, decisionsList, noteLabel, buttonRow]
         for view in wide {
@@ -793,7 +794,7 @@ final class UpdateSheetController: NSWindowController, NSWindowDelegate {
             list.maxHeight = height
             list.fit()
         }
-        let screen = (window.screen ?? parentWindow?.screen ?? NSScreen.main)?.visibleFrame
+        let screen = (window.screen ?? attachment.parent?.screen ?? NSScreen.main)?.visibleFrame
         let chrome = window.frame.height - window.contentLayoutRect.height
         if let screen {
             var excess = content.fittingSize.height + chrome + 24 - screen.height
@@ -822,31 +823,9 @@ final class UpdateSheetController: NSWindowController, NSWindowDelegate {
             window.orderFront(nil)
             return
         }
-        if let parent, parent.isVisible, !parent.isMiniaturized {
-            let size = window.frame.size
-            var origin = NSPoint(x: parent.frame.midX - size.width / 2, y: parent.frame.maxY - size.height - 64)
-            if let screen = (parent.screen ?? NSScreen.main)?.visibleFrame {
-                origin.x = min(max(origin.x, screen.minX), screen.maxX - size.width)
-                origin.y = min(max(origin.y, screen.minY), screen.maxY - size.height)
-            }
-            window.setFrameOrigin(origin)
-            parent.addChildWindow(window, ordered: .above)
-            parentWindow = parent
-            NotificationCenter.default.addObserver(self, selector: #selector(parentWillClose(_:)), name: NSWindow.willCloseNotification,
-                                                   object: parent)
-        } else {
-            window.center()
-        }
+        if !attachment.attach(window, over: parent) { window.center() }
         window.orderFront(nil)
         if !NSApp.isActive { NSApp.requestUserAttention(.informationalRequest) }
-    }
-
-    /// Its window closing would take this one with it: it stays, on its own.
-    @objc private func parentWillClose(_ note: Notification) {
-        guard let window, let parent = note.object as? NSWindow else { return }
-        NotificationCenter.default.removeObserver(self, name: NSWindow.willCloseNotification, object: parent)
-        parent.removeChildWindow(window)
-        parentWindow = nil
     }
 
     @objc private func keepChanged() {
@@ -872,11 +851,7 @@ final class UpdateSheetController: NSWindowController, NSWindowDelegate {
     }
 
     override func close() {
-        if let parent = parentWindow, let window {
-            NotificationCenter.default.removeObserver(self, name: NSWindow.willCloseNotification, object: parent)
-            parent.removeChildWindow(window)
-        }
-        parentWindow = nil
+        attachment.detach()
         window?.delegate = nil
         super.close()
     }
@@ -917,6 +892,7 @@ final class UpdateWaitPanel: NSWindowController, NSWindowDelegate {
         let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 420, height: 180),
                             styleMask: [.titled, .utilityWindow, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.title = "Software Update"
+        panel.keepsItsOwnFrame()
         panel.isReleasedWhenClosed = false
         panel.hidesOnDeactivate = false
         panel.becomesKeyOnlyIfNeeded = true

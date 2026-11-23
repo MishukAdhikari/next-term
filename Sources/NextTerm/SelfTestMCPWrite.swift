@@ -2,7 +2,7 @@ import AppKit
 import NextTermCore
 
 /// The MCP tools that change things, called through the local socket (`nxtrm mcp`) as a local agent calls
-/// them: every change asks on the Mac, and Approve, Decline, no answer and Decline and Stop Asking each do
+/// them: every change asks on the Mac, and Approve, Decline, no answer and Don’t Ask Again each do
 /// what they say. They work in a repository of their own inside the self-test's project, so the other
 /// checks' git state is untouched.
 extension SelfTest {
@@ -91,8 +91,9 @@ extension SelfTest {
         let declined = await client.asked("write_file", ["path": notes, "content": "one\nTWO\n", "reason": "Fix the second line."], .decline)
         let declinedRefused = declined.isError && declined.text.contains("Declined on the Mac")
         check(declinedRefused && read("notes.txt") == "one\ntwo\n", "MCP writes: write_file asks on the Mac first, and Decline writes nothing", declined.text)
-        let namesAsker = declined.shown.contains("outside Next Term's tabs")
-        let quotesAgent = declined.shown.contains("“Fix the second line.”")
+        let namesAsker = declined.shown.contains("outside Next Term’s tabs")
+        // The agent's words are set apart as its own under "The agent says", with no quote marks (ApprovalLayout).
+        let quotesAgent = declined.shown.contains("The agent says") && declined.shown.contains("Fix the second line.")
         let showsChange = declined.shown.contains("notes.txt") && declined.shown.contains("+1 −1")
         check(namesAsker && quotesAgent && showsChange && declined.unkeyed,
               "MCP writes: the window names the asker, quotes the agent and shows the change, without taking the keyboard", declined.shown)
@@ -226,6 +227,28 @@ extension SelfTest {
         let extra = pc.addTab(directory: root.path, select: false)
         _ = await wait(20) { extra.status.integrated }
         let extraID = extra.id.uuidString.lowercased()
+        // rename_tab names only the caller's own tab and the tabs it opened (010a review): the test opened this one itself.
+        let notMine = await client.call("rename_tab", ["tab_id": extraID, "title": "API server"])
+        check(notMine.isError && notMine.text.contains("only your own tab") && extra.userTitle == nil,
+              "MCP writes: rename_tab refuses a tab the agent did not open", notMine.text)
+        // A title that hides or reorders text (a direction isolate here) is refused, and no tab opens for it.
+        let tabsBeforeTitle: Int = pc.tabs.count
+        let hiddenTitle = await client.call("new_tab", ["directory": root.path, "title": "api\u{2066}server"])
+        check(hiddenTitle.isError && pc.tabs.count == tabsBeforeTitle, "MCP writes: new_tab refuses a title with a direction mark, and opens nothing", hiddenTitle.text)
+        let opened = await client.call("new_tab", ["directory": root.path])
+        let openedID: String = json(opened.text)?["id"] as? String ?? ""
+        let worker: TerminalTab? = pc.tabs.first { $0.id.uuidString.lowercased() == openedID }
+        // rename_tab asks nothing: it only changes the label, which the tab bar shows; "" gives the tab its own back.
+        let renamed = await client.call("rename_tab", ["tab_id": openedID, "title": "  API server  "])
+        let named: Bool = worker?.userTitle == "API server" && worker?.title == "API server" && MCPWriteControl.pending == nil
+        check(!renamed.isError && named, "MCP writes: rename_tab names a tab the agent opened, as Rename Tab… does, and asks nothing", renamed.text)
+        let twoLines = await client.call("rename_tab", ["tab_id": openedID, "title": "a\nb"])
+        check(twoLines.isError && worker?.userTitle == "API server", "MCP writes: rename_tab refuses a title of two lines", twoLines.text)
+        let bidi = await client.call("rename_tab", ["tab_id": openedID, "title": "a\u{202E}b"])
+        check(bidi.isError && worker?.userTitle == "API server", "MCP writes: rename_tab refuses a title with a direction override", bidi.text)
+        let own = await client.call("rename_tab", ["tab_id": openedID, "title": ""])
+        check(!own.isError && worker?.userTitle == nil, "MCP writes: rename_tab with an empty title gives the tab its own back", own.text)
+        if let worker { pc.remove(worker) }
         let front = pc.activeTab
         let noFocus = await client.asked("focus_tab", ["tab_id": extraID], .decline)
         check(noFocus.isError && pc.activeTab === front, "MCP writes: focus_tab asks first, and Decline leaves the keyboard where it is", noFocus.text)
@@ -277,6 +300,7 @@ extension SelfTest {
               "MCP writes: send_to_tab, close_tab and the pane tools refuse a tab whose input line is not the user's own", typed.text + " / " + notClosed.text)
         pc.remove(extra)
         if let front { pc.show(front) }
+        await runCommandChecks(client, pc: pc, root: root)
 
         // set_layout, for the project's window; a call that changes nothing asks nothing.
         let position = app.terminalPosition.rawValue
@@ -422,7 +446,7 @@ extension SelfTest {
             try? FileManager.default.removeItem(atPath: base)
         }
 
-        // Decline and Stop Asking: that asker is refused without a window until Next Term quits, its
+        // Don’t Ask Again: that asker is refused without a window until Next Term quits, its
         // proposals and the writing of a proposal it had accepted too.
         let proposing = Task { await client.call("propose_edit", ["path": notes, "content": "accepted before the stop\n"]) }
         let stopPane = await proposalPane(in: pc)
@@ -433,11 +457,11 @@ extension SelfTest {
         let after = await client.call("write_file", ["path": notes, "content": "stop\n"])
         let acceptedAfter = await client.call("write_file", ["path": notes, "content": "accepted before the stop\n"])
         let proposedAfter = await client.call("propose_edit", ["path": notes, "content": "after the stop\n"])
-        let refusedAfter = [after, acceptedAfter, proposedAfter].allSatisfy { $0.isError && $0.text.contains("Decline and Stop Asking") }
+        let refusedAfter = [after, acceptedAfter, proposedAfter].allSatisfy { $0.isError && $0.text.contains("Don’t Ask Again") }
         let noProposal = !pc.editorArea.proposals.contains { $0.proposal?.tag.hasPrefix("mcp:") == true && !$0.isDecided }
         let notesUnchanged = read("notes.txt") == "one\ntwo\nthree\n"
         check(stop.isError && refusedAfter && noProposal && notesUnchanged && MCPWriteControl.pending == nil,
-              "MCP writes: after Decline and Stop Asking, the asker's changes and proposals are refused without a window", after.text + " / " + proposedAfter.text)
+              "MCP writes: after Don’t Ask Again, the asker's changes and proposals are refused without a window", after.text + " / " + proposedAfter.text)
         MCPWriteControl.stopped = []
         MCPWriteControl.accepted = [:]
 
@@ -462,7 +486,7 @@ extension SelfTest {
         check(doorWindow && namedConnection && doorDeclined.isError && read("notes.txt") == "granted\n",
               "MCP writes: askOnMac from the door asks on the Mac, naming the connection", doorShown)
 
-        // A remote Decline and Stop Asking stops that connection by its grant id: not another connection of
+        // A remote Don’t Ask Again stops that connection by its grant id: not another connection of
         // the same name, and not the agents on this Mac.
         let stopping = Task { await door(.askOnMac, "a\n", connection: "g-a") }
         let stopShown = await wait(30) { MCPWriteControl.pending?.window != nil }
@@ -474,14 +498,14 @@ extension SelfTest {
         MCPWriteControl.pending?.window?.declineButton.performClick(nil)
         _ = await otherB.value
         let local = await client.asked("write_file", ["path": notes, "content": "local\n"], .decline)
-        let aStopped = againA.isError && againA.text.contains("Decline and Stop Asking")
+        let aStopped = againA.isError && againA.text.contains("Don’t Ask Again")
         check(stopShown && aStopped && bAsked && local.window != nil && read("notes.txt") == "granted\n",
-              "MCP writes: a remote Decline and Stop Asking stops that connection only", againA.text)
+              "MCP writes: a remote Don’t Ask Again stops that connection only", againA.text)
         MCPWriteControl.stopped = []
     }
 
     /// install_skill and remove_skill from the remote door: under a grant they run without a window and
-    /// name the grant; asking on the Mac, a Decline and Stop Asking pauses that connection only. Run from
+    /// name the grant; asking on the Mac, a Don’t Ask Again pauses that connection only. Run from
     /// skillsChecks' MCP checks, on their home folder with notes-helper installed.
     static func skillsPolicyChecks(home: String) async {
         let manager = FileManager.default
@@ -548,7 +572,7 @@ extension SelfTest {
         check(overFailed && overSaid && mineKept && !exists(".agents/skills/grant-mine"), "skills mcp: under a grant an install never replaces the user's own skill", "\(over)")
         try? manager.removeItem(atPath: mine)
 
-        // Asking on the Mac: a connection's Decline and Stop Asking pauses that connection by its grant id,
+        // Asking on the Mac: a connection's Don’t Ask Again pauses that connection by its grant id,
         // not another of the same name, and not the agents on this Mac.
         let fromA = await door("install_skill", ["source": "example-org/a-one"], .askOnMac, "g-a")
         let windowA = SkillsMCP.open?.window
@@ -565,7 +589,7 @@ extension SelfTest {
         let quietA = againA["status"] as? String == "declined"
         let askedB = fromB["status"] as? String == "pending" && windowB != nil
         let askedLocal = local["status"] as? String == "pending" && windowLocal != nil
-        check(askedA && quietA && askedB && askedLocal, "skills mcp: a remote Decline and Stop Asking pauses that connection only",
+        check(askedA && quietA && askedB && askedLocal, "skills mcp: a remote Don’t Ask Again pauses that connection only",
               "\(fromA) \(againA) \(fromB) \(local)")
     }
 
@@ -593,6 +617,7 @@ extension SelfTest {
         guard let view else { return "" }
         var found: [String] = []
         if let field = view as? NSTextField { found.append(field.stringValue) }
+        if let text = view as? NSTextView { found.append(text.string) } // a command in its box
         for sub in view.subviews {
             let text = texts(sub)
             if !text.isEmpty { found.append(text) }
@@ -604,6 +629,94 @@ extension SelfTest {
     private static func proposalPane(in controller: TerminalWindowController) async -> DiffPane? {
         _ = await wait(30) { controller.editorArea.proposals.contains { $0.proposal?.tag.hasPrefix("mcp:") == true && !$0.isDecided } }
         return controller.editorArea.proposals.first { $0.proposal?.tag.hasPrefix("mcp:") == true && !$0.isDecided }
+    }
+
+    /// run_command from an agent outside the tabs (the self-test's client): the command shows in its box with Run as the
+    /// primary; Decline runs nothing; Run runs it in a new tab in the folder, which takes the keyboard, and the answer has
+    /// its exit code and output; a command still running answers with a request_id that waits for it.
+    private static func runCommandChecks(_ client: WriteClient, pc: TerminalWindowController, root: URL) async {
+        func tab(_ id: Any?) -> TerminalTab? { pc.tabs.first { $0.id.uuidString.lowercased() == id as? String } }
+        let marker = "nt-run-" + UUID().uuidString.prefix(8).lowercased()
+        let command = "sh -c 'echo \(marker); exit 3'"
+        let arguments: [String: Any] = ["command": command, "directory": root.path, "reason": "The login needs your password."]
+        let missing = await client.call("run_command", ["command": command])
+        let twoLines = await client.call("run_command", ["command": "echo a\necho b", "directory": root.path])
+        check(missing.isError && missing.text.contains("Give directory") && twoLines.isError && MCPWriteControl.pending == nil,
+              "MCP writes: run_command from outside the tabs needs a directory, and takes one line", missing.text + " / " + twoLines.text)
+        let tabsBefore = pc.tabs.count
+        let declined = await client.asked("run_command", arguments, .decline)
+        check(declined.isError && pc.tabs.count == tabsBefore, "MCP writes: run_command asks first, and Decline runs nothing", declined.text)
+
+        // The window as the user sees it, before Run.
+        let call = Task { await client.call("run_command", arguments) }
+        _ = await wait(30) { MCPWriteControl.pending?.window != nil }
+        let window = MCPWriteControl.pending?.window
+        let shown = texts(window?.window?.contentView)
+        if let shownWindow = window?.window { await screenshot(shownWindow, suffix: "-run-command") }
+        let run = window?.approveButton
+        let primary = run?.title == "Run" && run?.bezelColor == .controlAccentColor && run?.keyEquivalent.isEmpty == true
+            && run?.refusesFirstResponder == true && window?.declineButton.keyEquivalent == "\u{1b}"
+        check(primary && shown.contains(command) && shown.contains("The login needs your password.") && window?.window?.isKeyWindow == false,
+              "MCP writes: run_command shows the command in its box and the agent's words, with Run as the primary, a click only",
+              "Run: \(run?.title ?? "none") \(String(describing: run?.bezelColor)) | \(shown)")
+        run?.performClick(nil)
+        let answer = json(await call.value.text) ?? [:]
+        let opened = tab(answer["tab_id"])
+        let output = answer["output"] as? String ?? ""
+        let keyboard = opened.map { pc.activeTab === $0 && pc.window?.firstResponder === $0.view } ?? false
+        check(answer["status"] as? String == "ran" && answer["exit_code"] as? Int == 3 && output.contains(marker) && opened != nil,
+              "MCP writes: run_command runs the command once Run is clicked, in a new tab in the folder, and answers its exit code and output",
+              "\(answer)")
+        check(keyboard, "MCP writes: run_command's tab takes the keyboard, for a password", "active \(pc.activeTab?.title ?? "none")")
+        if let opened { pc.remove(opened) }
+
+        // Still running at the wait's end: running with a request_id, and that id waits for the end.
+        let savedWait = MCPWriteControl.answerWithin
+        MCPWriteControl.answerWithin = 3
+        let slow = await client.asked("run_command", ["command": "sleep 4; echo \(marker)-slow", "directory": root.path], .approve)
+        let first = slow.json ?? [:]
+        let id = first["request_id"] as? String ?? ""
+        let later = json(await client.call("run_command", ["request_id": id]).text) ?? [:]
+        let notMine = await client.call("run_command", ["request_id": "nope"])
+        MCPWriteControl.answerWithin = savedWait
+        check(first["status"] as? String == "running" && !id.isEmpty && later["status"] as? String == "ran"
+              && (later["output"] as? String ?? "").contains(marker + "-slow") && notMine.isError,
+              "MCP writes: run_command still running answers running with a request_id, and calling with it waits for the end",
+              "\(first) / \(later)")
+        if let slowTab = tab(first["tab_id"]) { pc.remove(slowTab) }
+
+        #if DEBUG
+        // Exit code 0: the tab shows "Closes in 3 s" with Keep Open and closes by itself, and read_tab on its id then says
+        // it closed after finishing, with its exit code and output (CommandPaneAutoClose). The exit 3 above stayed.
+        let fine = await client.asked("run_command", ["command": "echo \(marker)-ok", "directory": root.path], .approve).json ?? [:]
+        let fineID = fine["tab_id"] as? String ?? ""
+        let barShown = await wait(5) { tab(fineID).map { CommandPaneAutoClose.keepButton($0) != nil } ?? false }
+        let closedItself = await wait(10) { tab(fineID) == nil }
+        let read = json(await client.call("read_tab", ["tab_id": fineID]).text) ?? [:]
+        check(fine["exit_code"] as? Int == 0 && barShown && closedItself && read["closed"] as? Bool == true
+              && read["exit_code"] as? Int == 0 && (read["output"] as? String ?? "").contains(marker + "-ok"),
+              "MCP writes: run_command's tab closes by itself a few seconds after exit 0, and read_tab says it closed after finishing",
+              "\(fine) / bar \(barShown) closed \(closedItself) / \(read)")
+        if let left = tab(fineID) { pc.remove(left) }
+
+        // Keep Open in the bar: the tab stays past the count, and its menus no longer offer Keep Open.
+        let keptRun = await client.asked("run_command", ["command": "echo \(marker)-kept", "directory": root.path], .approve).json ?? [:]
+        let keptID = keptRun["tab_id"] as? String ?? ""
+        _ = await wait(5) { tab(keptID).map { CommandPaneAutoClose.keepButton($0) != nil } ?? false }
+        if let kept = tab(keptID) { CommandPaneAutoClose.keepButton(kept)?.performClick(nil) }
+        _ = await wait(CommandPaneClose.delay + 1.5) { tab(keptID) == nil }
+        let stayed = tab(keptID)
+        check(stayed != nil && stayed.map { !CommandPaneAutoClose.mayClose($0) } == true,
+              "MCP writes: Keep Open keeps run_command's finished tab open", "kept \(keptRun)")
+        if let stayed { pc.remove(stayed) }
+
+        // new_tab with a command (not an agent): its tab closes by itself after exit 0 too.
+        let typed = json(await client.call("new_tab", ["directory": root.path, "command": "echo \(marker)-tab"]).text) ?? [:]
+        let typedID = typed["id"] as? String ?? typed["tab_id"] as? String ?? ""
+        let tabClosed = await wait(15) { tab(typedID) == nil }
+        check(!typedID.isEmpty && tabClosed, "MCP writes: new_tab's tab opened with a command closes by itself after exit 0", "\(typed)")
+        if let left = tab(typedID) { pc.remove(left) }
+        #endif
     }
 
     private static func json(_ text: String) -> [String: Any]? {

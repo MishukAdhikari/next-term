@@ -50,6 +50,12 @@ public struct TabListRow: Equatable, Sendable {
     /// What VoiceOver says for the title when it is not the title as shown (an agent's row says its time with its
     /// state, in full words); nil: the title.
     public var spokenTitle: String?
+    /// An agent tab's or pane's context usage, shown as a gauge after the title; nil for any other row.
+    public var context: AgentUsage?
+    /// A tab the user pinned (plan 045): its pin shows where the × would.
+    public var pinned = false
+    /// The last pinned tab's row, with unpinned tabs after it: a hairline under it sets the pinned ones apart.
+    public var endsPinnedGroup = false
 
     public init(key: String, kind: Kind = .tab, title: String, truncatesTail: Bool = false, shorterTitles: [String] = [],
                 editableTitle: String? = nil, state: TabState = .idle, tooltip: String = "", spokenStatus: String = "",
@@ -131,11 +137,13 @@ public enum TabListRows {
         public var herdrAgents: [Agent]
         /// Its folded idle agents show (HerdrAgents.fold).
         public var herdrIdleOpen: Bool
+        /// Its agent's context usage (AgentUsageWatch); nil when it runs no agent Next Term reads.
+        public var context: AgentUsage?
 
         public init(key: String, title: String, truncatesTail: Bool = false, shorterTitles: [String] = [],
                     editableTitle: String? = nil, state: TabState = .idle, tooltip: String = "", spokenStatus: String = "",
                     folder: String = "", question: String? = nil, remote: RemoteMark? = nil, focused: Bool = false,
-                    herdrAgents: [Agent] = [], herdrIdleOpen: Bool = false) {
+                    herdrAgents: [Agent] = [], herdrIdleOpen: Bool = false, context: AgentUsage? = nil) {
             self.key = key
             self.title = title
             self.truncatesTail = truncatesTail
@@ -150,6 +158,7 @@ public enum TabListRows {
             self.focused = focused
             self.herdrAgents = herdrAgents
             self.herdrIdleOpen = herdrIdleOpen
+            self.context = context
         }
     }
 
@@ -163,9 +172,12 @@ public enum TabListRows {
         /// pane with the keyboard's own.
         public var tooltip: String?
         public var spokenStatus: String?
+        /// The user pinned the tab (plan 045).
+        public var pinned = false
 
         public init(key: String, panes: [Pane], shortcut: String? = nil, place: String? = nil, tooltip: String? = nil,
-                    spokenStatus: String? = nil) {
+                    spokenStatus: String? = nil, pinned: Bool = false) {
+            self.pinned = pinned
             self.key = key
             self.panes = panes
             self.shortcut = shortcut
@@ -184,8 +196,12 @@ public enum TabListRows {
                             now: TimeInterval? = nil) -> [TabListRow] {
         var rows: [TabListRow] = []
         rows.reserveCapacity(tabs.count)
-        for source in tabs {
-            rows.append(tabRow(source, showsFolders: showsFolders, home: home, workingShown: workingShown))
+        let lastPinned = tabs.lastIndex { $0.pinned }
+        for (number, source) in tabs.enumerated() {
+            var row = tabRow(source, showsFolders: showsFolders, home: home, workingShown: workingShown)
+            row.pinned = source.pinned
+            row.endsPinnedGroup = number == lastPinned && number + 1 < tabs.count
+            rows.append(row)
             guard source.panes.count > 1 else {
                 if let pane = source.panes.first { rows += agentRows(pane, showsFolders: showsFolders, home: home, now: now) }
                 continue
@@ -253,6 +269,7 @@ public enum TabListRows {
                              editableTitle: focused.editableTitle, state: state, tooltip: source.tooltip ?? focused.tooltip,
                              spokenStatus: source.spokenStatus ?? focused.spokenStatus, shortcut: source.shortcut, remote: remote,
                              place: source.place)
+        row.context = focused.context
         guard showsFolders else { return row }
         // The pane that asks says so on the tab's line, the keyboard's first; else the keyboard pane's folder.
         let asking: Pane? = ([focused] + source.panes).first { hasQuestion($0.question) }
@@ -263,9 +280,11 @@ public enum TabListRows {
     }
 
     private static func paneRow(_ pane: Pane, index: Int, count: Int) -> TabListRow {
-        TabListRow(key: pane.key, kind: .pane(index: index, count: count), title: pane.title, truncatesTail: pane.truncatesTail,
+        var row = TabListRow(key: pane.key, kind: .pane(index: index, count: count), title: pane.title, truncatesTail: pane.truncatesTail,
                    shorterTitles: pane.shorterTitles, state: pane.state, tooltip: pane.tooltip, spokenStatus: pane.spokenStatus,
                    remote: pane.remote, focused: pane.focused)
+        row.context = pane.context
+        return row
     }
 
     /// Needs you, then working, failed, done, idle: the mark a split tab shows for its panes, as on the top bar.

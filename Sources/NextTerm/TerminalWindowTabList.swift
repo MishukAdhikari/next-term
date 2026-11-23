@@ -151,15 +151,15 @@ extension TerminalWindowController: TabListViewDelegate {
                                         shorterTitles: item.shorterTitles, editableTitle: item.editableTitle, state: item.state,
                                         tooltip: item.tooltip, spokenStatus: item.accessibilityStatus, folder: folders ? tab.directory : "",
                                         question: folders ? tab.status.question : nil, remote: item.remote, focused: true,
-                                        herdrAgents: tab.herdrRows, herdrIdleOpen: tab.herdrIdleOpen)
-            return TabListRows.Source(key: key, panes: [pane], shortcut: item.shortcut, place: item.place)
+                                        herdrAgents: tab.herdrRows, herdrIdleOpen: tab.herdrIdleOpen, context: tab.contextUsage)
+            return TabListRows.Source(key: key, panes: [pane], shortcut: item.shortcut, place: item.place, pinned: group.pinned)
         }
         let focused: TerminalTab = group.focused
         let panes: [TabListRows.Pane] = group.panes.map { (tab: TerminalTab) -> TabListRows.Pane in
             tabListPane(tab, focused: tab === focused, folders: folders)
         }
         return TabListRows.Source(key: key, panes: panes, shortcut: item.shortcut, place: item.place, tooltip: item.tooltip,
-                                  spokenStatus: item.accessibilityStatus)
+                                  spokenStatus: item.accessibilityStatus, pinned: group.pinned)
     }
 
     /// One pane of a split tab: its own title, mark, tooltip and words, as its pane header has them.
@@ -170,7 +170,7 @@ extension TerminalWindowController: TabListViewDelegate {
                                 editableTitle: tab.editableTitle, state: tab.status.state, tooltip: tab.tooltip,
                                 spokenStatus: tab.ownStateDescription ?? "", folder: folders ? tab.directory : "",
                                 question: folders ? tab.status.question : nil, remote: tab.remoteMark, focused: focused,
-                                herdrAgents: tab.herdrRows, herdrIdleOpen: tab.herdrIdleOpen)
+                                herdrAgents: tab.herdrRows, herdrIdleOpen: tab.herdrIdleOpen, context: tab.contextUsage)
     }
 
     /// The list given its rows again as last made, in the form it shows now: when only its width or its collapse

@@ -19,8 +19,22 @@ import Testing
         #expect(ProjectOpening.placement(from: used, setting: .ask) == .ask)
         #expect(ProjectOpening.placement(from: used, setting: .thisWindow) == .replace)
         #expect(ProjectOpening.placement(from: used, setting: .newWindow) == .newWindow)
-        // Settings › "Open Projects In" keeps the words it always saved.
-        #expect(ProjectOpening.Setting.allCases.map(\.rawValue) == ["ask", "thisWindow", "newWindow"])
+        // Settings › "Open Projects In" keeps the words it always saved, the new choices after them.
+        #expect(ProjectOpening.Setting.allCases.map(\.rawValue) == ["ask", "thisWindow", "newWindow", "newTab", "asMacOS"])
+    }
+
+    /// New Tab in This Window merges the project into the window it was opened from; As macOS Prefers does when System
+    /// Settings' "Prefer tabs" says so for that window, else opens a window of its own (plan 032).
+    @Test func newTabMergesIntoThisWindowAndAsMacOSPrefersFollowsTheSystem() {
+        #expect(ProjectOpening.placement(from: used, setting: .newTab) == .newTab)
+        #expect(ProjectOpening.placement(from: used, setting: .asMacOS, systemPrefersTabs: true) == .newTab)
+        #expect(ProjectOpening.placement(from: used, setting: .asMacOS, systemPrefersTabs: false) == .newWindow)
+        // An unused window is still taken over, and a restored one still never merged into.
+        #expect(ProjectOpening.placement(from: fresh, setting: .newTab) == .adopt)
+        #expect(ProjectOpening.placement(from: restored, setting: .newTab, systemPrefersTabs: true) == .newWindow)
+        // As MCP names them, both ways.
+        for setting in ProjectOpening.Setting.allCases { #expect(ProjectOpening.Setting(mcpName: setting.mcpName) == setting) }
+        #expect(ProjectOpening.Setting(mcpName: "newTab") == nil)
     }
 
     /// A window the restore brought back, with tabs the user has not put anything in yet, is never taken over or replaced:

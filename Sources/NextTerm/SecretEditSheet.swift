@@ -93,10 +93,10 @@ final class SecretEditSheet: NSWindowController, NSWindowDelegate, NSTextFieldDe
         views += [Self.caption("Name"), nameField, savedAsLabel, hint]
         if case .replace = mode {} else {
             purposeField.stringValue = entry?.purpose ?? ""
-            purposeField.placeholderString = "What it's for (agents see this)"
+            purposeField.placeholderString = "What it’s for (agents see this)"
             purposeField.delegate = self
-            purposeField.setAccessibilityLabel("What it's for")
-            views += [Self.caption("What it's for"), purposeField]
+            purposeField.setAccessibilityLabel("What it’s for")
+            views += [Self.caption("What it’s for"), purposeField]
             let link = SecretLinkField(stored: entry?.link, from: entry?.linkFrom)
             link.onChange = { [weak self] in self?.refresh() }
             link.value = { [weak self] in self.flatMap { $0.hasValue ? $0.typedValue : nil } }
@@ -134,15 +134,16 @@ final class SecretEditSheet: NSWindowController, NSWindowDelegate, NSTextFieldDe
         saveButton = NSButton(title: "Save", target: self, action: #selector(save))
         saveButton.keyEquivalent = "\r"
         for button in [cancelButton, saveButton] { button?.bezelStyle = .rounded }
+        DialogFit.widen([cancelButton, saveButton].compactMap { $0 })
         let buttons = NSStackView(views: [NSView(), cancelButton, saveButton])
-        buttons.spacing = 8
+        buttons.spacing = 12
         views.append(buttons)
 
         let stack = NSStackView(views: views)
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 6
-        stack.edgeInsets = NSEdgeInsets(top: 16, left: 18, bottom: 16, right: 18)
+        stack.edgeInsets = DialogFit.insets
         stack.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(stack)
         var constraints = [
@@ -152,10 +153,11 @@ final class SecretEditSheet: NSWindowController, NSWindowDelegate, NSTextFieldDe
             stack.bottomAnchor.constraint(equalTo: view.bottomAnchor),
             stack.widthAnchor.constraint(equalToConstant: 460),
         ]
-        for row in stack.arrangedSubviews { constraints.append(row.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -36)) }
+        for row in stack.arrangedSubviews { constraints.append(row.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -40)) }
         NSLayoutConstraint.activate(constraints)
         suggestLink()
         refresh()
+        DialogFit.fit(window)
     }
 
     /// "Remind me to rotate" and its pop-up: Never, or 30, 90, 180 or 365 days; a key saved with another age keeps it
@@ -265,6 +267,9 @@ final class SecretEditSheet: NSWindowController, NSWindowDelegate, NSTextFieldDe
         shortLabel.isHidden = !hasValue || length == 0 || length >= SecretMask.minimumLength
         let purposeOK = purposeField.stringValue.count <= SecretVault.maxPurposeLength
         linkField?.refresh()
+        // A note, the link's suggestion or its refusal shown or gone takes its space (DialogFit moves nothing when the
+        // height is the same).
+        DialogFit.fit(window)
         let linkOK: Bool = linkField?.blocksSave != true
         let valueOK: Bool = !hasValue || length > 0
         saveButton?.isEnabled = !isBusy && StoredSecretName.isValid(name) && !taken && purposeOK && linkOK && valueOK
@@ -353,6 +358,7 @@ final class SecretEditSheet: NSWindowController, NSWindowDelegate, NSTextFieldDe
     private func setStatus(_ text: String) {
         statusLabel.stringValue = text
         statusLabel.isHidden = text.isEmpty
+        DialogFit.fit(window)
         guard !text.isEmpty, let window else { return }
         NSAccessibility.post(element: window, notification: .announcementRequested,
                              userInfo: [.announcement: text, .priority: NSAccessibilityPriorityLevel.high.rawValue])

@@ -402,6 +402,11 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private(set) var agentAsk: AgentAsk?
+    /// Made at all: the window exists only once something opened it.
+    private static var made = false
+    /// The import window is open, the user's or an agent's request (a hint holds back while it is).
+    static var isShowing: Bool { made && shared.window?.isVisible == true }
+
     /// The user's own import window is open (not an agent's request).
     var isOpenForUser: Bool { window?.isVisible == true && agentAsk == nil }
 
@@ -409,9 +414,11 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 520), styleMask: [.titled, .closable],
                               backing: .buffered, defer: false)
         window.title = "Import Settings and Shortcuts"
+        window.keepsItsOwnFrame()
         window.isReleasedWhenClosed = false
         super.init(window: window)
         window.delegate = self
+        Self.made = true
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
@@ -484,6 +491,18 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
             staleList = list
             rows += [header, list]
         }
+        // The first run's other way: an agent that sets Next Term up (SetupAgentLine), shown once one is registered.
+        if firstRun {
+            let agents = SetupAgentLine()
+            agents.identifier = .init("spaced")
+            agents.onStart = { [weak self] in self?.finish(with: nil) }
+            agents.onChange = { [weak self, weak agents] in
+                guard agents?.window != nil else { return }
+                self?.window?.contentView?.layoutSubtreeIfNeeded()
+                self?.refitPage?()
+            }
+            rows.append(agents)
+        }
         rows.append(Self.wrapping("Reads files on this Mac only. Never changes the other app. Nothing leaves your Mac.", secondary: true, size: 11))
         let preview = NSButton(title: "Preview…", target: self, action: #selector(previewChosen))
         preview.keyEquivalent = "\r"
@@ -509,6 +528,7 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
     @objc private func toggleStaleList(_ sender: NSButton) {
         staleList?.isHidden = sender.state != .on
         window?.contentView?.layoutSubtreeIfNeeded()
+        refitPage?()
     }
 
     /// "1.105.1  ·  used 3 days ago  ·  brings shortcuts, settings, fonts and colours", or "app removed" for an app
@@ -813,7 +833,7 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
         if ask != nil {
             // An agent asks at a moment of its own choosing: no key answers it, and only a click applies.
             apply.refusesFirstResponder = true
-            let stop = NSButton(title: "Decline and Stop Asking", target: self, action: #selector(declineAndStop))
+            let stop = NSButton(title: "Don’t Ask Again", target: self, action: #selector(declineAndStop))
             layout(rows, buttons: [stop, cancel, apply], scrolls: true)
         } else {
             cancel.keyEquivalent = "\u{1b}"
@@ -847,10 +867,12 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
             (shortcutSummary?.superview as? NSStackView)?.arrangedSubviews.compactMap { $0 as? NSButton }.first?.state = .on
         }
         recount()
+        refitPage?()
     }
 
     @objc private func toggleShortcutList(_ sender: NSButton) {
         shortcutList?.isHidden = sender.state != .on
+        refitPage?()
     }
 
     private var choice: ImportChoice {
@@ -939,6 +961,16 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
 
     /// For the self-test: tick state and apply.
     var applyTitle: String { applyButton?.title ?? "" }
+    /// For the self-test: how far the Apply button sits from the window's bottom edge, and the empty space a scrolling
+    /// page leaves below its rows (none: the window is as tall as its rows, or they scroll).
+    var buttonsFitForTest: (bottom: CGFloat, emptyBelowRows: CGFloat)? {
+        guard let window, let apply = applyButton, let content = window.contentView,
+              let scroll = content.subviews.compactMap({ $0 as? NSScrollView }).first, let document = scroll.documentView else { return nil }
+        content.layoutSubtreeIfNeeded()
+        let bottom: CGFloat = apply.convert(apply.bounds, to: content).minY
+        let empty: CGFloat = max(0, scroll.contentView.bounds.height - document.frame.height)
+        return (bottom, empty)
+    }
     /// For the self-test: the app chosen in the chooser, and whether the apps not used lately are shown.
     var chosenTitle: String? { radios.first { $0.state == .on }?.title }
     var staleListIsOpen: Bool { staleList?.isHidden == false }
@@ -970,11 +1002,18 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
         for (i, row) in rows.enumerated() where i > 0 && ["heading", "spaced"].contains(row.identifier?.rawValue) {
             stack.setCustomSpacing(16, after: rows[i - 1])
         }
-        stack.edgeInsets = NSEdgeInsets(top: 22, left: 24, bottom: 16, right: 24)
+        stack.edgeInsets = NSEdgeInsets(top: 22, left: 20, bottom: 16, right: 20)
         let buttonRow = NSStackView(views: [NSView()] + buttons)
         buttonRow.orientation = .horizontal
-        buttonRow.edgeInsets = NSEdgeInsets(top: 0, left: 24, bottom: 18, right: 24)
-        for button in buttons { button.bezelStyle = .rounded }
+        buttonRow.spacing = 12
+        // A window's buttons sit 20 points from its edges, as macOS's own dialogs have them, each at least 80 wide. A
+        // horizontal stack holds its bottom inset only while it hugs its height (else centring wins and the inset goes).
+        buttonRow.edgeInsets = NSEdgeInsets(top: 0, left: 20, bottom: 20, right: 20)
+        buttonRow.setHuggingPriority(.defaultHigh, for: .vertical)
+        for button in buttons {
+            button.bezelStyle = .rounded
+            button.widthAnchor.constraint(greaterThanOrEqualToConstant: 80).isActive = true
+        }
         let content = NSView()
         let body: NSView
         if scrolls {
@@ -1012,8 +1051,34 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
         ])
         if !scrolls { stack.widthAnchor.constraint(equalToConstant: 560).isActive = true }
         window?.contentView = content
-        if scrolls { window?.setContentSize(NSSize(width: 560, height: 560)) } else { fitHeight(content) }
+        if scrolls {
+            refitPage = { [weak self] in self?.fitScrolling(content, document: stack, buttons: buttonRow) }
+        } else {
+            refitPage = { [weak self] in self?.fitHeight(content) }
+        }
+        refitPage?()
     }
+
+    /// The page shown fitted again, after a list on it opens or closes.
+    private var refitPage: (() -> Void)?
+
+    /// A page that can scroll: as tall as its rows and buttons, up to `scrollingHeight` (or what the screen has room
+    /// for), and only past that does it scroll. A short list keeps no empty space above its buttons.
+    private func fitScrolling(_ content: NSView, document: NSView, buttons: NSView) {
+        guard let window else { return }
+        // Laid out at the window's real width first, so wrapped lines count at the height they take.
+        window.setContentSize(NSSize(width: 560, height: Self.scrollingHeight))
+        content.layoutSubtreeIfNeeded()
+        let rows: CGFloat = document.frame.height
+        let room: CGFloat = (window.screen ?? NSScreen.main).map { (screen: NSScreen) -> CGFloat in screen.visibleFrame.height * 0.8 } ?? Self.scrollingHeight
+        let body: CGFloat = min(rows, min(Self.scrollingHeight, room))
+        let height: CGFloat = body + 8 + buttons.fittingSize.height
+        let frame = window.frameRect(forContentRect: NSRect(origin: .zero, size: NSSize(width: 560, height: height)))
+        window.setFrame(NSRect(x: window.frame.minX, y: window.frame.maxY - frame.height, width: frame.width, height: frame.height), display: true)
+    }
+
+    /// The tallest a scrolling page's rows get before they scroll.
+    static let scrollingHeight: CGFloat = 560
 
     /// The window as tall as what it shows, its top edge where it was: a short page (the chooser with one app, what one
     /// click brought over) after a long one keeps no empty space.

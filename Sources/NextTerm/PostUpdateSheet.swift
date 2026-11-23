@@ -181,12 +181,15 @@ extension PostUpdateSheet {
         for button in [backButton, sendButton] { button.isHidden = editing }
         copyButton.keyEquivalent = editing ? "\r" : ""
         sendButton.keyEquivalent = editing ? "" : "\r"
+        let sendWasHidden: Bool = sendBox.isHidden, statusWasHidden: Bool = status.isHidden
         sendBox.isHidden = editing
         startOver.isEnabled = ready
         for button in [saveButton, sendStepButton, copyButton] { button.isEnabled = ready && hasText }
         reveal.isHidden = saved == nil || !editing
         sendButton.isEnabled = canSend
         status.isHidden = status.stringValue.isEmpty
+        // Back from the send step, or a status line gone: the sheet as tall as what it shows again.
+        if sendBox.isHidden != sendWasHidden || status.isHidden != statusWasHidden { DialogFit.fit(window) }
     }
 
     /// Send can type now: a ready tab picked, a place to post, and a text short enough.

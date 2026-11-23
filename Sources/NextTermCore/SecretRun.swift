@@ -18,8 +18,20 @@ public enum SecretRun {
         Touch ID or your password. NAME is a stored key; ENVNAME, when given, is the variable it is set as. Every \
         other stored key's name is taken out of the command's environment. Nothing is written to standard output.
 
-        For an MCP server, put it in the server's command:
-          nxtrm secret run GITHUB_TOKEN -- npx -y @modelcontextprotocol/server-github
+        For an MCP server, put it in the server's command, ENVNAME being the variable the server reads:
+          nxtrm secret run GH_TOKEN=GITHUB_PERSONAL_ACCESS_TOKEN -- docker run -i --rm -e GITHUB_PERSONAL_ACCESS_TOKEN ghcr.io/github/github-mcp-server
+
+        For a server at a URL that wants a bearer token, give the key a name only this command sets (starting with NXTRM_, 64 characters at most), so an agent that fills in ${...} from its own environment leaves it alone; mcp-remote fills it in \
+        itself (keep the single quotes):
+          nxtrm secret run API_TOKEN=NXTRM_API_TOKEN -- npx -y mcp-remote@0.15.2 https://mcp.example.com/mcp --header 'Authorization: Bearer ${NXTRM_API_TOKEN}'
+
+        To add one to an agent, put the whole line after its own command:
+          codex mcp add docs -- nxtrm secret run API_TOKEN=NXTRM_API_TOKEN -- npx -y mcp-remote@0.15.2 https://mcp.example.com/mcp --header 'Authorization: Bearer ${NXTRM_API_TOKEN}'
+          claude mcp add docs -- nxtrm secret run API_TOKEN=NXTRM_API_TOKEN -- npx -y mcp-remote@0.15.2 https://mcp.example.com/mcp --header 'Authorization: Bearer ${NXTRM_API_TOKEN}'
+        In a JSON or TOML config, nxtrm is the command and the rest are its arguments. Pin each package to a version: \
+        Next Term warns about an npx -y package that runs whatever is newest. Next Term asks you when the server starts: \
+        each time for a key set to ask for Touch ID every time. Claude Code lists NXTRM_ names under missing \
+        environment variables; that is expected: never set or export them.
 
         Internal: nxtrm secret run --ticket <id> is the line Next Term types for run_with_secrets.
         """
@@ -164,9 +176,12 @@ public enum SecretRun {
         /// The variables that can redirect a command, by name, with a SHA-256 of each value.
         public var warn: [String: String]
         public var ticket: String?
+        /// A ticket's wrapper's own `PATH`: the one its tab's shell runs the ticket's command with, so an Always grant
+        /// binds the executable the command resolves to there.
+        public var path: String?
 
         enum CodingKeys: String, CodingKey {
-            case names, map, argv, executable, directory, warn, ticket
+            case names, map, argv, executable, directory, warn, ticket, path
             case argvFull = "argv_full"
         }
 
@@ -356,7 +371,7 @@ public enum SecretRun {
             let time = until.map { clock($0, timeZone: timeZone) } ?? "10 minutes from when you declined it"
             return ("nxtrm: you declined this a few minutes ago, so Next Term won’t ask again until \(time).", 1)
         case .stopped:
-            return ("nxtrm: you chose Decline and Stop Asking for this command, so Next Term won’t ask again until it quits. Resume it in Settings › Secrets.", 1)
+            return ("nxtrm: you chose Don’t Ask Again for this command, so Next Term won’t ask again until it quits. Resume it in Settings › Secrets.", 1)
         case .declining:
             let minutes = until.map { max(1, Int(($0.timeIntervalSince(now) / 60).rounded(.up))) } ?? 60
             return ("nxtrm: Next Term is pausing key requests for the next \(minutes) \(minutes == 1 ? "minute" : "minutes").", 1)
@@ -526,7 +541,7 @@ public enum SecretRun {
         guard isPipx ? unpinnedPipx(command) != nil : SkillReview.unpinnedPackage(command) else { return nil }
         let package = (isPipx ? unpinnedPipx(command) : command.dropFirst().first { !$0.hasPrefix("-") && $0 != "dlx" }) ?? ""
         let lead = command.prefix { $0 != package }.joined(separator: " ")
-        return "\(lead) runs the newest \(package) each time, so code you haven't seen gets the key. Pin a version to avoid this."
+        return "\(lead) runs the newest \(package) each time, so code you haven’t seen gets the key. Pin a version to avoid this."
     }
 
     /// `pipx run`'s package when it has no exact version: the value of `--spec` when given, else the first word after

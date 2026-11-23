@@ -21,6 +21,41 @@ import Testing
         #expect((newer?["result"] as? [String: Any])?["protocolVersion"] as? String == MCPServer.supportedVersions[0])
     }
 
+    /// One prompt, setup (Claude Code's /mcp__next-term__setup), advertised in initialize, listed with no arguments, and
+    /// given as the paste prompt in one user message; an unknown name is an invalid-params error.
+    @Test func theSetupPromptIsListedAndGiven() throws {
+        let initialize = answer(["jsonrpc": "2.0", "id": 1, "method": "initialize", "params": ["protocolVersion": "2025-06-18"]])
+        let capabilities = (initialize?["result"] as? [String: Any])?["capabilities"] as? [String: Any]
+        #expect((capabilities?["prompts"] as? [String: Any])?["listChanged"] as? Bool == false && capabilities?["tools"] != nil)
+
+        let list = try #require((answer(["jsonrpc": "2.0", "id": 2, "method": "prompts/list"])?["result"] as? [String: Any])?["prompts"] as? [[String: Any]])
+        #expect(list.count == 1)
+        #expect(list.first?["name"] as? String == "setup" && list.first?["title"] as? String == "Set up Next Term")
+        #expect((list.first?["arguments"] as? [Any])?.isEmpty == true && !(list.first?["description"] as? String ?? "").isEmpty)
+
+        let got = try #require(answer(["jsonrpc": "2.0", "id": 3, "method": "prompts/get", "params": ["name": "setup"]])?["result"] as? [String: Any])
+        let messages = try #require(got["messages"] as? [[String: Any]])
+        #expect(messages.count == 1 && messages.first?["role"] as? String == "user")
+        let content = try #require(messages.first?["content"] as? [String: Any])
+        let text = try #require(content["text"] as? String)
+        #expect(content["type"] as? String == "text" && text == MCPServer.setupPrompt)
+        #expect(text.hasPrefix("Set up Next Term for me using its MCP tools.\n1. Call `list_tabs`"))
+        for step in ["ask me to restart you", "`next-term-setup` skill with `get_skill`", "`list_import_sources` and `preview_import`",
+                     "`settings_get`", "one plan as a table", "Apply it with `apply_setup` in one approval on my Mac", "how to undo it",
+                     "three shortcuts from `list_shortcuts`", "never print a key"] {
+            #expect(text.contains(step), "\(step)")
+        }
+        // Every tool it names is one the server lists, apply_setup's one approval among them.
+        let quoted = text.components(separatedBy: "`").enumerated().filter { $0.offset % 2 == 1 }.map(\.element)
+        let named = Set(quoted.filter { $0.contains("_") && !$0.contains(" ") })
+        #expect(named.contains("list_tabs") && named.contains("preview_import") && named.contains("apply_setup"))
+        for name in named { #expect(MCPServer.tool(named: name) != nil, "\(name)") }
+        #expect(!text.contains("'") && !text.contains("\""))
+
+        let unknown = answer(["jsonrpc": "2.0", "id": 4, "method": "prompts/get", "params": ["name": "nope"]])
+        #expect((unknown?["error"] as? [String: Any])?["code"] as? Int == -32602)
+    }
+
     /// Claude Code keeps a server's instructions up to 2,048 characters and cuts the rest, so every sentence must fit in
     /// them, the secret tools' at the end included, and with the parallel-tabs offer in front too.
     @Test func theInstructionsFitInTwoThousandAndFortyEightCharacters() {
@@ -29,13 +64,24 @@ import Testing
                 let said = MCPServer.instructions(inTab: inTab, offeringTabs: offering)
                 #expect(said.utf16.count <= 2048, "\(said.utf16.count) characters, in a tab: \(inTab), offering tabs: \(offering)")
                 #expect(said.hasSuffix("store_secret saves a key you already hold."))
+                // One line break: Secrets' line, then the rest.
+                #expect(said.components(separatedBy: "\n").count == 2)
             }
         }
     }
 
+    /// Asked to run or hand off work with another agent in a tab, an agent uses Next Term's tabs, not its subagents, and
+    /// the ask is the yes: in the instructions and in new_tab's description.
+    @Test func anAskToRunAnotherAgentInATabIsTheYes() throws {
+        #expect(MCPServer.instructions.contains("use tabs, not subagents: the ask is the yes"))
+        let newTab = try #require(MCPServer.tools.first { $0.name == "new_tab" })
+        #expect(newTab.description.contains("not your own subagents: their ask is the yes"))
+        #expect(newTab.description.contains("Command Code's"))
+    }
+
     /// OpenCode is named beside Claude Code and Codex wherever the server gives agents as examples.
     @Test func theAgentExamplesNameOpencode() throws {
-        #expect(MCPServer.instructions.contains(#"a command such as "claude", "codex" or "opencode""#))
+        #expect(MCPServer.instructions.contains(#"a command such as "claude", "codex" or "opencode"; Command Code's is "cmd""#))
         for name in ["new_tab", "check_host", "new_remote_tab"] {
             let tool = try #require(MCPServer.tools.first { $0.name == name })
             #expect(tool.description.contains("opencode"), "\(name)")
@@ -61,6 +107,7 @@ import Testing
     }
 
     @Test func toolsAreListedWithHonestAnnotations() throws {
+        // Every tool, with or without a list of MCP servers.
         let reply = answer(["jsonrpc": "2.0", "id": "a", "method": "tools/list"])
         let tools = try #require((reply?["result"] as? [String: Any])?["tools"] as? [[String: Any]])
         #expect(tools.count == MCPServer.tools.count)
@@ -89,10 +136,11 @@ import Testing
         let answer = try #require(tools.first { $0["name"] as? String == "answer_agent" }?["inputSchema"] as? [String: Any])
         #expect(answer["required"] as? [String] == ["tab_id", "question_id"])
         // Only the tools that reach a server over ssh, or GitHub for a skill, go beyond this Mac.
-        let remote: Set<String> = ["check_host", "new_remote_tab", "host_sessions", "host_changes", "install_skill"]
+        let remote: Set<String> = ["check_host", "new_remote_tab", "host_sessions", "end_session", "host_changes", "install_skill",
+                                   "start_agent"]
         #expect(tools.allSatisfy { (($0["annotations"] as? [String: Any])?["openWorldHint"] as? Bool) == remote.contains($0["name"] as? String ?? "") })
         // Saving hosts, opening remote tabs and running anything on a host: clients ask first.
-        for name in ["add_host", "remove_host", "check_host", "new_remote_tab", "host_sessions", "host_changes"] {
+        for name in ["add_host", "remove_host", "edit_host", "check_host", "new_remote_tab", "host_sessions", "end_session", "host_changes"] {
             #expect(hints(name)["destructiveHint"] as? Bool == true)
         }
         #expect(hints("list_hosts")["readOnlyHint"] as? Bool == true)
@@ -108,7 +156,7 @@ import Testing
         // Every schema is a JSON object schema (the raw strings parse).
         #expect(tools.allSatisfy { ($0["inputSchema"] as? [String: Any])?["type"] as? String == "object" })
         let loaded = tools.filter { !MCPServer.isDeferred($0["name"] as? String ?? "") }
-        let loadedCount: Int = tools.count - MCPServer.importTools.count - MCPServer.taskTools.count
+        let loadedCount: Int = tools.count - 3 - MCPServer.setupTools.count - MCPServer.taskTools.count - MCPServer.hubTools.count // 3: apply_import, undo_import, reopen_before_update
         #expect(loaded.count == loadedCount)
         let kept: [Bool] = loaded.map { tool in
             let meta: [String: Any] = tool["_meta"] as? [String: Any] ?? [:]
@@ -1716,10 +1764,12 @@ struct SplitMix: RandomNumberGenerator {
 @Suite struct MCPHerdrAgentTests {
     func description(_ name: String) -> String { MCPServer.tool(named: name)?.description ?? "" }
 
-    @Test func noNewToolAndTheInstructionsOnlyNameThem() {
-        // 31 + 12 + 4 + 5 (Secrets' five, import_secrets the fifth), and add_task: as many as without herdr's agents'
-        // ids.
-        #expect(MCPServer.tools.count == 52 + MCPServer.taskTools.count)
+    @Test func toolCountAndTheInstructionsOnlyNameThem() {
+        // 31 + 13 (run_command the 13th) + 4 + 5 (Secrets' five, import_secrets the fifth), and add_task, as many as without
+        // herdr's agents' ids; then edit_host and end_session (plan 010a U6a), rename_tab (U5a) and start_agent (U5b), and
+        // apply_setup, and reopen_before_update; then the MCP hub's add_mcp_server and list_mcp_servers; then switch_view (plan 041); then set_token_budget.
+        #expect(MCPServer.tools.count == 61 + MCPServer.setupTools.count + MCPServer.taskTools.count + MCPServer.hubTools.count + MCPServer.handoverTools.count)
+        #expect(MCPServer.hubTools.count == 2)
         #expect(!MCPServer.tools.contains { $0.name.contains("herdr") })
         // Five characters more, and no sentence: list_tabs' description says the rest.
         #expect(MCPServer.instructions.contains("list_tabs shows every project, tab and herdr agent with its state"))
@@ -1735,13 +1785,13 @@ struct SplitMix: RandomNumberGenerator {
         }
         #expect(description("host_sessions").contains("herdr_sessions") && description("host_sessions").contains("herdr agent's id"))
         #expect(description("new_remote_tab").contains("herdr_sessions from host_sessions"))
-        #expect(description("list_tabs").contains("read_tab, wait_for_tab, send_to_tab, press_keys, answer_agent, show_tab and focus_tab take that id"))
+        #expect(description("list_tabs").contains("read_tab, wait_for_tab, send_to_tab, press_keys, answer_agent, show_tab, close_tab and focus_tab take that id"))
         // herdr's own machines, and how long an agent has waited.
         #expect(description("list_tabs").contains("machine") && description("list_tabs").contains("/@, the machine's id"))
         #expect(description("list_tabs").contains("waiting_seconds"))
-        // The schema's words for it, on exactly the seven tools an agent's id works with.
+        // The schema's words for it, on exactly the eight tools an agent's id works with.
         let taking = MCPServer.tools.filter { $0.inputSchema.contains("or a herdr agent's id from its herdr_agents") }.map(\.name)
-        #expect(Set(taking) == ["read_tab", "wait_for_tab", "send_to_tab", "press_keys", "answer_agent", "show_tab", "focus_tab"])
+        #expect(Set(taking) == ["read_tab", "wait_for_tab", "send_to_tab", "press_keys", "answer_agent", "show_tab", "close_tab", "focus_tab"])
     }
 
     @Test func theBridgeSaysWhichHerdrPaneTheCallerRunsIn() throws {

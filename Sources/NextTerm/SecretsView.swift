@@ -26,18 +26,18 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
     }
     static let docsURL = URL(string: "https://nxtrm.mishuk.me/docs/secrets/")!
 
-    static let secureEnclaveLine = "Protected by this Mac's Secure Enclave. Using a key needs your approval with Touch ID or your password."
-    static let recoveryLine = "Protected by this Mac's Secure Enclave, with a copy of its key in your login keychain so updates keep working. "
+    static let secureEnclaveLine = "Protected by this Mac’s Secure Enclave. Using a key needs your approval with Touch ID or your password."
+    static let recoveryLine = "Protected by this Mac’s Secure Enclave, with a copy of its key in your login keychain so updates keep working. "
         + "Using a key needs your approval with Touch ID or your password."
     static let lessProtectedLine = "Less protected: this Mac has no Secure Enclave. Next Term asks for Touch ID or your password, but the key "
         + "that opens Secrets is in your login keychain."
-    static let cantOpenLine = "These keys were saved on another Mac, or this Mac's Secure Enclave was reset, so they can't be opened here."
-    static let tamperedLine = "Secrets' file was changed outside Next Term, so no key is released. Start Over, or restore the file from a backup."
+    static let cantOpenLine = "These keys were saved on another Mac, or this Mac’s Secure Enclave was reset, so they can’t be opened here."
+    static let tamperedLine = "Secrets’ file was changed outside Next Term, so no key is released. Start Over, or restore the file from a backup."
     static let tooLargeLine = "Secrets’ file is larger than Next Term can read (8 MB), so no key is released. Start Over, or restore an "
         + "older copy of the file from a backup."
-    static let unlistedLine = "Next Term's list of the vaults it made on this Mac is missing from the login keychain, so it can't tell these "
+    static let unlistedLine = "Next Term’s list of the vaults it made on this Mac is missing from the login keychain, so it can\u{2019}t tell these "
         + "keys are its own, and no key is released. Start Over to make a new vault."
-    static let agentControlLine = "Agents and MCP servers can't use these keys while “Let agents control Next Term” is off "
+    static let agentControlLine = "Agents and MCP servers can’t use these keys while “Let agents control Next Term” is off "
         + "(Settings › Editor › Agents)."
     static let writeOnlyLine = "Never shown: Next Term never shows or copies this key. Replace it to change it."
     static let emptyLine = "No keys yet. Add one, or import them from a file or your MCP configs."
@@ -67,6 +67,8 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
     /// Import From: A File… and MCP Configs….
     private(set) var importMenuButton = NSPopUpButton(frame: .zero, pullsDown: true)
     private let allowedBox = NSStackView()
+    /// The Always approvals, by key (SecretsViewAlways.swift).
+    let alwaysBox = NSStackView()
     private(set) var allowedRows: [(grant: SecretGrant, revoke: NSButton)] = []
     private(set) var revokeAllButton = NSButton(title: "Revoke All", target: nil, action: nil)
     private let pausedBox = NSStackView()
@@ -77,6 +79,8 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
     private(set) var reminderSettings = SecretReminderSettingsView()
     /// New keys: "Never show their values" and "Ask for Touch ID every time they’re used".
     private(set) var newKeySettings = SecretNewKeySettingsView()
+    /// "Agents look here first": the next-term-secrets skill added to agents' own skills folder, or not.
+    private(set) var skillSetting = SecretsSkillSettingView()
     private var resumeActions: [ObjectIdentifier: () -> Void] = [:]
 
     private(set) var entries: [SecretVault.Entry] = []
@@ -111,6 +115,7 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
         build()
         NotificationCenter.default.addObserver(self, selector: #selector(reload), name: SecretsStore.changed, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(reload), name: SecretRequests.changed, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(reload), name: SecretAlways.changed, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(refreshAges), name: SecretReminders.checked, object: nil)
         for name in [SecretsStore.locked, NSApplication.willHideNotification] {
             endObservers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
@@ -211,21 +216,30 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
         configureImportMenu()
         let valueButtons = NSStackView(views: [revealButton, copyButton, writeOnlyButton, NSView(), importMenuButton])
         valueButtons.spacing = 8
-        for box in [allowedBox, pausedBox, importsBox] {
+        for box in [allowedBox, alwaysBox, pausedBox, importsBox] {
             box.orientation = .vertical
             box.alignment = .leading
             box.spacing = 6
         }
         let footer = SecretApprovalPanel.label(Self.footer, size: 11)
         footer.textColor = .secondaryLabelColor
-        let docs = NSButton(title: "What Secrets protects, and what it doesn't", target: self, action: #selector(openDocs))
+        let docs = NSButton(title: "What Secrets protects, and what it doesn’t", target: self, action: #selector(openDocs))
         docs.bezelStyle = .inline
+        signInsLabel.font = .systemFont(ofSize: 12)
+        signInsLabel.textColor = .secondaryLabelColor
+        signOutAllButton.target = self
+        signOutAllButton.action = #selector(signOutAll)
+        signOutAllButton.bezelStyle = .rounded
+        signOutAllButton.controlSize = .small
+        signInsRow.setViews([signInsLabel, signOutAllButton], in: .leading)
+        signInsRow.spacing = 8
+        signInsRow.alignment = .firstBaseline
         let rows: [NSView] = [statusLabel, startOverButton, agentControlLabel, tableScroll, emptyLabel, writeOnlyLabel, keyButtons,
-                              valueButtons, actionLabel, newKeySettings, reminderSettings, allowedBox, importsBox, pausedBox, footer,
-                              docs]
+                              valueButtons, actionLabel, signInsRow, newKeySettings, skillSetting, reminderSettings, allowedBox, alwaysBox, importsBox,
+                              pausedBox, footer, docs]
         for row in rows { content.addArrangedSubview(row) }
         let wide: [NSView] = [statusLabel, agentControlLabel, tableScroll, emptyLabel, writeOnlyLabel, keyButtons, valueButtons,
-                              actionLabel, newKeySettings, reminderSettings, allowedBox, importsBox, pausedBox, footer]
+                              actionLabel, newKeySettings, skillSetting, reminderSettings, allowedBox, alwaysBox, importsBox, pausedBox, footer]
         for row in wide {
             row.widthAnchor.constraint(equalTo: content.widthAnchor, constant: -32).isActive = true
         }
@@ -246,9 +260,9 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
     /// the table fills the list from the start and its columns resize together: none is squeezed out, and the list
     /// never scrolls sideways. A cell cut short has its whole text as its tooltip.
     static let columns: [Column] = [Column(id: "name", title: "Name", width: 84, minWidth: 64),
-                                    Column(id: "purpose", title: "What it's for", width: 70, minWidth: 44),
+                                    Column(id: "purpose", title: "What it’s for", width: 70, minWidth: 44),
                                     Column(id: "page", title: "Page", width: 78, minWidth: 48),
-                                    Column(id: "writeOnly", title: "", width: 20, minWidth: 18, maxWidth: 28),
+                                    Column(id: "writeOnly", title: "", width: 24, minWidth: 22, maxWidth: 30),
                                     Column(id: "rotated", title: "Rotated", width: 66, minWidth: 48),
                                     Column(id: "used", title: "Last used", width: 64, minWidth: 48)]
 
@@ -271,7 +285,7 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
         table.intercellSpacing = NSSize(width: 8, height: table.intercellSpacing.height)
         table.dataSource = self
         table.delegate = self
-        table.rowHeight = 22
+        table.rowHeight = 24
         table.usesAlternatingRowBackgroundColors = true
         table.allowsMultipleSelection = false
         table.target = self
@@ -287,7 +301,12 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
 
     // MARK: data
 
+    let signInsLabel = NSTextField(labelWithString: "")
+    let signOutAllButton = NSButton(title: "Sign Out of All\u{2026}", target: nil, action: nil)
+    private let signInsRow = NSStackView()
+
     @objc func reload() {
+        skillSetting.reload() // a copy added, edited or removed elsewhere shows as it is now
         let store = SecretsStore.shared
         // The selected key, by its id, before the list changes: its row may hold another key after a delete elsewhere,
         // and a rename keeps the id, not the name.
@@ -311,8 +330,26 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
         importMenuButton.isEnabled = !broken
         refreshButtons()
         reloadAllowed()
+        reloadAlways()
         reloadImports()
         reloadPaused()
+        reloadSignIns()
+    }
+
+    /// The sign-ins to MCP servers, kept under a key of the vault's own that no list shows: one line, and Sign Out of
+    /// All…, only while there are some.
+    func reloadSignIns() {
+        let count = MCPHubSignIns.peek()?.records.count ?? 0
+        signInsRow.isHidden = count == 0
+        signInsLabel.stringValue = "Sign-ins to MCP servers: \(count) \(count == 1 ? "server" : "servers"), kept here for your agents."
+        signInsLabel.toolTip = "Next Term signs in to these in Settings \u{203A} MCP Servers, and keeps them signed in. No agent gets them."
+    }
+
+    @objc func signOutAll() {
+        MCPHubSignIns.signOutAll { [weak self] said in
+            self?.reload()
+            self?.say(said)
+        }
     }
 
     /// `unlisted`: a refused vault is one this Mac has no record of, not one whose file changed. `tooLarge`: its file is
@@ -357,8 +394,7 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         guard entries.indices.contains(row) else { return nil }
         let entry = entries[row]
-        let cell = NSTextField(labelWithString: "")
-        cell.lineBreakMode = .byTruncatingTail
+        let cell = SecretsCellField.make()
         switch tableColumn?.identifier.rawValue {
         case "name":
             cell.stringValue = entry.name
@@ -370,7 +406,8 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
         case "page":
             Self.fillPageCell(cell, SecretsStore.shared.pageLink(of: entry.name))
         case "writeOnly":
-            return Self.neverShownCell(entry)
+            // A key never shown has its lock; any other, an eye that reveals it (Touch ID first).
+            return entry.writeOnly ? Self.neverShownCell(entry) : revealCell(entry, row: row)
         case "rotated":
             Self.fillRotatedCell(cell, entry, now: Date())
         default:
@@ -510,11 +547,37 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
         bottom.widthAnchor.constraint(equalTo: allowedBox.widthAnchor).isActive = true
     }
 
-    /// "Codex: GITHUB_TOKEN for npx -y … in api, 12 min".
+    /// "Codex: GITHUB_TOKEN for npx -y … in api, 12 min"; a session's: "Claude Code's session: OPENAI_API_KEY for any
+    /// command, until it ends".
     static func grantText(_ grant: SecretGrant, now: ContinuousClock.Instant = .now) -> String {
         let binding = grant.binding
-        let who = binding.program.isEmpty ? "A command" : AgentName.of(program: binding.program)
         let command = SecretApprovalPanel.sanitized(binding.command.joined(separator: " "), limit: 80)
+        if grant.kind == .session, !grant.wide {
+            // This exact request again, for its session: outside the tabs that agent process, else its run in its tab.
+            let agent = binding.program.isEmpty ? "The agent" : AgentName.of(program: binding.program)
+            let outside = grant.session.map(SecretSessions.isOutsideTabs) ?? false
+            return "\(agent)\u{2019}s session\(outside ? " outside Next Term\u{2019}s tabs" : ""): \(SecretRun.keysText(binding.names)) for "
+                + "\(command), until the session ends"
+        }
+        if let scope = grant.scope, grant.kind == .worktree || grant.kind == .folder {
+            let who = binding.program.isEmpty ? "A command" : AgentName.of(program: binding.program)
+            let place = (scope.path as NSString).lastPathComponent
+            let where_ = grant.kind == .worktree ? "anywhere in the worktree \u{201C}\(place)\u{201D}" : "in \u{201C}\(place)\u{201D}"
+            return "\(who): \(SecretRun.keysText(binding.names)) for \(command) \(where_), until Next Term quits"
+        }
+        if grant.kind == .session {
+            // A wrapper names its agent; run_with_secrets names the command's program, so its tab says whose session it is.
+            let tabID: String? = grant.session.flatMap { $0.hasPrefix("tab:") ? $0.split(separator: ":").dropFirst().first.map(String.init) : nil }
+            let tab: TerminalTab? = tabID.flatMap { id in AppDelegate.shared.controllers.flatMap(\.tabs).first { $0.id.uuidString == id } }
+            // A wrapper names its agent; a run_with_secrets session's is the one in front of its tab (its tab closing ends it).
+            let front: String? = tab.flatMap { $0.status.running && $0.status.kind == .agent ? AgentName.of(program: $0.status.program) : nil }
+            let agent: String = binding.source == .wrapper && !binding.program.isEmpty ? AgentName.of(program: binding.program) : front ?? "The agent"
+            let place: String = tab.map { " in \u{201C}\(SecretApprovalPanel.sanitized($0.title, limit: 60))\u{201D}" } ?? ""
+            // Which door it answers: run_with_secrets' commands, or the servers nxtrm secret run starts.
+            let door: String = binding.source == .wrapper ? "for any server it starts with nxtrm secret run" : "for any command it runs through Next Term"
+            return "\(agent)\u{2019}s session\(place): \(SecretRun.keysText(binding.names)) \(door), until the session ends"
+        }
+        let who = binding.program.isEmpty ? "A command" : AgentName.of(program: binding.program)
         let folder = (binding.folder as NSString).lastPathComponent
         let left: String
         if let expires = grant.expires {
@@ -542,7 +605,7 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
                          + "\(SecretRequests.clockText(pause.untilDate)).", { requests.resume(binding) }))
         }
         for asker in limits.stopped.sorted() {
-            rows.append(("\(Self.askerText(asker)): you chose Decline and Stop Asking.", { requests.resume(asker: asker) }))
+            rows.append(("\(Self.askerText(asker)): you chose Don’t Ask Again.", { requests.resume(asker: asker) }))
         }
         for asker in limits.limitedAskers where !limits.stopped.contains(asker) {
             rows.append(("\(Self.askerText(asker)): asked too often this session.", { requests.resume(asker: asker) }))
@@ -567,7 +630,7 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
 
     /// Who an asker is, in words.
     static func askerText(_ asker: String) -> String {
-        if asker == "outside" { return "Agents outside Next Term's tabs" }
+        if asker == "outside" { return "Agents outside Next Term’s tabs" }
         if asker.hasPrefix("remote") { return "A remote connection" }
         if asker.hasPrefix("wrapper:") {
             let path = asker.dropFirst("wrapper:".count).split(separator: ":").first.map(String.init) ?? "none"
@@ -579,7 +642,7 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
         return "An agent in a tab that has closed"
     }
 
-    private static func heading(_ text: String) -> NSTextField {
+    static func heading(_ text: String) -> NSTextField {
         let label = NSTextField(labelWithString: text)
         label.font = .systemFont(ofSize: 13, weight: .semibold)
         return label
@@ -684,6 +747,27 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
 
     /// The Touch ID it asks for ends with Reveal (`endReveal`), and an approval that comes after that shows nothing:
     /// the value is dropped, its bytes wiped.
+    /// The eye in a key's row: Reveal for that key, one click.
+    private func revealCell(_ entry: SecretVault.Entry, row: Int) -> NSView {
+        let help = "Reveal \(entry.name) (asks for Touch ID or your password)"
+        let button = NSButton(image: NSImage(systemSymbolName: "eye", accessibilityDescription: help) ?? NSImage(),
+                              target: self, action: #selector(revealRow(_:)))
+        button.isBordered = false
+        button.imagePosition = .imageOnly
+        button.contentTintColor = .secondaryLabelColor
+        button.tag = row
+        button.toolTip = help
+        button.setAccessibilityLabel("Reveal \(entry.name)")
+        return button
+    }
+
+    @objc private func revealRow(_ sender: NSButton) {
+        guard entries.indices.contains(sender.tag) else { return }
+        table.selectRowIndexes(IndexSet(integer: sender.tag), byExtendingSelection: false)
+        refreshButtons()
+        reveal()
+    }
+
     @objc func reveal() {
         guard let entry = selectedEntry, !entry.writeOnly else { return }
         revealTask?.cancel() // the newer Reveal asks instead
@@ -726,9 +810,12 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
         }
         let alert = NSAlert()
         alert.messageText = "Start over with an empty Secrets?"
-        alert.informativeText = "Next Term keeps the old folder as \(name). MCP servers that use these keys won't start until you add them again."
-        alert.addButton(withTitle: "Start Over")
-        alert.addButton(withTitle: "Cancel")
+        alert.informativeText = "Next Term keeps the old folder as \(name). MCP servers that use these keys won\u{2019}t start until you add them again."
+        // Every key goes: Cancel holds Return, and Start Over is marked destructive.
+        let over = alert.addButton(withTitle: "Start Over")
+        over.keyEquivalent = ""
+        over.hasDestructiveAction = true
+        alert.addButton(withTitle: "Cancel").keyEquivalent = "\r"
         confirm(alert) { [weak self] in
             do {
                 try SecretsStore.shared.startOver()
@@ -806,15 +893,20 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
         let alert = NSAlert()
         alert.messageText = "Put \(names.count) \(names.count == 1 ? "key" : "keys") back into these files as plain text?"
         alert.informativeText = Set(row.backups.map(\.path)).sorted().map { "• " + SecretImportSheet.file($0) }.joined(separator: "\n")
-        alert.addButton(withTitle: "Put Back")
-        alert.addButton(withTitle: "Cancel")
+        // Keys written into files as plain text: Cancel holds Return, and Put Back is marked destructive.
+        let back = alert.addButton(withTitle: "Put Back")
+        back.keyEquivalent = ""
+        back.hasDestructiveAction = true
+        alert.addButton(withTitle: "Cancel").keyEquivalent = "\r"
         let box = NSButton(checkboxWithTitle: "Also delete these keys from Secrets", target: nil, action: nil)
         box.state = .off
         alert.accessoryView = box
         undoDeleteBox = box
         self.alert = alert
+        let escape: Any? = alert.escapePressesCancel() // Cancel holds Return, so Escape is given back to it
         alert.beginSheetModal(for: window) { [weak self] response in
             MainActor.assumeIsolated {
+                if let escape { NSEvent.removeMonitor(escape) }
                 guard let self else { return }
                 self.alert = nil
                 let delete = box.state == .on
@@ -1002,4 +1094,39 @@ final class UndoOutcome: @unchecked Sendable {
 /// A document view whose rows start at the top.
 private final class SecretsFlippedView: NSView {
     override var isFlipped: Bool { true }
+}
+
+/// A cell of the list: one line, cut at its end, set in the middle of its row's height so every column's text shares a
+/// baseline.
+final class SecretsCellField: NSTextField {
+    static func make() -> SecretsCellField {
+        let field = SecretsCellField(labelWithString: "")
+        field.cell = CenteredCell(textCell: "")
+        field.isBordered = false
+        field.drawsBackground = false
+        field.isEditable = false
+        field.isSelectable = false
+        field.font = .systemFont(ofSize: 12)
+        field.textColor = .labelColor
+        field.lineBreakMode = .byTruncatingTail
+        field.cell?.truncatesLastVisibleLine = true
+        field.cell?.usesSingleLineMode = true
+        return field
+    }
+
+    private final class CenteredCell: NSTextFieldCell {
+        override func titleRect(forBounds rect: NSRect) -> NSRect {
+            var title = super.titleRect(forBounds: rect)
+            let height = cellSize(forBounds: rect).height
+            if height < title.height {
+                title.origin.y += ((title.height - height) / 2).rounded()
+                title.size.height = height
+            }
+            return title
+        }
+
+        override func drawInterior(withFrame frame: NSRect, in view: NSView) {
+            super.drawInterior(withFrame: titleRect(forBounds: frame), in: view)
+        }
+    }
 }

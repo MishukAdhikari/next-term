@@ -4,7 +4,7 @@ import Foundation
 // whole script lines are never kept.
 
 extension ProjectFacts {
-    /// Python's manifests, then `package.json`, `Gemfile` and `mix.exs`, each read once.
+    /// Python's manifests, then `package.json`, `Gemfile`, `mix.exs` and `Cargo.toml`, each read once.
     mutating func readManifests(_ reader: inout FactReader, startWords: [String]) {
         readRequirements(&reader)
         readPyproject(&reader, startWords: startWords)
@@ -20,7 +20,22 @@ extension ProjectFacts {
         if let text = reader.text("mix.exs") {
             addDependencies(Self.matches(Self.hexPattern, in: text), file: "mix.exs", ecosystem: .hex)
         }
+        if let text = reader.text("Cargo.toml"), case .success(let table) = TOMLReader.parse(text) {
+            addDependencies(Self.crateNames(.table(table)), file: "Cargo.toml", ecosystem: .cargo)
+        }
     }
+
+    /// The crates `Cargo.toml` depends on: `[dependencies]`, `[dev-dependencies]`, `[build-dependencies]` and the
+    /// workspace's, by name only.
+    static func crateNames(_ root: TOMLValue) -> [String] {
+        let tables: [TOMLValue?] = ["dependencies", "dev-dependencies", "build-dependencies"].map { (name: String) -> TOMLValue? in
+            root[name]
+        } + [root["workspace", "dependencies"]]
+        return tables.flatMap { (table: TOMLValue?) -> [String] in (table?.table ?? [:]).keys.sorted() }
+            .filter { (name: String) -> Bool in name.wholeMatch(of: crateName) != nil }
+    }
+
+    private static let crateName = #/[A-Za-z0-9_-]{1,64}/#
 
     /// `gem "rails"` at the start of a line; a commented-out gem is not one.
     static let gemPattern = try? NSRegularExpression(pattern: #"(?m)^[ \t]*gem[ \t]+["']([A-Za-z0-9._-]{1,100})["']"#)

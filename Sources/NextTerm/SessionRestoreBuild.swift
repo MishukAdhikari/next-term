@@ -15,6 +15,8 @@ enum RestorePlanning {
     struct Planned {
         var plans: [PanePlan]
         var folders: [String: FolderCheck]
+        /// The planner ran out of time and planned again reading nothing more (`planBudget`).
+        var timedOut = false
 
         /// The folder was found gone. One not checked in time may still be there.
         func isGone(_ path: String) -> Bool { folders[path] == .gone }
@@ -39,10 +41,12 @@ enum RestorePlanning {
         let checkFolder = { (path: String) -> FolderCheck in checks[path] ?? .notChecked }
         let hosts = hostNames()
         let lookup = SessionLookup.live(home: agents).freeing(freed)
+        // How a tab's shell starts `nxtrm` in this build: an agent session resumes by it (plan 035 U7).
+        let launcher = ACPSessionTabs.launcher
         let world = RestorePlanner.World(home: home, checkFolder: checkFolder, resumeFacts: { evidence, folder, projects in
             ResumeFacts.read(for: evidence, projects: projects, tabFolder: folder,
                              sessionAvailable: lookup.available(evidence, home: agents), home: agents)
-        }, sessions: lookup, hostNames: hosts)
+        }, sessions: lookup, hostNames: hosts, agentLauncher: launcher)
         let result = Result()
         let done = DispatchSemaphore(value: 0)
         let job = Job(snapshot: snapshot, kind: kind, safeMode: safeMode, quitConsent: quitConsent, world: world)
@@ -54,9 +58,9 @@ enum RestorePlanning {
         // Out of time: the same plan with nothing more read. Folders keep what was found of them.
         let empty = SessionLookup(read: { _, _, _ in [] }, newest: { _, _, _, _ in nil })
         let blind = RestorePlanner.World(home: home, checkFolder: checkFolder, resumeFacts: { _, _, _ in ResumeFacts() },
-                                         sessions: empty, hostNames: hosts)
+                                         sessions: empty, hostNames: hosts, agentLauncher: launcher)
         let plans = RestorePlanner.plan(snapshot, kind: kind, safeMode: safeMode, quitConsent: quitConsent, world: blind)
-        return Planned(plans: plans, folders: checks)
+        return Planned(plans: plans, folders: checks, timedOut: true)
     }
 
     /// The names the user gave hosts, by host id.
@@ -188,8 +192,21 @@ enum RestoreBuild {
         // Every window is counted for the window column before the first is made: each is laid out with it, and each pane
         // has its real size before its shell starts, rather than a narrower one a moment after.
         app.windowColumns.expecting = snapshot.windows.count
-        for window in snapshot.windows {
-            guard let controller = build(window, screens: screens, gone: planned.isGone, maker: &maker) else { continue }
+        // Windows merged into one take its frame, the tab in front's, and are laid out under its tab bar before they are
+        // filled: each pane has the size it keeps before its shell starts (plan 032).
+        var saved: [SessionSnapshot.Window] = snapshot.windows
+        var merged: Set<Int> = []
+        for unit in RestoreLayout.units(saved) where unit.members.count > 1 {
+            for member in unit.members {
+                merged.insert(member)
+                guard member != unit.front else { continue }
+                saved[member].frame = saved[unit.front].frame
+                saved[member].screen = saved[unit.front].screen
+            }
+        }
+        for (index, window) in saved.enumerated() {
+            guard let controller = build(window, screens: screens, merged: merged.contains(index), gone: planned.isGone,
+                                         maker: &maker) else { continue }
             shown.append((controller, window))
         }
         app.windowColumns.expecting = shown.count
@@ -200,12 +217,32 @@ enum RestoreBuild {
             app.adoptRestored(shown[index].controller)
         }
         app.windowColumns.expecting = 0
-        for entry in shown.reversed() {
-            app.presentRestored(entry.controller)
-            if entry.window.minimized { entry.controller.window?.miniaturize(nil) }
+        // Back to front, each window as it was: on its own, or merged with the others it was merged with, in their tab
+        // order, the same one in front. Apart, whatever "Prefer tabs" says.
+        let units: [RestoreLayout.Unit] = RestoreLayout.units(shown.map(\.window))
+        WindowTabbing.withoutAutomaticTabbing {
+            for unit in units.reversed() {
+                let front: TerminalWindowController = shown[unit.front].controller
+                app.presentRestored(front)
+                if unit.members.count > 1, let group = front.window?.tabGroup {
+                    for (place, member) in unit.members.enumerated() where member != unit.front {
+                        guard let window = shown[member].controller.window else { continue }
+                        // On screen before it joins, as Reopen's windows are, just behind the front one (no flash, no
+                        // keyboard): a window that only ever came in behind a tab never drew its terminals' text (the
+                        // caret moved over a blank pane) until it was taken out.
+                        if let frontNumber = front.window?.windowNumber { window.order(.below, relativeTo: frontNumber); window.displayIfNeeded() }
+                        group.insertWindow(window, at: min(place, group.windows.count))
+                    }
+                    group.selectedWindow = front.window
+                } else if front.expectsTabBar {
+                    front.expectsTabBar = false // the others it was merged with were not built
+                    front.titleBarChanged(force: true)
+                }
+                if shown[unit.front].window.minimized { front.window?.miniaturize(nil) }
+            }
         }
-        for entry in shown where entry.window.fullScreen && !entry.window.minimized {
-            entry.controller.window?.toggleFullScreen(nil)
+        for unit in units where shown[unit.front].window.fullScreen && !shown[unit.front].window.minimized {
+            shown[unit.front].controller.window?.toggleFullScreen(nil) // a merged window is one Space
         }
         let remote = maker.remoteToStart
         RemoteConnection.whenShellRead {
@@ -215,8 +252,9 @@ enum RestoreBuild {
         return Built(windows: windows, panes: maker.panes, keptRemote: maker.keptRemote, skipped: maker.skipped)
     }
 
-    /// One window, laid out and filled but not shown; nil when none of its tabs could be built.
-    private static func build(_ window: SessionSnapshot.Window, screens: [RestoreLayout.Screen], gone: (String) -> Bool,
+    /// One window, laid out and filled but not shown; nil when none of its tabs could be built. `merged`: it is to be
+    /// merged with others, so laid out under their tab bar.
+    private static func build(_ window: SessionSnapshot.Window, screens: [RestoreLayout.Screen], merged: Bool, gone: (String) -> Bool,
                               maker: inout PaneMaker) -> TerminalWindowController? {
         // A project folder gone since: a plain window, its tabs in the folders left.
         let project = window.project.flatMap { (path: String) -> String? in RestorePlanner.lexical(path) }
@@ -228,6 +266,10 @@ enum RestoreBuild {
         } else {
             controller.window?.center()
         }
+        if merged {
+            controller.expectsTabBar = true
+            controller.titleBarChanged()
+        }
         var selected = 0
         for (index, group) in window.groups.enumerated() {
             guard let root = maker.node(group.root, in: controller) else { continue }
@@ -235,6 +277,7 @@ enum RestoreBuild {
             guard let focused = tabs[group.focused] ?? root.panes.first else { continue }
             let zoomed = group.zoomed.flatMap { (id: UUID) -> TerminalTab? in tabs[id] }
             let built = PaneGroup(root: root, focused: focused, zoomed: zoomed)
+            built.pinned = group.pinned
             let local: [TerminalTab] = built.panes.filter { (tab: TerminalTab) -> Bool in tab.remote == nil }
             controller.insertRestored(built, starting: local)
             if index == window.selected { selected = controller.groups.count - 1 }
@@ -308,7 +351,7 @@ enum RestoreBuild {
                 let keep: KeepMode = plan.outcome == .reattach ? record.keep : .off
                 let session: String? = keep == .off ? nil : record.session
                 let remote = RemoteTab(host: host, directory: record.directory, session: session, keep: keep,
-                                       herdrSession: keep == .herdr ? record.herdrSession : nil)
+                                       herdrSession: keep == .herdr ? record.herdrSession : nil, expectsSession: true)
                 tab = controller.restoredTab(directory: nil, remote: remote, id: id)
                 if keep != .off { keptRemote.append(record) }
                 remoteToStart.append(tab)

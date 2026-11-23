@@ -56,6 +56,7 @@ final class CommitSheet: NSObject, NSTextViewDelegate {
         let title = NSTextField(labelWithString: branch.map { "Commit to “\($0)”" } ?? "Commit (detached HEAD)")
         title.font = .systemFont(ofSize: 15, weight: .semibold)
         Typography.singleLine(title, truncation: .byTruncatingMiddle)
+        title.setContentCompressionResistancePriority(.defaultLow, for: .horizontal) // a long branch name too
 
         message.font = .systemFont(ofSize: 13)
         message.isRichText = false
@@ -124,6 +125,8 @@ final class CommitSheet: NSObject, NSTextViewDelegate {
         let fileList = NSTextField(labelWithAttributedString: list)
         fileList.maximumNumberOfLines = 22
         fileList.lineBreakMode = .byTruncatingMiddle
+        // A long path is cut in its middle, never widening the sheet.
+        fileList.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         amend.target = self
         amend.action = #selector(updateState)
@@ -148,7 +151,7 @@ final class CommitSheet: NSObject, NSTextViewDelegate {
         stack.alignment = .leading
         stack.spacing = 10
         stack.setCustomSpacing(4, after: scroll)
-        stack.edgeInsets = NSEdgeInsets(top: 18, left: 20, bottom: 16, right: 20)
+        stack.edgeInsets = DialogFit.insets
         for view in [scroll, hintRow, buttons] {
             view.translatesAutoresizingMaskIntoConstraints = false
             view.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -40).isActive = true

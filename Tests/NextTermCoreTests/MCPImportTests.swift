@@ -10,14 +10,16 @@ import Testing
 @Suite struct MCPImportToolTests {
     let names = ["list_import_sources", "preview_import", "apply_import", "undo_import"]
 
-    @Test func theImportToolsAreTheirOwnListAndNotAlwaysLoaded() throws {
+    /// The two that only read are always loaded, so an agent sees them without a tool search; the two that ask are not.
+    @Test func theImportToolsAreTheirOwnListAndOnlyTheReadingOnesAlwaysLoaded() throws {
         let listed: [String] = MCPServer.importTools.map(\.name)
         #expect(listed == names)
         for name in names {
             let tool = try #require(MCPServer.tool(named: name))
+            let reads = name == "list_import_sources" || name == "preview_import"
             #expect(MCPServer.isImportTool(name) && !MCPServer.isControlTool(name), "\(name)")
-            #expect(!tool.alwaysLoad, "\(name)")
-            #expect(tool.meta["anthropic/alwaysLoad"] == nil, "\(name)")
+            #expect(tool.alwaysLoad == reads && MCPServer.isDeferred(name) == !reads, "\(name)")
+            #expect(tool.meta["anthropic/alwaysLoad"] as? Bool == (reads ? true : nil), "\(name)")
             #expect(!tool.openWorld, "\(name)")
             let schema = (try? JSONSerialization.jsonObject(with: Data(tool.inputSchema.utf8))) as? [String: Any]
             #expect(schema?["type"] as? String == "object", "\(name)")

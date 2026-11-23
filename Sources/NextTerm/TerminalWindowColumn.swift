@@ -31,9 +31,46 @@ extension TerminalWindowController {
         }
         host.onShownChange = { [weak self] (shown: WindowColumnShown) in self?.windowColumnShownChanged(shown) }
         let column: WindowColumnView = host.column
-        column.onSelect = { (id: Int) in AppDelegate.shared.bringForward(id) }
+        column.onSelect = { [weak self, weak host] (id: Int) in
+            host?.chose() // no list slides out in the window just left
+            if let self { ColumnHints.shared.columnSwitched(to: id, from: self) }
+            AppDelegate.shared.bringForward(id)
+        }
         column.onToggle = { AppDelegate.shared.toggleWindowColumnExpanded(nil) }
+        column.onFold = { (key: String) in AppDelegate.shared.windowColumns.toggleFold(key) }
+        // Its edge dragged: as wide as the pointer says, never past the room the editor and terminal keep beside the
+        // sidebar; in past half its narrowest, folded to the rail, as a macOS sidebar collapses (plan 033).
+        column.onResize = { [weak self] (width: CGFloat?, ended: Bool) in
+            self?.columnDragged(to: width, ended: ended)
+        }
         column.onMore = { AppDelegate.shared.openProjectPanel(nil) }
+    }
+
+    /// A step of the edge's drag (nil: a double-click, back to the default width). Folding shows in this window alone
+    /// while the drag goes on; at its end every window follows, the width from before the drag kept.
+    private func columnDragged(to width: CGFloat?, ended: Bool) {
+        let host: WindowColumnHost = columnHost
+        let windows: WindowColumns = AppDelegate.shared.windowColumns
+        guard let width else { return windows.setWidth(nil, from: self, ended: ended) }
+        if host.dragStartWidth == nil { host.dragStartWidth = WindowColumnWidth.expanded }
+        switch WindowColumnWidth.dragged(width) {
+        case .folded:
+            if !host.dragFolded {
+                host.dragFolded = true
+                placeWindowColumn()
+            }
+            guard ended else { return }
+            WindowColumnWidth.expanded = host.dragStartWidth ?? WindowColumnWidth.expanded
+            host.dragStartWidth = nil
+            AppDelegate.shared.windowColumnExpanded = false // every window folds; the hub's tell places them
+            host.dragFolded = false
+        case .unfolded(let wanted):
+            host.dragFolded = false
+            // Whole points under the room, so rounding never takes it past and folds it for want of room.
+            let room: CGFloat = host.unfoldedRoom().rounded(.down)
+            windows.setWidth(min(wanted, room), from: self, ended: ended)
+            if ended { host.dragStartWidth = nil }
+        }
     }
 
     /// The hub's rows, what changed in them, whether the column shows in every window, and whether the user unfolded it.
@@ -76,16 +113,19 @@ extension TerminalWindowController {
     /// How far the column reaches in from the window's left edge, under the traffic lights: its width with its hairline
     /// while it shows on the left outside full screen, else 0.
     var windowColumnUnderLights: CGFloat {
-        guard !columnHost.columnOnRight, !isFullScreen else { return 0 }
+        guard !columnHost.columnOnRight, lightsBesideBars else { return 0 }
         return columnHost.shown.width
     }
 
-    /// The column's own insets for the traffic lights: folded at the top-left, a strip of title bar over its chevron;
-    /// unfolded, its header's words after them. On the right, or in full screen, it starts at the top.
+    /// The column's own inset for the traffic lights: on the left outside full screen, a strip of title bar over its count
+    /// in every form (WindowColumnGrid), so nothing sits under them and the list on hover, the rail and the pinned column
+    /// keep one grid. On the right, or in full screen, it starts at the top.
     func updateWindowColumnInsets() {
-        let column: WindowColumnView = columnHost.column
-        let underLights: Bool = !columnHost.columnOnRight && !isFullScreen
-        column.topInset = underLights && columnHost.shown.form == .folded ? TabBarView.height : 0
-        column.headerLeading = underLights ? 78 : 8
+        let host: WindowColumnHost = columnHost
+        let underLights: Bool = !host.columnOnRight && lightsBesideBars
+        let inset: CGFloat = underLights ? TabBarView.height : 0
+        guard host.column.topInset != inset else { return }
+        host.hideList(animated: false) // its grid was the old one's
+        host.column.topInset = inset
     }
 }

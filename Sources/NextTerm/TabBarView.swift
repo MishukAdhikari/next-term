@@ -25,6 +25,10 @@ struct TabBarItem: Equatable {
     /// Agent tabs: what the place mark after the title says (its agent works in another checkout than the
     /// window shows, or its branch was switched under it); nil without one.
     var place: String? = nil
+    /// Agent tabs: how full the agent's context is, shown as a small gauge after the title.
+    var context: AgentUsage? = nil
+    /// Terminal tabs: pinned (plan 045). A pin stands where the × would, and a divider follows the last pinned tab.
+    var pinned = false
 }
 
 protocol TabBarViewDelegate: AnyObject {
@@ -143,6 +147,75 @@ final class TabBarView: NSView, ProjectGlowing {
     let updateButton = UpdatePill()
     private var updateWidth: CGFloat { updateButton.isHidden ? 0 : updateButton.width + 8 }
 
+    // MARK: a hint
+
+    /// The hint up in this bar (HintStage puts it there), in `hintRoom`: the free strip between the last control after
+    /// the tabs and the buttons at the end. It takes no room of its own, so the tabs and the keys are laid out as if it
+    /// were not there; when what is left can't hold its words whole it goes (`onHintRoomWent`), before a key or a tab
+    /// would give way: its room went (the bar narrowed, a tab or a button came), the stage takes it down.
+    private(set) var hint: HintLine?
+
+    /// The free strip, in the bar's coordinates, as the last layout left it.
+    var hintRoom: (start: CGFloat, end: CGFloat) {
+        layoutSubtreeIfNeeded()
+        return freeStrip()
+    }
+
+    /// Puts `line` up in the free strip, at its trailing end, without a plate. False, and nothing put up, when the bar
+    /// is not on screen, shows the Update button (a notice of its own), or has no room for the words whole.
+    func showHint(_ line: HintLine) -> Bool {
+        guard hint == nil, window != nil, !isHiddenOrHasHiddenAncestor, updateButton.isHidden else { return false }
+        layoutSubtreeIfNeeded()
+        let strip = freeStrip()
+        guard HintRoom.place(width: line.ownWidth, start: strip.start, end: strip.end) != nil else { return false }
+        line.place = .bar
+        line.onPointerCame = { [weak self] in self?.watchPointer() }
+        addSubview(line)
+        hint = line
+        placeHint()
+        line.appear()
+        return true
+    }
+
+    /// Takes the hint down (HintStage, which counts its showing).
+    func removeHint() {
+        guard let line = hint else { return }
+        hint = nil
+        line.onPointerCame = nil
+        line.removeFromSuperview()
+    }
+
+    /// From the end of what follows the tabs (the +, the », or the last tab) to the first button at the bar's end.
+    private func freeStrip() -> (start: CGFloat, end: CGFloat) {
+        let visibleTabs = tabViews.filter { !$0.isHidden && $0 !== dragging?.view }
+        var start: CGFloat = max(tabsStart, visibleTabs.map(\.frame.maxX).max() ?? 0)
+        if !overflowButton.isHidden { start = max(start, overflowButton.frame.maxX) }
+        if allowsNewTab { start = max(start, newTabButton.frame.maxX) }
+        let more: CGFloat = moreButton == nil ? 0 : Self.moreButtonWidth
+        let end: CGFloat = bounds.width - more - 4 - collapseWidth - revealWidth - updateWidth
+        return (start, end)
+    }
+
+    /// The hint at the strip's trailing end, its height the line's, in the bar's middle; with too little room left it
+    /// hides at once and its room is told gone.
+    private func placeHint() {
+        guard let line = hint else { return }
+        let strip = freeStrip()
+        guard updateButton.isHidden, let placed = HintRoom.place(width: line.ownWidth, start: strip.start, end: strip.end) else {
+            line.isHidden = true
+            DispatchQueue.main.async { [weak self, weak line] in
+                MainActor.assumeIsolated {
+                    guard let self, let line, self.hint === line else { return }
+                    HintStage.shared.placeWent(in: self)
+                }
+            }
+            return
+        }
+        line.isHidden = false
+        let frame = NSRect(x: placed.x, y: ((bounds.height - 1 - HintLine.height) / 2).rounded(), width: placed.width, height: HintLine.height)
+        if line.frame != frame { line.frame = frame }
+    }
+
     /// The title for the accessibility tab group and the close button's tooltip.
     var kind = "tab" { didSet { setAccessibilityLabel(kind == "tab" ? "Terminal tabs" : "Editor tabs") } }
 
@@ -152,6 +225,16 @@ final class TabBarView: NSView, ProjectGlowing {
     var onTopRowMenu: (() -> NSMenu?)?
 
     private(set) var items: [TabBarItem] = []
+    /// The hairline between pinned tabs and the rest.
+    private let pinDivider: NSView = {
+        let line = NSView()
+        line.wantsLayer = true
+        line.themedBackground(Theme.textDim.withAlphaComponent(0.35))
+        line.setAccessibilityElement(false)
+        return line
+    }()
+    /// For the self-test: the divider after the pinned tabs shows.
+    var showsPinDivider: Bool { pinDivider.superview != nil && !pinDivider.isHidden }
     private(set) var selectedIndex = 0
     private var tabViews: [TabItemView] = []
     private let newTabButton = NSButton()
@@ -177,18 +260,32 @@ final class TabBarView: NSView, ProjectGlowing {
     func spokenLabel(at index: Int) -> String? { tabViews[safe: index]?.accessibilityLabel() }
     /// Whether a tab shows its place mark, and its tooltip (for the self-test).
     func showsPlaceMark(at index: Int) -> Bool { tabViews[safe: index]?.showsPlaceMark ?? false }
+    func shownContextPercent(at index: Int) -> Int? { tabViews[safe: index]?.shownContextPercent }
     func toolTip(at index: Int) -> String? { tabViews[safe: index]?.toolTip }
+    /// For the self-test: whether tab `index` heard the pointer come in, and whether it counts its name as cut.
+    func hoverState(at index: Int) -> String { tabViews[safe: index].map { $0.hoverStateForTest } ?? "no tab" }
+    #if DEBUG
+    /// For the self-test: the pointer rests on tab `index`, as the bar follows it there.
+    func restPointerForTest(at index: Int) { tabViews[safe: index]?.pointerRests() }
+    #endif
+    /// For the self-test: tab `index`, in screen coordinates.
+    func screenFrame(at index: Int) -> NSRect? {
+        guard let view = tabViews[safe: index], let window = view.window else { return nil }
+        return window.convertToScreen(view.convert(view.bounds, to: nil))
+    }
     /// The font of a tab's title (for the self-test: a preview's is italic).
     func titleFont(at index: Int) -> NSFont? { tabViews[safe: index]?.titleFont }
     /// The colour of a tab's title (for the self-test: the project's colour leaves it alone).
     func titleColor(at index: Int) -> NSColor? { tabViews[safe: index]?.titleColor }
     /// A tab's view, to click (for the self-test).
     func tabView(at index: Int) -> NSView? { tabViews[safe: index] }
+    /// For the self-test: the tab at `index` shows its pin.
+    func showsPin(at index: Int) -> Bool { tabViews[safe: index]?.showsPin ?? false }
 
     override init(frame: NSRect) {
         super.init(frame: frame)
         wantsLayer = true
-        layer?.backgroundColor = Theme.bar.cgColor
+        themedBackground(Theme.bar)
 
         newTabButton.bezelStyle = .regularSquare
         newTabButton.isBordered = false
@@ -351,6 +448,16 @@ final class TabBarView: NSView, ProjectGlowing {
             view.isHidden = !range.contains(i)
             if !view.isHidden { view.frame = frameForTab(at: i) }
         }
+        // A hairline after the last pinned tab, while unpinned tabs follow it on screen (plan 045).
+        let lastPinned = items.lastIndex { $0.pinned }
+        if let lastPinned, range.contains(lastPinned), lastPinned + 1 < range.upperBound {
+            if pinDivider.superview == nil { addSubview(pinDivider) }
+            pinDivider.isHidden = false
+            let edge = frameForTab(at: lastPinned).maxX
+            pinDivider.frame = NSRect(x: edge, y: 7, width: 1, height: max(0, bounds.height - 15))
+        } else {
+            pinDivider.isHidden = true
+        }
         var x = tabsStart + CGFloat(range.count) * tabWidth
         sidebarButton.frame = NSRect(x: leadingInset + room(sidebarHint), y: 0, width: Self.sidebarButtonWidth, height: bounds.height - 1)
         overflowButton.isHidden = !isOverflowing
@@ -374,6 +481,7 @@ final class TabBarView: NSView, ProjectGlowing {
         sidebarHint.keepClear = leadingInset // over the traffic lights' strip, its key would go under them
         for hint in [sidebarHint, newTabHint, collapseHint, revealHint] { hint.place(shown: hintRooms[hint] != nil) }
         updateOverflowButton()
+        placeHint()
     }
 
     /// The hidden tabs' count and their most urgent status (attention > failed > done > working).
@@ -460,6 +568,60 @@ final class TabBarView: NSView, ProjectGlowing {
 
     fileprivate func index(of view: TabItemView) -> Int? {
         tabViews.firstIndex { $0 === view }
+    }
+
+    // MARK: the pointer in the title strip
+
+    /// The window's title-bar band tells the views under it neither that the pointer came nor that it left, nor sends
+    /// its moves, so a tab there only hears the pointer come up from below. From then on the bar looks where the pointer
+    /// is, twenty times a second, until it is off the bar: each tab it rests on lights up and shows its whole name when
+    /// cut short. Nothing runs while the pointer is elsewhere.
+    private var pointerWatch: Timer?
+    private weak var pointed: TabItemView?
+    static let pointerLooks: TimeInterval = 0.05
+
+    fileprivate func pointerCame(to view: TabItemView) {
+        point(at: view)
+        watchPointer()
+    }
+
+    /// Looks where the pointer is until it leaves the bar: for the tabs, and for a hint's ×.
+    private func watchPointer() {
+        guard pointerWatch == nil else { return }
+        let timer = Timer(timeInterval: Self.pointerLooks, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.followPointer() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        pointerWatch = timer
+    }
+
+    /// The tab under the pointer now; off the bar, or the window gone or behind another app's, none, and the watch ends.
+    private func followPointer() {
+        guard let window, window.isVisible else { return pointerGone() }
+        let at: NSPoint = convert(window.mouseLocationOutsideOfEventStream, from: nil)
+        // On the bar, and on this window, not another one over it.
+        guard bounds.contains(at), NSWindow.windowNumber(at: NSEvent.mouseLocation, belowWindowWithWindowNumber: 0) == window.windowNumber
+        else { return pointerGone() }
+        point(at: tabViews.first { !$0.isHidden && $0.convert($0.bounds, to: self).contains(at) })
+        if let hint, !hint.isHidden { hint.pointer(on: hint.frame.contains(at)) }
+    }
+
+    private func point(at view: TabItemView?) {
+        if pointed !== view { pointed?.pointerLeft() }
+        pointed = view
+        view?.pointerRests()
+    }
+
+    private func pointerGone() {
+        point(at: nil)
+        hint?.pointer(on: false)
+        pointerWatch?.invalidate()
+        pointerWatch = nil
+    }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        super.viewWillMove(toWindow: newWindow)
+        if newWindow == nil { pointerGone() }
     }
 
     fileprivate func itemMouseDown(_ view: TabItemView, event: NSEvent) {
@@ -573,6 +735,8 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
     private let label = NSTextField(labelWithString: "")
     /// The place mark, right after the title.
     private let placeMark = NSImageView()
+    /// How full an agent's context is, after the title (and the place mark).
+    private let gauge = ContextGaugeView()
     private let closeButton = NSButton()
     private var closeTip: ShortcutToolTip?
     /// "⌘1": how to get to this tab from the keyboard.
@@ -611,6 +775,7 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
         placeMark.contentTintColor = Theme.textDim
         placeMark.isHidden = true
         addSubview(placeMark)
+        addSubview(gauge)
 
         closeButton.bezelStyle = .regularSquare
         closeButton.isBordered = false
@@ -621,6 +786,12 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
         closeButton.action = #selector(closeClicked)
         closeTip = ShortcutToolTip(closeButton, "Close tab", #selector(TerminalWindowController.closeTab(_:)))
         addSubview(closeButton)
+        pinView.image = NSImage(systemSymbolName: "pin.fill", accessibilityDescription: "Pinned")?
+            .withSymbolConfiguration(.init(pointSize: 9, weight: .semibold))
+        pinView.contentTintColor = Theme.textDim
+        pinView.isHidden = true
+        pinView.toolTip = "Pinned: Close Other Tabs leaves it, and closing it asks first."
+        addSubview(pinView)
         KeyHint.style(hint) // said in the tab's own help, as the buttons' keys are in theirs
         hint.isHidden = true
         addSubview(hint)
@@ -635,6 +806,9 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
     override var mouseDownCanMoveWindow: Bool { false }
 
     private var item: TabBarItem?
+    private let pinView = NSImageView()
+    /// For the self-test: the tab shows its pin.
+    var showsPin: Bool { !pinView.isHidden }
     var shownShortcut: String? { hint.isHidden ? nil : hint.stringValue }
     var titleFont: NSFont? { label.font }
     var titleColor: NSColor? { label.textColor }
@@ -649,7 +823,8 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
         if label.lineBreakMode != newItem.truncation { label.lineBreakMode = newItem.truncation }
         let font = newItem.preview ? Self.previewFont : Self.font
         if label.font != font { label.font = font }
-        let tip = newItem.tooltip + (newItem.place.map { "\n" + $0 } ?? "") + (newItem.shortcut.map { "\n\($0) switches to this tab" } ?? "")
+        // An agent's spinner frame stays out of it: a tooltip set anew with each frame is reset and never shows.
+        let tip = AgentTitle.withoutSpinnerFrame(newItem.tooltip) + (newItem.place.map { "\n" + $0 } ?? "") + (newItem.shortcut.map { "\n\($0) switches to this tab" } ?? "")
         if toolTip != tip { toolTip = tip }
         if hint.stringValue != newItem.shortcut ?? "" {
             hint.stringValue = newItem.shortcut ?? ""
@@ -658,6 +833,8 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
         }
         setAccessibilityHelp(newItem.shortcut.map { "\($0) switches to this tab" })
         dot.state = newItem.state
+        if (newItem.context == nil) != (item?.context == nil) { needsLayout = true }
+        gauge.usage = newItem.context
         if iconView.image !== newItem.icon { iconView.image = newItem.icon }
         iconView.isHidden = newItem.icon == nil
         dot.isHidden = newItem.icon != nil
@@ -671,7 +848,7 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
         selected = isSelected
         // "web-1: app (connecting), Remote: web-1 (deploy@203.0.113.5), connecting": a state that is only
         // the connection's comes once, in the remote part.
-        let spoken = [newItem.title, newItem.accessibilityStatus, newItem.remote?.summary ?? "", newItem.place ?? ""]
+        let spoken = [newItem.title, newItem.pinned ? "pinned" : "", newItem.accessibilityStatus, newItem.remote?.summary ?? "", newItem.place ?? ""]
         setAccessibilityLabel(spoken.filter { !$0.isEmpty }.joined(separator: ", "))
         setAccessibilityValue(isSelected)
         refresh()
@@ -681,12 +858,16 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
     var shownRemoteLink: RemoteLink? { remoteMark.isHidden ? nil : remoteMark.link }
 
     private func refresh() {
-        layer?.backgroundColor = (selected ? Theme.background : hovering ? Theme.tabHover : .clear).cgColor
+        themedBackground((selected ? Theme.background : hovering ? Theme.tabHover : .clear))
         label.textColor = selected || hovering ? Theme.text : Theme.textDim
         remoteMark.tint = label.textColor ?? Theme.textDim
         // Unsaved: a dot that turns into the close button under the pointer.
         let modified = item?.modified == true
-        let closeHidden = !(selected || hovering || modified)
+        // Pinned: the pin, never the × (closing it is asked about from ⌘W or the menu).
+        let pinned = item?.pinned == true
+        pinView.isHidden = !pinned
+        pinView.contentTintColor = label.textColor ?? Theme.textDim
+        let closeHidden = pinned || !(selected || hovering || modified)
         if closeButton.isHidden != closeHidden {
             closeButton.isHidden = closeHidden
             needsLayout = true // the shortcut moves into its place, or out of it
@@ -705,6 +886,7 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
         dot.frame = NSRect(x: 12, y: (h - 10) / 2, width: 10, height: 10)
         iconView.frame = NSRect(x: 10, y: (h - 16) / 2, width: 16, height: 16)
         closeButton.frame = NSRect(x: bounds.width - 24, y: (h - 18) / 2, width: 18, height: 18)
+        pinView.frame = closeButton.frame
         // A remote tab: the status mark keeps its column (the same place on every tab), and the server
         // mark goes before the title, like an icon of the title.
         // Its server sits on the title's centre line; the dot hangs a point lower.
@@ -721,7 +903,7 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
             let end = closeShown ? bounds.width - 27 : bounds.width - 14
             return hintWidth == 0 || end - hintRoom - 6 - titleStart < (closeShown ? 56 : 40) ? nil : end
         }
-        let placeRoom: CGFloat = placeMark.isHidden ? 0 : 15
+        let placeRoom: CGFloat = (placeMark.isHidden ? 0 : 15) + (gauge.isHidden ? 0 : ContextGaugeView.size + 5)
         func titleWidth(hintEnd: CGFloat?) -> CGFloat {
             max(0, min(bounds.width - 28, hintEnd.map { $0 - hintWidth - 6 } ?? .infinity) - labelX - placeRoom)
         }
@@ -730,7 +912,7 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
         // would say less, and a pointer passing over it would drop and add "web-1: " or "(connecting)".
         let restWidth = titleWidth(hintEnd: hintEnd(closeShown: false))
         let words = fittedTitle(within: restWidth)
-        var shownHintEnd = hintEnd(closeShown: !closeButton.isHidden)
+        var shownHintEnd = hintEnd(closeShown: !closeButton.isHidden || !pinView.isHidden)
         if item?.shorterTitles.isEmpty == false, let words, fits(words, within: restWidth),
            !fits(words, within: titleWidth(hintEnd: shownHintEnd)) {
             shownHintEnd = nil
@@ -745,11 +927,15 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
         // The place mark right after the title's last letter.
         let text = (label.stringValue as NSString).size(withAttributes: [.font: label.font as Any]).width + 4
         placeMark.frame = NSRect(x: label.frame.minX + min(label.frame.width, ceil(text)) + 1, y: (h - 11) / 2, width: 11, height: 11)
+        let gaugeX = placeMark.isHidden ? placeMark.frame.minX + 2 : placeMark.frame.maxX + 4
+        gauge.frame = NSRect(x: gaugeX, y: (h - ContextGaugeView.size) / 2, width: ContextGaugeView.size, height: ContextGaugeView.size)
         renameField?.frame = NSRect(x: labelX - 3, y: (h - 22) / 2, width: max(40, bounds.width - labelX - 26), height: 22)
     }
 
     /// For the self-test: the place mark shows.
     var showsPlaceMark: Bool { !placeMark.isHidden }
+    /// For the self-test: the context gauge's percent, when it shows.
+    var shownContextPercent: Int? { gauge.shownPercent }
 
     /// A remote tab too narrow for "web-1: app (connecting)" says less rather than "web-1: a…g)": first
     /// "web-1: " goes (the mark says it is on a server, the tooltip which one), then the note (the dot on
@@ -781,14 +967,62 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         trackingAreas.forEach(removeTrackingArea)
-        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self))
+        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .mouseMoved, .activeAlways, .inVisibleRect], owner: self))
     }
 
-    override func mouseEntered(with event: NSEvent) { hovering = true }
-    override func mouseExited(with event: NSEvent) { hovering = false }
+    override func mouseEntered(with event: NSEvent) { came() }
+    override func mouseMoved(with event: NSEvent) { came() }
+
+    /// The pointer on it: the bar follows it from here (TabBarView.pointerCame), as the title strip says nothing more.
+    private func came() {
+        if let bar { bar.pointerCame(to: self) } else { pointerRests() }
+    }
+
+    /// The pointer rests on it, come in or moving there.
+    fileprivate func pointerRests() {
+        if !hovering { hovering = true }
+        restTip()
+    }
+
+    /// The pointer went to another tab or off the bar.
+    fileprivate func pointerLeft() {
+        hovering = false
+        HoverTip.shared.hide(from: self)
+    }
+
+    /// Its name cut short (or a shorter one in its place): the whole name under it, wherever the bar sits. In the title
+    /// strip AppKit shows no tooltip; below a system tab bar (a merged window) the tooltip comes late and is reset by an
+    /// agent's changing title, so the name shows here in both.
+    private func restTip() {
+        guard let title = item?.title, isNameCut(title) else { return }
+        HoverTip.shared.rest(AgentTitle.withoutSpinnerFrame(title), on: self)
+    }
+
+    override func mouseExited(with event: NSEvent) { pointerLeft() }
 
     override func mouseDown(with event: NSEvent) {
+        HoverTip.shared.clicked(self)
         bar?.itemMouseDown(self, event: event)
+    }
+
+    var hoverStateForTest: String {
+        "areas \(trackingAreas.count) \(trackingAreas.first.map { "\($0.rect)" } ?? ""), bounds \(bounds), hovering \(hovering), in strip \(isInTitleStrip), cut \(item.map { isNameCut($0.title) } ?? false), label “\(label.stringValue)” \(label.bounds.width) of \(label.attributedStringValue.size().width)"
+    }
+
+    /// In the window's title-bar strip, where AppKit shows no tooltip: anywhere else its own tooltip says the name.
+    private var isInTitleStrip: Bool {
+        guard let window else { return false }
+        return convert(bounds, to: nil).maxY > window.contentLayoutRect.maxY + 0.5
+    }
+
+    /// Whether the label shows less than `title`: another, shorter title, or the title cut where it no longer fits.
+    private func isNameCut(_ title: String) -> Bool {
+        label.stringValue != title || label.attributedStringValue.size().width > label.bounds.width + 0.5
+    }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        super.viewWillMove(toWindow: newWindow)
+        if newWindow == nil { HoverTip.shared.hide(from: self) }
     }
 
     // Middle-click closes, like a browser.
@@ -1142,4 +1376,9 @@ extension Array {
 /// A borderless icon button that does not drag the window (it sits in the title-bar strip).
 final class HoverButton: NSButton {
     override var mouseDownCanMoveWindow: Bool { false }
+}
+
+extension TabBarView: HintPlace {
+    /// A bar's line goes after a few seconds: the bar stays.
+    var hintGoesWithPlace: Bool { false }
 }

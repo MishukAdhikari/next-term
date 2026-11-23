@@ -159,7 +159,7 @@ final class DiffPane: NSView, DiffSelectionHost {
         self.proposal = proposal
         super.init(frame: .zero)
         wantsLayer = true
-        layer?.backgroundColor = Theme.background.cgColor
+        themedBackground(Theme.background)
         build()
         reload()
     }
@@ -202,7 +202,7 @@ final class DiffPane: NSView, DiffSelectionHost {
         commit = change
         super.init(frame: .zero)
         wantsLayer = true
-        layer?.backgroundColor = Theme.background.cgColor
+        themedBackground(Theme.background)
         build()
         reload()
     }
@@ -215,7 +215,7 @@ final class DiffPane: NSView, DiffSelectionHost {
         branchChange = change
         super.init(frame: .zero)
         wantsLayer = true
-        layer?.backgroundColor = Theme.background.cgColor
+        themedBackground(Theme.background)
         build()
         reload()
     }
@@ -234,7 +234,7 @@ final class DiffPane: NSView, DiffSelectionHost {
         refLabel = label
         super.init(frame: .zero)
         wantsLayer = true
-        layer?.backgroundColor = Theme.background.cgColor
+        themedBackground(Theme.background)
         build()
         reload()
     }
@@ -322,7 +322,7 @@ final class DiffPane: NSView, DiffSelectionHost {
         header.spacing = 8
         header.edgeInsets = NSEdgeInsets(top: 0, left: 12, bottom: 0, right: 12)
         header.wantsLayer = true
-        header.layer?.backgroundColor = Theme.bar.cgColor
+        header.themedBackground(Theme.bar)
 
         message.textColor = Theme.textDim
         message.alignment = .center
@@ -357,6 +357,8 @@ final class DiffPane: NSView, DiffSelectionHost {
             guard let self else { return }
             (self.window?.windowController as? TerminalWindowController)?.askAgent(from: self)
         }
+        // Lines with a review comment are marked, as the window's review changes.
+        NotificationCenter.default.addObserver(self, selector: #selector(reviewChanged(_:)), name: ReviewDraft.changed, object: nil)
         // What is selected goes to the agents, as the editor's selection does.
         for view in [left.textView, right.textView] {
             NotificationCenter.default.addObserver(self, selector: #selector(sideSelectionChanged(_:)), name: NSTextView.didChangeSelectionNotification, object: view)
@@ -596,6 +598,34 @@ final class DiffPane: NSView, DiffSelectionHost {
     /// tab, Git Diff's Uncommitted); not a commit's, a branch's, an agent's proposal, or All changes since a base.
     var isUncommitted: Bool { proposal == nil && commit == nil && branchChange == nil && workingTreeBranch == nil }
 
+    @objc private func reviewChanged(_ notification: Notification) {
+        guard notification.object as? NSWindow === window else { return }
+        markComments()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        markComments()
+    }
+
+    /// The lines of this file the window's review comments are on: the file's lines now on the right, removed lines on
+    /// the left, in a diff of uncommitted changes only (another version's numbers are not the file's). Outdated ones
+    /// are not marked: their lines are not where they were.
+    func markComments() {
+        let comments = isUncommitted ? ReviewDraft.existing(window)?.comments ?? [] : []
+        let marks = ReviewComments.marks(comments, path: canonicalPath(absolutePath))
+        right.commented = marks.new
+        right.notes = marks.newNotes
+        left.commented = marks.old
+        left.notes = marks.oldNotes
+        unified.column.mark(marks)
+    }
+
+    /// For the self-test: the line numbers marked as commented, on the left and the right.
+    var commentedLines: (left: Set<Int>, right: Set<Int>) { (left.commented, right.commented) }
+    /// For the self-test: the notes shown after lines, on the left and the right.
+    var shownNotes: (left: [Int: String], right: [Int: String]) { (left.notes, right.notes) }
+
     var offersAsk: Bool {
         guard message.isHidden else { return false }
         let lines = unified.isOn ? unified.column.hasSelectedLines : (selectedSide == .old ? left : right).hasSelectedLines
@@ -811,6 +841,10 @@ final class DiffColumn: NSScrollView {
     private let spacing = LineSpacing()
     var rowHeight: CGFloat { spacing.lineHeight }
     var currentHunkRow: Int? { didSet { if currentHunkRow != oldValue { textView.needsDisplay = true } } }
+    /// Line numbers on this side with a review comment: a bar at the row's start and a tint.
+    var commented: Set<Int> = [] { didSet { if commented != oldValue { textView.needsDisplay = true } } }
+    /// A review comment's note, shown after the line with this number (ReviewNoteDrawing).
+    var notes: [Int: String] = [:] { didSet { if notes != oldValue { textView.needsDisplay = true } } }
 
     init(side: Side) {
         self.side = side
@@ -957,6 +991,57 @@ final class DiffTextView: NSTextView {
         return became
     }
 
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let menu = super.menu(for: event)
+        let items = [commentItem(), reviewItem()].compactMap { $0 }
+        if let menu, !items.isEmpty {
+            for (index, item) in items.enumerated() { menu.insertItem(item, at: index) }
+            menu.insertItem(.separator(), at: items.count)
+        }
+        return menu
+    }
+
+    /// "Review (N)…": the window's review comments, as Review (N) in the toolbar lists them where it fits.
+    func reviewItem() -> NSMenuItem? {
+        let count = ReviewDraft.existing(window)?.comments.count ?? 0
+        guard count > 0 else { return nil }
+        return ClosureMenuItem(title: "Review (\(count))…") { [weak self] in
+            guard let self else { return }
+            ReviewUI.showReview(anchor: self)
+        }
+    }
+
+    /// "Add Review Comment…" for the selected lines, where Comment in the toolbar would be offered: the toolbar may
+    /// have no room for it, the menu always has (plan 039 U3). nil when the selection can't take a comment.
+    func commentItem() -> NSMenuItem? {
+        var view: NSView? = superview
+        while let current = view, !(current is DiffPane) { view = current.superview }
+        guard let pane = view as? DiffPane, pane.offersAsk else { return nil }
+        let item = ClosureMenuItem(title: "Add Review Comment…") { [weak self, weak pane] in
+            guard let self, let pane else { return }
+            ReviewUI.addComment(from: pane, anchor: self)
+        }
+        return item
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        guard let column, !column.notes.isEmpty, let layout = layoutManager else { return }
+        let height = column.rowHeight
+        let top = textContainerInset.height
+        let first = max(0, Int((dirtyRect.minY - top) / height))
+        let last = min(column.rows.count - 1, Int((dirtyRect.maxY - top) / height) + 1)
+        guard first <= last else { return }
+        let limit = enclosingScrollView.map { convert($0.documentVisibleRect, from: $0.contentView).maxX } ?? bounds.maxX
+        for index in first...last {
+            guard let number = column.number(at: index), let note = column.notes[number], column.starts.indices.contains(index) else { continue }
+            let glyph = layout.glyphIndexForCharacter(at: column.starts[index])
+            let used = layout.lineFragmentUsedRect(forGlyphAt: glyph, effectiveRange: nil)
+            let band = NSRect(x: 0, y: top + CGFloat(index) * height, width: bounds.width, height: height)
+            ReviewNoteDrawing.draw(note, in: band, after: textContainerOrigin.x + used.maxX, limit: limit - 8)
+        }
+    }
+
     override func mouseDown(with event: NSEvent) {
         super.mouseDown(with: event)
         guard let column, column.rowHeight > 0 else { return }
@@ -981,7 +1066,7 @@ final class DiffTextView: NSTextView {
             let mine = column.side == .left ? row.left : row.right
             switch row.kind {
             case .hunkHeader:
-                (index == column.currentHunkRow ? NSColor(hex: 0x2E3440) : NSColor(hex: 0x26282E)).setFill()
+                (index == column.currentHunkRow ? Theme.tabHover : Theme.currentLine).setFill()
                 band.fill()
                 if let hunk = row.hunkIndex {
                     let label = "⋯  change \(hunk + 1)" as NSString
@@ -991,7 +1076,7 @@ final class DiffTextView: NSTextView {
                 }
             case .removed, .added, .changed:
                 if mine == nil {
-                    NSColor(hex: 0x232428).setFill() // the line exists only on the other side
+                    Theme.overlay(0.03).setFill() // the line exists only on the other side
                     band.fill()
                 } else {
                     (column.side == .left ? Theme.linesRemoved : Theme.linesAdded).withAlphaComponent(0.12).setFill()
@@ -999,6 +1084,12 @@ final class DiffTextView: NSTextView {
                 }
             case .unchanged:
                 break
+            }
+            if !column.commented.isEmpty, let number = column.number(at: index), column.commented.contains(number) {
+                Theme.accent.withAlphaComponent(0.14).setFill()
+                band.fill()
+                Theme.accent.setFill()
+                NSRect(x: 0, y: band.minY, width: 3, height: band.height).fill()
             }
         }
     }
@@ -1036,7 +1127,7 @@ final class DiffRuler: NSRulerView {
         let last = min(column.rows.count - 1, Int((visible.maxY - top) / height) + 1)
         guard first <= last else { return }
         let font = NSFont.monospacedDigitSystemFont(ofSize: max(9, (EditorDocument.font.pointSize) - 1.5), weight: .regular)
-        let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor(hex: 0x5A5F69)]
+        let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: Theme.lineNumber]
         for index in first...last {
             guard let number = column.number(at: index) else { continue }
             let label = "\(number)" as NSString

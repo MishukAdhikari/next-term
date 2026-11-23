@@ -416,6 +416,14 @@ public final class SecretVault {
     /// is left out when encoding, so the vault stays format 1 and 0.11.6, which skips members it doesn't know, still
     /// opens it (and drops them when it next saves). Like `purpose`, they are not in the value's seal: the index's MAC
     /// covers them, and a new link needs no new seal.
+    /// An entry Next Term keeps for itself.
+    public enum Kind: String, Codable, Sendable {
+        case signIns
+    }
+
+    /// The reserved name of the sign-ins' key (`Entry.isSignIns`): no key of the user's may take it.
+    public static let signInsName = "NEXT_TERM_SIGN_INS"
+
     public struct Entry: Codable, Equatable, Sendable {
         public let id: String
         public internal(set) var name: String
@@ -441,6 +449,13 @@ public final class SecretVault {
         /// (Allow for 15 minutes, until the Mac locks). Absent on every key that asks, so a key saved before the box
         /// reads as asking every time, the safe default.
         public internal(set) var lastingApprovals: Bool? = nil
+        /// What Next Term itself keeps in this entry, for an entry that isn't a key of the user's: `signIns`, the key
+        /// that seals the sign-ins to remote MCP servers (SignInFile). Absent on every key of the user's.
+        public internal(set) var kind: Kind? = nil
+
+        /// The sign-ins' key, by its kind or by its reserved name (a copy before 0.11.43 may have dropped the kind
+        /// when it saved): hidden from every list, refused to every agent, released only to Next Term itself.
+        public var isSignIns: Bool { kind == .signIns || name == SecretVault.signInsName }
 
         /// "Ask for Touch ID every time it's used": on unless the user unticked it for this key.
         public var asksEveryUse: Bool { lastingApprovals != true }
@@ -451,6 +466,11 @@ public final class SecretVault {
         /// When the value was last set, or for a key saved before that was recorded, when the key was made: its age can
         /// then only seem greater than it is, never less.
         public var lastSet: Date { valueSet ?? created }
+
+        /// A SHA-256 of the sealed value (its box, whose associated data holds the id, the name and the flags), hex: it
+        /// changes with a new value, a rename and a key made write-only, and never with what the key is for. An Always
+        /// grant keeps it, so any of those asks again.
+        public var valueMark: String { SHA256.hash(data: box).map { String(format: "%02x", $0) }.joined() }
     }
 
     struct Wrapped: Codable, Equatable, Sendable {
@@ -471,12 +491,30 @@ public final class SecretVault {
         var wrapped: Wrapped
         var recovery: Recovery?
         public internal(set) var entries: [Entry]
+        /// The lowest `sequence` each of Secrets' sealed companions (always.json, sign-ins.json) may have, by file name:
+        /// raised in the Touch ID that changes what one grants, so an older copy put back, its MAC still good, reads as
+        /// tampered after a relaunch too. Added after 0.11.43; absent until the first, and a copy before it drops it when it
+        /// next saves, which only lowers the floor.
+        public internal(set) var floors: [String: Int]? = nil
+
+        /// A companion's floor (`floors`), 0 with none.
+        public func floor(of file: String) -> Int { floors?[file] ?? 0 }
 
         /// Whether the second wrap, under the login keychain's recovery key, is there.
         public var hasRecovery: Bool { recovery != nil }
 
         public func entry(named name: String) -> Entry? { entries.first { $0.name == name } }
         public var names: [String] { entries.map(\.name) }
+
+        /// This index without the sign-ins' key: what every list, tool and menu sees (SecretsStore.index).
+        public var hidingSignIns: Index {
+            var shown = self
+            shown.entries.removeAll { $0.isSignIns }
+            return shown
+        }
+
+        /// The sign-ins' key, when the vault has one.
+        public var signIns: Entry? { entries.first { $0.isSignIns } }
 
         /// The row of the key whose id is `id`, for a list that keeps its selection across a reload: a rename or a new
         /// value keeps the key's id, so it stays selected; a key deleted and added again under its name has another id,
@@ -624,9 +662,11 @@ public final class SecretVault {
     /// "Ask for Touch ID every time it's used", on unless the caller says otherwise.
     public func add(name: String, purpose: String, purposeBy: PurposeBy, origin: Origin, writeOnly: Bool,
                     value: SecretBytes, link: String? = nil, linkFrom: LinkFrom? = nil, remindDays: Int? = nil,
-                    asksEveryUse: Bool = true, maskKey: SymmetricKey? = nil, now: Date = Date()) throws -> Data {
+                    asksEveryUse: Bool = true, maskKey: SymmetricKey? = nil, kind: Kind? = nil, now: Date = Date()) throws -> Data {
         let key = try unlockedKey()
         guard StoredSecretName.isValid(name) else { throw Failure.badName }
+        // The reserved name is the sign-ins' key's alone.
+        guard (name == Self.signInsName) == (kind == .signIns) else { throw Failure.badName }
         guard index.entry(named: name) == nil else { throw Failure.nameTaken(name) }
         guard index.entries.count < Self.maxEntries else { throw Failure.tooManyKeys }
         let purpose = try Self.checkedPurpose(purpose)
@@ -644,6 +684,7 @@ public final class SecretVault {
         entry.valueSet = date
         entry.remindDays = remindDays
         entry.lastingApprovals = asksEveryUse ? nil : true
+        entry.kind = kind
         return try written(key, now: now) { index.entries.append(entry) }
     }
 
@@ -671,7 +712,7 @@ public final class SecretVault {
             entry.remindDays = try Self.checkedReminder(remindDays)
         }
         if let newName, newName != name {
-            guard StoredSecretName.isValid(newName) else { throw Failure.badName }
+            guard StoredSecretName.isValid(newName), newName != Self.signInsName, !entry.isSignIns else { throw Failure.badName }
             guard index.entry(named: newName) == nil else { throw Failure.nameTaken(newName) }
             let value = try Self.open(entry, key: key)
             entry.box = try Self.seal(value, key: key, id: entry.id, name: newName, writeOnly: entry.writeOnly, origin: entry.origin)
@@ -692,6 +733,7 @@ public final class SecretVault {
                         now: Date = Date()) throws -> Data {
         let key = try unlockedKey()
         var (position, entry) = try find(name)
+        guard !entry.isSignIns else { throw Failure.badName } // Next Term's own: never given a value from outside
         let value = try Self.normalized(value, name: name)
         let origin = origin ?? entry.origin
         let neverShown: Bool = entry.writeOnly || writeOnly
@@ -715,6 +757,7 @@ public final class SecretVault {
                        now: Date = Date()) throws -> Data {
         let key = try unlockedKey()
         var (position, entry) = try find(name)
+        guard !entry.isSignIns else { throw Failure.badName }
         let value = try Self.normalized(value, name: name)
         let current = try Self.open(entry, key: key)
         guard !(current == value) else { throw Failure.sameValue(name) }
@@ -786,6 +829,27 @@ public final class SecretVault {
         }
     }
 
+    // MARK: companions
+
+    /// Raises a companion's floor (`Index.floors`) to `sequence`; one already as high leaves the file as it is.
+    public func raiseFloor(of file: String, to sequence: Int) throws -> Data {
+        let key = try unlockedKey()
+        guard !file.isEmpty, file.utf8.count <= 64, sequence >= 0 else { throw Failure.badName }
+        guard sequence > index.floor(of: file) else { return self.file }
+        return try written(key) {
+            var floors = index.floors ?? [:]
+            floors[file] = sequence
+            index.floors = floors
+        }
+    }
+
+    /// A key for one of Secrets' sealed companions, derived from the vault key with `info`: only an unlock releases it,
+    /// and a vault made again (Start Over) gives another, so an old companion file opens with nothing.
+    public func companionKey(_ info: String) throws -> SymmetricKey {
+        let key = try unlockedKey()
+        return HKDF<SHA256>.deriveKey(inputKeyMaterial: key, info: Data(("nextterm companion/1\u{0}" + info).utf8), outputByteCount: 32)
+    }
+
     // MARK: values
 
     /// A key's value, to hand to a command: write-only keys included. Throws `tampered` when its seal fails.
@@ -816,7 +880,7 @@ public final class SecretVault {
     /// A key's value, to show or copy: refused for a write-only key.
     public func shownValue(of name: String) throws -> SecretBytes {
         let (_, entry) = try find(name)
-        guard !entry.writeOnly else { throw Failure.writeOnly(name) }
+        guard !entry.writeOnly, !entry.isSignIns else { throw Failure.writeOnly(name) }
         return try value(of: name)
     }
 
@@ -1054,6 +1118,9 @@ public final class SecretVault {
                   ids.insert(entry.id).inserted, entry.marks.allSatisfy(SecretMask.isPlausible),
                   hasWellFormedFacts(entry) else { return false }
         }
+        if let floors = index.floors {
+            guard floors.count <= 8, floors.allSatisfy({ !$0.key.isEmpty && $0.key.utf8.count <= 64 && $0.value >= 0 }) else { return false }
+        }
         return true
     }
 
@@ -1164,6 +1231,12 @@ extension KeyedDecodingContainer {
     func decodeIfPresent(_ type: SecretVault.LinkFrom.Type, forKey key: Key) throws -> SecretVault.LinkFrom? {
         guard let text = try? decodeIfPresent(String.self, forKey: key) else { return nil }
         return SecretVault.LinkFrom(rawValue: text)
+    }
+
+    /// `Entry.kind`, read the same way: a kind a later release adds reads as none.
+    func decodeIfPresent(_ type: SecretVault.Kind.Type, forKey key: Key) throws -> SecretVault.Kind? {
+        guard let text = try? decodeIfPresent(String.self, forKey: key) else { return nil }
+        return SecretVault.Kind(rawValue: text)
     }
 }
 

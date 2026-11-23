@@ -374,7 +374,7 @@ public enum ImportSublimeText {
 
     /// Commands that are a Next Term command whatever arguments they are given.
     static let commands: [String: String] = [
-        "new_window": "newWindow:", "close_window": "performClose:", "prompt_open": "openProjectPanel:",
+        "new_window": "newWindow:", "close_window": "closeWindow:", "prompt_open": "openProjectPanel:",
         "prompt_open_folder": "openProjectPanel:", "prompt_open_project_or_workspace": "openProjectPanel:",
         "close_workspace": "closeProject:", "save_all": "saveAllDocuments:", "close": "closeTab:", "undo": "undo:",
         "redo": "redo:", "redo_or_repeat": "redo:", "cut": "cut:", "copy": "copy:", "paste": "paste:", "select_all": "selectAll:",

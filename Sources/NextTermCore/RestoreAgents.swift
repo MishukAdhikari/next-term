@@ -286,7 +286,7 @@ extension SessionSnapshot.Agent {
     }
 
     /// The permission options a typed line, or an alias's expansion, shows for this agent (KTD5): in its last command,
-    /// the one that started the agent, as the launcher and the typed-line check read it. An earlier command that names the
+    /// the one that started the agent, as the launcher reads it. An earlier command that names the
     /// agent ran and ended before it (`claude --dangerously-skip-permissions --version; cad`), and confirms nothing. None
     /// when that command does not run the agent, or its options cannot be kept whole.
     public func confirmedOptions(inLine line: String) -> [SessionSnapshot.LaunchOption] {
@@ -379,6 +379,13 @@ extension SessionSnapshot.Agent {
         }
     }
 
+    /// The agent's own install moved from one version of itself to another: the two paths are the same but for the
+    /// version this agent's table reads in each (`AgentCLI.version(at:)`), its versions folder or Homebrew keg or cask.
+    func updatedItself(from old: String, to new: String) -> Bool {
+        guard let was = cli.version(at: [old]), let now = cli.version(at: [new]), was != now else { return false }
+        return old.replacingOccurrences(of: "/" + was, with: "/" + now) == new
+    }
+
     /// The project config it reads, relative to a folder: one changed after it started sends it to the line.
     public var projectConfigFiles: [String] {
         switch self {
@@ -404,21 +411,26 @@ public enum ResumeCheck: String, CaseIterable, Sendable {
     /// can't tell, a value outside its pattern, or a permission option argv and the typed line do not both show; or the
     /// options are not known.
     case flags
-    /// An environment prefix, a wrapper, a function, or an alias that holds one: the line did not run as typed.
-    case typedLine
-    /// Its provider or config variables differed from the shell's.
+    /// Its provider or config variables were set, and the login shell's differ or are not known (`routingHolds`).
     case routing
     /// An auto-continue variable is set, in its environment or its settings.
     case autoContinue
     /// The session is not in its store, or a live process holds it.
     case session
-    /// The store its session file was read in is gone, is no longer that real folder, is not the user's alone, or lies
-    /// where a tab can write: a project, the tab's or session's folder, a temporary folder (KTD4).
+    /// No store was recorded, or the store its session file was read in is no longer that real folder, is not the user's
+    /// alone, or lies where a tab can write: a project, the tab's or session's folder, a temporary folder (KTD4).
     case store
-    /// The session's folder is gone, someone else's, writable by others or not local.
+    /// The store recorded is not there: a volume not mounted yet, say.
+    case storeGone
+    /// No session folder was recorded, or it is someone else's, writable by others or not local.
     case folder
+    /// The session's folder recorded is not there: a volume not mounted yet, say.
+    case folderGone
     /// What runs no longer resolves.
     case executable
+    /// What runs now is not the file that ran: its recorded path leads elsewhere, other than the agent's own install
+    /// moving to another version of itself (`codeChanged`).
+    case executableChanged
     /// What runs lies in a project, the tab's or session's folder, or a temporary folder.
     case location
     /// What runs is not a regular file of the user's or root's, or others can write it.
@@ -426,6 +438,65 @@ public enum ResumeCheck: String, CaseIterable, Sendable {
     /// A project config it reads changed after it started, or code that config starts and a tab can write did (a
     /// script in a project, the tab's or session's folder, or a temporary folder), or its start is not known.
     case projectConfig
+}
+
+extension ResumeCheck {
+    /// Its name as MCP and the restore report give it: `executable_changed`.
+    public var word: String { RestoreReport.snake(rawValue) }
+
+    /// A fact that can clear without the user (plan 046): the session not in its store or held by a process yet, or its
+    /// folder or store not there yet (a volume not mounted). A pane held by these alone is checked again after the
+    /// restore (RestoreRecheck). Every other check guards the user (flags, auto-continue, project config, what runs and
+    /// where, ownership and permissions, the id, routing): it is never checked again, and its line waits for the user.
+    public var isTransient: Bool {
+        switch self {
+        case .session, .folderGone, .storeGone: return true
+        default: return false
+        }
+    }
+
+    /// What held the agent, in plain words, for its tab's note: "its launch flags".
+    public var heldWords: String {
+        switch self {
+        case .automatic: return "it is not an agent that resumes by itself"
+        case .sessionFile: return "its own session file did not confirm its session"
+        case .idPattern: return "its session id"
+        case .flags: return "its launch flags"
+        case .routing: return "its provider settings"
+        case .autoContinue: return "its auto-continue setting"
+        case .session: return "its session is gone or open elsewhere"
+        case .store: return "its session store"
+        case .storeGone: return "its session store is not there"
+        case .folder: return "its folder"
+        case .folderGone: return "its folder is not there"
+        case .executable: return "its program could not be found"
+        case .executableChanged: return "its program changed since it started"
+        case .location: return "where its program lies"
+        case .ownership: return "who may change its program"
+        case .projectConfig: return "its project settings changed"
+        }
+    }
+}
+
+/// Why the planner asked the gate nothing for a pane (RestorePlanner.verdict): the first condition that stopped it.
+public enum ResumeStop: String, CaseIterable, Sendable {
+    /// A crash restore, safe mode, or a quit restore without the quit consent: nothing resumes by itself.
+    case restoreKind
+    /// No line was kept for the pane.
+    case noCommand
+    /// Its line failed a check (a secret, or more than one line), so it was not kept.
+    case commandNotKept
+    /// Nothing was running in it.
+    case notRunning
+    /// No agent was seen running in it.
+    case noAgent
+    /// Its agent's session id is a guess.
+    case notExact
+    /// Its id is exact, but not through the agent's own session file.
+    case notFromFile
+
+    /// Its name as the restore report gives it: `command_not_kept`.
+    public var word: String { RestoreReport.snake(rawValue) }
 }
 
 public enum ResumeVerdict: Equatable, Sendable {
@@ -499,6 +570,23 @@ public struct ResumeFacts: Sendable {
 extension SessionSnapshot.Evidence {
     /// The automatic-resume gate (KTD5): every check must pass for Claude Code, Codex or Qwen Code to resume by
     /// itself. Whether the restore is an update restore is the planner's to know: a crash restore never resumes.
+    ///
+    /// It judges what Next Term saw run, never how the line was typed, so a resume does not depend on the zsh
+    /// integration (plan 046): the agent's own session file for the exact id, the process's executable and argv, and
+    /// its environment. The typed line still counts in one place, the flags policy: a permission option is carried only
+    /// when the typed line confirmed it too, as a process can rewrite its own argv; without the integration such a pane
+    /// is held with `flags`.
+    ///
+    /// An earlier gate also asked that the line ran as typed (no environment prefix, wrapper, function or alias that held
+    /// one). What that guarded is checked on the process instead:
+    /// - which program runs: the resume never goes through a typed word, an alias or a function. It runs the recorded
+    ///   absolute path through `/usr/bin/env`, which `codeIsTheAgent` and the code-path checks judge by its real path
+    ///   (`codeProblems`), and which must still lead to the file that ran (`executableChanged`);
+    /// - variables set on the line or by a function: the process's own environment shows them, and `routing` and
+    ///   `autoContinue` read it;
+    /// - a wrapper that stays running (caffeinate, op run, aws-vault): it leads the tab's foreground group, so capture
+    ///   sees no agent leading it and no id is exact. One that replaces itself with the agent (`sandbox-exec`, `nice`)
+    ///   leaves no trace in the process, and its resume runs the agent without it.
     public func gate(_ facts: ResumeFacts) -> ResumeVerdict {
         guard agent.hasResumeForm else { return .note }
         var failed: [ResumeCheck] = []
@@ -506,12 +594,11 @@ extension SessionSnapshot.Evidence {
         if agent.fileSource == nil || source != agent.fileSource { failed.append(.sessionFile) }
         if !(sessionID.map(agent.isSessionID) ?? false) { failed.append(.idPattern) }
         if !launch.allowed { failed.append(.flags) }
-        if !ranAsTyped { failed.append(.typedLine) }
-        if !routingMatchesShell { failed.append(.routing) }
+        if !routingHolds { failed.append(.routing) }
         if !autoContinueOff || facts.settingsAutoContinue { failed.append(.autoContinue) }
         if !facts.sessionAvailable { failed.append(.session) }
-        if !storeIsSafe(facts) { failed.append(.store) }
-        if !folderIsSafe(facts) { failed.append(.folder) }
+        if let problem = storeProblem(facts) { failed.append(problem) }
+        if let problem = folderProblem(facts) { failed.append(problem) }
         failed += codeProblems(facts)
         if startedAt == nil || facts.projectConfigChanged { failed.append(.projectConfig) }
         guard failed.isEmpty else { return .onTheLine(failed) }
@@ -519,18 +606,21 @@ extension SessionSnapshot.Evidence {
         return .resume(command)
     }
 
-    /// The session's folder exists, is the user's, others cannot write it, and it is on a local volume.
-    private func folderIsSafe(_ facts: ResumeFacts) -> Bool {
-        guard let folder = sessionFolder, let found = facts.files[folder] else { return false }
-        return found.isDirectory && found.owner == facts.user && !found.othersCanWrite && found.isLocal
+    /// The session's folder exists, is the user's, others cannot write it, and it is on a local volume: else `folder`,
+    /// or `folderGone` when a folder recorded is not there at all (a volume not mounted yet), which a re-check may find.
+    private func folderProblem(_ facts: ResumeFacts) -> ResumeCheck? {
+        guard let folder = sessionFolder else { return .folder }
+        guard let found = facts.files[folder] else { return .folderGone }
+        return found.isDirectory && found.owner == facts.user && !found.othersCanWrite && found.isLocal ? nil : .folder
     }
 
     /// The store capture read the session file in is still that real folder, the user's alone, and outside every
-    /// folder a tab can write.
-    private func storeIsSafe(_ facts: ResumeFacts) -> Bool {
-        guard let store, let found = facts.files[store] else { return false }
+    /// folder a tab can write: else `store`, or `storeGone` when a store recorded is not there at all.
+    private func storeProblem(_ facts: ResumeFacts) -> ResumeCheck? {
+        guard let store else { return .store }
+        guard let found = facts.files[store] else { return .storeGone }
         let owned = found.isDirectory && found.owner == facts.user && !found.othersCanWrite
-        return owned && found.realPath == store && !facts.forbids(found.realPath)
+        return owned && found.realPath == store && !facts.forbids(found.realPath) ? nil : .store
     }
 
     /// What runs (the executable, or a script agent's interpreter and script), by real path: there, a regular file of
@@ -549,7 +639,21 @@ extension SessionSnapshot.Evidence {
             let owned = file.owner == facts.user || file.owner == 0
             if !file.isRegular || !owned || file.othersCanWrite { problems.append(.ownership) }
         }
+        if codeChanged(facts) { problems.append(.executableChanged) }
         return ResumeCheck.allCases.filter(problems.contains)
+    }
+
+    /// What runs now is not what ran: the path the resume runs (the executable, or a script agent's interpreter) leads
+    /// to another file than the kernel ran (`ranPath`), or a script agent's script is no longer its own real path. That
+    /// replaces the typed line's word for which program ran: a link, alias or function pointed elsewhere since cannot
+    /// slip another program in. The one change allowed is the agent's own install moving to another version of itself,
+    /// the same path but for the version its table reads there (`~/.local/share/claude/versions/2.1.1` to `2.1.2`), as
+    /// a Claude Code that updated itself while running does. A record from before `ranPath` was kept says nothing here:
+    /// the code-path checks alone judge it.
+    private func codeChanged(_ facts: ResumeFacts) -> Bool {
+        if let script, let file = facts.files[script], file.realPath != script { return true }
+        guard let ranPath, let runner = interpreter ?? executable, let now = facts.files[runner]?.realPath else { return false }
+        return now != ranPath && !agent.updatedItself(from: ranPath, to: now)
     }
 
     /// Whether the code the snapshot records is this agent, judged as capture judged the process
@@ -566,6 +670,24 @@ extension SessionSnapshot.Evidence {
         return name.flatMap { RestoreAgent(program: $0, at: [executable]) } == agent
     }
 
+    /// The routing check (KTD5): the resume reaches the provider, account and store the agent ran with. Read from the
+    /// process's own environment: an agent that had none of its routing variables set (`routingSet` empty) passes
+    /// whatever the login shell sets, or when the shell is not known, and its resume unsets every one of them
+    /// (`unsetRouting`); one that had any set passes only when the login shell's matched them all when captured
+    /// (`routingMatchesShell`), as their values are never kept. A record from before `routingSet` was kept needs that
+    /// match too.
+    var routingHolds: Bool {
+        routingMatchesShell || routingSet?.isEmpty == true
+    }
+
+    /// The routing variables the resume unsets: every one of the agent's, when it ran with none of them set and the login
+    /// shell did not match (it sets some, or is not known). None otherwise: a shell that matched starts the resume as the
+    /// agent ran.
+    var unsetRouting: [String] {
+        guard !routingMatchesShell, routingSet?.isEmpty == true else { return [] }
+        return agent.routingVariables
+    }
+
     /// The executable; for a script agent, its interpreter and script, both needed.
     private var codePaths: [String]? {
         if let interpreter {
@@ -575,7 +697,8 @@ extension SessionSnapshot.Evidence {
         return executable.map { [$0] }
     }
 
-    /// The automatic resume (KTD5): `/usr/bin/env -u <auto-continue variables>`, the recorded absolute path (a
+    /// The automatic resume (KTD5): `/usr/bin/env -u <auto-continue variables> -u <routing variables it ran without,
+    /// when the login shell differs>` (`unsetRouting`), the recorded absolute path (a
     /// script agent's interpreter and script), the resume form with the id, the plain options and the permission options
     /// the typed line confirmed (`launch`). Nil when any of it is missing or not one plain line, an option may not be
     /// carried, or the code recorded is not the agent (`codeIsTheAgent`). It holds no prompt words. Only the gate hands it
@@ -587,7 +710,7 @@ extension SessionSnapshot.Evidence {
               let paths = codePaths, let words = agent.resumeWords(id: id, folder: sessionFolder) else { return nil }
         let limit = SessionSnapshot.Limits.standard.path
         guard paths.allSatisfy({ SnapshotText.plainPath($0, max: limit) != nil }) else { return nil }
-        let unset = agent.autoContinueVariables.flatMap { ["-u", $0] }
+        let unset = (agent.autoContinueVariables + unsetRouting).flatMap { ["-u", $0] }
         let line = (["/usr/bin/env"] + unset + paths + words + launch.carried).map(ShellQuote.quote).joined(separator: " ")
         return SessionSnapshot.Command.problem(with: line) == nil ? line : nil
     }

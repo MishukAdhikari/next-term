@@ -66,6 +66,7 @@ final class CommandSuggestionPanel: NSObject, NSWindowDelegate {
 
     private func build() {
         panel.title = "Suggest a Command"
+        panel.keepsItsOwnFrame()
         panel.isFloatingPanel = true
         panel.hidesOnDeactivate = true
         panel.isReleasedWhenClosed = false
@@ -181,7 +182,10 @@ final class CommandSuggestionPanel: NSObject, NSWindowDelegate {
         view.documentView = textView
         view.hasVerticalScroller = true
         alert.accessoryView = view
-        alert.addButton(withTitle: "Include").keyEquivalent = ""
+        // What the user came here for, tinted as the primary but pressed only by a click: Return sends no output.
+        let include = alert.addButton(withTitle: "Include")
+        include.keyEquivalent = ""
+        MainActor.assumeIsolated { ApprovalLayout.style(include, look: .accent) }
         alert.addButton(withTitle: "Don’t Include").keyEquivalent = "\u{1b}"
         Self.outputQuestion = alert
         alert.beginSheetModal(for: panel) { [weak self] response in
@@ -345,6 +349,8 @@ final class CommandSuggestionPanel: NSObject, NSWindowDelegate {
     // MARK: showing
 
     private func refresh() {
+        // Each stage's rows shown or gone: the panel as tall as they are, its top edge under the caret where it was.
+        defer { if panel.isVisible { DialogFit.fit(panel) } }
         let answered = stage == .answered
         field.isEditable = stage == .asking
         outputButton.isHidden = stage != .asking

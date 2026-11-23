@@ -67,7 +67,7 @@ public enum ImportCmux {
     /// Term's tabs are; its workspaces (the sidebar) have no equivalent, so their actions aren't mapped.
     static let actions: [String: String] = [
         "newSurface": "newTab:", "closeTab": "closeTab:", "renameTab": "renameTab:", "closeOtherTabsInPane": "closeOtherTabs:",
-        "nextSurface": "showNextTab:", "prevSurface": "showPreviousTab:", "newWindow": "newWindow:", "closeWindow": "performClose:",
+        "nextSurface": "showNextTab:", "prevSurface": "showPreviousTab:", "newWindow": "newWindow:", "closeWindow": "closeWindow:",
         "toggleFullScreen": "toggleFullScreen:", "openSettings": "showSettings:", "openFolder": "openProjectPanel:",
         "splitRight": "splitRight:", "splitDown": "splitDown:", "focusLeft": "selectPaneLeft:", "focusRight": "selectPaneRight:",
         "focusUp": "selectPaneAbove:", "focusDown": "selectPaneBelow:", "focusNextPane": "selectNextPane:",

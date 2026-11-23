@@ -340,6 +340,24 @@ import Testing
         #expect(none.hiddenCount == 3)
     }
 
+    @Test func collapsedAMarkDragsAmongTheMarksThatShow() {
+        let column = TabListLayout.collapsed(tabCount: 5, height: 38 + 4 + 5 * 24 + 4)
+        // Its top runs from the first mark's place to the last's.
+        #expect(column.dragRange == 42...138)
+        // It drops into the slot whose middle is nearest its own, never past the ends.
+        #expect(column.dropIndex(centreY: 54) == 0 && column.dropIndex(centreY: 77) == 1 && column.dropIndex(centreY: 400) == 4)
+        #expect(column.dropIndex(centreY: -50) == 0)
+        // The first tab moved to the third place: the second and third close up behind it.
+        #expect(column.slots(movingTab: 0, to: 2).map(\.minY) == [90, 42, 66, 114, 138])
+        // The last moved to the first: the others open before it.
+        #expect(column.slots(movingTab: 4, to: 0).map(\.minY) == [66, 90, 114, 138, 42])
+        #expect(column.slots(movingTab: 2, to: 2) == column.slots)
+        // A tab behind the "+N", or a place past it, moves nothing.
+        let crowded = TabListLayout.collapsed(tabCount: 8, height: 38 + 4 + 5 * 24 + 4)
+        #expect(crowded.slots(movingTab: 6, to: 0) == crowded.slots && crowded.slots(movingTab: 0, to: 6) == crowded.slots)
+        #expect(TabListLayout.collapsed(tabCount: 3, height: 30).dragRange == nil)
+    }
+
     @Test func thePlusTakesTheHiddenTabsMostUrgentColour() {
         #expect(TabListCollapsed.moreState([.idle, .done, .working]) == .done)
         #expect(TabListCollapsed.moreState([.working, .failed, .attention]) == .attention)

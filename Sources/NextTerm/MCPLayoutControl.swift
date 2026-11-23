@@ -15,17 +15,22 @@ extension MCPWriteControl {
         case .success(let found): (tab, controller) = (found.0, found.1)
         }
         let id = tab.id.uuidString.lowercased()
-        if controller.activeTab === tab, controller.window?.firstResponder === tab.view {
+        // Merged behind another project's tab (plan 032), its keyboard is nobody's until its tab comes to the front.
+        let behind: Bool = controller.window?.isBackgroundTab == true
+        if !behind, controller.activeTab === tab, controller.window?.firstResponder === tab.view {
             return reply(MCPControl.ok(["id": id, "focused": true, "note": "It has its window's keyboard already."]))
         }
         let ask = Ask(title: "An agent asks to move the keyboard to a tab",
-                      details: "“\(tab.title)” comes to the front of \(place(controller)) and takes its keyboard: what you type in that window goes to it. The window stays where it is.")
+                      details: behind
+                          ? "In \(place(controller)), merged behind another project’s tab, its tab comes to the front of that window and \(MCPTabNames.named(tab)) takes the keyboard: what you type there goes to it."
+                          : "In \(place(controller)), \(MCPTabNames.named(tab)) comes to the front and takes the keyboard: what you type in that window goes to it. The window stays where it is.")
         approve(ask, context, reply: reply) { approved, window in
             window?.finish()
             guard let controller = MCPControl.controller(of: tab) else { return reply(MCPControl.fail("That tab closed meanwhile; nothing changed.")) }
             if let why = MCPInputLine.refusal(tab) { return reply(MCPControl.fail(why)) }
             tab.view.awaitsChoice = false // the user approved giving it the keyboard
             controller.show(tab)
+            if let shown = controller.window, shown.isBackgroundTab { shown.makeKeyAndOrderFront(nil) } // selects its tab
             reply(MCPControl.ok(["id": id, "focused": true, "approved": approved]))
         }
     }
@@ -43,7 +48,7 @@ extension MCPWriteControl {
         if let why = MCPInputLine.refusal(tab) { return reply(MCPControl.fail(why)) }
         let host = found.ref.machineLabel.map { "on its machine “\($0)”" } ?? tab.remote.map { "on \($0.host.name)" } ?? "on this Mac"
         let ask = Ask(title: "An agent asks to show a herdr agent",
-                      details: "“\(found.agent.name)” (\(found.agent.paneID)) in herdr \(host) comes to the front of \(place(controller)): herdr shows that pane in every window attached to its session, and the tab takes the keyboard.")
+                      details: "“\(SecretApprovalPanel.sanitized(found.agent.name, limit: 60))” (\(found.agent.paneID)) in herdr \(host) comes to the front of \(place(controller)): herdr shows that pane in every window attached to its session, and the tab takes the keyboard.")
         approve(ask, context, reply: reply) { approved, window in
             window?.finish()
             guard let controller = MCPControl.controller(of: tab) else {
@@ -82,7 +87,7 @@ extension MCPWriteControl {
         let down = direction == "down"
         let folder = directory ?? (tab.remote.map { "\(tab.directory) on \($0.host.name)" } ?? tab.directory)
         let ask = Ask(title: "An agent asks to split a pane",
-                      details: "A new terminal opens \(down ? "below" : "to the right of") “\(tab.title)” in \(place(controller)), in \(folder). It doesn't take the keyboard.")
+                      details: "A new terminal opens \(down ? "below" : "to the right of") \(MCPTabNames.named(tab)) in \(place(controller)), in \(folder). It doesn't take the keyboard.")
         approve(ask, context, reply: reply) { approved, window in
             window?.finish()
             guard let controller = MCPControl.controller(of: tab) else { return reply(MCPControl.fail("That tab closed meanwhile; nothing changed.")) }
@@ -91,6 +96,7 @@ extension MCPWriteControl {
             }
             controller.presentForAgent(nil) // its window comes forward; the pane waits for the user's click
             MCPControl.driven.insert(pane.id) // the agent that asked for it waits for its work
+            MCPTabOpeners.record(pane, openedBy: context.caller)
             reply(MCPControl.ok(["id": pane.id.uuidString.lowercased(), "beside": tab.id.uuidString.lowercased(),
                                  "directory": pane.directory, "approved": approved]))
         }
@@ -110,7 +116,7 @@ extension MCPWriteControl {
         if !kept, let warning = tab.closeWarning, !force {
             return reply(MCPControl.fail("The pane is running \(warning); pass force: true to stop it and close the pane."))
         }
-        var details = "Closes the pane “\(tab.title)” in \(place(controller)); the tab's other panes stay."
+        var details = "Closes the pane “\(MCPTabNames.title(tab))” of \(MCPTabNames.position(tab)) in \(place(controller)); the tab's other panes stay."
         if kept, let host = tab.remote?.host.name { details += " It only detaches: what runs on \(host) keeps running." }
         if !kept, let warning = tab.closeWarning { details += " This stops \(warning)." }
         approve(Ask(title: "An agent asks to close a pane", details: details), context, reply: reply) { approved, window in
@@ -128,6 +134,19 @@ extension MCPWriteControl {
         }
     }
 
+    /// reopen_before_update: the windows open before the last update that did not come back, asked about first.
+    static func reopenBeforeUpdate(_ context: Context, reply: @escaping Reply) {
+        let missing = BeforeUpdateControl.missingNow()
+        guard !missing.isEmpty else { return reply(MCPControl.ok(["reopened": 0, "note": "Every window from before the update is open."])) }
+        let names: [String] = missing.map { window in window.project.map { ($0 as NSString).lastPathComponent } ?? "a window with no project" }
+        let details = "\(missing.count) window\(missing.count == 1 ? "" : "s") from before the update reopen\(missing.count == 1 ? "s" : ""): \(names.joined(separator: ", ")), each with its tabs in their folders."
+        approve(Ask(title: "An agent asks to reopen the windows from before the update", details: details), context, reply: reply) { approved, window in
+            window?.finish()
+            let opened = BeforeUpdateControl.reopen()
+            reply(MCPControl.ok(["reopened": opened, "approved": approved]))
+        }
+    }
+
     static func zoomPane(_ arguments: [String: Any], _ context: Context, reply: @escaping Reply) {
         let tab: TerminalTab, controller: TerminalWindowController, group: PaneGroup
         switch paneTarget(arguments) {
@@ -141,8 +160,8 @@ extension MCPWriteControl {
         if zoomed ? group.zoomed === tab : group.zoomed == nil {
             return reply(MCPControl.ok(["id": id, "zoomed": zoomed, "note": "It is so already."]))
         }
-        let details = zoomed ? "“\(tab.title)” fills its tab in \(place(controller)) and takes the window's keyboard; the other panes keep running behind it."
-                             : "Every pane of the tab with “\(tab.title)” in \(place(controller)) comes back."
+        let details = zoomed ? "The pane “\(MCPTabNames.title(tab))” fills \(MCPTabNames.position(tab)) in \(place(controller)) and takes the window's keyboard; the other panes keep running behind it."
+                             : "Every pane of \(MCPTabNames.named(tab)) in \(place(controller)) comes back."
         approve(Ask(title: zoomed ? "An agent asks to zoom a pane" : "An agent asks to bring the panes back", details: details), context, reply: reply) { approved, window in
             window?.finish()
             guard let controller = MCPControl.controller(of: tab), let group = controller.group(of: tab), group.isSplit else {
@@ -156,7 +175,7 @@ extension MCPWriteControl {
     // MARK: layout
 
     /// The window set_layout's per-window changes go to: the project's, the caller's, or the front one.
-    private static func layoutWindow(_ arguments: [String: Any], _ context: Context) -> Result<TerminalWindowController, MCPToolError> {
+    static func layoutWindow(_ arguments: [String: Any], _ context: Context) -> Result<TerminalWindowController, MCPToolError> {
         let controllers = AppDelegate.shared.controllers
         if arguments["project"] != nil {
             switch context.projects.project(arguments["project"]) {
@@ -174,10 +193,11 @@ extension MCPWriteControl {
         return .failure(MCPToolError("No Next Term window is open."))
     }
 
-    private static func layout(of controller: TerminalWindowController) -> [String: Any] {
+    static func layout(of controller: TerminalWindowController) -> [String: Any] {
         let app = AppDelegate.shared!
         var layout: [String: Any] = [
             "terminal_position": app.terminalPosition.rawValue, "sidebar_side": app.sidebarSide.rawValue,
+            "window_column_side": app.windowColumnOnRight ? "right" : "left",
             "terminal_tabs": app.terminalTabs.rawValue,
             "sidebar": controller.isSidebarVisible ? "shown" : "hidden", "terminal_folded": controller.terminalCollapsed,
             "window_column": app.showsWindowColumn ? "shown" : "hidden", "window_column_folded": !app.windowColumnExpanded,
@@ -207,6 +227,29 @@ extension MCPWriteControl {
         case .failure(let error): return reply(MCPControl.fail(error.text))
         case .success(let found): controller = found
         }
+        let change: MCPLayoutChange, lines: [String]
+        switch layoutPlan(wanted, in: controller) {
+        case .failure(let error): return reply(MCPControl.fail(error.text))
+        case .success(let plan): (change, lines) = (plan.change, plan.lines)
+        }
+        if change.isEmpty {
+            var answer = layout(of: controller)
+            answer["changed"] = [String]()
+            return reply(MCPControl.ok(answer))
+        }
+        approve(Ask(title: "An agent asks to change the layout", details: lines.joined(separator: "\n")), context, reply: reply) { approved, window in
+            window?.finish()
+            let changed = applyLayout(change, in: controller, asked: window != nil)
+            var answer = layout(of: controller)
+            answer["changed"] = changed
+            answer["approved"] = approved
+            reply(MCPControl.ok(answer))
+        }
+    }
+
+    /// What `wanted` would change, in `controller`'s window for its per-window fields: only the fields that differ
+    /// now, each with the line the approval window shows. A fold the window can't make is refused.
+    static func layoutPlan(_ wanted: MCPLayoutChange, in controller: TerminalWindowController) -> Result<(change: MCPLayoutChange, lines: [String]), MCPToolError> {
         let app = AppDelegate.shared!
         var change = MCPLayoutChange()
         var lines: [String] = []
@@ -217,6 +260,10 @@ extension MCPWriteControl {
         if let side = wanted.sidebarSide, side != app.sidebarSide.rawValue {
             change.sidebarSide = side
             lines.append("The project sidebar moves to the \(side), in every window.")
+        }
+        if let side = wanted.windowColumnSide, side != (app.windowColumnOnRight ? "right" : "left") {
+            change.windowColumnSide = side
+            lines.append("The window column moves to the \(side), in every window.")
         }
         if let tabs = wanted.terminalTabs, tabs != app.terminalTabs.rawValue {
             change.terminalTabs = tabs
@@ -229,7 +276,7 @@ extension MCPWriteControl {
         }
         if let folded = wanted.windowColumnFolded, folded != !app.windowColumnExpanded {
             guard app.windowColumns.wouldShow(ifShown: wanted.windowColumnShown ?? app.showsWindowColumn) else {
-                return reply(MCPControl.fail("The window column isn’t showing (it needs window_column shown and two or more windows open), so it can’t fold or unfold; nothing changed."))
+                return .failure(MCPToolError("The window column isn’t showing (it needs window_column shown and two or more windows open), so it can’t fold or unfold; nothing changed."))
             }
             change.windowColumnFolded = folded
             lines.append(WindowColumnSettings.approvalLine(folded: folded))
@@ -240,7 +287,7 @@ extension MCPWriteControl {
         }
         if let folded = wanted.terminalFolded {
             if folded, controller.editorArea.isHidden {
-                return reply(MCPControl.fail("The editor is closed in that window (no file is open), so the terminal fills it and can’t fold; nothing changed."))
+                return .failure(MCPToolError("The editor is closed in that window (no file is open), so the terminal fills it and can’t fold; nothing changed."))
             }
             // A new terminal position unfolds it: fold again after the move. Moving the sidebar leaves it as it is.
             if MCPLayoutChange.needsFoldStep(wanted: folded, folded: controller.terminalCollapsed, newPosition: change.terminalPosition != nil) {
@@ -248,58 +295,60 @@ extension MCPWriteControl {
                 lines.append("The terminal is \(folded ? "folded" : "unfolded") in \(place(controller)).")
             }
         }
-        if change.isEmpty {
-            var answer = layout(of: controller)
-            answer["changed"] = [String]()
-            return reply(MCPControl.ok(answer))
+        return .success((change, lines))
+    }
+
+    /// Makes a layout change as the View menu does, the per-window fields in `controller`'s window while it is open, and
+    /// returns the fields changed. `asked`: the user approved it in a window; a remote door's grant asked nothing, so a
+    /// toast says what changed in the window column, and how to put it back.
+    @discardableResult
+    static func applyLayout(_ change: MCPLayoutChange, in controller: TerminalWindowController?, asked: Bool) -> [String] {
+        let app = AppDelegate.shared!
+        var changed: [String] = []
+        if let position = change.terminalPosition {
+            app.applyImported(.terminalPosition(position))
+            changed.append("terminal_position")
         }
-        approve(Ask(title: "An agent asks to change the layout", details: lines.joined(separator: "\n")), context, reply: reply) { approved, window in
-            window?.finish()
-            var changed: [String] = []
-            if let position = change.terminalPosition {
-                app.applyImported(.terminalPosition(position))
-                changed.append("terminal_position")
-            }
-            if let side = change.sidebarSide {
-                app.applyImported(.sidebarSide(side))
-                changed.append("sidebar_side")
-            }
-            // Only the tabs move: a folded terminal stays folded, so terminal_folded needs no step for it.
-            if let tabs = change.terminalTabs {
-                app.moveTerminalTabs(to: TerminalTabsSetting(stored: tabs))
-                changed.append("terminal_tabs")
-            }
-            // The window column: every window, as the View menu and Settings › General change it.
-            if let shown = change.windowColumnShown {
-                app.showsWindowColumn = shown
-                changed.append("window_column")
-                // A remote door's grant asks nothing on the Mac: say what changed, and how to put it back.
-                if window == nil {
-                    GitToast.whenFree {
-                        guard let front = (NSApp.keyWindow?.windowController as? TerminalWindowController)?.window ?? controller.window else { return }
-                        GitToast.show(WindowColumnSettings.grantedLine(shown: shown, key: columnKey), in: front)
-                    }
+        if let side = change.sidebarSide {
+            app.applyImported(.sidebarSide(side))
+            changed.append("sidebar_side")
+        }
+        // Only the tabs move: a folded terminal stays folded, so terminal_folded needs no step for it.
+        if let tabs = change.terminalTabs {
+            app.moveTerminalTabs(to: TerminalTabsSetting(stored: tabs))
+            changed.append("terminal_tabs")
+        }
+        // The window column: every window, as the View menu and Settings › General change it.
+        if let shown = change.windowColumnShown {
+            app.showsWindowColumn = shown
+            changed.append("window_column")
+            if !asked {
+                let columnKey: String? = KeyboardShortcuts.shared.chord(for: "toggleWindowColumn:")?.display
+                GitToast.whenFree {
+                    guard let front = (NSApp.keyWindow?.windowController as? TerminalWindowController)?.window ?? controller?.window else { return }
+                    GitToast.show(WindowColumnSettings.grantedLine(shown: shown, key: columnKey), in: front)
                 }
             }
-            if let folded = change.windowColumnFolded {
-                app.windowColumnExpanded = !folded
-                changed.append("window_column_folded")
-            }
-            let open = AppDelegate.shared.controllers.contains { $0 === controller }
-            if open, let shown = change.sidebarShown {
-                app.sidebarVisible = shown
-                controller.setSidebarVisible(shown)
-                changed.append("sidebar")
-            }
-            if open, let folded = change.terminalFolded {
-                if folded { controller.collapseTerminal() } else { controller.expandTerminal() }
-                changed.append("terminal_folded")
-            }
-            var answer = layout(of: controller)
-            answer["changed"] = changed
-            answer["approved"] = approved
-            reply(MCPControl.ok(answer))
         }
+        if let folded = change.windowColumnFolded {
+            app.windowColumnExpanded = !folded
+            changed.append("window_column_folded")
+        }
+        if let side = change.windowColumnSide {
+            app.setWindowColumnSide(side == "right" ? .right : .left)
+            changed.append("window_column_side")
+        }
+        guard let controller, AppDelegate.shared.controllers.contains(where: { $0 === controller }) else { return changed }
+        if let shown = change.sidebarShown {
+            app.sidebarVisible = shown
+            controller.setSidebarVisible(shown)
+            changed.append("sidebar")
+        }
+        if let folded = change.terminalFolded {
+            if folded { controller.collapseTerminal() } else { controller.expandTerminal() }
+            changed.append("terminal_folded")
+        }
+        return changed
     }
 
     // MARK: settings
@@ -321,12 +370,47 @@ extension MCPWriteControl {
         case "agent_spinner": return .choice(AgentSpinner.current.rawValue)
         case "agents_offer_tabs": return .flag(app.agentsOfferTabs)
         case "agents_bring_tabs_forward": return .choice(app.agentArrival.rawValue)
+        case "open_projects_in": return .choice(app.projectTarget.mcpName)
+        case "notify_threshold_seconds": return .number(Double(notifications.threshold.rawValue))
+        default: return behaviourValue(of: setting)
+        }
+    }
+
+    /// The terminal's font, colours, cursor and scrollback, where a new tab opens, what opens at launch, the
+    /// sidebar's single click and the shortcut set, as Settings shows them.
+    private static func behaviourValue(of setting: MCPSettings.Setting) -> MCPSettings.Value {
+        let app = AppDelegate.shared!
+        switch setting.name {
+        case "terminal_font_family": return .choice(Preferences.terminalFontFamily ?? MCPSettings.defaultFont)
+        case "terminal_font_size": return app.terminalOwnFontSize.map { .number(Double($0)) } ?? .choice(MCPSettings.sameAsEditor)
+        case "appearance": return .choice(Preferences.appearance.rawValue)
+        case "light_theme": return .choice(Theme.palettes.light.id)
+        case "dark_theme": return .choice(Theme.palettes.dark.id)
+        case "terminal_colours": return .choice(Preferences.terminalPalette == nil ? "next_term" : "imported")
+        case "terminal_cursor": return .choice(Preferences.terminalCursorShape.rawValue)
+        case "terminal_cursor_blink": return .flag(Preferences.terminalCursorBlinks)
+        case "terminal_scrollback": return .number(Double(Preferences.terminalScrollback))
+        case "new_tab_folder": return .choice(Preferences.terminalStartFolder.stored)
+        case "at_launch": return .choice(LaunchSettings(defaults: .standard).opens.mcpName)
+        case "sidebar_single_click": return .flag(app.sidebarSingleClickOpens)
+        case "shortcut_set": return .choice(KeyboardShortcuts.shared.preset.mcpName)
+        case "agents_open_as_chat": return .choice(ChatFirst.chatAgents().joined(separator: ","))
+        case "chat_token_usage": return .flag(LiveChatView.showsTokenUsage)
         default: return .flag(false)
         }
     }
 
+    /// Why a change checked against the allowlist still can't be made here (nil: it can): imported colours need
+    /// colours an import brought over, which Settings keeps.
+    static func refusal(_ setting: MCPSettings.Setting, _ value: MCPSettings.Value) -> String? {
+        if setting.name == "terminal_colours", value == .choice("imported"), Preferences.customTerminalPalette == nil {
+            return "No import has brought terminal colours over, so terminal_colours takes only next_term here; nothing was changed. list_import_sources and preview_import bring colours over from another terminal."
+        }
+        return nil
+    }
+
     /// Sets a value the way the menus and Settings do, so it applies at once.
-    private static func apply(_ setting: MCPSettings.Setting, _ value: MCPSettings.Value) {
+    static func apply(_ setting: MCPSettings.Setting, _ value: MCPSettings.Value) {
         let app = AppDelegate.shared!
         switch (setting.name, value) {
         case ("font_size", .number(let size)): app.setFontSize(CGFloat(size))
@@ -344,10 +428,53 @@ extension MCPWriteControl {
         case ("agent_spinner", .choice(let name)): if let choice = AgentSpinner(rawValue: name) { AgentSpinner.current = choice }
         case ("agents_offer_tabs", .flag(let on)): app.agentsOfferTabs = on
         case ("agents_bring_tabs_forward", .choice(let name)): if let mode = AgentArrival.Mode(rawValue: name) { app.agentArrival = mode }
-        default: break
+        case ("open_projects_in", .choice(let name)): if let target = ProjectOpening.Setting(mcpName: name) { app.projectTarget = target }
+        case ("notify_threshold_seconds", .number(let seconds)):
+            if let threshold = WorkThreshold(rawValue: Int(seconds)) { UserDefaults.standard.set(threshold.rawValue, forKey: NotificationSettings.Key.threshold) }
+        default: applyBehaviour(setting, value)
         }
         // Settings › Notifications shows it, if open.
         if setting.name.hasPrefix("notif") { NotificationCenter.default.post(name: NotificationsMenu.changed, object: nil) }
+    }
+
+    /// The terminal's settings, what opens at launch, the sidebar's single click and the shortcut set, as Settings
+    /// sets them; each Settings tab that shows one is told, as after an import.
+    private static func applyBehaviour(_ setting: MCPSettings.Setting, _ value: MCPSettings.Value) {
+        let app = AppDelegate.shared!
+        switch (setting.name, value) {
+        case ("terminal_font_family", .choice(let family)): app.setTerminalFontFamily(family == MCPSettings.defaultFont ? nil : family)
+        case ("terminal_font_size", .number(let size)): app.setTerminalFontSize(CGFloat(size))
+        case ("terminal_font_size", .choice): app.setTerminalFontSize(nil)
+        case ("appearance", .choice(let raw)): Preferences.appearance = AppAppearance(stored: raw)
+        case ("light_theme", .choice(let id)): Preferences.lightTheme = id
+        case ("dark_theme", .choice(let id)): Preferences.darkTheme = id
+        case ("terminal_colours", .choice(let name)):
+            // Imported: the colours Settings keeps from the last import, as its Colours menu offers them.
+            app.setTerminalPalette(name == "imported" ? Preferences.customTerminalPalette : nil)
+        case ("terminal_cursor", .choice(let raw)): if let shape = CursorShape(rawValue: raw) { app.setTerminalCursor(shape: shape) }
+        case ("terminal_cursor_blink", .flag(let on)): app.setTerminalCursor(blinks: on)
+        case ("terminal_scrollback", .number(let lines)): app.setTerminalScrollback(Int(lines))
+        case ("new_tab_folder", .choice(let stored)): Preferences.terminalStartFolder = StartFolder(stored: stored)
+        case ("at_launch", .choice(let name)):
+            guard let opens = LaunchOpens(mcpName: name) else { return }
+            var launch = LaunchSettings(defaults: .standard)
+            launch.opens = opens
+            launch.save(.opens, to: .standard)
+            // Settings › General and the Welcome window's At launch pop-up show it.
+            NotificationCenter.default.post(name: LaunchSettings.changed, object: nil)
+            return
+        case ("sidebar_single_click", .flag(let on)): app.sidebarSingleClickOpens = on
+        case ("shortcut_set", .choice(let name)):
+            // As Settings › Keyboard Shortcuts switches it: the preset under the user's own keys, which stay.
+            if let preset = KeymapPreset(mcpName: name) { KeyboardShortcuts.shared.preset = preset }
+        case ("chat_token_usage", .flag(let on)): LiveChatView.showsTokenUsage = on
+        case ("agents_open_as_chat", .choice(let list)):
+            // Each agent's Opens as (Settings › Agents): the listed ones Chat, the others Terminal. New sessions only.
+            let chat = Set(list.split(separator: ",").map(String.init))
+            for id in ChatFirst.agentIDs { ChatFirst.set(id, asChat: chat.contains(id)) }
+        default: return
+        }
+        NotificationCenter.default.post(name: ImportCoordinator.changed, object: nil)
     }
 
     /// A command notification choice as MCP names it: in_another_app, always, never.
@@ -359,7 +486,7 @@ extension MCPWriteControl {
         }
     }
 
-    private static func same(_ a: MCPSettings.Value, _ b: MCPSettings.Value) -> Bool {
+    static func same(_ a: MCPSettings.Value, _ b: MCPSettings.Value) -> Bool {
         if case .number(let x) = a, case .number(let y) = b { return abs(x - y) < 0.001 }
         return a == b
     }
@@ -383,6 +510,7 @@ extension MCPWriteControl {
         case .failure(let error): return reply(MCPControl.fail(error.text))
         case .success(let changes): asked = changes
         }
+        if let refused = asked.lazy.compactMap({ refusal($0.0, $0.1) }).first { return reply(MCPControl.fail(refused)) }
         let changes = asked.filter { !same(value(of: $0.0), $0.1) }
         guard !changes.isEmpty else { return reply(MCPControl.ok(["changed": [String](), "note": "Those values are set already."])) }
         let lines = changes.map { "\($0.0.title): \(value(of: $0.0).text) → \($0.1.text)" }

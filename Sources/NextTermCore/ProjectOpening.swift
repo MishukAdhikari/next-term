@@ -7,6 +7,38 @@ public enum ProjectOpening {
     /// words they are saved as.
     public enum Setting: String, CaseIterable, Sendable {
         case ask, thisWindow, newWindow
+        /// A tab of this window, as macOS merges windows (plan 032): the project keeps a window of its own, merged in.
+        case newTab
+        /// A tab when System Settings › Desktop & Dock › "Prefer tabs when opening documents" says so (Always, or In Full
+        /// Screen while this window is), else a new window.
+        case asMacOS
+
+        /// As File › Open Projects In and Settings › General list it.
+        public var title: String {
+            switch self {
+            case .ask: return "Ask Each Time"
+            case .thisWindow: return "This Window"
+            case .newWindow: return "New Window"
+            case .newTab: return "New Tab in This Window"
+            case .asMacOS: return "As macOS Prefers"
+            }
+        }
+
+        /// As settings_get and settings_set name it (open_projects_in).
+        public var mcpName: String {
+            switch self {
+            case .ask: return "ask"
+            case .thisWindow: return "this_window"
+            case .newWindow: return "new_window"
+            case .newTab: return "new_tab"
+            case .asMacOS: return "as_macos"
+            }
+        }
+
+        public init?(mcpName: String) {
+            guard let found = Self.allCases.first(where: { $0.mcpName == mcpName }) else { return nil }
+            self = found
+        }
     }
 
     /// The window Open Project was asked from.
@@ -32,17 +64,22 @@ public enum ProjectOpening {
         /// This window: its tabs make way for the project's.
         case replace
         case newWindow
+        /// A window of its own, merged into this one as a tab.
+        case newTab
     }
 
     /// An unused window is taken over; otherwise the setting decides. A window the restore brought back, while it holds
     /// what came back, is never taken over or replaced: the folder opens in a window of its own, and nothing asks.
-    public static func placement(from target: Target?, setting: Setting) -> Placement {
+    /// `systemPrefersTabs`: macOS's own preference for this window, which As macOS Prefers follows.
+    public static func placement(from target: Target?, setting: Setting, systemPrefersTabs: Bool = false) -> Placement {
         guard let target, !target.holdsRestore else { return .newWindow }
         if target.pristine { return .adopt }
         switch setting {
         case .ask: return .ask
         case .thisWindow: return .replace
         case .newWindow: return .newWindow
+        case .newTab: return .newTab
+        case .asMacOS: return systemPrefersTabs ? .newTab : .newWindow
         }
     }
 

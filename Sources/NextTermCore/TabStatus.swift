@@ -88,6 +88,11 @@ public struct TabStatus {
     private var footerSeen = false
     /// Its working hint has been on screen this run: from then on its footer alone means it stopped.
     private var workingSeen = false
+    /// A bell's notice has gone out since the agent's screen last said it stopped (`bell`): one a stop.
+    private var stopRang = false
+    /// The agent's screen showed nothing at the last look (`AgentActivity.blank`): it is between screens, so output going
+    /// quiet is no finish.
+    private var screenBlank = false
     /// Jobs the shell holds (suspended or in the background), reported by the zsh integration.
     public private(set) var jobs = 0
     public private(set) var jobSummary = ""
@@ -253,6 +258,7 @@ public struct TabStatus {
     public mutating func observe(agentScreen activity: AgentActivity, at now: TimeInterval) {
         guard running, kind == .agent else { return }
         settleStop(at: now)
+        screenBlank = activity == .blank
         switch activity {
         case .working:
             screenSynced = true
@@ -261,6 +267,7 @@ public struct TabStatus {
             if !busy {
                 busy = true
                 if lastStop == nil { turnWords = nil } // a new turn
+                stopRang = false
                 // Within a second of a stop: one frame without the hint, and the same turn goes on.
                 busySince = lastStop?.since ?? now
                 if unseen == .done { unseen = nil }
@@ -297,6 +304,20 @@ public struct TabStatus {
             }
             screenSynced = true
             stopped(at: now)
+        case .waiting:
+            // Its own prompt, from an agent whose working hint is known to show: the screen says it waits.
+            screenSynced = true
+            answered()
+            guard workingSeen else {
+                // Its startup drawing (or a screen before its prompt), not a turn: no done, no notice.
+                busy = false
+                lastStop = nil
+                return
+            }
+            stopped(at: now)
+        case .blank:
+            // Nothing on screen: it stays as it was (`screenBlank` keeps output timing from ending a turn).
+            break
         case .idle:
             // An agent with a footer of its own that shows none of its shapes (OpenCode in a sub-agent's session,
             // which draws a footer of its own): no sign either way, so it stays as it was. Its question has gone.
@@ -363,6 +384,15 @@ public struct TabStatus {
             heldWords = (words.body, now)
             return
         }
+        if words == nil, running, kind == .agent, screenSynced, !busy, question == nil {
+            // An agent whose screen says it stopped and asks nothing rings as it finishes (Codex's turn-complete bell,
+            // Claude Code's terminal_bell): its notice goes, once a stop, but the finish is the mark, not an amber one.
+            guard !visible, !stopRang else { return }
+            stopRang = true
+            pendingNotice = TabNotice(state: .attention, command: command, program: program, kind: kind, stillRunning: running,
+                                      duration: .infinity, fromProgram: true)
+            return
+        }
         guard var notice = marked(.attention, duration: .infinity, fromProgram: true) else { return }
         notice.message = words?.body
         pendingNotice = notice
@@ -394,7 +424,7 @@ public struct TabStatus {
     public mutating func tick(at now: TimeInterval) {
         settleStop(at: now)
         releaseWords(at: now)
-        guard busy, !screenSynced, now - lastOutputAt >= Self.quietAfter else { return }
+        guard busy, !screenSynced, !screenBlank, now - lastOutputAt >= Self.quietAfter else { return }
         busy = false
         // An agent whose own footer has shown this run, and not yet its working hint: what output timing saw was no
         // turn of its own (its startup, a redraw), or one whose end its screen cannot tell. No done, no notice.
@@ -464,6 +494,8 @@ public struct TabStatus {
         screenSynced = false
         footerSeen = false
         workingSeen = false
+        screenBlank = false
+        stopRang = false
         exitCode = nil
         if unseen == .done || unseen == .failed { unseen = nil }
     }

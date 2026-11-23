@@ -23,6 +23,20 @@ public enum LaunchOpens: String, CaseIterable, Sendable {
         case .newTerminal: return "Open a new terminal"
         }
     }
+
+    /// As settings_get and settings_set name it (at_launch): welcome, resume or new_terminal.
+    public var mcpName: String {
+        switch self {
+        case .welcome: return "welcome"
+        case .lastProjects: return "resume"
+        case .newTerminal: return "new_terminal"
+        }
+    }
+
+    public init?(mcpName: String) {
+        guard let found = Self.allCases.first(where: { $0.mcpName == mcpName }) else { return nil }
+        self = found
+    }
 }
 
 /// The choices in Settings › General, read from the defaults at each launch, reopen and quit, so a change

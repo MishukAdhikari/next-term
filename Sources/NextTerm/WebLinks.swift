@@ -55,7 +55,7 @@ enum WebLinks {
 /// Settings › Terminal's switch for Studio links (WebLinks.studioInChromium).
 final class StudioLinksCheckbox: NSButton {
     static func make() -> StudioLinksCheckbox {
-        let box = StudioLinksCheckbox(checkboxWithTitle: "Open LangGraph Studio links in Chrome, Edge, Brave or Arc when Safari is the default browser",
+        let box = StudioLinksCheckbox(checkboxWithTitle: "Open LangGraph Studio links in Chrome, Edge, Brave or Arc",
                                       target: nil, action: nil)
         box.target = box
         box.action = #selector(toggled)

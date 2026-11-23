@@ -461,6 +461,41 @@ extension SelfTest {
     }
 }
 
+extension SelfTest {
+    /// Collapsed, a mark dragged as a hand drags (an event every 1/60 s) onto the third mark's place moves its tab
+    /// there, as a row's drag does in the open list; dragged back, the tabs are as they were. Three tabs at least,
+    /// the ones added closed after.
+    static func collapsedDragChecks(_ c: TerminalWindowController, list: TabListView, in window: NSWindow) async {
+        var added: [TerminalTab] = []
+        while c.groups.count < 3 { added.append(c.addTab(directory: nil, select: false)) }
+        for tab in added { _ = await wait(20) { tab.status.integrated } }
+        defer { for tab in added where c.tabs.contains(where: { $0 === tab }) { c.requestClose(tab) } }
+        c.select(0)
+        if !list.isCollapsed { c.toggleTabListCollapsed(nil) }
+        window.layoutIfNeeded()
+        await pause(0.5)
+        let order: [ObjectIdentifier] = c.groups.map { ObjectIdentifier($0) }
+        func drag(_ from: Int, onto to: Int) -> Bool {
+            guard let mark = list.tabRowView(at: from), let target = list.tabRowView(at: to) else { return false }
+            let start: NSPoint = mark.convert(NSPoint(x: mark.bounds.midX, y: mark.bounds.midY), to: nil)
+            let end: NSPoint = target.convert(NSPoint(x: target.bounds.midX, y: target.bounds.midY), to: nil)
+            return PacedDrag(in: window, from: start, to: end, steps: 20).run(on: mark)
+        }
+        let draggedOut: Bool = drag(0, onto: 2)
+        window.layoutIfNeeded()
+        let moved: [ObjectIdentifier] = c.groups.map { ObjectIdentifier($0) }
+        let wentThird: Bool = moved.count == order.count && moved[2] == order[0] && moved[0] == order[1] && moved[1] == order[2]
+        let draggedBack: Bool = drag(2, onto: 0)
+        window.layoutIfNeeded()
+        let back: Bool = c.groups.map { ObjectIdentifier($0) } == order
+        check(list.isCollapsed && draggedOut && wentThird && draggedBack && back,
+              "tab list: collapsed, a mark dragged onto the third mark moves its tab there, and back again, as the open list's rows do",
+              "collapsed \(list.isCollapsed), dragged \(draggedOut)/\(draggedBack), third \(wentThird), back \(back)")
+        c.toggleTabListCollapsed(nil)
+        window.layoutIfNeeded()
+    }
+}
+
 /// The top bar's tab view, timed and counted from outside the bar's file, which has no counters: its draws (its class
 /// draws itself, and only its own method is wrapped), and the moments its frame is set (its class sets none of its
 /// own, so one is added that calls NSView's: wrapping NSView's own would time every view in the app). Installed once,

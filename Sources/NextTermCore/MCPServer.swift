@@ -18,31 +18,44 @@ public enum MCPServer {
         (home as NSString).appendingPathComponent("Library/Application Support/Next Term/mcp.sock")
     }
 
-    public static let instructions = """
-        Next Term is the terminal and editor this agent may run in, for orchestrating work across projects. \
-        list_tabs shows every project, tab and herdr agent with its state (working, done, needs attention). Start \
-        an agent with new_tab (a folder and a command such as "claude", "codex" or "opencode"), give it a task with \
-        send_to_tab, then wait_for_tab until it stops and read_tab. An agent awaiting a decision shows \
+    /// What `initialize` says to an agent outside a Next Term tab. Its first line is Secrets' (secretsLead), whole in the
+    /// 250 characters Codex shows of a deferred server's first line, so an agent that needs a key looks there before its
+    /// shell files or the user; what the tools do follows, then where to learn to set Next Term up (setupPointer), and how
+    /// keys are used ends it (secretsUse). Every variant stays within the 2,048 characters older Claude Code keeps.
+    public static let instructions = outside(orchestration)
+
+    static func outside(_ orchestration: String) -> String {
+        secretsLead + "\n" + "Next Term is the terminal and editor this agent may run in. " + orchestration + " " + setupPointer + " " + secretsUse
+    }
+
+    /// Where an agent outside a Next Term tab learns to set Next Term up: an agent in a tab has next-term-setup in the
+    /// skills paragraph instead.
+    static let setupPointer = "To set Next Term up or change it, read get_skill next-term-setup."
+
+    /// What Next Term's tools do, between Secrets' first line and its last sentences.
+    static let orchestration = """
+        list_tabs shows every project, tab and herdr agent with its state. Start \
+        an agent with new_tab (a folder and a command such as "claude", "codex" or "opencode"; Command Code's is "cmd"), \
+        give it a task with send_to_tab, wait_for_tab until it stops, then read_tab. Asked to orchestrate or hand off work to \
+        another agent, use tabs, not subagents: the ask is the yes. An agent awaiting a decision shows \
         "attention" and a question_id for answer_agent. Never type into your own tab ("you": true). \
         read_file, find_in_files, git_status, get_diff and get_editor_selection read projects and the editor. \
-        list_hosts, new_remote_tab, host_sessions and host_changes work on the user's servers. list_skills \
-        and get_skill give your project's, the user's and Next Term's skills: read one that fits and your \
-        agent doesn't load itself. propose_edit shows an edit for the user to accept. write_file, \
+        list_hosts, new_remote_tab, host_sessions and host_changes work on hosts. list_skills \
+        and get_skill give skills: read one that fits and your agent doesn't load. propose_edit offers the user an edit. write_file, \
         create_file, stage, commit, focus_tab, split_pane, close_pane, zoom_pane, set_layout, settings_set, \
-        install_skill, remove_skill, apply_import, undo_import and add_task ask the user on the Mac first, and change \
-        nothing when declined. For settings from another app use list_import_sources and preview_import, \
-        never its files. A tab Next Term brings back after an update or a quit keeps its id. list_secrets \
-        lists the user's stored keys by name; no tool returns a key's value. run_with_secrets runs a command \
-        with keys in its environment once the user approves on the Mac with Touch ID. request_secret asks \
-        the user to type a key into Next Term. store_secret saves a key you already hold.
+        install_skill, remove_skill, apply_import, undo_import, apply_setup, add_task and add_mcp_server ask the user on the \
+        Mac first. Another app's settings: list_import_sources and preview_import, never its files. A tab Next Term brings back after an update or a quit keeps its id. \
+        Told a prompt was meant for another tab: forward_prompt.
         """
 
-    /// First in the instructions when the agent runs in a Next Term tab: each of Next Term's own skills offered
+    /// Right after Secrets' first line when the agent runs in a Next Term tab: each of Next Term's own skills offered
     /// (BuiltInSkill.offered), with when to read it; get_skill gives the rules. next-term-tabs leads, while Settings ›
-    /// Editor › "Agents offer to run parallel work in tabs" is on. Whole within its first 512 characters, as some
-    /// clients read only those.
+    /// Editor › "Agents offer to run parallel work in tabs" is on. next-term-secrets is left out: the first line already
+    /// tells every agent when to look in Secrets, and the 2,048 characters have no room for it. Since Secrets' line went
+    /// first (2026-10-31), the paragraph no longer ends within the first 512 characters: Codex shows a deferred server's
+    /// first line, and that line is the one about keys.
     public static func skillsParagraph(offeringTabs: Bool) -> String {
-        let offered = BuiltInSkill.offered(tabs: offeringTabs).map { $0.name + " " + $0.when }
+        let offered = BuiltInSkill.offered(tabs: offeringTabs).filter { $0 != .secrets }.map { $0.name + " " + $0.when }
         return "This agent runs in a Next Term tab. Read get_skill " + offered.joined(separator: "; ") + ". Not in a tab with opened_by."
     }
 
@@ -60,9 +73,66 @@ public enum MCPServer {
         return false
     }
 
-    /// What `initialize` says: for an agent in a Next Term tab (`inTab`), Next Term's own skills first.
+    /// What `initialize` says: for an agent in a Next Term tab (`inTab`), Secrets' line, then Next Term's own skills in
+    /// place of the line that names Next Term.
     public static func instructions(inTab: Bool, offeringTabs: Bool) -> String {
-        inTab ? skillsParagraph(offeringTabs: offeringTabs) + " " + instructions : instructions
+        guard inTab else { return instructions }
+        return secretsLead + "\n" + skillsParagraph(offeringTabs: offeringTabs) + " " + inTabOrchestration + " " + secretsUse
+    }
+
+    /// The orchestration paragraph in a tab: next-term-tabs says that a restored tab keeps its id, which leaves room
+    /// for every variant within the limit with or without the hub's line.
+    static var inTabOrchestration: String {
+        orchestration.replacingOccurrences(of: " A tab Next Term brings back after an update or a quit keeps its id.", with: "")
+    }
+
+    /// The 2,048 characters older Claude Code keeps of a server's instructions.
+    public static let instructionsLimit = 2_048
+
+    /// `instructions(inTab:offeringTabs:)` with, once servers the user connected in Next Term apply to this agent (the
+    /// hub's session is active), a line naming them right after Secrets' first line: an agent uses a tool it knows it has,
+    /// and never searches for a server it doesn't know about. When it doesn't fit in the limit, the two sentences an agent
+    /// needs least (`spareSentences`) make room; names that still don't fit are counted instead.
+    public static func instructions(inTab: Bool, offeringTabs: Bool, hubServers: [String], callOnly: [String] = []) -> String {
+        let base = instructions(inTab: inTab, offeringTabs: offeringTabs)
+        guard !hubServers.isEmpty else { return base }
+        let spared = spareSentences.reduce(base) { $0.replacingOccurrences(of: " " + $1, with: "") }
+        for text in [base, spared] {
+            guard let lineEnd = text.firstIndex(of: "\n"),
+                  let line = hubParagraph(hubServers, callOnly: callOnly, room: instructionsLimit - text.utf16.count - 1,
+                                          least: text == base ? hubServers.count : 1)
+            else { continue }
+            return String(text[..<lineEnd]) + "\n" + line + String(text[lineEnd...])
+        }
+        return base
+    }
+
+    /// What the instructions leave out to make room for the hub's line.
+    static let spareSentences = [
+        "Another app's settings: list_import_sources and preview_import, never its files.",
+        "A tab Next Term brings back after an update or a quit keeps its id.",
+        // The host tools are listed with their own descriptions; the line naming them goes before the hub's line does.
+        "list_hosts, new_remote_tab, host_sessions and host_changes work on hosts.",
+    ]
+
+    /// The hub's line for `servers`, within `room` characters and naming at least `least` of them, or nil.
+    static func hubParagraph(_ servers: [String], callOnly: [String] = [], room: Int, least: Int = 1) -> String? {
+        func line(_ names: [String], more: Int) -> String {
+            let listed = names.joined(separator: ", ") + (more > 0 ? " and \(more) more" : "")
+            // The servers with no direct tools in this session are named: an agent looks for <server>__<tool> and
+            // doesn't find theirs.
+            let shown = Set(names)
+            let viaCall = callOnly.filter { shown.contains($0) }
+            let use = viaCall.isEmpty || viaCall.count == names.count && more == 0
+                ? (viaCall.isEmpty ? "Use their tools, <server>__<tool>; " : "Reach them with mcp_tools (server: its name) and mcp_call; ")
+                : "Use their tools, <server>__<tool>; for \(viaCall.joined(separator: ", ")), mcp_tools (server: its name) then mcp_call; "
+            return "MCP servers connected in Next Term: \(listed). " + use + "mcp_servers, mcp_tools and mcp_call reach all."
+        }
+        for count in stride(from: servers.count, through: max(1, least), by: -1) {
+            let made = line(Array(servers.prefix(count)), more: servers.count - count)
+            if made.utf16.count <= room { return made }
+        }
+        return nil
     }
 
     // MARK: tools
@@ -81,14 +151,16 @@ public enum MCPServer {
         public let timeout: TimeInterval
         /// Reaches another machine (a server over ssh), not only this Mac.
         public var openWorld = false
-        /// Listed for Claude Code to keep loaded (`anthropic/alwaysLoad`). Tools used once in a while (the
-        /// import tools and add_task, MCPServer.isDeferred) leave it off, so they cost nothing until tool search finds them.
+        /// Listed for Claude Code to keep loaded (`anthropic/alwaysLoad`). Tools used once in a while (apply_import,
+        /// undo_import, apply_setup, add_task and the MCP hub's two, MCPServer.isDeferred) leave it off, so they cost nothing until tool search finds them.
         public var alwaysLoad = true
+        /// JSON Schema for the tool's structured answer, as JSON text (`structuredContent`); nil for text only.
+        public var outputSchema: String? = nil
     }
 
     private static let tabID = #""tab_id": {"type": "string", "description": "A tab's id from list_tabs."}"#
     /// tab_id for the tools that take a herdr agent's id too: read_tab, wait_for_tab, send_to_tab, press_keys, answer_agent,
-    /// show_tab and focus_tab (MCPWriteTools).
+    /// show_tab, close_tab and focus_tab (MCPWriteTools).
     static let agentTabID = #""tab_id": {"type": "string", "description": "A tab's id from list_tabs, or a herdr agent's id from its herdr_agents."}"#
     private static let projectRef = #""project": {"type": "string", "description": "An open project's folder (as list_projects gives it) or its name. Default: your window's project, or the only one open."}"#
     private static let hostRef = #""host": {"type": "string", "description": "A host's id or name from list_hosts."}"#
@@ -96,16 +168,16 @@ public enum MCPServer {
 
     public static let tools: [Tool] = [
         Tool(name: "list_tabs", title: "List projects and tabs",
-             description: "Every Next Term window (one per project) and its terminal tabs: id, title, folder, the program running, and its state: idle, working (an agent is busy), done, failed, or attention (an agent waits for a decision; the question, its choices and a question_id for answer_agent are included). Remote tabs also have their host, and can be connecting (ssh is logging in; login_prompt: the user must answer ssh in that tab) or disconnected. A local agent tab whose agent works in a git repository also has, once read, its checkout, its branch (or detached_at), and sync: same (the window shows that checkout), elsewhere (another checkout of the window's repository), switched_under (its branch was switched under the chat) or other_repository (the window shows another repository, or none); and chat_branch and switched_by whenever the chat's branch was switched under it. The tab you run in has \"you\": true. A tab another agent started with new_tab has opened_by (that tab's id): its agent opens no tabs unless the user asks it to, there. A tab Next Term brought back after an update or a quit has restored (why, and what the restart did to it) until its next command, and calls made while a tab restarts say what happens to it. A herdr tab (keep herdr, or herdr run in a local tab) lists herdr's agents in herdr_agents, each with a herdr agent's id (the tab's id, a slash and herdr's pane id), pane, name, agent, state, title, directory, workspace, tab, focused and session, waiting_seconds while it needs the user, and, while it waits on a decision, question, choices and question_id: read_tab, wait_for_tab, send_to_tab, press_keys, answer_agent, show_tab and focus_tab take that id as tab_id. Agents on one of herdr's own machines (a herdr run in a local tab) also have machine, and their id is the tab's id, /@, the machine's id, / and the pane.",
-             inputSchema: #"{"type": "object", "properties": {"project": {"type": "string", "description": "Only the window of this project folder."}}, "additionalProperties": false}"#,
+             description: "Every Next Term window (one per project) and its terminal tabs: id, title, folder, the program running, and its state: idle, working (an agent is busy), done, failed, or attention (an agent waits for a decision; the question, its choices and a question_id for answer_agent are included). Remote tabs also have their host, and can be connecting (ssh is logging in; login_prompt: the user must answer ssh in that tab) or disconnected. A local agent tab whose agent works in a git repository also has, once read, its checkout, its branch (or detached_at), and sync: same (the window shows that checkout), elsewhere (another checkout of the window's repository), switched_under (its branch was switched under the chat) or other_repository (the window shows another repository, or none); and chat_branch and switched_by whenever the chat's branch was switched under it. The tab you run in has \"you\": true. A project window merged with others into one window, as macOS's tabs, has merged_with (the others' projects) and behind (its tab is out of sight behind the one in front, where the user is working). A tab another agent started with new_tab has opened_by (that tab's id): its agent opens no tabs unless the user asks it to, there. A tab the user pinned has pinned: true: close_tab on it asks the user on the Mac first. A local agent that started before Next Term was added to it has needs_restart: it has Next Term's tools once restarted. A tab Next Term brought back after an update or a quit has restored (why, what the restart did to it, and held_because when its agent did not resume by itself) until its next command, and calls made while a tab restarts say what happens to it. A herdr tab (keep herdr, or herdr run in a local tab) lists herdr's agents in herdr_agents, each with a herdr agent's id (the tab's id, a slash and herdr's pane id), pane, name, agent, state, title, directory, workspace, tab, focused and session, waiting_seconds while it needs the user, and, while it waits on a decision, question, choices and question_id: read_tab, wait_for_tab, send_to_tab, press_keys, answer_agent, show_tab, close_tab and focus_tab take that id as tab_id. A tmux tab whose session was gone when it came back, so a new one was made, has session_created. Agents on one of herdr's own machines (a herdr run in a local tab) also have machine, and their id is the tab's id, /@, the machine's id, / and the pane.",
+             inputSchema: #"{"type": "object", "properties": {"project": {"type": "string", "description": "Only the window of this project folder."}, "herdr_layout": {"type": "boolean", "description": "Also each herdr tab's whole session (herdr api snapshot): herdr_workspaces, their tabs and panes with ids the tab tools take (<tab id>/ws:w1, <tab id>/tab:w1:t1), places, zoom, and what herdr's integrations report. Default false."}}, "additionalProperties": false}"#,
              readOnly: true, destructive: false, idempotent: true, timeout: 15),
         Tool(name: "read_tab", title: "Read a tab's screen",
              description: "The text at the end of a tab's terminal (what the agent or command printed last), and the tab's state. At a zsh prompt in a tab on this Mac, also input: the line being typed (line, and cursor in characters) and, where a plugin such as zsh-autosuggestions shows one, its suggestion, which is not typed and is left out of screen. With a herdr agent's id, that agent's pane, read through herdr.",
              inputSchema: #"{"type": "object", "properties": {\#(agentTabID), "lines": {"type": "integer", "minimum": 1, "maximum": 2000, "description": "How many lines from the end. Default 80."}}, "required": ["tab_id"], "additionalProperties": false}"#,
              readOnly: true, destructive: false, idempotent: true, timeout: 15),
         Tool(name: "wait_for_tab", title: "Wait for a tab",
-             description: "Waits until the tab's agent stops working (done, or waiting for input or a decision), or until its command finishes, then returns the state and the last lines of the screen, with input at a zsh prompt as read_tab gives it. Returns early with \"timed_out\": true; call again to keep waiting. With a herdr agent's id, until herdr says that agent stopped working.",
-             inputSchema: #"{"type": "object", "properties": {\#(agentTabID), "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 300, "description": "Default 50: some clients give up on a tool after 60 seconds, unless they send a progress token and reset their timeout on progress (the wait then sends progress every 20 seconds); call again to keep waiting."}}, "required": ["tab_id"], "additionalProperties": false}"#,
+             description: "Waits until the tab's agent stops working (done, or waiting for input or a decision), or until its command finishes, then returns the state and the last lines of the screen, with input at a zsh prompt as read_tab gives it. Returns early with \"timed_out\": true; call again to keep waiting. With a herdr agent's id, until herdr says that agent stopped working, or reached one of until's states. match: until the screen shows that text (a regular expression with regex: true), in a tab or a herdr pane.",
+             inputSchema: #"{"type": "object", "properties": {\#(agentTabID), "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 300, "description": "Default 50: some clients give up on a tool after 60 seconds, unless they send a progress token and reset their timeout on progress (the wait then sends progress every 20 seconds); call again to keep waiting."}, "until": {"type": "array", "items": {"type": "string", "enum": ["idle", "working", "blocked", "done", "unknown"]}, "description": "A herdr agent's id: the states to wait for (herdr agent wait --until)."}, "match": {"type": "string", "description": "Text to wait for on the screen (herdr pane wait-output for a herdr pane)."}, "regex": {"type": "boolean", "description": "match is a regular expression. Default false."}}, "required": ["tab_id"], "additionalProperties": false}"#,
              readOnly: true, destructive: false, idempotent: true, timeout: 300),
         Tool(name: "list_projects", title: "List projects",
              description: "Projects open in Next Term and recently opened ones (folder paths).",
@@ -140,11 +212,11 @@ public enum MCPServer {
              inputSchema: #"{"type": "object", "properties": {"path": {"type": "string", "description": "Absolute folder path."}}, "required": ["path"], "additionalProperties": false}"#,
              readOnly: false, destructive: false, idempotent: true, timeout: 30),
         Tool(name: "new_tab", title: "New tab",
-             description: "Opens a terminal tab in a folder (in the window of the project that holds it, opening the project if needed), or a pane split beside another tab, and optionally runs a command in it, such as an agent (\"claude\", \"codex\", \"opencode\", \"gemini\"). Returns the tab's id. Its window comes forward (Settings: agents_bring_tabs_forward), but in the window the user works in it opens behind their tab, and it never takes the user's keyboard until they click it. Before starting agents in several tabs for parallel work, offer it to the user and wait for their yes; a tab you start has your tab as its opened_by, unless hand_off. A linked worktree's folder opens in the worktree's own window, and a folder that is never a project (the home folder, /) in a new window with no project.",
-             inputSchema: #"{"type": "object", "properties": {"directory": {"type": "string", "description": "Absolute folder path."}, "command": {"type": "string", "description": "Typed at the prompt and run."}, "prompt": {"type": "string", "description": "With command: an agent's first prompt, as plain text. Next Term quotes it for the shell and types it after command (command codex, prompt Fix the login test: codex 'Fix the login test'; OpenCode's joined to --prompt=: opencode --prompt='Fix the login test', unless command has --prompt or is opencode run), so never quote it yourself."}, "hand_off": {"type": "boolean", "description": "The agent in this tab carries on your own conversation with the user (a hand-off, as next-term-worktrees moves work), not a task of yours: it gets no opened_by. Default false."}, "title": {"type": "string", "description": "Tab title: for an agent, name its task."}, "split_beside": {"type": "string", "description": "A tab id: open as a pane split beside that tab instead of a new tab."}, "direction": {"type": "string", "enum": ["right", "down"], "description": "With split_beside. Default right."}}, "required": ["directory"], "additionalProperties": false}"#,
+             description: "Use this to run another agent (Claude Code \"claude\", Codex \"codex\", Command Code \"cmd\", OpenCode \"opencode\", Gemini \"gemini\") or a command in a new tab whenever the user asks to run, start, hand off or orchestrate work with another agent or in another tab (\"run cmd in the next tab\"): use this and send_to_tab, not your own subagents: their ask is the yes. Opens a terminal tab in a folder: in the window of the project that holds it, else in your own window (new_window: true, or an agent outside Next Term, opens the folder's project in a window of its own), or a pane split beside another tab, and optionally runs a command in it, such as an agent (\"claude\", \"codex\", \"opencode\", \"gemini\", Command Code's \"cmd\"). Returns the tab's id. Its window comes forward (Settings: agents_bring_tabs_forward), but in the window the user works in it opens behind their tab, and it never takes the user's keyboard until they click it. Before starting agents in several tabs for parallel work they did not ask for, offer it and wait for their yes; a tab you start has your tab as its opened_by, unless hand_off. A linked worktree's folder opens in the worktree's own window, and a folder that is never a project (the home folder, /) in a new window with no project.",
+             inputSchema: #"{"type": "object", "properties": {"directory": {"type": "string", "description": "Absolute folder path."}, "new_window": {"type": "boolean", "description": "Open the folder's project in a window of its own when no open project holds it, instead of a tab in your window. Default false."}, "command": {"type": "string", "description": "Typed at the prompt and run."}, "agent_session": {"type": "string", "description": "Instead of command: an agent session, claude, codex or an agent that speaks the Agent Client Protocol (gemini, qwen, opencode, cursor, copilot, goose and others installed here) run so that Next Term follows it exactly: wait_for_tab returns when its turn ends or it asks permission, and answer_agent answers its permission requests. prompt is its first prompt. A name not installed is refused, with the ones that are."}, "view": {"type": "string", "enum": ["chat", "terminal"], "description": "With agent_session: how the session first shows, as a native chat (once the chat view setting is on) or its terminal text view. Default: Settings › Agents › Open agent tabs as chat (on unless turned off); the tab's toggle and switch_view change it later."}, "prompt": {"type": "string", "description": "With command or agent_session: an agent's first prompt, as plain text. Next Term quotes it for the shell and types it after command (command codex, prompt Fix the login test: codex 'Fix the login test'; OpenCode's joined to --prompt=: opencode --prompt='Fix the login test', unless command has --prompt or is opencode run), so never quote it yourself."}, "hand_off": {"type": "boolean", "description": "The agent in this tab carries on your own conversation with the user (a hand-off, as next-term-worktrees moves work), not a task of yours: it gets no opened_by. Default false."}, "title": {"type": "string", "description": "Tab title: for an agent, name its task. One line of characters that show as themselves, cut at 100; one with a direction mark or another hidden character is refused, and nothing opens."}, "split_beside": {"type": "string", "description": "A tab id: open as a pane split beside that tab instead of a new tab. Or a herdr agent's or pane's id: herdr splits that pane and runs command in the new one (pane run), once the user approves on the Mac; the answer's id is the new pane's, for read_tab, wait_for_tab (match) and close_tab."}, "direction": {"type": "string", "enum": ["right", "down"], "description": "With split_beside. Default right."}}, "required": ["directory"], "additionalProperties": false}"#,
              readOnly: false, destructive: true, idempotent: false, timeout: 30),
         Tool(name: "send_to_tab", title: "Type into a tab",
-             description: "Types text into a tab, as if pasted, and presses Return unless submit is false: a prompt for the agent in that tab, an answer to its question, or a shell command. With a herdr agent's id, the text goes to that agent through herdr even when another pane has herdr's keyboard (with submit, as a prompt herdr refuses while the agent awaits a decision); text holding a stored key is refused.",
+             description: "Gives the agent in a tab (one new_tab started, or the user's) its task or an answer. Types text into a tab, as if pasted, and presses Return unless submit is false: a prompt for the agent in that tab, an answer to its question, or a shell command. With a herdr agent's id, the text goes to that agent through herdr even when another pane has herdr's keyboard (with submit, as a prompt herdr refuses while the agent awaits a decision); text holding a stored key is refused.",
              inputSchema: #"{"type": "object", "properties": {\#(agentTabID), "text": {"type": "string"}, "submit": {"type": "boolean", "description": "Press Return after the text. Default true."}}, "required": ["tab_id", "text"], "additionalProperties": false}"#,
              readOnly: false, destructive: true, idempotent: false, timeout: 15),
         Tool(name: "press_keys", title: "Press keys in a tab",
@@ -156,57 +228,82 @@ public enum MCPServer {
              inputSchema: #"{"type": "object", "properties": {\#(agentTabID), "question_id": {"type": "string", "description": "The question_id that came with the question."}, "choice": {"type": "integer", "minimum": 1, "description": "The choice's number in choices (1 is the first)."}, "answer": {"type": "string", "description": "Instead of choice: the choice's words, such as \"Yes\" (or y or n for a y/n prompt)."}}, "required": ["tab_id", "question_id"], "additionalProperties": false}"#,
              readOnly: false, destructive: true, idempotent: false, timeout: 15),
         Tool(name: "show_tab", title: "Show a tab",
-             description: "Brings a tab and its window to the front, for the user to see, without the keyboard: in the window the user works in it stays behind their tab (focus_tab asks to give it the keyboard). A herdr agent's id shows its herdr tab; herdr's own view does not move.",
+             description: "Brings a tab and its window to the front, for the user to see, without the keyboard: in the window the user works in it stays behind their tab (focus_tab asks to give it the keyboard). A herdr agent's id shows its herdr tab; herdr's own view does not move. So does a herdr tab's or workspace's id (list_tabs herdr_layout).",
              inputSchema: #"{"type": "object", "properties": {\#(agentTabID)}, "required": ["tab_id"], "additionalProperties": false}"#,
              readOnly: false, destructive: false, idempotent: true, timeout: 15),
+        Tool(name: "switch_view", title: "Switch a tab's view",
+             description: "Use when the user asks to see an agent's session as a chat, or its terminal again: shows a local Claude Code, Codex or Command Code tab's live session, or an agent session Next Term started (new_tab agent_session), as Next Term's chat view, or its terminal screen (list_tabs gives such a tab's view). A view change only: the agent keeps running and nothing is typed into it. Refused for other tabs and while Settings › Agents › Chat view for agent tabs is off.",
+             inputSchema: #"{"type": "object", "properties": {\#(tabID), "view": {"type": "string", "enum": ["chat", "terminal"], "description": "chat: the session as a chat; terminal: the agent's own screen, or an agent session's text view."}}, "required": ["tab_id", "view"], "additionalProperties": false}"#,
+             readOnly: false, destructive: false, idempotent: true, timeout: 15),
+        Tool(name: "set_token_budget", title: "Set a session's token budget",
+             description: "Use when the user asks for a token budget for an agent's session (\"give this session a 2M budget\"), or to clear one: the tab's chat view then shows how much of it the session has spent, under its composer, from the agent's own record (cache reads apart). Shown, never enforced: nothing stops the agent at it. Only local Claude Code and Codex tabs record a running total Next Term reads; others are refused. list_tabs gives a tab's budget (tokens, and spent once counted). The budget lasts while the tab is open.",
+             inputSchema: #"{"type": "object", "properties": {\#(tabID), "tokens": {"type": ["number", "string"], "description": "The budget in tokens: a number, or words such as \"2M\" or \"500k\". 0 clears it."}}, "required": ["tab_id", "tokens"], "additionalProperties": false}"#,
+             readOnly: false, destructive: false, idempotent: true, timeout: 15),
         Tool(name: "close_tab", title: "Close a tab",
-             description: "Closes a tab. A tab with something running is refused unless force is true, which stops it. A remote tab kept by tmux only detaches: what runs there keeps running on the host (the answer says so; new_remote_tab with session reattaches), and force ends that tmux session (the tab closes only once it has ended). A herdr tab only detaches; herdr keeps its agents, and a herdr agent's id is refused: Next Term never ends herdr's agents. The last tab in a window whose editor has unsaved files would close the window, so the user is asked to save them first: the answer has closed false and asking_user (and session_ended when force has ended a tmux session already).",
-             inputSchema: #"{"type": "object", "properties": {\#(tabID), "force": {"type": "boolean"}}, "required": ["tab_id"], "additionalProperties": false}"#,
-             readOnly: false, destructive: true, idempotent: false, timeout: 15),
+             description: "Closes a tab. A tab with something running is refused unless force is true, which stops it. A remote tab kept by tmux only detaches: what runs there keeps running on the host (the answer says so; new_remote_tab with session reattaches), and force ends that tmux session once the user approves on the Mac (the tab closes only once it has ended). A herdr tab only detaches; herdr keeps its agents. With a herdr agent's id, herdr closes that agent's pane once the user approves on the Mac (a working agent needs force): when it was its herdr tab's only pane, herdr closes that tab too (herdr_tab_closed), and the session's last pane is refused; the session and its server keep running. A herdr pane with no agent (one new_tab ran a command in) closes the same way, and a herdr tab's or workspace's id closes that tab or workspace (never the session's last panes), and <herdr tab id>/session:<name> stops that herdr session (delete: true deletes a stopped one), never one a tab here shows; with remove_worktree, a linked worktree's workspace is removed with its checkout (herdr worktree remove), refused while it has uncommitted work. The last tab in a window whose editor has unsaved files would close the window, so the user is asked to save them first: the answer has closed false and asking_user (and session_ended when force has ended a tmux session already).",
+             inputSchema: #"{"type": "object", "properties": {\#(agentTabID), "force": {"type": "boolean"}, "remove_worktree": {"type": "boolean", "description": "With a linked worktree's herdr workspace id: remove the worktree and its checkout too. Default false."}, "delete": {"type": "boolean", "description": "With a herdr session's id: delete the stopped session's files. Default false."}, \#(reasonArgument)}, "required": ["tab_id"], "additionalProperties": false}"#,
+             readOnly: false, destructive: true, idempotent: false, timeout: 60),
+        Tool(name: "rename_tab", title: "Rename a tab",
+             description: "Renames your own tab, or a tab or pane you opened, as Rename Tab… does; an empty title gives it back its own. A tmux session's name never changes; a herdr agent, tab or workspace you started is renamed in herdr.",
+             inputSchema: #"{"type": "object", "properties": {\#(tabID), "title": {"type": "string", "description": "One line of characters that show as themselves; cut at 100 characters."}}, "required": ["tab_id", "title"], "additionalProperties": false}"#,
+             readOnly: false, destructive: false, idempotent: true, timeout: 15),
+        Tool(name: "start_agent", title: "Start an agent in herdr",
+             description: "Starts one of herdr's agent kinds where herdr runs: a new herdr tab, beside a pane (split_beside), a shell pane (pane), a new workspace or a git worktree; it returns the agent's id for the tab tools. The user is asked on the Mac first, seeing herdr's commands.",
+             inputSchema: #"{"type": "object", "properties": {"tab_id": {"type": "string", "description": "A tab that shows herdr, from list_tabs."}, "kind": {"type": "string", "description": "One of herdr's agent kinds, such as claude or codex."}, "name": {"type": "string", "description": "The agent's name in herdr: lowercase letters, digits, _ and -. Default: the kind."}, "directory": {"type": "string", "description": "Absolute folder for the new herdr tab. Default: herdr's own."}, "words": {"type": "array", "items": {"type": "string"}, "maxItems": 16, "description": "Arguments for the agent, each a plain word."}, "split_beside": {"type": "string", "description": "A herdr agent's or pane's id in that tab: the agent starts in a new pane beside it (herdr pane split)."}, "direction": {"type": "string", "enum": ["right", "down"], "description": "With split_beside. Default right."}, "pane": {"type": "string", "description": "Instead: a herdr shell pane at its prompt, by its id, to start the agent in."}, "new_workspace": {"type": "boolean", "description": "Instead: a new herdr workspace in directory."}, "worktree": {"type": "string", "description": "Instead: a new branch, for a git worktree of the repository at directory in a herdr workspace of its own (herdr worktree create)."}, \#(reasonArgument)}, "required": ["tab_id", "kind"], "additionalProperties": false}"#,
+             readOnly: false, destructive: true, idempotent: false, timeout: 120, openWorld: true),
         Tool(name: "list_hosts", title: "List remote hosts",
-             description: "Servers the user connects to from Next Term (Connect VPS): id, name, ssh destination, port, default folder, and how agents are kept there (keep: off, tmux or herdr). Remote tabs are in list_tabs with their host.",
+             description: "Servers the user connects to from Next Term (Connect VPS): id, name, ssh destination, port, default folder, and how agents are kept there (keep: off, tmux or herdr), and tmux_prefix and tmux_history when set. Remote tabs are in list_tabs with their host.",
              inputSchema: #"{"type": "object", "properties": {}, "additionalProperties": false}"#,
              readOnly: true, destructive: false, idempotent: true, timeout: 15),
         Tool(name: "add_host", title: "Add or update a remote host",
-             description: "Saves a server to connect to with the system ssh, which uses the user's keys, ssh agent and ~/.ssh/config; Next Term stores no password. destination is user@host or a Host alias from ~/.ssh/config. For a host already saved under that name, only directory and keep change: destination and port must be the saved ones, and pointing it at another server takes remove_host, then add_host. Nothing is installed or run on the host.",
-             inputSchema: #"{"type": "object", "properties": {"name": {"type": "string", "description": "Short name, such as web-1."}, "destination": {"type": "string", "description": "user@host, host, or an alias from ~/.ssh/config."}, "port": {"type": "integer", "minimum": 1, "maximum": 65535}, "directory": {"type": "string", "description": "Default folder on the host: absolute, or starting with ~. Default ~."}, \#(keepSchema)}, "required": ["name", "destination"], "additionalProperties": false}"#,
-             readOnly: false, destructive: true, idempotent: true, timeout: 15),
+             description: "Saves a server to connect to with the system ssh, which uses the user's keys, ssh agent and ~/.ssh/config; Next Term stores no password. destination is user@host or a Host alias from ~/.ssh/config. For a host already saved under that name, only directory and keep change: destination and port must be the saved ones, and pointing it at another server takes edit_host, or remove_host then add_host. Nothing is installed or run on the host. The user is asked on the Mac first.",
+             inputSchema: #"{"type": "object", "properties": {"name": {"type": "string", "description": "Short name, such as web-1."}, "destination": {"type": "string", "description": "user@host, host, or an alias from ~/.ssh/config."}, "port": {"type": "integer", "minimum": 1, "maximum": 65535}, "directory": {"type": "string", "description": "Default folder on the host: absolute, or starting with ~. Default ~."}, \#(keepSchema), \#(reasonArgument)}, "required": ["name", "destination"], "additionalProperties": false}"#,
+             readOnly: false, destructive: true, idempotent: true, timeout: 60),
         Tool(name: "remove_host", title: "Remove a remote host",
-             description: "Forgets a saved host. Sessions kept on it (tmux, herdr) keep running there.",
-             inputSchema: #"{"type": "object", "properties": {\#(hostRef)}, "required": ["host"], "additionalProperties": false}"#,
-             readOnly: false, destructive: true, idempotent: true, timeout: 15),
+             description: "Forgets a saved host. Sessions kept on it (tmux, herdr) keep running there. The user is asked on the Mac first.",
+             inputSchema: #"{"type": "object", "properties": {\#(hostRef), \#(reasonArgument)}, "required": ["host"], "additionalProperties": false}"#,
+             readOnly: false, destructive: true, idempotent: true, timeout: 60),
+        Tool(name: "edit_host", title: "Change a remote host",
+             description: "Changes a saved host: only the fields given, and a new destination or port points it at another server with a new id. The user is asked on the Mac first.",
+             inputSchema: #"{"type": "object", "properties": {\#(hostRef), "name": {"type": "string"}, "destination": {"type": "string", "description": "user@host, host, or an alias from ~/.ssh/config."}, "port": {"type": "integer", "minimum": 1, "maximum": 65535}, "clear_port": {"type": "boolean", "description": "Back to ssh's own port."}, "directory": {"type": "string", "description": "Default folder on the host: absolute, or starting with ~."}, \#(keepSchema), "tmux_prefix": {"type": "string", "enum": ["C-b", "C-a", "C-Space", "C-]"], "description": "The prefix key of Next Term's tmux on the host."}, "tmux_history": {"type": "integer", "minimum": 1000, "maximum": 200000, "description": "Lines of history each tmux pane keeps there."}, \#(reasonArgument)}, "required": ["host"], "additionalProperties": false}"#,
+             readOnly: false, destructive: true, idempotent: true, timeout: 60),
         Tool(name: "check_host", title: "Check a remote host",
              description: "Reports what a host has: OS, login shell, tmux and herdr versions, git, the agents on PATH (claude, codex, gemini, opencode), and Next Term's kept tmux sessions. It runs over the open connection of a remote tab on that host and never logs in by itself: with no tab connected there, open one (new_remote_tab) and let the user answer ssh in it.",
              inputSchema: #"{"type": "object", "properties": {\#(hostRef)}, "required": ["host"], "additionalProperties": false}"#,
              readOnly: false, destructive: true, idempotent: true, timeout: 30, openWorld: true),
         Tool(name: "new_remote_tab", title: "New tab on a remote host",
-             description: "Opens a terminal tab on a host, in a folder there (default: the host's folder), kept the host's way unless keep is given, and optionally runs a command in it such as an agent (\"claude\", \"codex\", \"opencode\"). session attaches to one of Next Term's tmux sessions on the host (from host_sessions), such as one started on another Mac. If ssh needs a password or a host key confirmation, the tab shows ssh's own prompt to the user and the command waits. Returns the tab's id: use send_to_tab, read_tab and wait_for_tab with it like any tab. With keep herdr, session is one of herdr_sessions from host_sessions (default: herdr's default session).",
-             inputSchema: #"{"type": "object", "properties": {\#(hostRef), "directory": {"type": "string", "description": "Folder on the host: absolute, or starting with ~."}, "command": {"type": "string", "description": "Typed at the prompt and run once the tab's shell is ready."}, "title": {"type": "string"}, \#(keepSchema), "session": {"type": "string", "description": "A tmux session name from host_sessions, to attach to it; with keep herdr, one of its herdr_sessions."}}, "required": ["host"], "additionalProperties": false}"#,
+             description: "Opens a terminal tab on a host, in a folder there (default: the host's folder), kept the host's way unless keep is given, and optionally runs a command in it such as an agent (\"claude\", \"codex\", \"opencode\"). session attaches to one of Next Term's tmux sessions on the host (from host_sessions), such as one started on another Mac; while a tab there is connected, a session the host does not list is refused rather than made. If ssh needs a password or a host key confirmation, the tab shows ssh's own prompt to the user and the command waits. Returns the tab's id: use send_to_tab, read_tab and wait_for_tab with it like any tab. With keep herdr, session is one of herdr_sessions from host_sessions (default: herdr's default session).",
+             inputSchema: #"{"type": "object", "properties": {\#(hostRef), "directory": {"type": "string", "description": "Folder on the host: absolute, or starting with ~."}, "command": {"type": "string", "description": "Typed at the prompt and run once the tab's shell is ready."}, "title": {"type": "string", "description": "One line of characters that show as themselves, cut at 100; one with a direction mark or another hidden character is refused, and nothing opens."}, \#(keepSchema), "session": {"type": "string", "description": "A tmux session name from host_sessions, to attach to it; with keep herdr, one of its herdr_sessions."}}, "required": ["host"], "additionalProperties": false}"#,
              readOnly: false, destructive: true, idempotent: false, timeout: 60, openWorld: true),
         Tool(name: "host_sessions", title: "Sessions kept on a host",
              description: "What keeps running on a host while no Mac is connected: Next Term's tmux sessions (name, folder, program in front, how many clients are attached) and, if the user runs herdr there, herdr's sessions (herdr_sessions: name, default, running) and the running ones' agents with their state (idle, working, blocked, done), each with its session, and its herdr agent's id while a tab shows that session. Connects like check_host.",
              inputSchema: #"{"type": "object", "properties": {\#(hostRef)}, "required": ["host"], "additionalProperties": false}"#,
              readOnly: false, destructive: true, idempotent: true, timeout: 30, openWorld: true),
+        Tool(name: "end_session", title: "End a session on a host",
+             description: "Ends one of Next Term's tmux sessions on a host (from host_sessions), what runs in it and the tabs here showing it; close_tab stops a herdr session. The user is asked on the Mac first, seeing who is attached, and nothing ends if another client attaches meanwhile.",
+             inputSchema: #"{"type": "object", "properties": {\#(hostRef), "session": {"type": "string", "description": "A tmux session name from host_sessions."}, \#(reasonArgument)}, "required": ["host", "session"], "additionalProperties": false}"#,
+             readOnly: false, destructive: true, idempotent: false, timeout: 60, openWorld: true),
         Tool(name: "host_changes", title: "Changes in a work tree on a host",
              description: "What changed in a git work tree on a host (what its agents did): the branch, the changed files (git status; untracked files are listed), a diffstat, and the diff against HEAD, cut at max_bytes. It never takes git's index lock. Connects like check_host.",
              inputSchema: #"{"type": "object", "properties": {\#(hostRef), "directory": {"type": "string", "description": "Folder on the host. Default: the host's folder."}, "diff": {"type": "boolean", "description": "Include the diff. Default true."}, "max_bytes": {"type": "integer", "minimum": 1000, "maximum": 2000000, "description": "Longest diff to return. Default 200000."}}, "required": ["host"], "additionalProperties": false}"#,
              readOnly: false, destructive: true, idempotent: true, timeout: 60, openWorld: true),
         Tool(name: "list_skills", title: "List agent skills",
-             description: "Lists the agent skills you can use here, found as your agent finds them: the project's (.agents/skills, .claude/skills, .codex/skills, .commandcode/skills, .opencode/skills in your folder and each above it to the repository's top), the user's (the same in the home folder, OpenCode's in ~/.config/opencode/skills, with which of Claude Code, Codex, Command Code and OpenCode loads each, its source and updates), and Next Term's own (next-term-tabs: parallel work in tabs; next-term-worktrees: going on in a worktree the project has; next-term-setup: changing Next Term for the user). One entry a name, by your agent's rule for duplicates (also: the other copies). Each has name, description, scope, place, and native: your agent loads it itself. get_skill gives the others' instructions.",
+             description: "Lists the agent skills you can use here, found as your agent finds them: the project's (.agents/skills, .claude/skills, .codex/skills, .commandcode/skills, .opencode/skills in your folder and each above it to the repository's top), the user's (the same in the home folder, OpenCode's in ~/.config/opencode/skills, with which of Claude Code, Codex, Command Code and OpenCode loads each, its source and updates), and Next Term's own (next-term-tabs: parallel work in tabs; next-term-worktrees: going on in a worktree the project has; next-term-setup: changing Next Term for the user; next-term-secrets: using the user's keys by name). One entry a name, by your agent's rule for duplicates (also: the other copies). Each has name, description, scope, place, and native: your agent loads it itself. get_skill gives the others' instructions.",
              inputSchema: #"{"type": "object", "properties": {"project": {"type": "string", "description": "A folder in an open project. Default: your tab's folder."}}, "additionalProperties": false}"#,
              readOnly: true, destructive: false, idempotent: true, timeout: 15),
         Tool(name: "get_skill", title: "Get a skill",
-             description: "A skill's instructions (its SKILL.md), its folder and its other files, from Next Term's library: the project's skills, the user's and Next Term's own, the copy your agent's rule picks; works for any agent. Read one when its description fits the task and your agent doesn't load it itself (list_skills: native false). Read Next Term's next-term-tabs before running work in parallel in Next Term tabs, next-term-worktrees when the user pastes a repo, branch or PR the project has a worktree or branch for, and next-term-setup before changing Next Term for the user.",
+             description: "A skill's instructions (its SKILL.md), its folder and its other files, from Next Term's library: the project's skills, the user's and Next Term's own, the copy your agent's rule picks; works for any agent. Read one when its description fits the task and your agent doesn't load it itself (list_skills: native false). Read Next Term's next-term-tabs before running work in parallel in Next Term tabs, next-term-worktrees when the user pastes a repo, branch or PR the project has a worktree or branch for, next-term-setup before changing Next Term for the user, and next-term-secrets when something needs an API key, token or password.",
              inputSchema: #"{"type": "object", "properties": {"name": {"type": "string", "description": "The skill's name, as list_skills gives it."}, "scope": {"type": "string", "enum": ["project", "personal", "next-term"], "description": "That scope's copy instead of the one your agent's rule picks."}, "project": {"type": "string", "description": "A folder in an open project. Default: your tab's folder."}}, "required": ["name"], "additionalProperties": false}"#,
              readOnly: true, destructive: false, idempotent: true, timeout: 15),
         Tool(name: "list_shortcuts", title: "List keyboard shortcuts",
              description: "The user's keyboard shortcuts as Next Term has them now: the shortcut set (Next Term, VS Code or JetBrains), and each command's title, where it is (a menu path such as \"File › New Tab\", or the part it works in), its key (null when it has none), and its default when the user changed it. query narrows it to commands whose title or place has all its words, or whose key it is (\"⌥⌘T\"). Keys differ with the set and the user's own changes: tell the user keys from here, never from memory.",
              inputSchema: #"{"type": "object", "properties": {"query": {"type": "string", "description": "Words in the command's title or menu path (\"split\", \"terminal position\"), or a key such as ⌘T. Default: every command."}}, "additionalProperties": false}"#,
              readOnly: true, destructive: false, idempotent: true, timeout: 15),
-        Tool(name: "show_settings", title: "Show Settings",
-             description: "Opens Next Term's Settings at a tab, in front of the user, for what agents don't change themselves: general, editor, terminal, notifications, keys (Keyboard Shortcuts), import, skills, tasks (where the todo folder is) or secrets. It changes no setting (settings_set and set_layout change the ones agents may). front is false when Next Term isn't the app in front: its Dock icon bounces instead.",
-             inputSchema: #"{"type": "object", "properties": {"tab": {"type": "string", "enum": ["general", "editor", "terminal", "notifications", "keys", "import", "skills", "tasks", "secrets"], "description": "The Settings tab."}}, "required": ["tab"], "additionalProperties": false}"#,
-             readOnly: false, destructive: false, idempotent: true, timeout: 15),
+        showSettings,
+        Tool(name: "list_agent_clis", title: "List the coding agents' CLIs",
+             description: "The coding agents' command-line tools on this Mac, as Settings › Agents shows them: each one's id, name, path (the copy a shell runs first, and other_copies after it), version, installed_by (npm, pnpm, Yarn, Bun, Volta, Homebrew, uv, pipx, Go, Own installer, npx or Unknown), latest (as last checked; Settings › Agents checks again) with update_available, updates_itself (true, false or notifies, and its_own_switch), auto_update (off, daily, weekly, or not offered), update_command, and a note when Next Term can't update it (an administrator's folder: it never uses sudo). Read-only: changing a schedule or updating is the user's, in Settings › Agents (show_settings with tab agents). all: also the agents not installed.",
+             inputSchema: #"{"type": "object", "properties": {"all": {"type": "boolean", "description": "Also list the agents not installed. Default false."}}, "additionalProperties": false}"#,
+             readOnly: true, destructive: false, idempotent: true, timeout: 15),
         Tool(name: "install_skill", title: "Ask to install a skill",
              description: "Asks the user to install an agent skill from a public GitHub repository. Nothing is fetched or written on this request alone: the user sees it in Next Term, chooses to review the skill's files, and decides. Answers within about 50 seconds: installed (with the names), declined, failed (with a note saying why), busy (another request is waiting; ask later), or pending with a request_id: call again with only request_id to keep waiting. A source the user declined stays declined until Next Term quits.",
              inputSchema: #"{"type": "object", "properties": {"source": {"type": "string", "description": "owner/repo, owner/repo/path/to/skill, or a github.com link to a repository, folder or SKILL.md."}, "reason": {"type": "string", "description": "Why, in a sentence; shown to the user as your words."}, "request_id": {"type": "string", "description": "A pending request's id, to keep waiting for the user's answer."}}, "additionalProperties": false}"#,
@@ -219,16 +316,27 @@ public enum MCPServer {
              description: "Opens a file in Next Term's editor, at a line and column if given (1-based).",
              inputSchema: #"{"type": "object", "properties": {"path": {"type": "string", "description": "Absolute file path."}, "line": {"type": "integer", "minimum": 1}, "column": {"type": "integer", "minimum": 1}}, "required": ["path"], "additionalProperties": false}"#,
              readOnly: false, destructive: false, idempotent: true, timeout: 15),
-    ] + controlTools + importTools + taskTools + secretTools
+    ] + controlTools + handoverTools + hubTools + importTools + setupTools + taskTools + secretTools
 
     public static func tool(named name: String) -> Tool? { tools.first { $0.name == name } }
 
-    static func listing() -> [[String: Any]] { listing(of: tools) }
+    /// show_settings, with Settings › MCP Servers (`mcp`) among its tabs.
+    static var showSettings: Tool {
+        let tabs = MCPShortcuts.settingsTabs
+        let named = "agents (the coding agents' CLIs: versions, how each was installed, updates), skills, mcp (MCP Servers: the servers agents reach through Next Term), tasks"
+        let schema = #"{"type": "object", "properties": {"tab": {"type": "string", "enum": ["# + tabs.map { "\"\($0)\"" }.joined(separator: ", ")
+            + #"], "description": "The Settings tab."}}, "required": ["tab"], "additionalProperties": false}"#
+        return Tool(name: "show_settings", title: "Show Settings",
+                    description: "Opens Next Term's Settings at a tab, in front of the user, for what agents don't change themselves: general, editor, terminal, notifications, keys (Keyboard Shortcuts), import, \(named) (where the todo folder is) or secrets. It changes no setting (settings_set and set_layout change the ones agents may). front is false when Next Term isn't the app in front: its Dock icon bounces instead.",
+                    inputSchema: schema, readOnly: false, destructive: false, idempotent: true, timeout: 15)
+    }
 
     /// The `tools/list` entries for these tools (the remote door lists only what a connection's options admit).
-    static func listing(of offered: [Tool]) -> [[String: Any]] {
-        offered.map { tool in
-            [
+    static func listing(of offered: [Tool]) -> [[String: Any]] { listing(offered) }
+
+    static func listing(_ listed: [Tool] = tools) -> [[String: Any]] {
+        listed.map { tool in
+            var listed: [String: Any] = [
                 "name": tool.name,
                 "title": tool.title,
                 "description": tool.description,
@@ -243,6 +351,10 @@ public enum MCPServer {
                 // Claude Code defers MCP tools behind its tool search; most are worth having at hand (Tool.alwaysLoad).
                 "_meta": tool.meta,
             ]
+            if let schema = tool.outputSchema, let object = try? JSONSerialization.jsonObject(with: Data(schema.utf8)) {
+                listed["outputSchema"] = object
+            }
+            return listed
         }
     }
 
@@ -252,22 +364,31 @@ public enum MCPServer {
     public struct CallResult: Sendable {
         public var text: String
         public var isError: Bool
-        public init(text: String, isError: Bool = false) {
+        /// The same answer as JSON text, for a tool with an outputSchema: sent as `structuredContent` beside the text.
+        public var structured: String?
+        public init(text: String, isError: Bool = false, structured: String? = nil) {
             self.text = text
             self.isError = isError
+            self.structured = structured
         }
     }
 
-    /// Answers one JSON-RPC message (nil for notifications). `call` runs a tool; it may block.
+    /// Answers one JSON-RPC message (nil for notifications). `call` runs a tool; it may block. `extra`: tools listed after
+    /// Next Term's own, each call to one answered whole by `callExtra` (the MCP hub's catalog, MCPHubCatalog); none
+    /// leaves every answer as it is without them. Next Term's own tools are listed whole, add_mcp_server and
+    /// list_mcp_servers among them, with or without a list of MCP servers, so an agent can add the first one (R17).
     public static func respond(to message: [String: Any], version: String, instructions said: String = instructions,
+                               extra: [Tool] = [], callExtra: (_ name: String, _ arguments: [String: Any]) -> [String: Any] = { _, _ in [:] },
                                call: (_ name: String, _ arguments: [String: Any]) -> CallResult) -> [String: Any]? {
-        respond(to: message, version: version, tools: tools, instructions: said, listChanged: false, call: call)
+        respond(to: message, version: version, tools: tools, instructions: said, listChanged: false, extra: extra, callExtra: callExtra, call: call)
     }
 
     /// The same, offering only `offered` with these instructions: a name outside `offered` is an unknown tool
-    /// and never reaches `call`. The remote door passes a connection's tools and `listChanged: true`.
+    /// and never reaches `call`. The remote door passes a connection's tools and `listChanged: true`, and no `extra`:
+    /// the MCP hub's catalog is never offered remotely.
     public static func respond(to message: [String: Any], version: String, tools offered: [Tool],
                                instructions text: String, listChanged: Bool,
+                               extra: [Tool] = [], callExtra: (_ name: String, _ arguments: [String: Any]) -> [String: Any] = { _, _ in [:] },
                                call: (_ name: String, _ arguments: [String: Any]) -> CallResult) -> [String: Any]? {
         guard let method = message["method"] as? String else { return nil } // a response to us: none expected
         guard let id = message["id"], !(id is NSNull) else { return nil } // a notification
@@ -281,24 +402,36 @@ public enum MCPServer {
             let asked = params["protocolVersion"] as? String ?? ""
             return result([
                 "protocolVersion": supportedVersions.contains(asked) ? asked : supportedVersions[0],
-                "capabilities": ["tools": ["listChanged": listChanged]],
+                "capabilities": ["tools": ["listChanged": listChanged], "prompts": ["listChanged": false]],
                 "serverInfo": ["name": name, "title": "Next Term", "version": version],
                 "instructions": text,
             ])
         case "ping":
             return result([String: Any]())
         case "tools/list":
-            return result(["tools": listing(of: offered)])
+            return result(["tools": listing(offered) + listing(extra)])
         case "tools/call":
+            if let name = params["name"] as? String, extra.contains(where: { $0.name == name }) {
+                return result(callExtra(name, params["arguments"] as? [String: Any] ?? [:]))
+            }
             guard let name = params["name"] as? String, offered.contains(where: { $0.name == name }) else {
                 return error(-32602, "Unknown tool: \(params["name"] as? String ?? "")")
             }
             let outcome = call(name, params["arguments"] as? [String: Any] ?? [:])
-            return result(["content": [["type": "text", "text": outcome.text]], "isError": outcome.isError])
+            var answer: [String: Any] = ["content": [["type": "text", "text": outcome.text]], "isError": outcome.isError]
+            if let structured = outcome.structured, let object = try? JSONSerialization.jsonObject(with: Data(structured.utf8)) {
+                answer["structuredContent"] = object
+            }
+            return result(answer)
         case "resources/list":
             return result(["resources": [Any]()])
         case "prompts/list":
-            return result(["prompts": [Any]()])
+            return result(["prompts": promptListing()])
+        case "prompts/get":
+            guard let name = params["name"] as? String, let prompt = prompt(named: name) else {
+                return error(-32602, "Unknown prompt: \(params["name"] as? String ?? "")")
+            }
+            return result(promptMessages(prompt))
         default:
             return error(-32601, "Method not found: \(method)")
         }
@@ -328,11 +461,13 @@ public enum MCPServer {
     public static func decodeAnswer(_ line: Data) -> CallResult? {
         guard let object = (try? JSONSerialization.jsonObject(with: line)) as? [String: Any],
               let text = object["text"] as? String else { return nil }
-        return CallResult(text: text, isError: object["isError"] as? Bool ?? false)
+        return CallResult(text: text, isError: object["isError"] as? Bool ?? false, structured: object["structured"] as? String)
     }
 
     public static func encodeAnswer(_ result: CallResult) -> Data {
-        var data = (try? JSONSerialization.data(withJSONObject: ["text": result.text, "isError": result.isError])) ?? Data("{}".utf8)
+        var answer: [String: Any] = ["text": result.text, "isError": result.isError]
+        if let structured = result.structured { answer["structured"] = structured }
+        var data = (try? JSONSerialization.data(withJSONObject: answer)) ?? Data("{}".utf8)
         data.append(0x0A)
         return data
     }

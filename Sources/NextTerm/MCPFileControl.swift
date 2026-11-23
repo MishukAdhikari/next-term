@@ -56,7 +56,7 @@ extension MCPWriteControl {
     }
 
     private static func propose(_ change: MCPFileChange, _ context: Context, reply: @escaping Reply) {
-        // A proposal opens a tab in the user's editor: none after Decline and Stop Asking, and one at a time.
+        // A proposal opens a tab in the user's editor: none after Don’t Ask Again, and one at a time.
         if isStopped(context) { return reply(MCPControl.fail(stoppedText)) }
         if let open = proposals.values.first(where: { $0.asker == context.asker && $0.answer == nil }) {
             return reply(MCPControl.fail("Your proposal for \(open.change.file.relative) is still open in Next Term; wait for the user's answer (propose_edit with proposal_id \(open.id)) before proposing another."))
@@ -192,7 +192,7 @@ extension MCPWriteControl {
                 }
             }
         }
-        // An accepted proposal is written without asking, but not after Decline and Stop Asking.
+        // An accepted proposal is written without asking, but not after Don’t Ask Again.
         if isStopped(context) { return reply(MCPControl.fail(stoppedText)) }
         if takeAccepted(change) { return run("accepted in the proposal", nil) }
         approve(ask, context, reply: reply, change: run)

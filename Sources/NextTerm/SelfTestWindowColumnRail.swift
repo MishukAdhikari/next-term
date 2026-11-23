@@ -1,0 +1,412 @@
+import AppKit
+import NextTermCore
+
+#if DEBUG
+/// The window column folded to its rail (plan 030) and the list it opens on one grid with it (plan 031). Part of
+/// NEXTTERM_SELFTEST_ONLY=windowColumn.
+extension SelfTest {
+    /// Seconds since the last real input on this Mac (a key, a click, a move of the pointer): the self-test's own events
+    /// never reach the window server's input stream, so they don't count.
+    static func secondsSinceInput() -> TimeInterval {
+        let kinds: [CGEventType] = [.mouseMoved, .leftMouseDown, .rightMouseDown, .otherMouseDown, .leftMouseDragged, .scrollWheel,
+                                    .keyDown, .flagsChanged]
+        return kinds.map { (kind: CGEventType) -> TimeInterval in CGEventSource.secondsSinceLastEventType(.hidSystemState, eventType: kind) }
+            .min() ?? .infinity
+    }
+
+    /// A check the user's own pointer or keys can upset (a hover draws, an entry or exit moves the list): failing while
+    /// the Mac had real input since `start`, it is noted and not failed, as a check run with the app not frontmost is.
+    static func checkUntouched(since start: Date, _ ok: Bool, _ name: String, _ detail: @autoclosure () -> String = "") {
+        if !ok, secondsSinceInput() < Date().timeIntervalSince(start) {
+            return note("\(name): not checked, as the Mac had input meanwhile (\(detail()))")
+        }
+        check(ok, name, detail())
+    }
+
+    /// The rail's form; the pointer passing over it opens nothing; resting on it opens the list over the rail and the
+    /// content, its dots, count and well on the rail's own, without moving the content or taking the keyboard, VoiceOver
+    /// hearing the windows once; going from the rail onto the list keeps it, leaving both closes it; the list's foot says
+    /// how to hide the column; a pointer at rest as the window comes forward opens nothing until it moves; a double-click
+    /// pins the column unfolded and folds it back, and folded under the pointer it opens nothing until the pointer leaves;
+    /// with Reduce Motion the list shows at once. `others`: the other windows, whose rows the list shows.
+    static func railChecks(_ app: AppDelegate, _ c: TerminalWindowController, others: [TerminalWindowController]) async {
+        guard let window = c.window else { return }
+        let host: WindowColumnHost = c.columnHost
+        let column: WindowColumnView = host.column
+        let started = Date()
+        let saved: (open: TimeInterval, close: TimeInterval) = (WindowColumnRail.openDelay, WindowColumnRail.closeDelay)
+        let motion: () -> Bool = WindowColumnHost.reducesMotion
+        let pointer: () -> NSPoint = WindowColumnHost.pointerLocation
+        defer {
+            WindowColumnRail.openDelay = saved.open
+            WindowColumnRail.closeDelay = saved.close
+            WindowColumnHost.reducesMotion = motion
+            WindowColumnHost.pointerLocation = pointer
+            host.hideList(animated: false)
+            app.windowColumnExpanded = false
+        }
+        app.windowColumnExpanded = false
+        // The real pointer may rest anywhere while the run is unattended: the checks drive the pointer's comings and goings
+        // themselves, so it stands far off the screen, where it is on no list.
+        WindowColumnHost.pointerLocation = { NSPoint(x: -100_000, y: -100_000) }
+        _ = await bringToFront(window)
+        window.layoutIfNeeded()
+
+        // At rest: 24 points and its hairline, a place of 24 points per window, no chevron.
+        let places: [CGFloat] = column.shownButtons.map(\.frame.height)
+        check(column.frame.width == WindowColumnWidth.folded + WindowColumnWidth.hairline && column.chevronButton.isHidden
+                && !places.isEmpty && places.allSatisfy { $0 == WindowColumnRail.slot } && column.shownButtons.count == column.list.count
+                && Set(([c] + others).map(\.indexID)).isSubset(of: Set(column.shownButtons.map(\.id))),
+              "window column: folded, it rests as a 24-point rail, a place per window, with no chevron",
+              "width \(column.frame.width), places \(places), chevron hidden \(column.chevronButton.isHidden)")
+        await screenshot(c, suffix: "-rail")
+
+        // At rest the dots are a quiet grey, and the hide key stands at the foot a key to a line. (Increase Contrast keeps
+        // their colours: off for this.)
+        let contrast: Bool? = DisplayOptions.increasesContrastOverride
+        DisplayOptions.increasesContrastOverride = false
+        column.contrastChanged()
+        defer {
+            DisplayOptions.increasesContrastOverride = contrast
+            column.contrastChanged()
+        }
+        let footKey: String = KeyboardShortcuts.shared.chord(for: "toggleWindowColumn:")?.display ?? ""
+        let quiet: Bool = column.shownButtons.filter { $0.dotColorForTest != nil }
+            .allSatisfy { $0.dotColorForTest == WindowColumnButton.restingDot.cgColor } && !column.awake
+        checkUntouched(since: started, quiet && (footKey.isEmpty || (column.hideButton.shownWords == footKey && !column.hideButton.isHidden)),
+                       "window column: at rest the rail's dots are a quiet grey, and its foot shows the hide key",
+                       "awake \(column.awake), foot “\(column.hideButton.shownWords)”")
+
+        // A few seconds after the pointer leaves, the dots settle to a trace; back on the rail, they are whole at once.
+        let settleDelay: TimeInterval = WindowColumnRail.settleDelay
+        WindowColumnRail.settleDelay = 0.2
+        column.onPointer?(true)
+        let whole: Bool = !column.settled && column.shownButtons.allSatisfy { $0.dotOpacityForTest == 1 }
+        column.onPointer?(false)
+        await pause(0.5)
+        let traced: Bool = column.settled && column.shownButtons.filter { $0.dotColorForTest != nil }
+            .allSatisfy { $0.dotOpacityForTest == WindowColumnRail.settledOpacity }
+        WindowColumnRail.settleDelay = settleDelay
+        checkUntouched(since: started, whole && traced, "window column: a few seconds after the pointer leaves the rail its dots settle to a trace, whole again on the rail",
+                       "whole on the rail \(whole), settled \(column.settled), traced \(traced)")
+
+        // Passing over it opens nothing; resting on it wakes the dots into their colours.
+        let content: NSRect = host.content.frame
+        let keyboard: NSResponder? = window.firstResponder
+        column.onPointer?(true)
+        let woke: Bool = column.awake
+        await pause(0.06)
+        column.onPointer?(false)
+        await pause(0.6)
+        checkUntouched(since: started, !host.listShowing && woke && !column.awake,
+                       "window column: the pointer passing over the rail opens nothing, its dots waking while it is on it")
+
+        // Resting on it opens the list over the rail and the content: as tall as the window, from the window's edge, the
+        // content and the keyboard where they were.
+        column.onPointer?(true)
+        let opened: Bool = await wait(2) { host.listShowing }
+        await pause(0.3) // the reveal
+        let list: WindowColumnView? = host.list
+        let frame: NSRect = host.listShade?.frame ?? .zero
+        let rows: Int = list?.shownButtons.count ?? 0
+        let foot: String = list?.hideButton.shownWords ?? ""
+        let key: String = KeyboardShortcuts.shared.chord(for: "toggleWindowColumn:")?.display ?? ""
+        let full: CGFloat = WindowColumnRail.listWidth + WindowColumnWidth.hairline
+        check(opened && frame.minX == column.frame.minX && frame.width == full && list?.frame.width == full
+                && frame.height == host.bounds.height && rows == column.list.count && list?.chevronButton.isHidden == true
+                && host.content.frame == content && window.firstResponder === keyboard,
+              "window column: resting on the rail opens the list over the rail and the content, a row per window and no chevron, without moving the content or taking the keyboard",
+              "open \(opened), list \(frame), rows \(rows), content \(content) → \(host.content.frame), keyboard kept \(window.firstResponder === keyboard)")
+        check(list?.hideButton.isHidden == false && foot == "Hide Column" + (key.isEmpty ? "" : "  " + key),
+              "window column: the list's foot says how to hide the column, with its key", foot)
+        // One grid: each window's dot, the count and this window's well lie where the rail has them, in the window.
+        var moved: [String] = []
+        if let list {
+            for rail in column.shownButtons {
+                guard let row = list.button(for: rail.id) else {
+                    moved.append("\(rail.id) not listed")
+                    continue
+                }
+                let railDot: NSRect = rail.convert(rail.dotForTest, to: nil)
+                let listDot: NSRect = row.convert(row.dotForTest, to: nil)
+                if railDot != listDot { moved.append("\(rail.id) dot \(railDot) → \(listDot)") }
+                let railWell: NSRect = rail.convert(rail.plateForTest, to: nil)
+                let listWell: NSRect = row.convert(row.plateForTest, to: nil)
+                // The rail's well grows into the list's pill: the same left edge and the same middle.
+                if rail.isCurrent, railWell.minX != listWell.minX || railWell.midY != listWell.midY {
+                    moved.append("well \(railWell) → \(listWell)")
+                }
+            }
+            let railCount: NSRect = column.convert(column.countFrame, to: nil)
+            let listCount: NSRect = list.convert(list.countFrame, to: nil)
+            if railCount != listCount { moved.append("count \(railCount) → \(listCount)") }
+        }
+        check(list != nil && moved.isEmpty, "window column: the list lies on the rail's grid, every dot, the count and this window's well where the rail has them",
+              moved.joined(separator: "; "))
+        // VoiceOver hears each window once: in the list, not under it on the rail.
+        let railHeard: Int = column.accessibilityChildren()?.count ?? -1
+        let listHeard: Int = list?.accessibilityChildren()?.count ?? 0
+        check(railHeard == 0 && listHeard >= column.list.count, "window column: while the list covers the rail, VoiceOver hears the windows in the list only",
+              "rail \(railHeard), list \(listHeard)")
+        await screenshot(c, suffix: "-rail-list")
+
+        // Escape closes it, and still reaches the terminal: the list never takes a key.
+        let escape: NSEvent? = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
+                                                context: nil, characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53)
+        if let escape { NSApp.postEvent(escape, atStart: false) }
+        let escaped: Bool = await wait(2) { !host.listShowing }
+        checkUntouched(since: started, escaped && window.firstResponder === keyboard, "window column: Escape closes the list, the keyboard where it was",
+                       "closed \(escaped), keyboard kept \(window.firstResponder === keyboard); \(host.hoverForTest)")
+        column.onPointer?(false)
+        column.onPointer?(true)
+        _ = await wait(2) { host.listShowing }
+
+        // From the rail onto the list: it stays. Off both: it goes.
+        column.onPointer?(false)
+        list?.onPointer?(true)
+        await pause(0.6)
+        let kept: Bool = host.listShowing
+        list?.onPointer?(false)
+        let closed: Bool = await wait(2) { !host.listShowing }
+        // The real pointer resting on the list keeps it open, rightly: its real entry races the check's own exit.
+        if !(kept && closed) && host.realPointerOnColumnArea {
+            note("window column: moving from the rail onto the list keeps it, and leaving both closes it: not checked, as the real pointer rests on the list (\(host.hoverForTest))")
+        } else {
+            checkUntouched(since: started, kept && closed, "window column: moving from the rail onto the list keeps it, and leaving both closes it",
+                           "kept \(kept), closed \(closed); \(host.hoverForTest)")
+        }
+
+        // Back on the rail just after the list went: it opens at once, with no rest.
+        column.onPointer?(true)
+        let warm: Bool = host.listShowing
+        host.hideList(animated: false)
+        column.onPointer?(false)
+        checkUntouched(since: started, warm, "window column: back on the rail just after the list went, it opens at once")
+
+        // A click on a dot ends the hover: no list opens after it in the window just left (past the quick reopen, so
+        // the open is one still on its way).
+        await pause(WindowColumnRail.warmDelay + 0.1)
+        column.onPointer?(true)
+        host.chose()
+        await pause(0.6)
+        checkUntouched(since: started, !host.listShowing && (column.accessibilityChildren()?.count ?? 0) > 0,
+              "window column: choosing a window on the rail opens no list after the click, and the rail is heard again")
+        column.onPointer?(false)
+
+        // The window comes forward with the pointer at rest on its rail, as one brought forward from another window's list
+        // does: nothing opens until the pointer moves.
+        let onRailPoint: NSPoint = window.convertPoint(toScreen: column.convert(NSPoint(x: column.bounds.midX, y: column.bounds.midY), to: nil))
+        WindowColumnHost.pointerLocation = { onRailPoint }
+        host.cameForward()
+        await pause(0.05) // it looks a turn later, once the window server has the window in front
+        column.onPointer?(true)
+        await pause(0.6)
+        let heldStill: Bool = !host.listShowing && host.heldAt != nil
+        WindowColumnHost.pointerLocation = { NSPoint(x: onRailPoint.x, y: onRailPoint.y - 6) }
+        column.onMoved?()
+        let openedOnMove: Bool = await wait(2) { host.listShowing }
+        checkUntouched(since: started, heldStill && openedOnMove, "window column: a pointer at rest on the rail as its window comes forward opens nothing until it moves",
+              "held \(heldStill), opened once moved \(openedOnMove)")
+        host.hideList(animated: false)
+        column.onPointer?(false)
+
+        // A double-click on the rail's empty space pins the column unfolded, and on the unfolded column folds it back.
+        func doubleClick(_ view: NSView, atTop: Bool = false) {
+            // The column is flipped: its top row is at the small y.
+            let y: CGFloat = atTop ? WindowColumnGrid.titleStrip / 2 : view.bounds.maxY - WindowColumnGrid.foot - 6
+            let point: NSPoint = view.convert(NSPoint(x: view.bounds.midX, y: y), to: nil)
+            let event: NSEvent? = NSEvent.mouseEvent(with: .leftMouseDown, location: point, modifierFlags: [], timestamp: 0,
+                                                     windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 2,
+                                                     pressure: 1)
+            if let event { view.mouseDown(with: event) }
+        }
+        doubleClick(column)
+        let pinned: Bool = await wait(2) { app.windowColumnExpanded && host.shown.form == .expanded }
+        doubleClick(column)
+        let folded: Bool = await wait(2) { !app.windowColumnExpanded && host.shown.form == .folded }
+        check(pinned && folded, "window column: a double-click on the rail pins it unfolded, and another folds it back",
+              "pinned \(pinned), folded \(folded)")
+        // On its top row, the count, too: it pins and folds as its empty space does, and never zooms the window.
+        let frameBefore: NSRect = window.frame
+        doubleClick(column, atTop: true)
+        let pinnedFromTop: Bool = await wait(2) { app.windowColumnExpanded && host.shown.form == .expanded }
+        doubleClick(column, atTop: true)
+        let foldedFromTop: Bool = await wait(2) { !app.windowColumnExpanded && host.shown.form == .folded }
+        check(pinnedFromTop && foldedFromTop && window.frame == frameBefore,
+              "window column: a double-click on its top row pins it unfolded and folds it back, and the window keeps its size",
+              "pinned \(pinnedFromTop), folded \(foldedFromTop), frame \(window.frame) of \(frameBefore)")
+        // Folded under the pointer: the list it would open is the column just folded, so nothing opens until the pointer
+        // leaves the column once.
+        let waited: Bool = host.waitsForExit
+        column.onPointer?(true)
+        await pause(0.6)
+        let stayedShut: Bool = !host.listShowing
+        column.onPointer?(false)
+        column.onPointer?(true)
+        let reopened: Bool = await wait(2) { host.listShowing }
+        checkUntouched(since: started, waited && stayedShut && reopened, "window column: folded under the pointer, it opens no list until the pointer has left the column",
+              "waits \(waited), shut \(stayedShut), opens after leaving \(reopened)")
+        host.hideList(animated: false)
+        column.onPointer?(false)
+        WindowColumnHost.pointerLocation = { NSPoint(x: -100_000, y: -100_000) }
+
+        // Reduce Motion: the list shows whole at once.
+        WindowColumnHost.reducesMotion = { true }
+        host.showList()
+        let instant: Bool = host.listShowing && host.listShade?.frame.width == full && host.listShade?.frame.minX == column.frame.minX
+        host.hideList(animated: true)
+        check(instant && !host.listShowing, "window column: with Reduce Motion the list shows and goes at once")
+    }
+    /// Two windows of one name: told apart by what is in front in them, which shows only after it has held for a second
+    /// (WindowColumns.detailHold), so a command that comes and goes in a title never flashes beside a name, and is drawn
+    /// unfolded after the name, dimmer. `plain`: a window with no project, whose folder a second window then opens too.
+    static func detailChecks(_ app: AppDelegate, _ plain: TerminalWindowController, open: () async -> TerminalWindowController?,
+                             close: (TerminalWindowController) async -> Void) async {
+        guard let twin = await open() else { return check(false, "window column: a second window opens in the same folder") }
+        guard let tab = plain.activeTab else { return check(false, "window column: the folder's window has a tab") }
+        defer { tab.userTitle = nil }
+        app.refreshWindowIndex()
+        let column: WindowColumnView = plain.windowColumn
+        func detail(_ c: TerminalWindowController) -> String? { column.button(for: c.indexID)?.row?.detail }
+        let same: Bool = column.button(for: plain.indexID)?.row?.name == column.button(for: twin.indexID)?.row?.name
+        let none: Bool = detail(plain) == nil && detail(twin) == nil
+        // What is in front changes: held a second, then shown beside the name.
+        tab.userTitle = "build"
+        app.refreshWindowIndex()
+        await pause(0.3)
+        let heldBack: Bool = detail(plain) == nil
+        let shown: Bool = await wait(3) { detail(plain) == "build" }
+        let twinPlain: Bool = detail(twin) == nil
+        check(same && none && heldBack && shown && twinPlain,
+              "window column: two windows of one name are told apart by what is in front in them, shown once it has held a second",
+              "same name \(same), none at first \(none), held \(heldBack), shown \(shown) (\(detail(plain) ?? "none")), the other \(detail(twin) ?? "none")")
+        // A quick one, there and gone within the second: nothing drawn.
+        column.resetCounters()
+        tab.userTitle = "ls"
+        app.refreshWindowIndex()
+        await pause(0.3)
+        tab.userTitle = "build"
+        app.refreshWindowIndex()
+        await pause(1.5)
+        let drawn: Int = column.button(for: plain.indexID)?.configureCount ?? -1
+        check(drawn == 0 && detail(plain) == "build", "window column: a title that comes and goes within a second changes no row",
+              "configured \(drawn), detail \(detail(plain) ?? "none")")
+        // Unfolded, the detail after the name.
+        app.windowColumnExpanded = true
+        plain.window?.layoutIfNeeded()
+        await screenshot(plain, suffix: "-column-details")
+        app.windowColumnExpanded = false
+        await close(twin)
+        app.refreshWindowIndex()
+        let alone: Bool = await wait(3) { detail(plain) == nil }
+        check(alone, "window column: alone with its name again, the window shows no detail")
+    }
+
+    /// A repository's fold arrow: unfolded, a guide runs beside its worktrees; folded, its worktrees' rows go from every
+    /// column, on the rail too, and its row counts their marks, the worktree's own window marked on it; the arrow brings
+    /// them back. The choice is kept.
+    static func foldChecks(_ app: AppDelegate, repo: TerminalWindowController, worktree: TerminalWindowController) async {
+        let all: [TerminalWindowController] = app.controllers.filter { !$0.hasClosed }
+        let saved: Any? = UserDefaults.standard.object(forKey: WindowColumnSettings.foldedKey)
+        app.windowColumnExpanded = true
+        defer {
+            app.windowColumnExpanded = false
+            if let saved { UserDefaults.standard.set(saved, forKey: WindowColumnSettings.foldedKey) } else {
+                UserDefaults.standard.removeObject(forKey: WindowColumnSettings.foldedKey)
+            }
+        }
+        for c in all { c.window?.layoutIfNeeded() }
+        let column: WindowColumnView = repo.windowColumn
+        guard repo.columnHost.shown.form == .expanded, let parent = column.button(for: repo.indexID), let arrow = parent.foldForTest,
+              let key = parent.row?.foldKey else {
+            return note("window column: folding not checked, as the repository's row has no fold arrow or no room to unfold")
+        }
+        let guided: Bool = !column.guides.isEmpty
+        let marks: AgentMarks = repo.indexEntry.marks + worktree.indexEntry.marks
+        arrow.performClick(nil)
+        for c in all { c.window?.layoutIfNeeded() }
+        let gone: Bool = all.allSatisfy { $0.windowColumn.button(for: worktree.indexID) == nil }
+        let row: WindowColumnRow? = column.button(for: repo.indexID)?.row
+        let counted: Bool = row?.hidden == [worktree.indexID] && row?.urgent == WindowColumnRow.urgent(marks)
+        let ownWell: Bool = worktree.windowColumn.button(for: repo.indexID)?.isCurrent == true
+        let kept: Bool = UserDefaults.standard.stringArray(forKey: WindowColumnSettings.foldedKey)?.contains(key) == true
+        await screenshot(repo, suffix: "-column-folded-worktrees")
+        column.button(for: repo.indexID)?.foldForTest?.performClick(nil)
+        for c in all { c.window?.layoutIfNeeded() }
+        let back: Bool = all.allSatisfy { $0.windowColumn.button(for: worktree.indexID) != nil }
+        check(guided && gone && counted && ownWell && kept && back,
+              "window column: a repository's arrow folds its worktrees into its row in every column, counting their marks, and brings them back",
+              "guide \(guided), gone \(gone), counted \(counted) (\(row?.hidden ?? []), \(row?.urgent?.rawValue ?? "none")), "
+                  + "the worktree's own window on its repository's row \(ownWell), kept \(kept), back \(back)")
+    }
+
+    /// Pinned, its inner edge dragged: the column takes the width in the window dragged in and, once the drag ends, in
+    /// every window, and the list on hover too; never past the room the work area keeps; a double-click puts back 180.
+    static func resizeChecks(_ app: AppDelegate, _ c: TerminalWindowController) async {
+        let all: [TerminalWindowController] = app.controllers.filter { !$0.hasClosed }
+        let saved: Any? = UserDefaults.standard.object(forKey: WindowColumnSettings.widthKey)
+        app.windowColumnExpanded = true
+        defer {
+            if let saved { UserDefaults.standard.set(saved, forKey: WindowColumnSettings.widthKey) } else {
+                UserDefaults.standard.removeObject(forKey: WindowColumnSettings.widthKey)
+            }
+            WindowColumnWidth.expanded = WindowColumnWidth.expandedWidth(CGFloat(UserDefaults.standard.double(forKey: WindowColumnSettings.widthKey)))
+            app.windowColumnExpanded = false
+            for each in all { each.placeWindowColumn() }
+        }
+        c.window?.layoutIfNeeded()
+        let column: WindowColumnView = c.windowColumn
+        guard c.columnHost.shown.form == .expanded, column.resizeEdge != nil else {
+            return note("window column: resizing not checked, as the window had no room to unfold its column")
+        }
+        // The handle over the inner edge, half on the column and half on the content, below the title bar's strip.
+        let handle: NSRect = c.columnHost.edge.frame
+        let straddles: Bool = !c.columnHost.edge.isHidden && abs(handle.midX - column.frame.maxX) < 0.5 && handle.width == 8
+            && handle.maxY <= c.columnHost.bounds.height - WindowColumnGrid.titleStrip
+        let room: CGFloat = c.columnHost.unfoldedRoom()
+        let target: CGFloat = min(240, room)
+        column.onResize?(target, false)
+        let live: Bool = column.frame.width == target + WindowColumnWidth.hairline
+        column.onResize?(target, true)
+        for each in all { each.window?.layoutIfNeeded() }
+        let everywhere: Bool = all.filter { $0.columnHost.shown.form == .expanded }
+            .allSatisfy { $0.windowColumn.frame.width == target + WindowColumnWidth.hairline }
+        let kept: Bool = UserDefaults.standard.double(forKey: WindowColumnSettings.widthKey) == Double(target)
+        // A window narrower than the widest column: the drag stops at its room, a fraction of a point less than it, and the
+        // column stays unfolded.
+        var capped = false
+        var cappedWords = ""
+        if let window = c.window {
+            let frame: NSRect = window.frame
+            // The sidebar takes some of a narrowing first: narrowed again until the room is about 300 points.
+            var narrow: CGFloat = room
+            for _ in 0..<5 where narrow > 330 {
+                let width: CGFloat = max(window.minSize.width, window.frame.width - (narrow - 300.5))
+                window.setFrame(NSRect(x: frame.minX, y: frame.minY, width: width, height: frame.height), display: true)
+                window.layoutIfNeeded()
+                narrow = c.columnHost.unfoldedRoom()
+            }
+            column.onResize?(narrow + 200, true)
+            window.layoutIfNeeded()
+            capped = narrow < WindowColumnWidth.expandedRange.upperBound && column.frame.width <= narrow + WindowColumnWidth.hairline
+                && c.columnHost.shown.form == .expanded
+            cappedWords = "room \(narrow), column \(column.frame.width), \(c.columnHost.shown.form)"
+            window.setFrame(frame, display: true)
+            window.layoutIfNeeded()
+        }
+        column.onResize?(nil, true)
+        let reset: Bool = WindowColumnWidth.expanded == WindowColumnWidth.defaultExpanded
+            && column.frame.width == WindowColumnWidth.defaultExpanded + WindowColumnWidth.hairline
+            && UserDefaults.standard.object(forKey: WindowColumnSettings.widthKey) == nil
+        app.windowColumnExpanded = false
+        c.window?.layoutIfNeeded()
+        let goneFolded: Bool = c.columnHost.edge.isHidden
+        app.windowColumnExpanded = true
+        check(straddles && goneFolded, "window column: pinned, a handle 8 points wide straddles its inner edge for the resize cursor; folded, none",
+              "handle \(handle) at the column's edge \(column.frame.maxX), hidden folded \(goneFolded)")
+        check(live && everywhere && kept && capped && reset,
+              "window column: dragging the pinned column's edge sets its width in every window, within the window's room, and a double-click puts back 180",
+              "live \(live), everywhere \(everywhere), kept \(kept), capped \(capped) (\(cappedWords)), reset \(reset) (room \(room))")
+    }
+}
+#endif

@@ -14,7 +14,7 @@ extension SecretManagerImportSheet {
         commandField.font = line == nil ? .systemFont(ofSize: 12) : .monospacedSystemFont(ofSize: 11, weight: .regular)
         commandField.isSelectable = line != nil
         commandField.setAccessibilityLabel("The line the new tab gets")
-        commandField.preferredMaxLayoutWidth = 524
+        commandField.preferredMaxLayoutWidth = 520
         var views: [NSView] = [title, explanation, commandField]
         if let note = Self.note(preset) { views.append(Self.small(note)) }
         downloadButton.title = "Get \(preset.program): \(Self.shown(preset.download))"
@@ -38,14 +38,15 @@ extension SecretManagerImportSheet {
         cancelButton.action = #selector(cancel)
         cancelButton.keyEquivalent = openButton.isHidden ? "\r" : "\u{1b}"
         for button in [openButton, cancelButton] { button.bezelStyle = .rounded }
+        DialogFit.widen([openButton, cancelButton])
         let buttons = NSStackView(views: [NSView(), cancelButton, openButton])
-        buttons.spacing = 8
+        buttons.spacing = 12
         views.append(buttons)
         let stack = NSStackView(views: views)
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 10
-        stack.edgeInsets = NSEdgeInsets(top: 16, left: 18, bottom: 16, right: 18)
+        stack.edgeInsets = DialogFit.insets
         stack.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(stack)
         var constraints: [NSLayoutConstraint] = [
@@ -56,8 +57,9 @@ extension SecretManagerImportSheet {
             view.widthAnchor.constraint(equalToConstant: 560),
         ]
         let wide: [NSView] = [explanation, commandField, offLabel, buttons]
-        for item in wide { constraints.append(item.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -36)) }
+        for item in wide { constraints.append(item.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -40)) }
         NSLayoutConstraint.activate(constraints)
+        DialogFit.fit(window) // as tall as what it says: no empty space under its buttons
     }
 
     /// The shell a new tab starts, by its name: the account's login shell, as a tab picks it.
@@ -117,6 +119,8 @@ extension SecretManagerImportSheet {
             let shell: String = SecretsMCP.shellName(of: tab)
             guard let line = Self.line(preset, shell: shell) else { return say(Self.untypableLine(shell)) }
             guard MCPControl.canType(tab) else { return say(Self.notTyped) }
+            // Once the user runs it and it finishes well, the tab closes by itself (CommandPaneAutoClose).
+            MainActor.assumeIsolated { CommandPaneAutoClose.watch(tab, before: tab.status.commandsAtPrompt) }
             MCPControl.type(line, into: tab, submit: false)
             say(Self.typedLine)
         }

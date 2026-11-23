@@ -21,6 +21,9 @@ final class WindowColumns: NSObject {
     private var offerNotice: Int?
 
     private(set) var list = WindowColumnList()
+    /// The repositories whose worktrees are folded into their row (WindowColumnRow.foldKey), in every window, kept across
+    /// launches: a repository folded and closed is folded again when it opens.
+    private(set) var folded: Set<String> = Set(UserDefaults.standard.stringArray(forKey: WindowColumnSettings.foldedKey) ?? [])
     /// Whether every window shows the column now.
     private(set) var visible = false
     /// Windows a restore is building and about to open, one at a time (SessionRestoreBuild): counted, so each is laid out
@@ -38,6 +41,7 @@ final class WindowColumns: NSObject {
     #endif
 
     override init() {
+        WindowColumnWidth.expanded = WindowColumnWidth.expandedWidth(CGFloat(UserDefaults.standard.double(forKey: WindowColumnSettings.widthKey)))
         super.init()
         let center = NotificationCenter.default
         center.addObserver(self, selector: #selector(colorsChanged), name: ProjectColorStore.changed, object: nil)
@@ -49,14 +53,18 @@ final class WindowColumns: NSObject {
         DispatchQueue.main.async { [weak self] in self?.remade() }
     }
 
-    /// Agent Spinner, Reduce Motion or Increase Contrast changed (AgentSpinner.changed): the rows, and the well's edge
-    /// when Increase Contrast is what changed.
+    /// Agent Spinner, Reduce Motion or Increase Contrast changed (AgentSpinner.changed): the rows, and the well's edge and
+    /// the dim text when Increase Contrast is what changed.
     @objc private func spinnerChanged() {
         remade()
         let contrast: Bool = DisplayOptions.increasesContrast
         guard contrast != contrastDrawn else { return }
         contrastDrawn = contrast
-        for controller in windows { controller.windowColumn.buttons.forEach { $0.contrastChanged() } }
+        for controller in windows {
+            controller.windowColumn.contrastChanged()
+            controller.columnHost.list?.contrastChanged()
+            controller.columnHost.hint?.contrastChanged() // beside the rail; one in the column or list is theirs
+        }
     }
 
     private var contrastDrawn: Bool = DisplayOptions.increasesContrast
@@ -96,35 +104,113 @@ final class WindowColumns: NSObject {
     }
 
     /// A window opened or closed, or a setting changed: the whole list made again and every window told.
-    func rebuild() {
+    /// `previous`: the list as it was before, when the caller has already moved `list` on (windowChanged's structure
+    /// change), so the hints' triggers compare against what the column showed.
+    func rebuild(from previous: WindowColumnList? = nil) {
         #if DEBUG
         rebuildCount += 1
         #endif
         let entries: [WindowIndex.Window] = app.windowIndex.windows
-        list = WindowColumnList.build(windows: entries, colors: colors(), showsWorking: showsWorking)
+        let old: WindowColumnList = previous ?? list
+        let was: Bool = visible
+        list = WindowColumnList.build(windows: entries, colors: colors(), showsWorking: showsWorking, folded: folded)
         visible = decideVisible(count: entries.count)
         tell(.structure)
+        hintTriggers(from: old, wasVisible: was)
+    }
+
+    /// The column's hints' triggers (ColumnHints): it has just come (H3), a mark has appeared in a window (H2), or a
+    /// repository's row has a worktree more under it (H8).
+    /// Never while a restore builds its windows: the column coming back with them at launch, or after an update, is not
+    /// the user reaching it, and the marks they bring back are not new.
+    private func hintTriggers(from old: WindowColumnList, wasVisible: Bool) {
+        guard visible, expecting == 0 else { return }
+        let new: WindowColumnList = list
+        MainActor.assumeIsolated {
+            if !wasVisible { ColumnHints.shared.columnAppeared() }
+            ColumnHints.shared.rowsChanged(from: old, to: new)
+        }
+    }
+
+    /// The pinned column's inner edge dragged to `width` in the window `from`: that window follows the drag, and every
+    /// other window once it ends (`ended`), when the width is kept. Nil puts back the default.
+    func setWidth(_ width: CGFloat?, from: TerminalWindowController, ended: Bool) {
+        WindowColumnWidth.expanded = WindowColumnWidth.expandedWidth(width ?? 0)
+        from.placeWindowColumn()
+        guard ended else { return }
+        if width == nil {
+            UserDefaults.standard.removeObject(forKey: WindowColumnSettings.widthKey)
+        } else {
+            UserDefaults.standard.set(Double(WindowColumnWidth.expanded), forKey: WindowColumnSettings.widthKey)
+        }
+        for controller in windows where controller !== from { controller.placeWindowColumn() }
+    }
+
+    /// A repository's fold arrow, in any window's column: its worktrees fold into its row, or come out again, everywhere.
+    func toggleFold(_ key: String) {
+        if folded.remove(key) == nil { folded.insert(key) }
+        // Used, by the arrow, VoiceOver's action or the hint's button: the hint on it is done.
+        MainActor.assumeIsolated { HintCenter.shared.retire(.foldWorktrees, reason: .actionPerformed) }
+        UserDefaults.standard.set(folded.sorted(), forKey: WindowColumnSettings.foldedKey)
+        rebuild()
     }
 
     /// Window `id`'s entry in the index changed: only its row is made again, and nothing goes on when the row is the same.
-    func windowChanged(_ id: Int) {
+    /// A change only to rows' details (what is in front in windows of the same name) waits `detailHold` first, unless
+    /// `holding` is false: a quick command coming and going in a window's title never flashes beside its name, and a
+    /// title that keeps changing shows at most once a second.
+    func windowChanged(_ id: Int, holding: Bool = true) {
         guard let entry = app.windowIndex.window(id) else { return rebuild() }
         let (next, change) = list.updating(entry, color: color(of: id), showsWorking: showsWorking)
+        if holding, case .rows(let ids) = change, Self.onlyDetails(ids, from: list, to: next) {
+            // The list keeps the entry it had, so a title back as it was by then changes nothing.
+            guard held.insert(id).inserted else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.detailHold) { [weak self] in
+                MainActor.assumeIsolated {
+                    guard let self, self.held.remove(id) != nil else { return }
+                    self.windowChanged(id, holding: false)
+                }
+            }
+            return
+        }
+        let old: WindowColumnList = list
         list = next
         switch change {
         case .none:
             return
         case .structure:
-            rebuild()
+            // A window more, or one regrouped: made again whole, its triggers against the list before the change (H8's
+            // worktree joining its repository's row, H2's mark in a regrouped row).
+            rebuild(from: old)
         case .rows:
             tell(change)
+            hintTriggers(from: old, wasVisible: visible)
         }
+    }
+
+    /// How long a change to a row's detail alone waits before it is drawn.
+    static var detailHold: TimeInterval = 1
+    /// The windows whose details are waiting.
+    private var held: Set<Int> = []
+
+    /// Whether going from `old` to `new` changes rows `ids` in their details and nothing else they draw (their words may
+    /// change too: those draw nothing).
+    private static func onlyDetails(_ ids: [Int], from old: WindowColumnList, to new: WindowColumnList) -> Bool {
+        var details = false
+        for id in ids {
+            guard let before = old.row(id), let after = new.row(id) else { return false }
+            guard before.face != after.face else { continue }
+            guard before.depth == after.depth, before.name == after.name, before.prefix == after.prefix, before.color == after.color,
+                  before.urgent == after.urgent, before.marks == after.marks else { return false }
+            details = true
+        }
+        return details
     }
 
     /// A colour or Agent Spinner changed: every row made again, and only the rows that differ drawn again.
     private func remade() {
         let entries: [WindowIndex.Window] = app.windowIndex.windows
-        let next = WindowColumnList.build(windows: entries, colors: colors(), showsWorking: showsWorking)
+        let next = WindowColumnList.build(windows: entries, colors: colors(), showsWorking: showsWorking, folded: folded)
         let change: WindowColumnList.Change = WindowColumnList.change(from: list, to: next)
         list = next
         guard change != .none else { return }
@@ -133,8 +219,10 @@ final class WindowColumns: NSObject {
 
     /// Settings › General's checkbox, View › Hide Window Column, or the fold: every window at once.
     func settingsChanged() {
+        let was: Bool = visible
         visible = decideVisible(count: app.windowIndex.windows.count)
         tell(.none)
+        hintTriggers(from: list, wasVisible: was)
     }
 
     // MARK: the offer to show or hide it
@@ -150,7 +238,7 @@ final class WindowColumns: NSObject {
     /// decision waiting (an agent's approval or proposal), no sheet or modal window. Kept for the next window otherwise.
     @MainActor private func offerIfDue() {
         guard !offeredThisLaunch, NSApp.isActive, !GitToast.isShowing, UpdateHolds.shared.openDecisions.isEmpty,
-              let window = CommandLineTool.offerWindow(key: NSApp.keyWindow, modal: NSApp.modalWindow),
+              let window = CommandLineTool.freeProjectWindow(key: NSApp.keyWindow, modal: NSApp.modalWindow),
               let controller = window.windowController as? TerminalWindowController else { return }
         let defaults = UserDefaults.standard
         let windows: Int = app.windowIndex.windows.count

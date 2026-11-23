@@ -1,0 +1,726 @@
+import AppKit
+import CryptoKit
+import NextTermCore
+import UserNotifications
+
+/// Next Term's sign-ins to remote MCP servers (R14, R15), for every agent: Next Term is the server's one OAuth client
+/// and its one refresher, and an agent never sees or sends a token (the spec's token passthrough rule).
+///
+/// - **The key.** The sign-ins are sealed in `sign-ins.json` (SignInFile) under a key only the vault releases: its
+///   hidden `NEXT_TERM_SIGN_INS` entry, made write-only in the Touch ID of the first sign-in. The key is released at the
+///   first need of a launch that has none, with one presence check, and held until Next Term quits, the Mac locking
+///   included (D2), so an agent working overnight stays signed in. A launch that never uses a signed-in server asks
+///   nothing.
+/// - **Signing in** starts only from the user's click (Settings, the Add sheet): the browser, never a web view, with
+///   the loopback redirect (MCPHubSignIn). Agents never start one.
+/// - **Each need** (`withSignIn`, between MCPHubRemoteControl's keys and its request): the sign-in's state, then R15's
+///   consent for the calling agent's kind (once, on the Mac, recorded in the sealed file), then a token from the
+///   sign-in's one refresher, off the main thread.
+/// - **A lapse** is one notice (once for each lapse, as program alerts are), never a modal; Settings shows Reconnect.
+@MainActor
+enum MCPHubSignIns {
+    /// The sign-ins' key, once released.
+    private static var key: SymmetricKey?
+    private static var startOver: NSObjectProtocol?
+    /// Needs waiting for the key's one presence check.
+    private static var unlocking: [(SymmetricKey?) -> Void]?
+    private static var refreshers: [String: SignInRefresher] = [:]
+    /// The lapses noticed: "id:generation".
+    private static var noticed = Set<String>()
+    /// Don't Allow, until Next Term quits: "id\0agent".
+    private static var refused = Set<String>()
+    /// Sign-ins allowed for one agent outside Next Term's tabs, by record id and that agent's session (its process: pid,
+    /// start time, executable): in memory only, never in the sealed file, so it ends with that process or Next Term.
+    private static var outsideAllowed = Set<String>()
+    /// Needs waiting on one consent panel: "id\0agent".
+    private static var asking: [String: [(Bool) -> Void]] = [:]
+    /// The panel shown for each consent being asked.
+    private(set) static var panels: [String: AgentApprovalWindow] = [:]
+    /// The last WWW-Authenticate each server sent, by `MCPHubOverview.signInKey`, so a sign-in starts where it said.
+    static var challenges: [String: String] = [:]
+    /// Sign-ins waiting for the browser, by `MCPHubOverview.signInKey`.
+    private(set) static var running: [String: MCPHubSignIn] = [:]
+
+    #if DEBUG
+    /// The self-test's: the agent a caller is, and the browser.
+    static var agentForTest: ((TerminalTab?) -> String?)?
+    static var openForTest: ((URL) -> Bool)?
+    /// The self-test's: a key's value from its stand-in Secrets, in place of the vault's presence check.
+    nonisolated(unsafe) static var secretForTest: ((String) -> String?)?
+    /// The self-test's: sign-ins' states for Settings, in place of the file's.
+    static var statesForTest: [String: MCPHubOverview.SignIn]?
+    #endif
+
+    static var folder: SecretFolder { SecretsStore.shared.folder }
+
+    // MARK: reading, for Settings
+
+    /// The sign-ins as the file has them, unchecked: for Settings' states only.
+    static func peek() -> SignInFile.Body? {
+        guard folder.exists, let data = try? folder.read(SignInFile.name, cap: SignInFile.maxSize) else { return nil }
+        return SignInFile.peek(data)
+    }
+
+    /// Each sign-in's state for Settings, by `MCPHubOverview.signInKey`.
+    static func states() -> [String: MCPHubOverview.SignIn] {
+        #if DEBUG
+        if let statesForTest { return statesForTest }
+        #endif
+        var found: [String: MCPHubOverview.SignIn] = [:]
+        for record in peek()?.records ?? [] { found[MCPHubOverview.signInKey(record.serverURL)] = MCPHubOverview.SignIn(record.state) }
+        return found
+    }
+
+    /// The sign-in for a server's URL, unchecked: never where a token is taken from (`withSignIn` finds it again in
+    /// the checked file).
+    static func record(for url: String) -> SignInFile.Record? {
+        peek()?.record(server: url)
+    }
+
+    static var isHeld: Bool { key != nil }
+
+    // MARK: the key
+
+    /// The key, released once a launch; `makes`: made when the vault has none (the first sign-in). Nil when the user
+    /// didn't approve, or there is none to release.
+    static func withKey(reason: String, makes: Bool, _ done: @escaping (SymmetricKey?) -> Void) {
+        if startOver == nil {
+            // Start Over in Secrets retires the folder, the sign-ins with it: the key held is no one's now.
+            startOver = NotificationCenter.default.addObserver(forName: SecretsStore.startedOver, object: nil, queue: .main) { _ in
+                MainActor.assumeIsolated { forget() }
+            }
+        }
+        if let key { return done(key) }
+        if unlocking != nil {
+            unlocking?.append(done)
+            return
+        }
+        unlocking = [done]
+        Task { @MainActor in
+            let got = await unlock(reason: reason, makes: makes)
+            if let got { key = got }
+            let waiting = unlocking ?? []
+            unlocking = nil
+            for each in waiting { each(got) }
+        }
+    }
+
+    private static func unlock(reason: String, makes: Bool) async -> SymmetricKey? {
+        let store = SecretsStore.shared
+        store.reloadIfChanged()
+        let name = SecretVault.signInsName
+        if store.held?.signIns != nil {
+            // In the same Touch ID, the vault's floor for sign-ins.json is raised to the file as it is now, when the key
+            // vouches for it: a copy older than that, put back while Next Term wasn't running, reads as tampered.
+            let released = KeyBox()
+            let folder = folder
+            let index = try? await store.run(makes: false, names: [name], reason: reason, change: { vault, _ in
+                let value = try vault.value(of: name)
+                guard let text = value.utf8String(), let data = Data(base64Encoded: text), data.count == 32 else { return nil }
+                let key = SymmetricKey(data: data)
+                released.key = key
+                let stored = try? folder.read(SignInFile.name, cap: SignInFile.maxSize)
+                guard let sequence = SignInFile.sequence(of: stored, key: key), sequence > vault.index.floor(of: SignInFile.name) else { return nil }
+                return try vault.raiseFloor(of: SignInFile.name, to: sequence)
+            }, line: { SecretAudit.Line(event: .use, names: [name], outcome: "done") })
+            guard let index, let key = released.key else { return nil }
+            floor = index.floor(of: SignInFile.name)
+            return key
+        }
+        guard makes else { return nil }
+        let made = SymmetricKey(size: .bits256)
+        let text = made.withUnsafeBytes { Data($0) }.base64EncodedString()
+        do {
+            try await store.run(makes: true, names: [name], reason: reason, change: { vault, maskKey in
+                try vault.add(name: name, purpose: "Next Term\u{2019}s sign-ins to MCP servers", purposeBy: .user, origin: .settings,
+                              writeOnly: true, value: SecretBytes(utf8: text), maskKey: maskKey, kind: .signIns)
+            }, line: nil)
+            return made
+        } catch {
+            return nil
+        }
+    }
+
+    /// Start Over in Secrets retired the folder, the sign-ins with it.
+    static func forget() {
+        key = nil
+        floor = 0
+        refreshers = [:]
+    }
+
+    private static func store(_ key: SymmetricKey) -> SignInStore { SignInStore(folder: folder, key: key, floor: floor) }
+
+    /// The vault's floor for sign-ins.json, as the unlock that released the key read it.
+    private static var floor = 0
+
+    /// The key an unlock released, carried out of the store's queue.
+    private final class KeyBox: @unchecked Sendable {
+        var key: SymmetricKey?
+    }
+
+    private static func refresher(_ record: SignInFile.Record, key: SymmetricKey) -> SignInRefresher? {
+        if let made = refreshers[record.id] { return made }
+        guard let url = URL(string: record.serverURL) else { return nil }
+        let made = SignInRefresher(id: record.id, store: store(key), fetch: MCPHubOAuthHTTP(server: url).asFetch)
+        refreshers[record.id] = made
+        return made
+    }
+
+    // MARK: signing in
+
+    /// Sign In… or Reconnect… for `server` (in its list or not yet): Touch ID when the key isn't held (made with the
+    /// first sign-in), then the browser. `progress` gets Settings' line while the browser is out; `done` nil when signed
+    /// in, else why not.
+    static func signIn(_ server: MCPHubServer, scopes: [String]? = nil, progress: @escaping (String) -> Void,
+                       done: @escaping (String?) -> Void) {
+        guard let url = URL(string: server.url), server.transport != .stdio else { return done("Only a server at a URL signs in.") }
+        let name = server.name
+        let at = MCPHubOverview.signInKey(server.url)
+        guard running[at] == nil else { return done("A sign-in to \(name) is waiting in your browser already.") }
+        let more: [String]? = scopes ?? {
+            if case .needsMoreAccess(let wanted)? = record(for: server.url)?.state { return wanted }
+            return nil
+        }()
+        withKey(reason: "keep your sign-in to \(name) in Secrets", makes: true) { key in
+            guard let key else { return done("Not approved, so Next Term didn\u{2019}t sign in to \(name).") }
+            let challenge = MCPHubOAuthChallenge.bearer(challenges[at])
+            let own = server.oauth.map { MCPHubOAuthRegistration.Own(clientID: $0.clientID, secretName: $0.secretName, issuer: $0.issuer,
+                                                                         redirect: $0.redirect) }
+            let secretName = server.oauth?.secretName
+            let flow = MCPHubSignIn(name: name, server: url, challenge: challenge, own: own,
+                                    readSecret: secretName.map { secretName in { host in readSecret(secretName, server: name, host: host) } },
+                                    store: store(key), fetch: MCPHubOAuthHTTP(server: url).asFetch, scopes: more)
+            running[at] = flow
+            DispatchQueue.global(qos: .userInitiated).async {
+                let result = flow.run(open: { authorization in
+                    var opened = false
+                    DispatchQueue.main.sync {
+                        MainActor.assumeIsolated {
+                            opened = open(authorization)
+                            progress(MCPHubSignInWords.finishing(name, at: flow.metadata?.issuerHost))
+                        }
+                    }
+                    return opened
+                })
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated {
+                        running[at] = nil
+                        switch result {
+                        case .success(let record):
+                            refreshers[record.id] = nil
+                            // The need that failed for want of it (no sign-in, a lapse, too little access) is history
+                            // now: Settings shows the sign-in, never "Couldn't reach" after a Reconnect that worked.
+                            for (runKey, run) in MCPHubControl.lastRuns where run.failure != nil && runKey.hasSuffix("\u{0}" + name) {
+                                MCPHubControl.lastRuns[runKey] = nil
+                            }
+                            NSApp.activate(ignoringOtherApps: true) // back from the browser, where the user just was
+                            NotificationCenter.default.post(name: MCPHubControl.changed, object: nil)
+                            done(nil)
+                        case .failure(let failure):
+                            done(failure.text) // a cancel too: "Sign-in was cancelled.", never "Signed in"…
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// The user's own OAuth app's secret, read from Secrets for the one token request that needs it (MCPHubSignIn, off
+    /// the main thread, after the browser came back): one presence check whose reason names the key and the host it goes
+    /// to, so a list changed behind the user's back can't send another key somewhere unnoticed. Nothing keeps it here;
+    /// the sign-in seals it beside its tokens (SignInFile) so that refreshes ask nothing.
+    nonisolated static func readSecret(_ secretName: String, server: String, host: String) -> Result<String, MCPHubOAuth.Failure> {
+        final class Box: @unchecked Sendable {
+            var result: Result<String, MCPHubOAuth.Failure> = .failure(MCPHubOAuth.Failure("Next Term couldn\u{2019}t read your OAuth app\u{2019}s secret."))
+        }
+        let box = Box()
+        let read = DispatchSemaphore(value: 0)
+        DispatchQueue.main.async {
+            Task { @MainActor in
+                defer { read.signal() }
+                #if DEBUG
+                if let secretForTest {
+                    box.result = secretForTest(secretName).map { .success($0) } ?? .failure(MCPHubOAuth.Failure("No key named \(secretName) in Secrets."))
+                    return
+                }
+                #endif
+                let store = SecretsStore.shared
+                store.reloadIfChanged()
+                guard store.index?.entry(named: secretName) != nil else {
+                    box.result = .failure(MCPHubOAuth.Failure("\(secretName) isn\u{2019}t in Secrets, so Next Term can\u{2019}t finish signing in to \(server). "
+                        + "Add it in Settings \u{203A} MCP Servers \u{203A} Edit\u{2026}"))
+                    return
+                }
+                let value = ValueBox()
+                do {
+                    try await store.run(makes: false, names: [secretName], reason: "send \(secretName) to \(host) to finish signing in to \(server)",
+                                        change: { vault, _ in
+                        value.text = try vault.value(of: secretName).utf8String()
+                        return nil
+                    }, line: { SecretAudit.Line(event: .use, names: [secretName], who: "Next Term", command: "sign in to \(server) at \(host)", outcome: "done") })
+                    box.result = value.text.map { .success($0) } ?? .failure(MCPHubOAuth.Failure("\(secretName) in Secrets isn\u{2019}t text."))
+                    value.text = nil
+                } catch SecretsStore.Failure.cancelled {
+                    box.result = .failure(MCPHubOAuth.Failure("Not approved, so Next Term didn\u{2019}t sign in to \(server)."))
+                } catch {
+                    box.result = .failure(MCPHubOAuth.Failure("Next Term couldn\u{2019}t read \(secretName) from Secrets: "
+                        + ((error as? LocalizedError)?.errorDescription ?? "\(error)")))
+                }
+            }
+        }
+        read.wait()
+        return box.result
+    }
+
+    private final class ValueBox: @unchecked Sendable {
+        var text: String?
+    }
+
+    /// Cancel while the browser is out.
+    static func cancelSignIn(_ url: String) {
+        running[MCPHubOverview.signInKey(url)]?.cancel()
+    }
+
+    static func isSigningIn(_ url: String) -> Bool { running[MCPHubOverview.signInKey(url)] != nil }
+
+    /// Opens the authorization URL in the user's own browser: LaunchServices, never a shell, and checked again first.
+    private static func open(_ url: URL) -> Bool {
+        #if DEBUG
+        if let openForTest { return openForTest(url) }
+        #endif
+        guard let scheme = url.scheme?.lowercased(), scheme == "https" || scheme == "http" else { return false }
+        return NSWorkspace.shared.open(url)
+    }
+
+    // MARK: signing out
+
+    /// Sign Out, or the last entry for its URL removed: the sign-in goes from the file, then is revoked at the server
+    /// (RFC 7009, best effort, ten seconds), or the user is told how to end it there. The last one takes the vault's
+    /// key with it, in the one Touch ID it asks. `done` gets what to say.
+    static func signOut(url: String, name: String, done: @escaping (String) -> Void) {
+        guard let record = record(for: url) else { return done("Signed out of \(name).") }
+        let last = (peek()?.records.count ?? 0) <= 1
+        let store = SecretsStore.shared
+        let folder = folder
+        let floor = floor
+        final class Taken: @unchecked Sendable {
+            var removed: (record: SignInFile.Record, tokens: SignInFile.Tokens?)?
+            var client: MCPHubOAuthRegistration.Client?
+            var key: SymmetricKey?
+            /// No sign-in left, as the checked file has it.
+            var none = false
+        }
+        let taken = Taken()
+        let held = key
+        // Run off the main thread (here or in the vault's change), so a closure of no actor's.
+        let remove: @Sendable (SymmetricKey) throws -> Void = { key in
+            let signIns = SignInStore(folder: folder, key: key, floor: floor)
+            if case .success(let body) = signIns.read() {
+                taken.client = body.registered(key: key).first { $0.issuer == record.issuer && $0.clientID == record.client.clientID }
+            }
+            taken.removed = try signIns.remove(id: record.id)
+            taken.key = key
+            taken.none = (try? signIns.read().get())?.records.isEmpty ?? false
+        }
+        func finish() {
+            key = taken.none ? nil : taken.key
+            refreshers[record.id] = nil
+            NotificationCenter.default.post(name: MCPHubControl.changed, object: nil)
+            guard let removed = taken.removed, let tokens = removed.tokens else { return done("Signed out of \(name).") }
+            let client = taken.client ?? removed.record.client
+            DispatchQueue.global(qos: .utility).async {
+                let said = revoke(removed.record, tokens: tokens, client: client, name: name)
+                DispatchQueue.main.async { done(said) }
+            }
+        }
+        if let held, !last {
+            // Off the main thread: the file's lock may be held by a refresh waiting on its server.
+            DispatchQueue.global(qos: .userInitiated).async {
+                let failure: String?
+                do { try remove(held); failure = nil } catch { failure = error.localizedDescription }
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated {
+                        guard let failure else { return finish() }
+                        done("Next Term couldn\u{2019}t sign out of \(name): \(failure)")
+                    }
+                }
+            }
+            return
+        }
+        Task { @MainActor in
+            do {
+                try await store.run(makes: false, names: [SecretVault.signInsName], reason: "sign out of \(name)", change: { vault, _ in
+                    let signInsKey: SymmetricKey
+                    if let held {
+                        signInsKey = held
+                    } else {
+                        let value = try vault.value(of: SecretVault.signInsName)
+                        guard let text = value.utf8String(), let data = Data(base64Encoded: text) else { throw SecretVault.Failure.tampered }
+                        signInsKey = SymmetricKey(data: data)
+                    }
+                    try remove(signInsKey)
+                    guard taken.none else { return nil } // the checked file's count, not the unchecked one's
+                    try? FileManager.default.removeItem(atPath: folder.path(SignInFile.name))
+                    return try vault.delete(SecretVault.signInsName)
+                }, line: nil)
+                finish()
+            } catch SecretsStore.Failure.cancelled {
+                done("Not approved, so you\u{2019}re still signed in to \(name).")
+            } catch {
+                done("Next Term couldn\u{2019}t sign out of \(name): " + ((error as? LocalizedError)?.errorDescription ?? "\(error)"))
+            }
+        }
+    }
+
+    /// Settings › Secrets › Sign Out of All…: every sign-in goes, revoked where the server can, and the vault's key
+    /// with them, in one Touch ID.
+    static func signOutAll(done: @escaping (String) -> Void) {
+        let count = peek()?.records.count ?? 0
+        let folder = folder
+        let held = key
+        final class Taken: @unchecked Sendable {
+            var all: [(record: SignInFile.Record, tokens: SignInFile.Tokens?, client: MCPHubOAuthRegistration.Client)] = []
+        }
+        let taken = Taken()
+        Task { @MainActor in
+            do {
+                try await SecretsStore.shared.run(makes: false, names: [SecretVault.signInsName], reason: "sign out of every MCP server",
+                                                  change: { vault, _ in
+                    var signInsKey = held
+                    if signInsKey == nil, let text = try? vault.value(of: SecretVault.signInsName).utf8String(), let data = Data(base64Encoded: text) {
+                        signInsKey = SymmetricKey(data: data)
+                    }
+                    if let signInsKey, case .success(let body) = SignInStore(folder: folder, key: signInsKey, floor: vault.index.floor(of: SignInFile.name)).read() {
+                        let clients = body.registered(key: signInsKey)
+                        taken.all = body.records.map { record in
+                            (record, SignInFile.open(record, key: signInsKey),
+                             clients.first { $0.issuer == record.issuer && $0.clientID == record.client.clientID } ?? record.client)
+                        }
+                    }
+                    try? FileManager.default.removeItem(atPath: folder.path(SignInFile.name))
+                    return try vault.delete(SecretVault.signInsName)
+                }, line: nil)
+            } catch SecretsStore.Failure.cancelled {
+                return done("Not approved, so you\u{2019}re still signed in.")
+            } catch {
+                return done("Next Term couldn\u{2019}t sign out: " + ((error as? LocalizedError)?.errorDescription ?? "\(error)"))
+            }
+            forget()
+            NotificationCenter.default.post(name: MCPHubControl.changed, object: nil)
+            let all = taken.all
+            DispatchQueue.global(qos: .utility).async {
+                for each in all {
+                    if let tokens = each.tokens { _ = revoke(each.record, tokens: tokens, client: each.client, name: each.record.name) }
+                }
+            }
+            done(count == 1 ? "Signed out of 1 MCP server." : "Signed out of \(count) MCP servers.")
+        }
+    }
+
+    /// Revokes at the server: the refresh token, or the access token when there is none. Nil said when revoked.
+    nonisolated private static func revoke(_ record: SignInFile.Record, tokens: SignInFile.Tokens, client: MCPHubOAuthRegistration.Client,
+                                           name: String) -> String {
+        guard let url = URL(string: record.serverURL),
+              let request = MCPHubOAuthFlow.revocationRequest(token: tokens.refresh ?? tokens.access,
+                                                              hint: tokens.refresh == nil ? "access_token" : "refresh_token",
+                                                              metadata: record.metadata, client: client) else {
+            return MCPHubSignInWords.revokeByHand(name, host: record.metadata.issuerHost)
+        }
+        _ = MCPHubOAuthHTTP(server: url).fetch(request, seconds: 10)
+        return "Signed out of \(name), and ended its sign-in at \(record.metadata.issuerHost)."
+    }
+
+    // MARK: each need
+
+    /// What a need with a sign-in carries: the token, and the one refresher and store, for a 401's refresh.
+    struct Use {
+        let id: String
+        let name: String
+        let token: String
+        let refresher: SignInRefresher
+        let store: SignInStore
+    }
+
+    /// The agent a caller is, for R15: its tab's agent kind, or nil for anything that isn't an agent in one of this
+    /// Mac's tabs.
+    static func agent(_ caller: TerminalTab?) -> String? {
+        #if DEBUG
+        if let agentForTest { return agentForTest(caller) }
+        #endif
+        guard let caller, caller.status.running, caller.status.kind == .agent else { return nil }
+        return MCPHubSignInWords.agentKey(program: caller.status.program)
+    }
+
+    /// Between a need's keys and its request: `use` with the sign-in's token, or nil when the server has no sign-in in
+    /// Next Term (or is given its own Authorization header, a key, which no sign-in joins); `fail` with the sentence when
+    /// the sign-in can't be used for this agent now. `byUser`: the user's own Check Now in Settings, for which no agent
+    /// is asking, so R15's consent (which agents may use the sign-in) has no one to ask about; the token stays in the app.
+    /// `ask`: false for a search across servers, which never puts a consent panel up; it says which server to name.
+    static func withSignIn(_ server: MCPHubServer, deadline: Date, caller: TerminalTab?, pid: pid_t?, byUser: Bool = false,
+                           ask: Bool = true, fail: @escaping (String) -> Void, use: @escaping (Use?) -> Void) {
+        if server.headers.keys.contains(where: { $0.lowercased() == "authorization" }) { return use(nil) }
+        guard let found = record(for: server.url) else { return use(nil) }
+        let name = server.name
+        switch found.state {
+        case .signedOut(let lapse):
+            notice(found.id, lapse: lapse, name: name, url: server.url)
+            return fail(MCPHubSignInWords.lapsed(name))
+        case .needsMoreAccess(let scopes): return fail(MCPHubSignInWords.moreAccess(name, scopes: scopes))
+        case .signedIn, .refreshing: break
+        }
+        let agent = byUser ? nil : Self.agent(caller)
+        // An agent outside Next Term's tabs (another terminal), named as Secrets names one: the agent process above the
+        // bridge, by pid, start time and executable. Anything that isn't one (a shell running `nxtrm mcp`, the remote
+        // door) is refused.
+        let outside = !byUser && agent == nil && caller == nil ? pid.flatMap(SecretSocket.agentAbove) : nil
+        let outsideSession = outside.flatMap { SecretRequests.session(outside: $0.pid) }
+        if !byUser, agent == nil, outsideSession == nil { return fail(MCPHubSignInWords.notAnAgent(name)) }
+        withKey(reason: "use its sign-in to \(name) for your agents", makes: false) { key in
+            guard let key else { return fail(MCPHubSignInWords.notUnlocked(name)) }
+            let signIns = store(key)
+            guard case .success(let body) = signIns.read() else { return fail(MCPHubSignInWords.tampered(name)) }
+            // Found again by the server's URL in the checked file, never by the unchecked one's id: a file changed
+            // between the two reads can't hand this server another server's token.
+            guard let record = body.record(server: server.url) else { return use(nil) }
+            @MainActor func granted() {
+                guard let refresher = refresher(record, key: key) else { return fail(MCPHubSignInWords.lapsed(name)) }
+                DispatchQueue.global(qos: .userInitiated).async {
+                    let outcome = refresher.token()
+                    DispatchQueue.main.async {
+                        MainActor.assumeIsolated {
+                            switch outcome {
+                            case .token(let token):
+                                use(Use(id: record.id, name: name, token: token, refresher: refresher, store: signIns))
+                            case .signedOut(let lapse):
+                                lapsed(record.id, lapse: lapse, name: name, url: server.url)
+                                fail(MCPHubSignInWords.lapsed(name))
+                            case .needsMoreAccess(let scopes): fail(MCPHubSignInWords.moreAccess(name, scopes: scopes))
+                            case .unreachable: fail(MCPHubSignInWords.unreachable(name))
+                            case .missing: use(nil)
+                            case .tampered: fail(MCPHubSignInWords.tampered(name))
+                            }
+                        }
+                    }
+                }
+            }
+            guard let agent else {
+                guard let outside, let outsideSession else { return granted() }
+                return outsideConsent(record, others: body.records, agent: outside, session: outsideSession, name: name, ask: ask,
+                                      deadline: deadline, fail: fail, granted: granted)
+            }
+            if !ask, !record.consents.contains(agent) {
+                return fail("\(MCPHubSignInWords.agentTitle(agent)) isn\u{2019}t allowed to use the \(name) sign-in yet, so a search across "
+                    + "servers leaves it out. Name it (mcp_tools with server \"\(name)\") to search its tools; the user is asked then.")
+            }
+            // The agent's other sign-ins it isn't allowed yet, asked about in the same panel: one question an agent, not one
+            // a server (each server still named, each consent still recorded).
+            let others = body.records.filter { other in
+                guard other.id != record.id, !other.consents.contains(agent), !refused.contains(other.id + "\u{0}" + agent) else { return false }
+                switch other.state {
+                case .signedIn, .refreshing: return true
+                case .signedOut, .needsMoreAccess: return false
+                }
+            }
+            consent(record, others: others, agent: agent, name: name, store: signIns, deadline: deadline, caller: caller, pid: pid,
+                    fail: fail) { granted() }
+        }
+    }
+
+    /// R15: the first time each agent kind uses each sign-in, the user approves once on the Mac; recorded in the sealed
+    /// file, so an agent can't grant itself. The panel names the sign-in needed now and the agent's `others` not yet
+    /// allowed, and Allow allows each it names, so an agent asks once rather than once a server. Don't Allow refuses that
+    /// agent the sign-in needed now, until Next Term quits; the others are asked about when they are needed. A need that
+    /// outlasts its call while the user decides is told so; an Allow that comes later is kept in the file for the agent's
+    /// next need.
+    private static func consent(_ record: SignInFile.Record, others: [SignInFile.Record] = [], agent: String, name: String,
+                                store: SignInStore, deadline: Date,
+                                caller: TerminalTab?, pid: pid_t?, fail: @escaping (String) -> Void, granted: @escaping () -> Void) {
+        if record.consents.contains(agent) { return granted() }
+        let title = MCPHubSignInWords.agentTitle(agent)
+        let ask = record.id + "\u{0}" + agent
+        if refused.contains(ask) { return fail(MCPHubSignInWords.declined(agent: title, name)) }
+        var answered = false
+        DispatchQueue.main.asyncAfter(deadline: .now() + max(0, deadline.timeIntervalSinceNow - 1)) {
+            guard !answered else { return }
+            answered = true
+            fail(MCPHubSignInWords.asking(agent: title, name))
+        }
+        let reply: (Bool) -> Void = { allowed in
+            guard !answered else { return }
+            answered = true
+            if allowed { granted() } else { fail(MCPHubSignInWords.declined(agent: title, name)) }
+        }
+        if asking[ask] != nil {
+            asking[ask]?.append(reply)
+            return
+        }
+        asking[ask] = [reply]
+        // The others join this panel: a need of one of them meanwhile waits for its answer rather than a panel of its own.
+        let group = others.filter { asking[$0.id + "\u{0}" + agent] == nil }
+        for other in group { asking[other.id + "\u{0}" + agent] = [] }
+        let words = group.isEmpty ? MCPHubSignInWords.consent(agent: title, name)
+            : MCPHubSignInWords.consent(agent: title, names: [name] + group.map(\.name))
+        let facts = SecretsMCP.askedBy(caller: caller, pid: pid, requester: nil)
+        let requester = [title, facts.tab.map { "in " + $0 }, facts.project.map { "of " + ($0 as NSString).lastPathComponent }]
+            .compactMap { $0 }.joined(separator: " ")
+        let request = AgentApprovalWindow.Request(title: words.title, requester: requester, agentWords: nil, details: words.details,
+                                                  approveTitle: "Allow", declineTitle: "Don\u{2019}t Allow")
+        let asks = [ask] + group.map { $0.id + "\u{0}" + agent }
+        func answer(_ allowed: Bool) {
+            panels[ask] = nil
+            func tell() {
+                for each in asks {
+                    let waiting = asking.removeValue(forKey: each) ?? []
+                    for reply in waiting { reply(allowed) }
+                }
+            }
+            guard allowed else {
+                refused.insert(ask) // the one needed now; the others are asked about again when needed
+                return tell()
+            }
+            // Written off the main thread: the file's lock may be held by a refresh waiting on its server.
+            let ids = [record.id] + group.map(\.id)
+            DispatchQueue.global(qos: .userInitiated).async {
+                for id in ids { try? store.setConsent(id: id, agent: agent, allowed: true) }
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated {
+                        NotificationCenter.default.post(name: MCPHubControl.changed, object: nil)
+                        tell()
+                    }
+                }
+            }
+        }
+        let window = AgentApprovalWindow(request, approve: { window in
+            window.finish()
+            answer(true)
+        }, decline: { _ in answer(false) })
+        panels[ask] = window
+        window.present()
+    }
+
+    /// R15 for an agent outside Next Term's tabs: one panel naming the sign-in needed now and the others it may use,
+    /// whose Allow lasts while that agent's process runs (`outsideAllowed`), never written to the sealed file. A new
+    /// session of the agent is asked again. Don't Allow refuses the one needed now for that session.
+    private static func outsideConsent(_ record: SignInFile.Record, others: [SignInFile.Record], agent: SecretSocket.Agent,
+                                       session: String, name: String, ask: Bool, deadline: Date,
+                                       fail: @escaping (String) -> Void, granted: @escaping () -> Void) {
+        let key = record.id + "\u{0}" + session
+        if outsideAllowed.contains(key) { return granted() }
+        let title = MCPHubSignInWords.agentTitle(MCPHubSignInWords.agentKey(program: agent.program))
+        if !ask {
+            return fail("\(title) isn\u{2019}t allowed to use the \(name) sign-in yet, so a search across servers leaves it out. "
+                + "Name it (mcp_tools with server \"\(name)\") to search its tools; the user is asked then.")
+        }
+        if refused.contains(key) { return fail(MCPHubSignInWords.declined(agent: title, name)) }
+        var answered = false
+        DispatchQueue.main.asyncAfter(deadline: .now() + max(0, deadline.timeIntervalSinceNow - 1)) {
+            guard !answered else { return }
+            answered = true
+            fail(MCPHubSignInWords.asking(agent: title, name))
+        }
+        let reply: (Bool) -> Void = { allowed in
+            guard !answered else { return }
+            answered = true
+            if allowed { granted() } else { fail(MCPHubSignInWords.declined(agent: title, name)) }
+        }
+        if asking[key] != nil {
+            asking[key]?.append(reply)
+            return
+        }
+        asking[key] = [reply]
+        let group = others.filter { other in
+            let otherKey = other.id + "\u{0}" + session
+            guard other.id != record.id, !outsideAllowed.contains(otherKey), !refused.contains(otherKey), asking[otherKey] == nil else { return false }
+            switch other.state {
+            case .signedIn, .refreshing: return true
+            case .signedOut, .needsMoreAccess: return false
+            }
+        }
+        for other in group { asking[other.id + "\u{0}" + session] = [] }
+        let keys = [key] + group.map { $0.id + "\u{0}" + session }
+        let words = MCPHubSignInWords.outsideConsent(agent: title, names: [name] + group.map(\.name))
+        let request = AgentApprovalWindow.Request(title: words.title, requester: "\(title) in another terminal (process \(agent.pid))",
+                                                  agentWords: nil, details: words.details,
+                                                  approveTitle: "Allow", declineTitle: "Don\u{2019}t Allow")
+        func answer(_ allowed: Bool) {
+            panels[key] = nil
+            if allowed { keys.forEach { outsideAllowed.insert($0) } } else { refused.insert(key) }
+            for each in keys {
+                let waiting = asking.removeValue(forKey: each) ?? []
+                for reply in waiting { reply(allowed) }
+            }
+        }
+        let window = AgentApprovalWindow(request, approve: { window in
+            window.finish()
+            answer(true)
+        }, decline: { _ in answer(false) })
+        panels[key] = window
+        window.present()
+    }
+
+    /// Settings' Change…: an agent no longer allowed. Asks for the key when it isn't held.
+    static func removeConsent(url: String, agent: String, done: @escaping (String?) -> Void) {
+        guard let found = record(for: url) else { return done(nil) }
+        withKey(reason: "change who uses your sign-in to \(found.name)", makes: false) { key in
+            guard let key else { return done("Not approved, so nothing changed.") }
+            let signIns = store(key)
+            DispatchQueue.global(qos: .userInitiated).async { // the file's lock may be held by a refresh
+                let failure: String?
+                do {
+                    try signIns.setConsent(id: found.id, agent: agent, allowed: false)
+                    failure = nil
+                } catch {
+                    failure = error.localizedDescription
+                }
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated {
+                        if failure == nil {
+                            refused.remove(found.id + "\u{0}" + agent)
+                            NotificationCenter.default.post(name: MCPHubControl.changed, object: nil)
+                        }
+                        done(failure)
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: lapses
+
+    /// A sign-in lapsed: Settings shows Reconnect, and the user gets one notice for it.
+    static func lapsed(_ id: String, lapse: Int, name: String, url: String) {
+        refreshers[id] = nil
+        NotificationCenter.default.post(name: MCPHubControl.changed, object: nil)
+        notice(id, lapse: lapse, name: name, url: url)
+    }
+
+    /// One notice for each lapse, keyed by the sign-in and its generation, as program alerts are allowed to show.
+    static func notice(_ id: String, lapse: Int, name: String, url: String) {
+        guard noticed.insert(id + ":" + String(lapse)).inserted else { return }
+        guard NotificationSettings(defaults: .standard).programAlerts else { return }
+        // After the need's answer has reached the bar: a window in front showing it needs no notice repeating it.
+        DispatchQueue.main.async {
+            MainActor.assumeIsolated {
+                guard !MCPConnectorPrompts.showing(url: url) else { return }
+                deliverNotice(id, lapse: lapse, name: name, url: url)
+            }
+        }
+    }
+
+    private static func deliverNotice(_ id: String, lapse: Int, name: String, url: String) {
+        let words = MCPHubSignInWords.notice(name)
+        let content = UNMutableNotificationContent()
+        content.title = words.title
+        content.body = words.body
+        content.threadIdentifier = "mcp-sign-in"
+        content.userInfo = [Self.noticeKey: url]
+        AppDelegate.shared.deliver(UNNotificationRequest(identifier: "mcp-sign-in-\(id)-\(lapse)", content: content, trigger: nil))
+    }
+
+    nonisolated static let noticeKey = "mcp_sign_in"
+
+    /// The notice, clicked: Settings › MCP Servers with the server selected and Reconnect… beside it.
+    static func openReconnect(_ url: String) {
+        AppDelegate.shared.showMCPServer(url: url)
+    }
+}

@@ -8,7 +8,7 @@ final class TerminalWindow: NSWindow {
     /// (behind Settings or a panel).
     static var front: TerminalWindow? {
         let candidates = [NSApp.mainWindow, NSApp.keyWindow] + NSApp.orderedWindows
-        return candidates.lazy.compactMap { $0 as? TerminalWindow }.first { $0.isVisible && !$0.isMiniaturized }
+        return candidates.lazy.compactMap { $0 as? TerminalWindow }.first(where: \.isShownFrame)
     }
 
     var onControlTab: ((_ backwards: Bool) -> Void)?
@@ -27,8 +27,23 @@ final class TerminalWindow: NSWindow {
         return made
     }
 
+    /// macOS names its tab bar item "Show Tab Bar" or "Hide Tab Bar" each time it checks it: here it is the project
+    /// tabs' (plan 032), beside the terminal's own tab settings in View.
+    override func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        let valid: Bool = super.validateMenuItem(menuItem)
+        if menuItem.action == #selector(NSWindow.toggleTabBar(_:)) {
+            menuItem.title = tabGroup?.isTabBarVisible == true ? "Hide Project Tab Bar" : "Show Project Tab Bar"
+        } else if menuItem.action == #selector(NSWindow.toggleTabOverview(_:)) {
+            menuItem.title = tabGroup?.isOverviewVisible == true ? "Exit Project Tab Overview" : "Show All Project Tabs"
+        }
+        return valid
+    }
+
     override func sendEvent(_ event: NSEvent) {
         if event.type == .keyDown { UserKeys.pressed() }
+        if [.keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown].contains(event.type) {
+            (windowController as? TerminalWindowController)?.userTouched()
+        }
         // A click on a tab an agent opened chooses it: it takes the keyboard, and the click reaches nothing in it (a
         // button in the agent's screen).
         if [.leftMouseDown, .rightMouseDown, .otherMouseDown].contains(event.type), let view = awaitingTerminal(at: event.locationInWindow) {
@@ -187,8 +202,18 @@ final class ThemedSplitView: HairlineSplitView {}
 /// Between the editor and the terminal: both have the same background, so the line between them must
 /// show (a hairline a few shades lighter), and it is easy to grab (see effectiveRect).
 final class WorkSplitView: HairlineSplitView {
-    static let line = NSColor(hex: 0x393B40)
+    static let line = Theme.divider
     override var lineColor: NSColor { Self.line }
+
+    /// A drag of the divider ended: the user pressed, moved it and let go (a window resize never calls it).
+    var onDividerReleased: (() -> Void)?
+
+    /// AppKit tracks a divider drag inside `super`, which returns once the button is up: what follows runs on release.
+    override func mouseDown(with event: NSEvent) {
+        let before: [NSRect] = arrangedSubviews.map(\.frame)
+        super.mouseDown(with: event)
+        if arrangedSubviews.map(\.frame) != before { onDividerReleased?() }
+    }
 }
 
 final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSplitViewDelegate, NSMenuItemValidation,
@@ -220,13 +245,41 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     let editorArea = EditorArea(frame: NSRect(x: 0, y: 0, width: 800, height: 360))
     let terminalPane = NSView(frame: NSRect(x: 0, y: 0, width: 800, height: 240))
     let container = NSView()
+    /// The connector bar along the work area's foot, for an MCP server an agent here needed (MCPConnectorPrompt).
+    let connector = MCPConnectorPrompt()
     /// Unsaved files were dealt with (saved or discarded) for this close.
     private var editorsConfirmed = false
     /// Close Anyway was chosen for the database values not saved yet, for this close.
     private var valuesConfirmed = false
-    /// In full screen (or about to be): no traffic lights in the way. Set by the window's full-screen notifications, and
-    /// by the self-test, which checks the insets without a real transition.
-    var isFullScreen = false
+    /// In full screen (or about to be): no traffic lights in the way. From the window itself (a window that joins or
+    /// leaves a full-screen tab group gets no transition of its own), the transition under way, or the self-test's
+    /// setting, which checks the insets without a real transition.
+    var isFullScreen: Bool {
+        get { fullScreenForTest ?? fullScreenTransition ?? (window?.styleMask.contains(.fullScreen) == true) }
+        set { fullScreenForTest = newValue }
+    }
+    private var fullScreenForTest: Bool?
+    /// Entering (true) or leaving (false) full screen, from the will-notification until it ends or fails.
+    private var fullScreenTransition: Bool?
+    /// The traffic lights sit beside our top bars: not in full screen, and not while a system tab bar puts them in a row
+    /// of their own above it.
+    var lightsBesideBars: Bool { !isFullScreen && columnHost.topCover == 0 }
+    /// Watches the window's unobscured area, which a system tab bar coming or going changes.
+    private var layoutRectWatch: NSKeyValueObservation?
+    /// The system tab group the window is in, and the watches on which tab is in front and who is in it (plan 032).
+    weak var watchedTabGroup: NSWindowTabGroup?
+    var tabGroupWatches: [NSKeyValueObservation] = []
+    /// A question about closing, asked while this project was merged behind another's tab: it waits for its tab to come
+    /// to the front (TerminalWindowTabs), and the tab is marked meanwhile.
+    var heldQuestion: (() -> Void)?
+    /// File › Close Window asked once about what stops in every project of a merged window: this one closes without
+    /// asking that again (MergedWindowClose).
+    var stopConfirmed = false
+    /// The mark on the project's system tab, as last set.
+    var projectTabMark: TabState?
+    /// A restore builds it to merge with others (plan 032): it is laid out under a tab bar before it has one, so its
+    /// panes' shells start at the size they keep. The tab bar, once there, takes over.
+    var expectsTabBar = false
     /// Last state announced to VoiceOver per tab, so each change is announced once.
     private var announcedStates: [UUID: TabState] = [:]
     private var projectKey: String?
@@ -264,6 +317,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     /// The window's id in the index of every window (AppDelegate.windowIndex): its own, the same while it is open.
     let indexID: Int
     private static var lastIndexID = 0
+    /// When the window was made, on the uptime clock: no hint shows in a window's first minute (HintCenter).
+    let madeAt: TimeInterval = ProcessInfo.processInfo.systemUptime
     /// Where the project keeps its colour (ProjectColors.key): for a linked worktree its repository's main checkout, so
     /// every worktree window of a repository has one colour. nil with no project, or the home folder: no colour.
     private(set) var projectColorKey: String?
@@ -275,6 +330,13 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     /// The window closed. AppDelegate drops it from its windows a moment later (windowClosed): until then, nothing may
     /// open a project or a tab in it.
     private(set) var hasClosed = false
+    /// An agent opened the window over MCP (`byAgent`): on a temporary folder it is an agent's scratch window
+    /// (AgentScratch), kept out of the lists and closed once quiet.
+    let openedByAgent: Bool
+    /// The user keyed or clicked into the window, or brought it to the front: it is theirs, never closed by itself.
+    private(set) var touchedByUser = false
+    /// The one grace a quiet scratch window waits out before it closes (AgentScratch.grace); nil while it is not quiet.
+    private var scratchClose: DispatchWorkItem?
 
     /// `repository`: the one `project` is a linked worktree of (WorktreeWindow.repository), read once for the title and
     /// the colour.
@@ -308,6 +370,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     /// the window over MCP, so its first tab waits for the user to choose it (AgentArrival).
     init(directory: String?, project: String? = nil, firstTab: Bool = true, byAgent: Bool = false) {
         self.project = project.map(canonicalPath)
+        openedByAgent = byAgent
         Self.lastIndexID += 1
         indexID = Self.lastIndexID
         // Swift runs no didSet in init: the title and the colour's key here, the colour once the bars exist.
@@ -326,13 +389,20 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
         window.backgroundColor = Theme.background
-        window.minSize = NSSize(width: 420, height: 240)
-        window.tabbingMode = .disallowed // our own tabs, not the system's
+        window.minSize = Self.minimumSize
+        // Project windows merge as macOS's own window tabs (plan 032), only with each other; Next Term places each one it
+        // shows (AppDelegate.openWindow), and the user merges, splits and drags them.
+        window.tabbingMode = WindowTabbing.suppressed ? .disallowed : .automatic
+        window.tabbingIdentifier = WindowTabbing.projectIdentifier
         window.isReleasedWhenClosed = false
-        window.appearance = NSAppearance(named: .darkAqua)
+        window.appearance = nil // the app\'s look (Settings › General › Appearance)
         super.init(window: window)
 
         window.delegate = self
+        // A system tab bar shown or hidden (a merge, a split, Show Tab Bar) moves our top row below it or back.
+        layoutRectWatch = window.observe(\.contentLayoutRect, options: [.new]) { [weak self] (_, _) in
+            MainActor.assumeIsolated { self?.titleBarChanged() }
+        }
         window.onControlTab = { [weak self] backwards in self?.cycleTab(by: backwards ? -1 : 1) }
         // Tab completion's list first, then a suggestion's keys.
         window.onTerminalKey = { [weak self] event, view in
@@ -384,15 +454,25 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         workSplit.isVertical = false
         workSplit.dividerStyle = .thin
         workSplit.delegate = self
+        workSplit.onDividerReleased = { [weak self] in self?.workDividerReleased() }
         workSplit.addArrangedSubview(editorArea)
         workSplit.addArrangedSubview(terminalPane)
         workSplit.translatesAutoresizingMaskIntoConstraints = false
         mainPane.addSubview(workSplit)
+        let bar = connector.bar
+        bar.translatesAutoresizingMaskIntoConstraints = false
+        mainPane.addSubview(bar)
+        let barHeight = bar.heightAnchor.constraint(equalToConstant: 0)
+        bar.heightConstraint = barHeight
         NSLayoutConstraint.activate([
             workSplit.topAnchor.constraint(equalTo: mainPane.topAnchor),
             workSplit.leadingAnchor.constraint(equalTo: mainPane.leadingAnchor),
             workSplit.trailingAnchor.constraint(equalTo: mainPane.trailingAnchor),
-            workSplit.bottomAnchor.constraint(equalTo: mainPane.bottomAnchor),
+            workSplit.bottomAnchor.constraint(equalTo: bar.topAnchor),
+            bar.leadingAnchor.constraint(equalTo: mainPane.leadingAnchor),
+            bar.trailingAnchor.constraint(equalTo: mainPane.trailingAnchor),
+            bar.bottomAnchor.constraint(equalTo: mainPane.bottomAnchor),
+            barHeight,
         ])
         editorArea.delegate = self
         editorArea.onShowChanges = { [weak self] url in self?.showChanges(of: url) }
@@ -404,12 +484,14 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         sidebar.onHeadChange = { [weak self] in self?.editorArea.headMoved() }
         sidebar.onBrowseHome = { [weak self] in self?.browseHomeFolder() }
         sidebar.onLeaveBrowsing = { [weak self] in self?.stopBrowsingHome() }
-        // A right-click on the top row, whichever bar is there: View › Project Color's choices for this window.
-        let colorMenu: () -> NSMenu? = { [weak self] in self?.projectColorMenu() }
-        for bar in [tabBar, editorArea.tabBar] { bar.onTopRowMenu = colorMenu }
-        sidebar.header.onTopRowMenu = colorMenu
-        terminalRail.onTopRowMenu = colorMenu
-        windowColumn.onTopRowMenu = colorMenu
+        // A right-click on the top row: that place's own commands from View, then this window's Project Color
+        // (PlaceMenus). The editor's bar has the Project Color choices alone.
+        editorArea.tabBar.onTopRowMenu = { [weak self] in self?.projectColorMenu() }
+        sidebar.header.onTopRowMenu = { [weak self] in self.map(PlaceMenus.sidebar(for:)) }
+        let terminalMenu: () -> NSMenu? = { [weak self] in self.map(PlaceMenus.terminal(for:)) }
+        tabBar.onTopRowMenu = terminalMenu
+        terminalRail.onTopRowMenu = terminalMenu
+        windowColumn.onTopRowMenu = { [weak self] in self.map(PlaceMenus.windowColumn(for:)) }
         NotificationCenter.default.addObserver(self, selector: #selector(projectColorsChanged), name: ProjectColorStore.changed, object: nil)
         for split in [splitView, workSplit] as [HairlineSplitView] { split.onPanesPlaced = { [weak self] in self?.projectGlowMoved() } }
         // The collapse button's tooltip names ⌘J, or the key Settings gives it instead.
@@ -641,6 +723,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     private func requestClose(_ tab: TerminalTab, saveAsked: Bool) {
         guard tabs.contains(where: { $0 === tab }) else { return }
+        // A pinned tab's last pane: asked about as the pinned tab (plan 045); a pane of a split pinned tab closes as a pane.
+        if !saveAsked, let group = group(of: tab), group.pinned, !group.isSplit { return askToClosePinned(group) }
         if !saveAsked, asksToSave(closing: tab) {
             return askToSave(closing: [tab]) { [weak self] in self?.requestClose(tab, saveAsked: true) }
         }
@@ -769,6 +853,14 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     /// as it was, with its reason.
     private func askToSave(closing: [TerminalTab], kept: String = "", then close: @escaping () -> Void) {
         guard let window, !askingToSave else { return }
+        // Merged behind the tab in use: asked once the user brings its tab to the front, its tab marked till then. Coming
+        // forward would take the window from under them, and a Return they type would answer it.
+        if window.isBackgroundTab {
+            heldQuestion = { [weak self] in self?.askToSave(closing: closing, kept: kept, then: close) }
+            updateProjectTab()
+            if !NSApp.isActive { NSApp.requestUserAttention(.informationalRequest) }
+            return
+        }
         let busy = closing.filter { $0.closeNote != nil }
         var note = "Closing the window’s last tab closes the window."
         if closing.allSatisfy(\.exited) {
@@ -877,6 +969,65 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         HerdrAgentMenu.popUp(in: self)
     }
 
+    // MARK: agent scratch
+
+    #if DEBUG
+    /// The self-test's grace (NEXTTERM_SELFTEST_ONLY=agentScratch): seconds instead of AgentScratch.grace's minute.
+    static var scratchGraceForTest: TimeInterval?
+    #endif
+
+    /// How long a quiet scratch window waits before it closes: AgentScratch.grace, or the self-test's.
+    private static var scratchGrace: TimeInterval {
+        #if DEBUG
+        return scratchGraceForTest ?? AgentScratch.grace
+        #else
+        return AgentScratch.grace
+        #endif
+    }
+
+    /// An agent's scratch window, as AgentScratch reads it.
+    var isAgentScratch: Bool { openedByAgent && project.map { AgentScratch.isTemporary($0) } == true }
+
+    /// A key or a click in the window, or the user bringing it to the front: it is theirs from now on.
+    func userTouched() {
+        guard openedByAgent, !touchedByUser else { return }
+        touchedByUser = true
+        scratchClose?.cancel()
+        scratchClose = nil
+    }
+
+    private var scratchState: AgentScratch.Window {
+        let terminals: [AgentScratch.Tab] = tabs.map { (tab: TerminalTab) -> AgentScratch.Tab in
+            AgentScratch.Tab(running: tab.status.running, jobs: tab.status.jobs, state: tab.status.state, remote: tab.remote != nil)
+        }
+        let unsaved: Bool = !editorArea.dirtyDocuments.isEmpty || !editorArea.draftDatabases.isEmpty
+        return AgentScratch.Window(scratch: isAgentScratch, touched: touchedByUser, unsaved: unsaved, tabs: terminals)
+    }
+
+    /// Read on each tick of an agent's window, acting only when the window turns quiet or stops being so: quiet, one
+    /// grace is armed; anything running, asking or unsaved again, or the user, cancels it. The grace ends with a last
+    /// look, and the window closes without asking only if it is still quiet then.
+    private func armScratchClose() {
+        guard !touchedByUser, !hasClosed else { return }
+        let quiet: Bool = AgentScratch.isQuiet(scratchState)
+        if !quiet {
+            scratchClose?.cancel()
+            scratchClose = nil
+            return
+        }
+        guard scratchClose == nil else { return }
+        let close = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.scratchClose = nil
+            guard !self.hasClosed, AgentScratch.isQuiet(self.scratchState) else { return }
+            self.closeConfirmed = true
+            self.opensWelcome = false
+            self.window?.close()
+        }
+        scratchClose = close
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.scratchGrace, execute: close)
+    }
+
     // MARK: status
 
     /// The user can see the active tab only while this window is in front in the active app: key, or main
@@ -930,10 +1081,12 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
                 AppDelegate.shared.post(notice, tab: tab, in: self)
             }
         }
+        if openedByAgent { armScratchClose() }
         if tickCount % 4 == 0 { editorArea.checkDisk() } // agents edit the files you have open
         // A window no one can see refreshes once a second (its tabs' marks still reach the Dock badge and the
         // notifications), and at once when it shows again (visibilityChanged).
         if window?.canBeSeen != false || tickCount % 4 == 0 { refresh() }
+        if tickCount % 4 == 0 { updateProjectTab() }
     }
 
     @objc private func visibilityChanged() {
@@ -948,7 +1101,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             guard group.isSplit else {
                 return TabBarItem(title: AgentSpinner.shown(tab.title), truncation: tab.titleTruncation, state: tab.status.state, tooltip: tab.tooltip,
                                   accessibilityStatus: tab.ownStateDescription ?? "", shortcut: shortcuts[index], remote: tab.remoteMark,
-                                  shorterTitles: tab.shorterTitles.map(AgentSpinner.shown), editableTitle: tab.editableTitle)
+                                  shorterTitles: tab.shorterTitles.map(AgentSpinner.shown), editableTitle: tab.editableTitle,
+                                  context: tab.contextUsage, pinned: group.pinned)
             }
             // A split tab: named by the pane with the keyboard, marked by the pane that most needs you.
             let lines = group.panes.map(\.paneSummary)
@@ -961,7 +1115,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
                               state: Self.mostUrgent(group.panes.map(\.status.state)),
                               tooltip: ([mark?.summary].compactMap { $0 } + lines).joined(separator: "\n"),
                               accessibilityStatus: spoken.joined(separator: "; "), shortcut: shortcuts[index], remote: mark,
-                              shorterTitles: tab.shorterTitles.map { AgentSpinner.shown($0) + others }, editableTitle: tab.editableTitle)
+                              shorterTitles: tab.shorterTitles.map { AgentSpinner.shown($0) + others }, editableTitle: tab.editableTitle,
+                              context: tab.contextUsage, pinned: group.pinned)
         }
         feedTabStrips(placeMarked(items))
         // An agent started or stopped, or another one is the one Send to Agent types into: the Ask hints follow.
@@ -985,7 +1140,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     /// An agent Next Term recognises runs here, in a window with no project, in the home folder: once in this window, a
     /// notice offers to open a project for it (Choose Folder…, as Open… does), with Don’t Ask Again for every window
-    /// (HomeAgentOffer). The agent is never held: the notice only offers.
+    /// and Skip for this time only (HomeAgentOffer). The agent is never held: the notice only offers.
     private func offerProjectForHomeAgent() {
         guard project == nil, !offeredProjectForAgent else { return }
         let agents: [TerminalTab] = tabs.filter { (tab: TerminalTab) -> Bool in tab.status.running && tab.status.kind == .agent }
@@ -1009,7 +1164,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         // window key, or none. Weak, as the notice keeps its action while it shows.
         let choose: () -> Void = { [weak self] in AppDelegate.shared.chooseProjectFolder(from: self) }
         GitToast.show(text, in: window, button: "Choose Folder…", action: choose,
-                      other: "Don’t Ask Again", otherAction: { HomeAgentOffer.turnOff(.standard) })
+                      other: "Don’t Ask Again", otherAction: { HomeAgentOffer.turnOff(.standard) }, skip: HomeAgentOffer.skip)
     }
 
     /// Needs you, then working, failed, done, idle. With Agent Spinner off a working pane shows no mark, so it never
@@ -1023,8 +1178,15 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     /// web-1" in a remote tab (or "xCloud — web-1: app" when the tab's name says it already); with no project
     /// "~/Downloads — vim", or "web-1 — app" with a server's tab in front. The window's name comes first, so the Window
     /// menu, Mission Control and VoiceOver lead with the project (WindowTitle).
+    /// The window's title, set only when it changes (a tab bar lays out again for each); its tab in a merged window is
+    /// named by the project, the whole title its tooltip.
     func updateTitle() {
-        window?.title = windowTitle
+        guard let window else { return }
+        let title: String = windowTitle
+        if window.title != title { window.title = title }
+        let name: String = windowName
+        if window.tab.title != name { window.tab.title = name }
+        if window.tab.toolTip != title { window.tab.toolTip = title }
     }
 
     var windowTitle: String {
@@ -1081,12 +1243,14 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     /// Tells VoiceOver users when a background tab finishes, fails or asks for attention: the dots are
     /// visual, so without this they would never know.
     private func announceBackgroundChanges() {
+        // Merged behind another project's tab, its tab in front is out of sight too, and the window in front speaks.
+        let behind: Bool = window?.isBackgroundTab == true
         for (i, tab) in groups.enumerated().flatMap({ index, group in group.panes.map { (index, $0) } }) {
             let state = tab.status.state
             defer { announcedStates[tab.id] = state }
-            guard i != activeIndex || terminalCollapsed, announcedStates[tab.id] != state, [.done, .failed, .attention].contains(state) else { continue }
-            NSAccessibility.post(element: window as Any, notification: .announcementRequested, userInfo: [
-                .announcement: "\(tab.title): \(tab.stateDescription)",
+            guard i != activeIndex || terminalCollapsed || behind, announcedStates[tab.id] != state, [.done, .failed, .attention].contains(state) else { continue }
+            NSAccessibility.post(element: (behind ? window?.shownWindow : window) as Any, notification: .announcementRequested, userInfo: [
+                .announcement: behind ? "\(windowName), \(tab.title): \(tab.stateDescription)" : "\(tab.title): \(tab.stateDescription)",
                 .priority: NSAccessibilityPriorityLevel.high.rawValue,
             ])
         }
@@ -1281,7 +1445,9 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     /// The bars of the top row, each with its slice of the glow.
     private var projectGlows: [ProjectGlow] {
+        // The window column's list on hover, once made, lies over the top-left corner too.
         [sidebar.header.projectGlow, tabBar.projectGlow, editorArea.tabBar.projectGlow, terminalRail.projectGlow, windowColumn.projectGlow]
+            + [columnHost.list?.projectGlow].compactMap { $0 }
     }
 
     private func paintProjectColor() {
@@ -1346,7 +1512,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         return projectColorKey != nil && ProjectColorStore.isShown
     }
 
-    /// The top row's right-click; none in a window with no project, which has no colour.
+    /// The editor's top row's right-click; none in a window with no project, which has no colour.
     func projectColorMenu() -> NSMenu? {
         projectColorKey == nil ? nil : ProjectColorMenu.contextMenu(for: self)
     }
@@ -1471,8 +1637,13 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         }
         applyTerminalTabs()
         updateCollapseButton()
-        // The window column follows the sidebar's side: the far right with it, the order mirrored.
-        columnHost.columnOnRight = sidebarOnRight
+        // The window column on its own side when the user chose one (View › Window Column Position › Right), else on the
+        // sidebar's: the far right with it, the order mirrored.
+        columnHost.columnOnRight = AppDelegate.shared.windowColumnOnRight
+        columnHost.roomBeside = { [weak self] () -> CGFloat in
+            guard let self, self.isSidebarVisible, self.sidebarOnRight == self.columnHost.columnOnRight else { return 0 }
+            return self.sidebar.frame.width
+        }
         placeWindowColumn()
         updateInsets()
     }
@@ -1530,9 +1701,10 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     /// The window column on the left takes its width off their room in the pane after it.
     func updateInsets() {
         let column: CGFloat = windowColumnUnderLights
-        let lights: CGFloat = isFullScreen ? 8 : max(8, 78 - column)
+        let end: CGFloat = lightsEnd
+        let lights: CGFloat = lightsBesideBars ? max(8, end - column) : 8
         let sidebarTopLeft = isSidebarVisible && !sidebarOnRight
-        sidebar.headerInset = sidebarTopLeft && !isFullScreen ? max(8, 70 - column) : 8
+        sidebar.headerInset = sidebarTopLeft && lightsBesideBars ? max(8, end - 8 - column) : 8
         updateWindowColumnInsets()
         let corner = sidebarTopLeft ? 8 : lights
         let editorShown = !editorArea.isHidden
@@ -1559,6 +1731,9 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         sidebar.header.onRight = sidebarOnRight
         updateUpdateButton()
     }
+
+    /// Where a bar along the window's top may start past the traffic lights (in the window), measured from its zoom button.
+    var lightsEnd: CGFloat { WindowColumnRail.lightsEnd(zoomMaxX: window?.standardWindowButton(.zoomButton)?.frame.maxX) }
 
     /// The bar along the top at the work area's right end: where the Update button goes (as the bar at
     /// the top-left corner offers back a hidden sidebar). A terminal folded to a strip beside the editor
@@ -1590,6 +1765,26 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             bar.onUpdate = { Updater.shared.showAvailable() }
         }
     }
+
+    /// A drag of the divider between the editor and the terminal ended: one to an extreme, above or below the editor
+    /// in a window wide enough, may say the terminal can go beside it (H7).
+    func workDividerReleased() {
+        guard terminalDividerAtExtreme else { return }
+        BarHints.shared.terminalDividerReleased(in: self)
+    }
+
+    /// The terminal above or below the editor, open, at under 15% or over 85% of a work area wide enough to hold the
+    /// two side by side (HintTriggers.terminalBeside).
+    var terminalDividerAtExtreme: Bool {
+        let length: CGFloat = workSplit.isVertical ? workSplit.bounds.width : workSplit.bounds.height
+        guard length > 0 else { return false }
+        return HintTriggers.terminalBeside(position: AppDelegate.shared.terminalPosition, collapsed: terminalCollapsed,
+                                           editorShown: !editorArea.isHidden, terminalShare: terminalLength / length,
+                                           workWidth: workSplit.bounds.width)
+    }
+
+    /// The Update button shows in one of this window's tab bars.
+    var showsUpdateButton: Bool { !tabBar.updateButton.isHidden || !editorArea.tabBar.updateButton.isHidden }
 
     /// The smallest a pane may get along the work split: room for its tabs and a few lines.
     private var workMinimum: CGFloat { workSplit.isVertical ? 240 : TabBarView.height + 60 }
@@ -1877,8 +2072,9 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     /// A tab in `directory` running `command` once its shell is at the prompt. An untouched first tab in
     /// the same folder is used rather than a second one; never a restored one, which may hold a put-back line.
+    /// `submit` false types the line and leaves Return to the user (Settings › Agents' Install…).
     @discardableResult
-    func runInNewTab(directory: String, command: String, title: String?) -> TerminalTab {
+    func runInNewTab(directory: String, command: String, title: String?, submit: Bool = true) -> TerminalTab {
         let folder = canonicalPath(directory)
         let tab: TerminalTab
         if groups.count == 1, tabs.count == 1, let only = tabs.first, only.remote == nil, only.isUntouched,
@@ -1889,7 +2085,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         }
         if let title { tab.userTitle = title }
         show(tab)
-        tab.runWhenReady(command)
+        if submit { tab.runWhenReady(command) } else { tab.typeWhenReady(command) }
         return tab
     }
 
@@ -1904,6 +2100,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     /// The file that was in front last time we looked, so moving the caret doesn't reveal it again.
     private var frontFile: String?
+    /// The tabs' served addresses at the last look, so the Services rows' ports are looked at only when one changes.
+    private var lastServedURLs = Set<String>()
 
     /// The sidebar follows the file in front when another one comes forward (a tab, a closed tab).
     private func followActiveFile() {
@@ -1926,6 +2124,10 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     private(set) lazy var fileFinder: GoToFileController = {
         let finder = GoToFileController()
         finder.onOpen = { [weak self] path, line, column in self?.openFile(URL(fileURLWithPath: path), line: line, column: column) }
+        finder.onRun = { [weak self] task in
+            guard let self else { return }
+            self.sidebar(self.sidebar, run: task)
+        }
         return finder
     }()
 
@@ -1956,7 +2158,9 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     /// the terminal) starts the search, as it does for Find; `app/User.php:42` in a log opens at line 42.
     @objc func goToFile(_ sender: Any?) {
         guard let window else { return }
-        fileFinder.show(root: searchRoot, recent: recentFiles, query: selectionSeed, over: window)
+        // The Run group's tasks too, when the sidebar shows the project ⌘P searches: typing "run" lists them.
+        let tasks = sidebar.root?.path == canonicalPath(searchRoot) ? sidebar.runGroup.tasks.map(\.task) : []
+        fileFinder.show(root: searchRoot, recent: recentFiles, query: selectionSeed, tasks: tasks, over: window)
     }
 
     /// The selected text, if it is one short line: in the editor when it has the keyboard, else the terminal's.
@@ -2000,6 +2204,18 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     func editorAreaSelectionChanged(_ area: EditorArea) {
         followActiveFile()
         scheduleSelectionShare()
+        BarHints.shared.editorSelectionChanged(in: self)
+    }
+
+    /// The lines selected in the editor in front, while it has the keyboard: the editor, its range and the first and
+    /// last line the selection spans (zero-based; one ending at a line's start leaves that line out, as Send to Agent
+    /// counts). Nil with nothing selected, or the keyboard elsewhere.
+    var editorLines: (editor: CodeEditorView, range: NSRange, first: Int, last: Int)? {
+        guard isEditorFocused, let editor = editorArea.activeEditor else { return nil }
+        let range: NSRange = editor.textView.selectedRange()
+        guard range.length > 0 else { return nil }
+        let lines = editor.document.lines
+        return (editor, range, lines.line(at: range.location), lines.line(at: max(range.location, NSMaxRange(range) - 1)))
     }
 
     /// Lines were selected in a diff in this window, or its selection went: the agents hear it, as they hear
@@ -2183,6 +2399,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         let key = KeyboardShortcuts.shared.key(for: #selector(sendToAgent(_:)))?.display
         for host in hosts {
             host.askRoom.show(agent: agent != nil && host.offersAsk ? agent : nil, key: key)
+            host.askRoom.offerComment(for: host) // Comment, plan 039 U3
         }
     }
 
@@ -2218,6 +2435,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             if let window { alert.beginSheetModal(for: window) } else { alert.runModal() }
             return
         }
+        // Sent, from the editor, the sidebar, the terminal, a diff's Ask or the hint itself: the hint on it is done.
+        HintCenter.shared.retire(.sendSelection, reason: .actionPerformed)
         let base = canonicalPath(tab.directory)
         let relative = items.map { item -> ContextItem in
             var item = item
@@ -2363,6 +2582,29 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         }
     }
 
+    /// A Run row: the task's command typed and run in a new tab in the project's folder, named after it.
+    func sidebar(_ sidebar: ProjectSidebarView, run task: RunTask) {
+        guard let root = sidebar.root?.path else { return }
+        runInNewTab(directory: root, command: task.command, title: task.command)
+    }
+
+    /// A Run offer's Install…: the installer typed in a new tab in the home folder, not run: the user's Return is the
+    /// yes, as Settings › Agents' Install… does. An installer this Mac can't run opens its page instead.
+    /// A Services row's Start Server in a Tab (run) or Pull Model (typed, for the user's Return), in a new tab in the
+    /// project's folder, named after the command.
+    func sidebar(_ sidebar: ProjectSidebarView, command: String, in directory: String, submit: Bool) {
+        runInNewTab(directory: directory, command: command, title: command.trimmingCharacters(in: .whitespaces), submit: submit)
+    }
+
+    func sidebar(_ sidebar: ProjectSidebarView, install offer: ToolOffer) {
+        switch offer.action {
+        case .type(let command):
+            runInNewTab(directory: NSHomeDirectory(), command: command, title: offer.tabTitle, submit: false)
+        case .open(let page):
+            if let url = URL(string: page) { NSWorkspace.shared.open(url) }
+        }
+    }
+
     func showChanges(of url: URL, base: GitRunner.DiffBase = .head) {
         let path = canonicalPath(url.path)
         let root = canonicalPath(ProjectRoot.find(from: (path as NSString).deletingLastPathComponent))
@@ -2411,13 +2653,13 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         }
     }
 
-    /// View › Hide .env Values, on or off for the file in front only (Settings › Editor does all).
+    /// View › Editor › Hide .env Values, on or off for the file in front only (Settings › Editor does all).
     @objc func toggleEnvValues(_ sender: Any?) {
         guard let editor = editorArea.activeEditor, editor.isEnvFile else { return NSSound.beep() }
         editor.toggleEnvValues()
     }
 
-    /// View › Markdown Live Preview, for the Markdown file in front: Live Preview or Source, remembered for that file
+    /// View › Editor › Markdown Live Preview, for the Markdown file in front: Live Preview or Source, remembered for that file
     /// (Settings › Editor sets what the others open in).
     @objc func toggleMarkdownPreview(_ sender: Any?) {
         guard let editor = editorArea.activeEditor, editor.preview != nil else { return NSSound.beep() }
@@ -2520,7 +2762,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     /// Under the branch name at the top of the sidebar, or near the window's top left without it.
     private var branchPopupAnchor: NSRect? {
         guard let window else { return nil }
-        var anchor = NSRect(x: window.frame.minX + 80, y: window.frame.maxY - 44, width: 1, height: 1)
+        var anchor = NSRect(x: window.frame.minX + (lightsBesideBars ? 80 : 8), y: window.contentTop - 44, width: 1, height: 1)
         if isSidebarVisible {
             anchor = window.convertToScreen(sidebar.header.convert(sidebar.header.bounds, to: nil))
             anchor.origin.x += sidebar.headerInset - 4
@@ -2643,6 +2885,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         if KeyboardShortcuts.shared.preset.clearsOnlyInTerminal && isEditorFocused { return }
         guard let tab = activeTab else { return }
         clear(tab)
+        // The second ⌘K in a terminal asks once whether ⌘K should open Go to Anything there too (plan 034).
+        if !isEditorFocused { ClearKeyChoice.noteClear(in: self) }
     }
 
     /// Wipes a terminal's screen and scrollback locally; at a prompt, asks the shell to redraw it. The tab is the pane
@@ -2660,6 +2904,16 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         if closeConfirmed || AppDelegate.shared.isTerminating { return true }
+        // Closed from behind another project's tab (its × in the tab bar, Close Other Tabs): what it asks, it asks in
+        // front, one project at a time.
+        if sender.isBackgroundTab, closeAsks {
+            if let asking = sender.mergedWindows.first(where: { $0 !== sender && $0.attachedSheet != nil }) {
+                WindowSheets.afterSheet(on: asking) { [weak sender] in sender?.performClose(nil) }
+                return false
+            }
+            heldQuestion = nil // asked now, as the close's own question
+            sender.makeKeyAndOrderFront(nil)
+        }
         let dirty = editorArea.dirtyDocuments
         if !dirty.isEmpty && !editorsConfirmed {
             let alert = saveAlert(dirty)
@@ -2703,6 +2957,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         }
         editorsConfirmed = false
         valuesConfirmed = false
+        if stopConfirmed { return true } // asked for the whole merged window (MergedWindowClose)
         let busy = busyTabs
         let kept = Self.keptList(tabs)
         guard !busy.isEmpty || !kept.isEmpty else { return true }
@@ -2730,10 +2985,18 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         alert.alertStyle = .warning
         alert.messageText = "Close this window?"
         alert.informativeText = info
-        alert.addButton(withTitle: "Close Window")
+        alert.addButton(withTitle: "Close Window").hasDestructiveAction = true
         alert.addButton(withTitle: "Cancel")
         alert.beginSheetModal(for: sender, completionHandler: answered)
         return false
+    }
+
+    /// Whether closing the window now asks something first: about unsaved files or database values, or what closing stops.
+    var closeAsks: Bool {
+        if closeConfirmed { return false }
+        if !editorArea.dirtyDocuments.isEmpty && !editorsConfirmed { return true }
+        if !editorArea.draftDatabases.isEmpty && !valuesConfirmed { return true }
+        return !stopConfirmed && (!busyTabs.isEmpty || !Self.keptList(tabs).isEmpty)
     }
 
     /// Close and Remove Worktree: when the worktree at `path` can go (WorktreeRemoval.verdict, with this window's tabs
@@ -2765,8 +3028,11 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     func windowWillClose(_ notification: Notification) {
         hasClosed = true
+        scratchClose?.cancel()
+        scratchClose = nil
         ticker?.invalidate()
         ticker = nil
+        columnHost.windowClosing() // a pending open, the list, its reveal's timer and its Escape monitor go with it
         sidebar.stopWatching()
         _ = TerminalTab.terminate(tabs, finishLater: true)
         groups.removeAll()
@@ -2777,6 +3043,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     func windowDidBecomeKey(_ notification: Notification) {
         if !keyingForAgent { lastKey = Date() } // brought forward for an agent: not a window the user went to
+        if !keyingForAgent { userTouched() }
+        watchTabGroup()
         activityChanged()
         refreshVisibility()
         refresh()
@@ -2784,6 +3052,9 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         if sidebar.showsNoProject { sidebar.noProject.show(recent: AppDelegate.shared.recentProjects) }
         sidebar.retryDenied() // back from System Settings, perhaps, with a folder allowed
         sidebar.scheduleSessionsReload() // agents in other terminals may have kept new ones
+        sidebar.lookForRunTools() // a tool the Run group offered may have been installed since
+        sidebar.lookForServiceTools() // so may a model server the Services group offered
+        sidebar.checkServicePorts() // a local service may have started or stopped meanwhile
         if let view = activeTab?.view, window?.firstResponder !== view, !(window?.firstResponder is NSTextView), !terminalCollapsed {
             window?.makeFirstResponder(view)
         }
@@ -2799,8 +3070,86 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         refreshVisibility()
     }
 
-    func windowWillEnterFullScreen(_ notification: Notification) { isFullScreen = true; updateInsets() }
-    func windowWillExitFullScreen(_ notification: Notification) { isFullScreen = false; updateInsets() }
+    func windowWillEnterFullScreen(_ notification: Notification) {
+        fullScreenTransition = true
+        updateInsets()
+    }
+    func windowWillExitFullScreen(_ notification: Notification) {
+        fullScreenTransition = false
+        updateInsets()
+    }
+    func windowDidEnterFullScreen(_ notification: Notification) { fullScreenEnded() }
+    func windowDidExitFullScreen(_ notification: Notification) { fullScreenEnded() }
+    func windowDidFailToEnterFullScreen(_ window: NSWindow) { fullScreenEnded() }
+    func windowDidFailToExitFullScreen(_ window: NSWindow) { fullScreenEnded() }
+
+    /// A transition over, or failed: the window's own style mask says again.
+    private func fullScreenEnded() {
+        fullScreenTransition = nil
+        titleBarChanged(force: true)
+    }
+
+    /// The system tab bar came or went, or the window's top changed with it: how much of the top it takes now
+    /// (TitleBarCover), our top row below it, and the traffic lights' insets as they now sit. The window's frame minimum
+    /// keeps the same room for the content. A resize changes the unobscured area too and the cover not: nothing then,
+    /// unless `force` (the end of a full-screen transition).
+    func titleBarChanged(force: Bool = false) {
+        guard let window else { return }
+        watchTabGroup()
+        let host: WindowColumnHost = columnHost
+        let layout: NSRect = host.convert(window.contentLayoutRect, from: nil)
+        let shown: Bool = window.tabGroup?.isTabBarVisible == true
+        var cover: CGFloat = TitleBarCover.top(contentHeight: host.bounds.height, layoutMaxY: layout.maxY, tabBarShown: shown)
+        if shown {
+            expectsTabBar = false
+            if !isFullScreen, cover > 0 { WindowTabbing.measuredCover = cover }
+        } else if expectsTabBar, !isFullScreen, let measured = WindowTabbing.measuredCover {
+            cover = measured
+        }
+        guard host.topCover != cover || force else { return }
+        if host.topCover != cover {
+            host.topCover = cover
+            window.minSize = NSSize(width: Self.minimumSize.width, height: Self.minimumSize.height + cover)
+        }
+        updateInsets()
+        updateProjectTab()
+    }
+
+    /// The smallest a window gets, its top row's room for a system tab bar on top.
+    static let minimumSize = NSSize(width: 420, height: 240)
+
+    // MARK: pinned tabs (plan 045)
+
+    /// Pins or unpins `group`: pinned, it moves to just after the tabs pinned before it; unpinned, to just after them.
+    func setPinned(_ group: PaneGroup, _ on: Bool) {
+        guard let from = groups.firstIndex(where: { $0 === group }), group.pinned != on else { return }
+        let flags = groups.map(\.pinned)
+        let to = on ? PinnedTabs.indexWhenPinned(from, pinned: flags) : PinnedTabs.indexWhenUnpinned(from, pinned: flags)
+        group.pinned = on
+        self.tabBar(self.tabBar, didMove: from, to: min(to, groups.count - 1)) // the move keeps the tab in front, and refreshes
+        NSAccessibility.post(element: window as Any, notification: .announcementRequested,
+                             userInfo: [.announcement: on ? "Pinned \(group.focused.title)" : "Unpinned \(group.focused.title)"])
+    }
+
+    /// ⌘W, Close Tab or the tab's close on a pinned tab: asked first, with what closing stops, never a silent no-op.
+    func askToClosePinned(_ group: PaneGroup) {
+        guard let window else { return }
+        let busy = group.panes.filter { $0.closeNote != nil }
+        let kept = Self.keptList(group.panes)
+        let alert = NSAlert()
+        alert.messageText = PinnedTabs.closeQuestion(title: group.focused.title)
+        alert.informativeText = [busy.isEmpty ? "It stays open until you close it here." : Self.stopText("Closing it stops", busy), kept]
+            .filter { !$0.isEmpty }.joined(separator: "\n\n")
+        alert.addButton(withTitle: "Close Tab")
+        alert.addButton(withTitle: "Cancel")
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard response == .alertFirstButtonReturn, let self else { return }
+            if self.closesWindow(group.panes), !self.editorArea.dirtyDocuments.isEmpty || !self.editorArea.draftDatabases.isEmpty {
+                return self.askToSave(closing: group.panes, kept: kept) { [weak self] in group.panes.forEach { self?.remove($0, saveAsked: true) } }
+            }
+            group.panes.forEach { self.remove($0) }
+        }
+    }
 
     // MARK: TabBarViewDelegate
 
@@ -2810,6 +3159,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     func tabBar(_ bar: TabBarView, didClose index: Int) {
         guard let group = groups[safe: index] else { return }
+        if group.pinned { return askToClosePinned(group) }
         guard group.isSplit else { return requestClose(group.focused) }
         // The tab's × closes all its panes, asking once if that stops anything (or, as the window's last
         // tab with files or a database value unsaved, about those: the window closes too).
@@ -2823,18 +3173,20 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         alert.alertStyle = .warning
         alert.messageText = "Close this tab and its \(group.panes.count) panes?"
         alert.informativeText = [busy.isEmpty ? "" : Self.stopText("Closing it stops", busy), kept].filter { !$0.isEmpty }.joined(separator: "\n\n")
-        alert.addButton(withTitle: "Close Tab")
+        alert.addButton(withTitle: "Close Tab").hasDestructiveAction = true
         alert.addButton(withTitle: "Cancel")
         alert.beginSheetModal(for: window) { [weak self] response in
             if response == .alertFirstButtonReturn { group.panes.forEach { self?.remove($0) } }
         }
     }
 
-    func tabBar(_ bar: TabBarView, didMove from: Int, to: Int) {
-        guard groups.indices.contains(from), groups.indices.contains(to) else { return }
+    func tabBar(_ bar: TabBarView, didMove from: Int, to wanted: Int) {
+        guard groups.indices.contains(from), groups.indices.contains(wanted) else { return }
+        // Pinned tabs stay together, first: a drag lands on its own side of the divider.
+        let to = PinnedTabs.clampedMove(from: from, to: wanted, pinned: groups.map(\.pinned))
         let active = activeGroup
         let group = groups.remove(at: from)
-        groups.insert(group, at: to)
+        groups.insert(group, at: min(to, groups.count))
         activeIndex = active.flatMap { a in groups.firstIndex { $0 === a } } ?? 0
         refresh()
     }
@@ -2870,7 +3222,17 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         // Events (command end, bell) can land between ticks; post their notices straight away.
         if let notice = tab.status.takeNotice() { AppDelegate.shared.post(notice, tab: tab, in: self) }
         AppDelegate.shared.updateCopilotFolders() // a new folder for Copilot CLI to connect from
+        noticeServedURLs()
         refresh()
+    }
+
+    /// A tab's served address came or went (a dev server started or stopped): the Services rows' ports are looked at
+    /// again, once.
+    private func noticeServedURLs() {
+        let served = Set(tabs.compactMap { $0.servedURL?.absoluteString })
+        guard served != lastServedURLs else { return }
+        lastServedURLs = served
+        sidebar.checkServicePorts()
     }
 
     func tabDidExit(_ tab: TerminalTab) {

@@ -227,6 +227,7 @@ extension SelfTest {
             note("notifications: the tab on screen skipped, the app is not frontmost")
         }
 
+        await programStatusChecks(c)
         await settingsChecks(app)
     }
 

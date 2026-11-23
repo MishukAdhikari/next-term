@@ -31,7 +31,7 @@ final class GitLogDetailsView: NSView, NSTextViewDelegate, NSTableViewDataSource
         self.root = root
         super.init(frame: .zero)
         wantsLayer = true
-        layer?.backgroundColor = Theme.background.cgColor
+        themedBackground(Theme.background)
         build()
         show(nil)
     }

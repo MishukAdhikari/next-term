@@ -58,6 +58,7 @@ final class ConnectTrackerSheet: NSWindowController, NSWindowDelegate {
         let window = NSWindow(contentRect: frame, styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.title = Self.title
+        window.keepsItsOwnFrame()
         super.init(window: window)
         window.delegate = self
         build()

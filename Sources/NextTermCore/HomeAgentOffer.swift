@@ -2,7 +2,7 @@ import Foundation
 
 /// An agent started in the home folder of a window with no project reads that folder as its project: Desktop,
 /// Documents and the rest of it, each of which macOS asks about, in Next Term's name. So the window offers once, in a
-/// notice, to choose a project folder for it, with Don't Ask Again. The offer never stops, holds or delays the agent.
+/// notice, to choose a project folder for it, with Don't Ask Again and Skip. The offer never stops, holds or delays the agent.
 public enum HomeAgentOffer {
     /// The setting, in the app's defaults: false once the user chose Don't Ask Again. Absent, it is on.
     public static let key = "offerProjectForAgentsInHome"
@@ -16,6 +16,9 @@ public enum HomeAgentOffer {
     public static func turnOff(_ defaults: UserDefaults) {
         defaults.set(false, forKey: key)
     }
+
+    /// The last button: it puts the notice away this time and writes nothing, so a later agent start may offer again.
+    public static let skip = "Skip"
 
     /// Whether a window offers it now: it has no project, has not offered it yet, and a tab here on this Mac runs an
     /// agent Next Term recognises whose folder is the home folder. `on`: the setting.

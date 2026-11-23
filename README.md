@@ -1,6 +1,6 @@
 # Next Term
 
-**The missing IDE for the terminal.**
+**The missing MCP for the terminal.**
 
 A native macOS terminal and editor for the AI era. Run Claude Code, Codex, OpenCode,
 Command Code, Junie, a test suite and a dev server side by side, one per tab, and see at a glance which
@@ -46,6 +46,12 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   its full path, as dropping it does (its name in a tab on a server or logged in elsewhere: a paste never copies a
   file there). Text on the clipboard always pastes as text. A pasted image is removed a day later, at the next paste
   or launch.
+- **See an agent's session as a chat (⇧⌘J).** A tab running Claude Code, Codex or Command Code has a terminal
+  button and a chat button above its terminal. The chat is the same live session, read from the file the agent
+  writes: prompts, replies, tool rows with their output, edits with their counts, plans, and a card for a question the
+  agent asks. What you type there goes into the agent's own prompt. The agent keeps running in its terminal the whole
+  time, and its own screen is one click away. Turn it off in Settings › Agents; agents MCP can switch it with
+  `switch_view`.
 - **Send to Agent (⌥⌘K).** Select code in the editor or a diff, or files and folders in the sidebar, and send
   them to the agent in your tab: Next Term types the reference in that agent’s own syntax (`@app/User.php#L10-20`
   for Claude, `@app/User.php#10-20` for OpenCode, `app/User.php:10-20` for Codex and others) and hands you
@@ -88,7 +94,8 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   answered. Next Term adds itself to the agents it finds, with
   nothing to run; Settings turns it off and removes it again (from the Claude desktop app once Claude is
   closed). The tools are marked honestly, so agents ask you before they type into a tab, and the ones that
-  change files, git, settings or your tasks (`add_task`) wait for your Approve on the Mac. At a zsh prompt,
+  change files, git, settings or your tasks (`add_task`) wait for your Approve on the Mac. An agent can name a
+  tab with `rename_tab`, as Rename Tab… does, which asks nothing. At a zsh prompt,
   reading a tab also gives the line being typed and the cursor, and any suggestion a zsh plugin draws, which is
   left out of the screen once Next Term finds it where zsh drew it, so it isn't read as typed. Local: a
   private socket, and no network port unless Remote access is on. Each of herdr's agents has an id of its own in `list_tabs`, which the tab
@@ -102,7 +109,12 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   Undo. Rotate… opens a key’s page from its link and takes the new key in the same sheet; it keeps the old key
   masked for 30 days and can remind you when a key gets old (**Secrets › Keys Due to Rotate**). Each key asks
   for Touch ID every time it’s used until you untick that, and a key set to “Never show this key” is never
-  shown or copied, even to you.
+  shown or copied, even to you. The first thing Next Term tells every agent that uses its MCP server is to
+  check Secrets for an API key, token or password before your shell files or asking you, and its
+  `next-term-secrets` skill shows them how to use a key by name, in an MCP server’s config too
+  (`nxtrm secret help`). **Settings › Secrets › Add to Agents…** puts that skill in `~/.agents/skills`, with a
+  link for Claude Code, so agents check Secrets first even outside Next Term; only when you click it, and Remove
+  takes it away.
   See [Secrets](https://nxtrm.mishuk.me/docs/secrets/).
 - **Pick up any agent's conversation.** The Welcome window lists your projects; choose one and every
   conversation Claude Code, Codex, Command Code, Gemini CLI, Qwen Code, OpenCode, Cursor Agent and Copilot
@@ -119,16 +131,19 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   agent reading the tab never take it for typed text, and before it shows it is checked: a `cd` to a folder that
   is gone, a missing file or program, or a command that never ran well is not suggested. It comes from Next
   Term's own record of the commands you ran in its zsh tabs, on this Mac: never an agent's, never a line with a
-  secret, and nothing while View › Private Mode is on; until that record has your commands, zsh's own history
-  in the shell fills in. Right after a command, the empty prompt shows the one that usually follows it, when that
-  is clear. Where zsh-autosuggestions (or Atuin through it) shows its own, Next Term shows none and asks once
-  which you want, without touching your `.zshrc`. View › Suggestions While Typing turns it off or on, and
-  Settings › Terminal › While typing does too, says how many commands are kept and clears them.
+  secret, and nothing while View › Privacy › Private Mode is on; until that record has your commands, zsh's own
+  history in the shell fills in. Right after a command, the empty prompt shows the one that usually follows it,
+  when that is clear. Where zsh-autosuggestions (or Atuin through it) shows its own, Next Term shows none and
+  asks once which you want, without touching your `.zshrc`. View › Privacy › Suggestions While Typing turns it
+  off or on, and Settings › Terminal › While typing does too, says how many commands are kept and clears them.
 - **Remote tabs on your servers.** File › New Remote Tab… (⌥⌘T) opens a tab on your VPS over your own ssh
   and `~/.ssh/config`. With tmux or herdr on the server, agents keep working while the Mac sleeps or is off,
   and the tab reattaches when it reconnects. Host keys are never accepted silently, nothing is installed on
-  the server except the Tab hook you allow, and no password is stored. Agents get seven MCP tools to open tabs
-  there and read the changes. To find herdr, a herdr tab uses the copy your running herdr server runs, or may
+  the server except the Tab hook you allow, and no password is stored. Next Term's tmux there shows true colour
+  and synchronized output; each server can have its own tmux prefix (⌃B, ⌃A, ⌃Space or ⌃]) and history, and a
+  tab that comes back to a session that was gone says it is a new one. Agents get nine MCP tools to save servers,
+  open tabs there, read the changes and end a tmux session; saving, changing or forgetting a server, and ending a
+  session, ask you on the Mac first, showing who is attached. To find herdr, a herdr tab uses the copy your running herdr server runs, or may
   run your login shell on the server once (no terminal, 3 seconds at most) to read its PATH; when herdr isn't
   there, the tab says where it looked and links herdr's install page. A file or folder dropped on a remote tab,
   or an image pasted into one, is copied to the server first, into a new folder only you can read there, and
@@ -154,16 +169,21 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   why herdr gives its state, and ⌘2 its conversation, from the transcript herdr names (Claude Code and Codex).
   A tab can open one of herdr's named sessions, picked in New Remote Tab; a connected herdr server with no herdr
   tab still shows its agents in Go to Agent, and a saved herdr server is one choice away. herdr run in a tab on
-  this Mac gets the same, the machines saved in it included, read through that herdr; that tab is only read,
-  never kept or reopened. Keep herdr's `ui.toast.delivery` at its default when Next Term follows herdr on this
+  this Mac gets the same, the machines saved in it included, read through that herdr; that tab is not kept, nor
+  rerun on restore. Keep herdr's `ui.toast.delivery` at its default when Next Term follows herdr on this
   Mac, or herdr posts its own notices too. Next Term tells programs that ask (herdr, vim, tmux) when its window or
   the app loses the focus, so herdr keeps a finish you have not seen. It runs only herdr's own commands (its
-  agent list, read, prompt, keys, focus and explain, its sessions and its list of machines): it never installs,
-  starts, stops or updates herdr, never changes its machines, and never ends one of its agents.
+  agent and pane lists, read, prompt, keys, focus and explain, `agent start --help` for its agent kinds, its
+  sessions and its list of machines): it never installs, starts, stops or updates herdr, never stops a herdr
+  session, and never changes its machines. An agent over MCP can start one of herdr's agents in a new herdr tab
+  (`start_agent`, with herdr's own kinds) or end one (`close_tab` on its id, herdr's `pane close`; when that was its
+  herdr tab's only pane, herdr closes the tab too, and the session's last pane is never closed from here), each only
+  after you approve it on the Mac, which shows herdr's commands.
 - **`nxtrm`, like `code`.** `nxtrm .` opens the folder as a project, `nxtrm app/User.php:42` a
   file at a line. It works in every Next Term tab from the first launch, and in other terminals too: the
   first launch links it into a folder on your PATH that needs no password (`~/.local/bin`,
-  `/opt/homebrew/bin`), or, when there is none, offers to put it in `/usr/local/bin` with your password.
+  `/opt/homebrew/bin`). When there is none, Next Term › Install Command Line Tool (nxtrm)… puts it in
+  `/usr/local/bin` with your password; nothing asks for it by itself.
   It never changes PATH or touches anyone else's `nxtrm`.
 - **Your layout.** The terminal below the editor (default), beside it on the right or left, or above it;
   the project sidebar on the left or right; the terminal's tabs on top or in a list down its left or
@@ -247,9 +267,9 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
 - **Git Log.** The commit history as a graph in an editor tab (⌥⌘L): lanes per line of history, branch
   and tag badges, filters by branch, author, date, paths and message or hash, and each commit's changed
   files, with a double-click for a file's diff in that commit. It follows the repository as agents commit.
-- **Git blame.** View › Annotate with Git Blame shows who last changed each line, how long ago and the
-  commit, beside the line numbers; click to see that commit in the Git Log. View › Current Line Blame
-  adds a note after the line with the caret.
+- **Git blame.** View › Diffs & Blame › Annotate with Git Blame shows who last changed each line, how long ago
+  and the commit, beside the line numbers; click to see that commit in the Git Log. View › Diffs & Blame ›
+  Current Line Blame adds a note after the line with the caret.
 - **Changes in the gutter.** A bar beside the line numbers marks the lines added (green) or changed (blue)
   since the last commit, and a red wedge where lines were deleted, as you type or an agent writes. Click a
   mark for the file's changes side by side.
@@ -261,13 +281,20 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   tree with their +/− on the left, the selected file's diff on the right, or every file's on one page with
   long unchanged runs folded. Compare all the branch's changes since it left main, what isn't committed
   yet, or one commit. A click on the sidebar header's +/− opens it too.
-- **Changes side by side or unified (⌥⌘G).** A file's diff in the Git Diff tab: the old version beside the
-  new, rows aligned, or one column top to bottom (View › Unified Diffs); the changed words marked,
-  syntax-coloured. All changes, unstaged or staged; step through them and stage, unstage or revert one
-  hunk at a time (⌘Z undoes a revert). Each action first checks the file is still what the diff showed,
-  so a change an agent made meanwhile is never overwritten.
+- **Changes side by side or unified (⌥⌘G).** A file's diff in the Git Diff tab: the old version beside the new,
+  rows aligned, or one column top to bottom (View › Diffs & Blame › Unified Diffs); the changed words marked,
+  syntax-coloured. All changes, unstaged or staged; step through them and stage, unstage or revert one hunk at a
+  time (⌘Z undoes a revert). Each action first checks the file is still what the diff showed, so a change an
+  agent made meanwhile is never overwritten.
 - **File operations.** Rename (Return), drag to move (Option to copy), New File / New Folder, Move to Trash,
   all undoable with ⌘Z. Drag a file onto a terminal to type its path.
+- **Go to Anything (⌘K).** Wherever a terminal doesn't have the keyboard, ⌘K lists every terminal tab, this
+  window's first, then every other window's and the projects you used before, each with its window, what runs and
+  its agent's mark. Type a few letters of a tab's name, its folder or its program and press Return: its window comes
+  forward and the tab has the keyboard. Clear Terminal is the first row, so ⌘K and Return still clears with the
+  editor in front, and in a terminal ⌘K clears as always. The second time you clear with ⌘K, Next Term asks once
+  whether ⌘K should open Go to Anything in a terminal too (Clear Terminal then moves to ⇧⌘K); Settings › Keyboard
+  Shortcuts changes either key.
 - **Go to File (⌘P).** Type a few letters of a file's name or path and the list follows every keystroke:
   `usrctl` finds `UserController.php`; a whole file name, the start of a word and runs of letters rank
   first, and files you opened lately come first. `name:42` opens it at line 42. Instant on large
@@ -301,7 +328,7 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   line for Return. A local OpenCode tab’s line names the session OpenCode was showing when its title
   matches exactly one of the folder’s sessions, so after `opencode -c` or a switch inside OpenCode, Return
   resumes the session you were in.
-- **Native.** Swift and AppKit, universal (Apple Silicon and Intel): about 33 MB to download, 71 MB
+- **Native.** Swift and AppKit, universal (Apple Silicon and Intel): about 37 MB to download, 80 MB
   installed. macOS 13 or later.
 
 ## Install
@@ -368,6 +395,24 @@ How it knows, most reliable first:
 3. **Other shells.** For bash and fish, or after `exec bash`, Next Term asks the kernel for the terminal's
    foreground process and working directory twice a second.
 
+### Agent sessions
+
+Claude Code, Codex and the agents that speak the [Agent Client Protocol](https://agentclientprotocol.com) can
+also run as an agent session: Agents › New Agent Session…, or `nxtrm agent claude` in any tab (also `codex`,
+`gemini`, `qwen`, `opencode`, `cursor`, `copilot`, `goose` and others, when their program is on your PATH; Next
+Term installs none of them). Claude Code runs as `claude -p` over its stream-json, and Codex as `codex
+app-server`; each is the CLI you installed, signed in as you signed it in, and Next Term never reads or offers a
+login. The tab draws the session as text: your prompts, the agent's words, each tool call with its status, file
+changes with their line counts, the plan as a checklist, and how each turn ended (Done, Stopped, Refused, Hit the
+token limit). Next Term follows the agent's own turns instead of its screen, so the tab's mark is exact, and a
+permission request turns it amber with the agent's options as the notification's buttons. Allow always is asked
+on the Mac first and lasts for that session only. Before Claude Code's first session in a folder, Next Term asks
+on the Mac whether to trust it, as `claude -p` runs a folder's hooks and MCP servers without asking. A session
+names the CLI's version, says when it changed, and comes back after a Next Term update. An orchestrating agent
+starts one with `new_tab`'s `agent_session` and answers its requests with `answer_agent`. The agent's own
+terminal interface in a tab stays the default: a session is an addition, and what only that interface has
+(Claude Code's `/usage`, `/rewind`, `/login` and plugin panels, Codex's own screens) works in a tab running it.
+
 Interactive programs (`vim`, `ssh`, `less`, REPLs) are never reported as "done". Closing a tab or quitting
 asks first if a program is running or a job is suspended (Ctrl-Z) or in the background, and names it.
 
@@ -399,6 +444,7 @@ One window per project, and a few keys to move between them:
 | New remote tab (on one of your servers) | ⌥⌘T |
 | Switch to or open a project (the Welcome window: ↩ go there, ⌘↩ new window, ⌘1–⌘9 the first nine; ⌘O again there for any folder) / Close project | ⌘O / File menu |
 | Go to File (`name` or `name:line`) | ⌘P |
+| Go to Anything: any tab or project by name (outside a terminal) | ⌘K |
 | Go to the next agent needing you, in any window (again for the one after) | ⇧⌘U |
 | Resume an agent session (↩ resume or go to its tab, ⌘↩ fork) | ⌥⌘O |
 | Close tab (or the focused pane in a split tab) | ⌘W |
@@ -418,7 +464,7 @@ One window per project, and a few keys to move between them:
 | Use the selection for Find | ⌘E |
 | Replace in the open file | ⌥⌘F |
 | Find in Files / Replace in Files | ⌘⇧F / ⌘⇧R |
-| Clear (in a Markdown file, ⌘K makes a link) | ⌘K |
+| Clear (in a terminal; in a Markdown file ⌘K makes a link, elsewhere it opens Go to Anything) | ⌘K |
 | Take the suggestion while typing / one word of it / hide it | → (or End, ⌃E, ⌃F) / ⌥→ / Esc |
 | Forget the suggestion showing (never suggested again) | ⇧⌘⌫ |
 | Font size | ⌘+ / ⌘- / ⌘0 |
@@ -486,15 +532,23 @@ Next Term's menu.
   Spotlight leaves out): each line, when it last ran, how often, its exit, its folder and repository, and the
   commands that followed it. A command Next Term or an agent ran is never recorded, nor a line that holds a
   secret (one of your stored keys, a token or a password), starts with a space, or spans lines, nor anything
-  while suggestions are off or View › Private Mode is on (which lasts until you turn it off or quit). zsh's
-  history file is never read or changed. Edit › Forget This Suggestion removes one, and Settings › Terminal ›
-  While typing › Clear History… removes them all. Agents never see Next Term's suggestion.
+  while suggestions are off or View › Privacy › Private Mode is on (which lasts until you turn it off or quit).
+  zsh's history file is never read or changed. Edit › Forget This Suggestion removes one, and Settings ›
+  Terminal › While typing › Clear History… removes them all. Agents never see Next Term's suggestion.
 - **Secrets** (the Secrets menu, and Settings › Secrets) keeps API and MCP keys in a vault on your Mac, each
   value sealed on disk, with the key that opens them guarded by the Secure Enclave (on a Mac without one, by
   the login keychain, which Settings calls less protected); the names, what each key is for, who added it, the
   link to its page, its settings and its dates are not encrypted. Agents use a key by name, after Next Term’s
   own panel shows who asks, which keys and the command, and you approve with Touch ID or your password; no MCP
-  tool returns a value. A key’s “Ask for Touch ID every time it’s used” is ticked by default (untick it in its
+  tool returns a value. The first line of what Next Term’s MCP server tells every agent is to call
+  `list_secrets` before reading your shell profiles or `.env` files for a key, or asking you; a key it doesn’t
+  find, it asks you to type into Next Term (`request_secret`), never into the chat. In an MCP server’s config the
+  key goes by name too: `nxtrm secret run NAME=ENVNAME -- command`, and for a server at a URL that wants a bearer
+  token, a name only that command sets, `nxtrm secret run API_TOKEN=NXTRM_API_TOKEN -- npx -y
+  mcp-remote@0.15.2 URL --header 'Authorization: Bearer ${NXTRM_API_TOKEN}'`, so an agent that fills in `${…}`
+  from its own environment never puts a value in a command line (Claude Code lists such a name under missing
+  environment variables; leave it unset). Next Term asks you when such a server starts: each time for a key set
+  to ask for Touch ID every time. A key’s “Ask for Touch ID every time it’s used” is ticked by default (untick it in its
   Edit… sheet), and while it is, a request that uses the key offers only Allow once. A key set to “Never show
   this key” is never shown or copied, even to you, and that can’t be undone; commands you allow still get it.
   The New keys group in Settings › Secrets sets how both start for the keys you add, an agent asks you for, or

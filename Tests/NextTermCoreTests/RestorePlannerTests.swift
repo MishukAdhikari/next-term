@@ -22,7 +22,7 @@ import Testing
     let folder = "/Users/x/app"
     let start = Date(timeIntervalSince1970: 1_790_000_000)
 
-    private func id(_ n: Int) -> UUID {
+    func id(_ n: Int) -> UUID {
         UUID(uuidString: String(format: "00000000-0000-4000-8000-%012d", n))!
     }
 
@@ -146,6 +146,84 @@ import Testing
         plan([pane], kind: kind, safeMode: safeMode, quitConsent: quitConsent, world: world)[0]
     }
 
+    // MARK: agent sessions (plan 035 U7)
+
+    /// A tab running `nxtrm agent NAME`, whose session reported its id: Claude Code's session, Codex's thread.
+    func sessionTab(_ n: Int, agent: String = "claude", id: String = s, line: String? = nil, running: Bool = true) -> Pane {
+        var tab = pane(n, typed(line ?? "nxtrm agent \(agent)", running: running))
+        tab.agentSession = SessionSnapshot.AgentSessionRecord(agent: agent, sessionID: id, folder: folder)
+        return tab
+    }
+
+    /// An update restore runs `nxtrm agent NAME --resume ID` in the session's folder, as plain agent tabs resume; a crash
+    /// restore, safe mode and a quit without its consent put that line back unrun, and never resume (R12).
+    @Test func anAgentSessionTabResumesAfterAnUpdateAndNeverAfterACrash() {
+        let world = self.world()
+        let claude = plan(sessionTab(1), world: world)
+        #expect(claude.outcome == .resume)
+        #expect(claude.line == "nxtrm agent claude --resume \(s)")
+        #expect(claude.folder == folder)
+        #expect(claude.pending == PendingAction(action: .resume, reason: .update))
+        #expect(claude.session == NamedSession(agent: .claude, id: s, naming: .exact))
+        #expect(claude.listLine == "Claude Code resumes")
+        #expect(text(claude) == "Resumed Claude Code session \(s).")
+        let codex = plan(sessionTab(2, agent: "codex", id: "thr_1"), world: world)
+        #expect(codex.outcome == .resume && codex.line == "nxtrm agent codex --resume thr_1")
+        #expect(codex.session == NamedSession(agent: .codex, id: "thr_1", naming: .exact))
+        // The launcher the app has now.
+        var launched = world
+        launched.agentLauncher = "'/A B/nxtrm'"
+        #expect(plan(sessionTab(1), world: launched).line == "'/A B/nxtrm' agent claude --resume \(s)")
+        // A quit with its consent resumes as an update does.
+        #expect(plan(sessionTab(1), kind: .quit, quitConsent: true, world: world).outcome == .resume)
+
+        let held: [(SessionSnapshot.RestoreKind, Bool, Bool)] = [(.crash, false, false), (.unknown, false, false), (.quit, false, false),
+                                                                  (.update, true, false), (.crash, true, true), (.safeMode, false, true)]
+        for (kind, safeMode, consent) in held {
+            let result = plan(sessionTab(1), kind: kind, safeMode: safeMode, quitConsent: consent, world: world)
+            #expect(result.outcome == .agentOnTheLine, "\(kind), \(safeMode)")
+            #expect(result.line == "nxtrm agent claude --resume \(s)")
+            #expect(result.pending.action == .onTheLine)
+        }
+    }
+
+    /// Only a session still running, with a plain id and its folder there, in a shell with the integration, resumes; an
+    /// ACP agent's session is a command like any other.
+    @Test func anAgentSessionResumesOnlyFromWhatItsRecordHolds() {
+        // Ended before the save: nothing to resume.
+        #expect(plan(sessionTab(1, running: false), world: world()).outcome == .idle)
+        // Its folder gone: the line waits, unrun.
+        let gone = plan(sessionTab(1), world: world(exists: { $0 != self.folder }))
+        #expect(gone.outcome != .resume)
+        // An id with a shell character is not taken.
+        #expect(plan(sessionTab(1, id: "x;rm -rf ~"), world: world()).outcome != .resume)
+        // An agent that doesn't resume, or one Next Term doesn't know.
+        #expect(plan(sessionTab(1, agent: "gemini", id: "g1"), world: world()).outcome == .commandOnTheLine)
+        #expect(plan(sessionTab(1, agent: "nope", id: "g1"), world: world()).outcome == .commandOnTheLine)
+        // A line the shell didn't report typed, in a shell that has no integration (bash, fish): nothing can be typed in
+        // its restored tab, so a note names the line, as for a plain agent.
+        var polled = sessionTab(1)
+        polled.command = typed("nxtrm agent claude", source: .polled)
+        polled.systemZsh = false
+        #expect(plan(polled, world: world()).outcome == .agentNote)
+        // The same line in the system zsh, whose restored tab reports when it is ready: it resumes (plan 046).
+        polled.systemZsh = true
+        #expect(plan(polled, world: world()).outcome == .resume)
+    }
+
+    /// The record is saved with the tab and read back; the typed line keeps no prompt words.
+    @Test func anAgentSessionsRecordIsSavedWithoutItsPrompt() throws {
+        let tab = sessionTab(1, line: "nxtrm agent claude --prompt 'the staging db password is Tr0ub4dor'")
+        let groups = [SessionSnapshot.Group(root: .pane(tab), focused: tab.id)]
+        let header = SessionSnapshot.Header(launchID: id(900), generation: 1, clean: false, savedAt: start)
+        let data = try SessionSnapshot(header: header, windows: [SessionSnapshot.Window(project: folder, groups: groups)]).encoded()
+        #expect(!String(decoding: data, as: UTF8.self).contains("Tr0ub4dor"))
+        let read = try #require(try SessionSnapshot.decode(data).panes.first)
+        #expect(read.agentSession == SessionSnapshot.AgentSessionRecord(agent: "claude", sessionID: s, folder: folder))
+        #expect(read.command?.line == "nxtrm agent claude")
+        #expect(plan(read, world: world()).line == "nxtrm agent claude --resume \(s)")
+    }
+
     // MARK: agents that resume by themselves
 
     @Test func anExactClaudeIDWithAPassingGateResumes() {
@@ -188,7 +266,9 @@ import Testing
         let result = plan(pane(1, typed("claude --resume \(s)"), agent: evidence), world: world(facts: facts))
         #expect(result.outcome == .agentOnTheLine && result.line == "claude --resume \(s)")
         #expect(result.pending.action == .onTheLine)
-        #expect(text(result) == "claude --resume \(s) is back on the line, not run. Press Return to resume Claude Code session \(s), or edit it first.")
+        #expect(text(result) == "claude --resume \(s) is back on the line, not run. Press Return to resume Claude Code session \(s), or edit it first."
+            + " Held: its own session file did not confirm its session.")
+        #expect(result.heldBecause == [.sessionFile] && result.stop == .notFromFile)
         #expect(result.listLine == "Claude Code's resume command goes on the line")
     }
 
@@ -257,7 +337,9 @@ import Testing
         let evidence = Evidence(agent: .qwen, sessionID: id, source: .runtimeFile, sessionFolder: folder, startedAt: start)
         let result = plan(pane(1, typed("qwen"), agent: evidence), world: world())
         #expect(result.outcome == .agentOnTheLine && result.line == "qwen --resume \(id)")
-        #expect(text(result) == "qwen --resume \(id) is back on the line, not run. Press Return to resume Qwen Code session \(id), or edit it first.")
+        #expect(text(result).hasPrefix("qwen --resume \(id) is back on the line, not run. Press Return to resume Qwen Code session \(id), or edit it first."
+            + " Held: its launch flags, "))
+        #expect(result.heldBecause.first == .flags && result.heldBecause.contains(.executable))
     }
 
     @Test func ofTwoPanesOnOneSessionTheLaterSelectedResumes() {
@@ -367,10 +449,14 @@ import Testing
 
     /// What capture makes of a launch: `argv` run as the tab's verified leader from `executable`, typed as `typed`, and
     /// expanded to `expanded` when the typed word was an alias. Nothing it reads is on this Mac.
-    func captured(_ argv: [String], typed: String, expanded: String? = nil, executable: String = "/Users/x/.local/bin/claude",
+    func captured(_ argv: [String], typed: String?, expanded: String? = nil, executable: String = "/Users/x/.local/bin/claude",
                   environment: [String: String] = [:]) throws -> Evidence {
+        // The routing variables among them, as ProcessInspector reads them: as digests.
+        let routing = environment.compactMapValues { $0 }.reduce(into: [String: String]()) { found, entry in
+            if let digest = AgentEvidence.routingDigest(of: entry.key, entry.value) { found[entry.key] = digest }
+        }
         let leader = AgentProcess(pid: 7, startedAt: start, executable: executable, arguments: argv, environment: environment,
-                                  directory: folder)
+                                  directory: folder, routing: routing)
         let input = AgentEvidence.Capture(leader: leader, verified: true, typedLine: typed, expandedLine: expanded, home: "/Users/x")
         return try #require(AgentEvidence.capture(input), "\(argv)")
     }
@@ -431,7 +517,9 @@ import Testing
         for (kind, consent) in [(SessionSnapshot.RestoreKind.update, false), (.quit, true), (.quit, false), (.crash, false)] {
             let put = plan(claude, kind: kind, quitConsent: consent, world: world)
             #expect(put.outcome == .agentOnTheLine && put.line == "claude --dangerously-skip-permissions --resume \(s)", "\(kind)")
-            #expect(text(put) == back("claude --dangerously-skip-permissions --resume \(s)"), "\(kind)")
+            // Where it could have resumed by itself, its note says what held it.
+            let held = kind == .update || consent ? " Held: its launch flags." : ""
+            #expect(text(put) == back("claude --dangerously-skip-permissions --resume \(s)") + held, "\(kind)")
         }
         // Expanded by the shell as itself, a function shows the same.
         let (same, sameWorld) = try launched(["claude", "--dangerously-skip-permissions"], typed: "claude-auto-danger",
@@ -455,19 +543,27 @@ import Testing
         }
     }
 
-    /// AE27: an alias that sets a variable fails the gate on that prefix, and is replayed, so the session is looked for in
-    /// the store the alias names.
+    /// AE27: an alias that sets a variable fails the gate on what the process shows of it (plan 046): its routing
+    /// variable, set in the agent's own environment, which the login shell does not set, and the store it moved, which
+    /// the restore does not look in. Its launch is replayed, so the session is looked for in the store the alias names.
     @Test func ae27AnAliasThatSetsAVariableIsReplayed() throws {
-        let (claude, world) = try launched(["claude"], typed: "cw", expanded: "CLAUDE_CONFIG_DIR=/Users/x/.claude-work claude",
+        let (launch, world) = try launched(["claude"], typed: "cw", expanded: "CLAUDE_CONFIG_DIR=/Users/x/.claude-work claude",
                                            environment: ["CLAUDE_CONFIG_DIR": "/Users/x/.claude-work"])
+        var claude = launch
+        claude.agent?.store = "/Users/x/.claude-work"
+        claude.agent?.routingMatchesShell = false
+        #expect(claude.agent?.routingSet == ["CLAUDE_CONFIG_DIR"])
         let failed: [ResumeCheck] = {
             guard let evidence = claude.agent, case .onTheLine(let failed) = evidence.gate(exactClaude().1) else { return [] }
             return failed
         }()
-        #expect(failed.contains(.typedLine))
+        #expect(failed == [.routing, .storeGone])
         let update = plan(claude, world: world)
         #expect(update.outcome == .agentOnTheLine && update.line == "cw --resume \(s)")
-        #expect(text(update) == back("cw --resume \(s)"))
+        #expect(text(update) == back("cw --resume \(s)") + " Held: its provider settings and its session store is not there.")
+        #expect(update.heldBecause == [.routing, .storeGone])
+        // Routing guards the user: the store being there later would not resume it, so it is not checked again.
+        #expect(!update.rechecks)
     }
 
     /// AE28: a code-loading option never runs by itself, and comes back on the line on every restore.
@@ -519,11 +615,11 @@ import Testing
         let (unclear, world) = try launched(["claude", "--newflag", "value"], typed: "claude --newflag value")
         let left = plan(unclear, world: world)
         #expect(left.outcome == .agentOnTheLine && left.line == "claude --resume \(s)")
-        #expect(text(left) == back("claude --resume \(s)") + " Left off: --newflag (Next Term can't tell its value from a prompt).")
+        #expect(text(left) == back("claude --resume \(s)") + " Held: its launch flags. Left off: --newflag (Next Term can't tell its value from a prompt).")
         let (joined, joinedWorld) = try launched(["claude", "--newflag=value"], typed: "claude --newflag=value")
         let kept = plan(joined, world: joinedWorld)
         #expect(kept.outcome == .agentOnTheLine && kept.line == "claude --newflag=value --resume \(s)")
-        #expect(text(kept) == back("claude --newflag=value --resume \(s)"))
+        #expect(text(kept) == back("claude --newflag=value --resume \(s)") + " Held: its launch flags.")
         // Two named at once, in a note with no session named.
         var two = unclear
         two.agent?.options = [SessionSnapshot.LaunchOption(["--newflag"], unclear: true), SessionSnapshot.LaunchOption(["--other"], unclear: true)]
@@ -975,7 +1071,7 @@ import Testing
         typedOnly.source = .typedAndArgv
         let line = plan(pane(2, typed("claude --resume \(s)"), agent: typedOnly), world: world(facts: facts))
         #expect(shown(line) == "claude --resume \(s) goes back on the line, not run, once the shell is ready, unless you type first. "
-            + "Press Return to resume Claude Code session \(s), or edit it first.")
+            + "Press Return to resume Claude Code session \(s), or edit it first. Held: its own session file did not confirm its session.")
         let gemini = plan(pane(3, typed("gemini"), agent: Evidence(agent: .gemini)), world: world())
         #expect(shown(gemini) == "gemini goes back on the line, not run, once the shell is ready, unless you type first. "
             + "No Gemini CLI session could be named, so Return starts a new one.")

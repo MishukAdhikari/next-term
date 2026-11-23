@@ -10,6 +10,12 @@ enum CommandLineTool {
         // `nxtrm mcp`: the MCP server agents start (see MCPServer). A file named "mcp" is `nxtrm ./mcp`.
         if arguments == ["mcp"] { MCPBridge.run() }
         if let targets = RemoteAccessGuardTargets.parse(arguments) { RemoteAccessTunnelGuard.run(targets) } // `nxtrm tunnel-guard …`: Remote access's tunnel watchdog
+        // `nxtrm agent NAME`: an agent session over ACP in this tab (AgentSessionCLI, plan 030). `nxtrm ./agent` opens a
+        // file named agent.
+        if arguments.first == "agent" { AgentSessionCLI.run(Array(arguments.dropFirst())) }
+        // `nxtrm call TOOL ['{json}']`: one of Next Term's MCP tools, its answer printed (JSON for most), for scripts and
+        // launchers (Raycast, Alfred, the Shortcuts app's Run Shell Script). `nxtrm call` alone lists the tools.
+        if arguments.first == "call", arguments.count <= 3 { CommandLineCall.run(Array(arguments.dropFirst())) }
         // The self-test's stand-in for opencode, run from a tab (SelfTestIDELinks.swift).
         if arguments.count == 3, arguments[0] == "--self-test-ide-client" { SelfTest.runIDEStandIn(port: arguments[1], output: arguments[2]) }
         // `nxtrm secret run …`, `nxtrm secret import …` and `nxtrm secret help` (Secrets). `nxtrm secret` alone still
@@ -177,15 +183,16 @@ enum CommandLineTool {
     }
 
     /// At launch: link `nxtrm` for other terminals where that needs no password (tabs in Next Term always
-    /// have it), as `plan` says. When no folder on PATH can take it, offer the password route.
+    /// have it), as `plan` says. When no folder on PATH can take it, nothing asks: the password route is
+    /// Next Term › Install Command Line Tool (nxtrm)…, or an agent's run_command, which the user sees first.
     static func registerQuietly() {
         guard let script = script?.path, isInStableLocation else { return }
         DispatchQueue.global(qos: .utility).async {
             // Never on a guessed PATH: /etc/paths has neither /opt/homebrew/bin nor ~/.local/bin, so a slow
-            // login shell would bring the password offer where neither needs one. A later launch decides.
+            // login shell would leave a link where the user's own PATH has none. A later launch decides.
             let path = LoginShell.shellPath
-            guard !path.isEmpty, register(script, path: path) == .unavailable else { return }
-            DispatchQueue.main.async { offer() }
+            guard !path.isEmpty else { return }
+            register(script, path: path)
         }
     }
 
@@ -209,70 +216,13 @@ enum CommandLineTool {
         return chosen
     }
 
-    // MARK: the first-launch offer
+    // MARK: the key project window
 
-    /// The version the offer was last shown in, or CommandLineLink.declined.
-    static let offerKey = "commandLineToolOffer"
-
-    private static var version: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
-    }
-
-    /// Set while the offer waits for a project window.
-    private static var offerWait: NSObjectProtocol?
-
-    /// No folder on PATH takes `nxtrm` without a password: offer the password route, once per version, on
-    /// a project window once nothing else is in the way, however long the launch's own windows (the folder
-    /// chooser, Import, Welcome) take. Until then it waits for a project window to become key.
-    private static func offer() {
-        let remembered = UserDefaults.standard.string(forKey: offerKey)
-        guard CommandLineLink.shouldOffer(remembered: remembered, version: version), offerWait == nil, !showOffer() else { return }
-        offerWait = NotificationCenter.default.addObserver(forName: NSWindow.didBecomeKeyNotification, object: nil, queue: .main) { _ in
-            // Once the change is over: a sheet or modal session that is ending is still there when it posts.
-            DispatchQueue.main.async {
-                guard let wait = offerWait, showOffer() else { return }
-                NotificationCenter.default.removeObserver(wait)
-                offerWait = nil
-            }
-        }
-    }
-
-    /// Shows the offer on the key project window, unless a sheet or modal window is in the way. True when
-    /// it is shown, or no longer needed.
-    private static func showOffer() -> Bool {
-        if isInstalled { return true } // with the menu command, meanwhile
-        guard let window = offerWindow(key: NSApp.keyWindow, modal: NSApp.modalWindow) else { return false }
-        UserDefaults.standard.set(version, forKey: offerKey)
-        offerAlert().beginSheetModal(for: window) { response in
-            if response == .alertFirstButtonReturn {
-                DispatchQueue.main.async { install(from: window) }
-            } else if response == .alertThirdButtonReturn {
-                UserDefaults.standard.set(CommandLineLink.declined, forKey: offerKey)
-            }
-        }
-        return true
-    }
-
-    /// Where the offer goes: the key window, if it is a project window and no sheet or modal window is in
-    /// the way.
-    static func offerWindow(key: NSWindow?, modal: NSWindow?) -> NSWindow? {
+    /// The key window, if it is a project window and no sheet or modal window is in the way: where a notice
+    /// that waits for the user's attention goes.
+    static func freeProjectWindow(key: NSWindow?, modal: NSWindow?) -> NSWindow? {
         guard let key, key.windowController is TerminalWindowController, modal == nil, key.attachedSheet == nil else { return nil }
         return key
-    }
-
-    static func offerAlert() -> NSAlert {
-        let alert = NSAlert()
-        alert.messageText = "Install the “\(CommandLineOpen.toolName)” command?"
-        alert.informativeText = """
-            Then “nxtrm .” opens a folder in Next Term from any terminal, and “nxtrm file:42” a file at a line \
-            (Next Term’s own tabs have it already). No folder on your PATH takes it without a password, so this \
-            links \(installPath) and asks for your administrator password once. You can also do it later from \
-            Next Term › Install Command Line Tool (nxtrm)…
-            """
-        alert.addButton(withTitle: "Install…")
-        alert.addButton(withTitle: "Not Now").keyEquivalent = "\u{1b}"
-        alert.addButton(withTitle: "Don’t Ask Again")
-        return alert
     }
 
     // MARK: the menu command
@@ -368,6 +318,10 @@ enum CommandLineTool {
 /// `nxtrm mcp`: MCP over stdio for an agent, one JSON-RPC message per line. `initialize` and `tools/list`
 /// are answered here at once; each tool call goes to the running app over its socket. Ends when the
 /// agent closes stdin.
+///
+/// The MCP hub rides it (MCPBridgeHub): as it starts, the bridge asks the app which servers the user connected apply to
+/// its agent. While none does, every answer is as it was before the hub; once one does, tools/list ends with the
+/// catalog and the servers' direct tools, whose calls the bridge answers itself, running the servers as its children.
 enum MCPBridge {
     private static let output = NSLock()
 
@@ -378,7 +332,7 @@ enum MCPBridge {
         let socket = environment[MCPServer.socketVariable].flatMap { $0.isEmpty ? nil : $0 } ?? MCPServer.socketPath()
         // Next Term's own skills, first, for an agent in a Next Term tab; next-term-tabs while the setting is on.
         let offering = UserDefaults.standard.object(forKey: "agentsOfferTabs") as? Bool ?? true
-        let instructions = MCPServer.instructions(inTab: MCPServer.runsUnder(executable: Bundle.main.executablePath ?? ""), offeringTabs: offering)
+        let inTab = MCPServer.runsUnder(executable: Bundle.main.executablePath ?? "")
         let calls = DispatchGroup()
         #if DEBUG
         // The self-test's shorter progress interval (SelfTestOpencodeProgress).
@@ -387,6 +341,7 @@ enum MCPBridge {
         let progressEvery = MCPProgress.interval
         #endif
         let progress = MCPProgress.Tickers(every: progressEvery, send: send)
+        let hub = MCPBridgeHub(socket: socket, version: version, environment: environment)
         while let line = readLine(strippingNewline: true) {
             guard !line.trimmingCharacters(in: .whitespaces).isEmpty else { continue }
             guard let object = try? JSONSerialization.jsonObject(with: Data(line.utf8)) else {
@@ -400,16 +355,30 @@ enum MCPBridge {
                     // Calls can take long (wait_for_tab): answer pings and other calls meanwhile. One that carries a
                     // progress token gets progress until its answer is sent (MCPProgress).
                     progress.answer(message, in: calls) {
-                        MCPServer.respond(to: message, version: version, call: { forward($0, $1, socket: socket) })
+                        // Only a catalog or direct tool's call waits for the hub's plan; Next Term's own go to the app as they did.
+                        let called = MCPBridgeHub.toolName(message)
+                        let session = MCPHubCatalog.isCatalogTool(called) || MCPHubDirect.isDirectName(called) ? hub.session : nil
+                        return MCPServer.respond(to: message, version: version, extra: session?.tools ?? [],
+                                                 callExtra: { session?.call($0, $1) ?? [:] }, call: { forward($0, $1, socket: socket) })
                     }
-                } else if let response = MCPServer.respond(to: message, version: version, instructions: instructions,
-                                                           call: { _, _ in MCPServer.CallResult(text: "") }) {
-                    send(response)
+                } else {
+                    // The tool list and the instructions are where the hub shows: they wait for the plan (MCPBridgeHub.planWait
+                    // at most), so the agent is told which of the user's servers it has, and has their tools.
+                    let method = message["method"] as? String
+                    let session = method == "tools/list" || method == "initialize" ? hub.session : nil
+                    let instructions = MCPServer.instructions(inTab: inTab, offeringTabs: offering, hubServers: session?.serverNames ?? [],
+                                                                  callOnly: session?.callOnlyNames ?? [])
+                    if let response = MCPServer.respond(to: message, version: version, instructions: instructions,
+                                                        extra: session?.tools ?? [],
+                                                        call: { _, _ in MCPServer.CallResult(text: "") }) {
+                        send(response)
+                    }
                 }
             }
         }
         progress.stopAll() // stdin closed: the calls in flight send no more progress
         calls.wait() // stdin closed: finish the answers in flight (a caller may still read them), then go
+        hub.stop() // the session's servers end with it
         exit(0)
     }
 
@@ -451,8 +420,9 @@ enum MCPBridge {
         return .success(fd)
     }
 
-    /// One try: the app's answer, or how the socket failed.
-    private static func attempt(_ tool: String, _ arguments: [String: Any], socket path: String) -> Result<MCPServer.CallResult, MCPServer.SocketFailure> {
+    /// One try: the app's answer, or how the socket failed. `wait`: how long the answer may take (the tool's own by default).
+    static func attempt(_ tool: String, _ arguments: [String: Any], socket path: String,
+                        wait: TimeInterval? = nil) -> Result<MCPServer.CallResult, MCPServer.SocketFailure> {
         let fd: Int32
         switch connect(path) {
         case .success(let connected): fd = connected
@@ -462,7 +432,7 @@ enum MCPBridge {
         var noSigPipe: Int32 = 1
         setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, socklen_t(MemoryLayout<Int32>.size))
         let waitSeconds = tool == "wait_for_tab" ? Double(min(300, arguments["timeout_seconds"] as? Int ?? 50)) : (MCPServer.tool(named: tool)?.timeout ?? 30)
-        var timeout = timeval(tv_sec: Int(min(1900, waitSeconds + 30)), tv_usec: 0)
+        var timeout = timeval(tv_sec: Int(wait.map { max(1, $0) } ?? min(1900, waitSeconds + 30)), tv_usec: 0)
         setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
         let caller = MCPServer.herdrCaller(ProcessInfo.processInfo.environment) // the herdr pane this agent runs in, if any
         guard let request = MCPServer.request(tool: tool, arguments: arguments, caller: caller) else {
@@ -492,5 +462,177 @@ enum MCPBridge {
             return .failure(ended ? .endedWithoutAnswer : .timedOut)
         }
         return .success(result)
+    }
+}
+
+/// The MCP hub in a bridge: the plan the app gives for this agent, asked for as the bridge starts so tools/list rarely
+/// waits, and the session that runs its servers (MCPHubSession). No list of the user's (the app isn't even asked), no
+/// app, a remote tab, or no server: no plan, and the catalog stays out of every answer. An agent outside Next Term's tabs
+/// gets the plan for the folder the bridge runs in.
+final class MCPBridgeHub: @unchecked Sendable {
+    /// The longest the session is waited for (the app's plan, then `warmWait`): within Codex's 10-second start-up wait.
+    static let planWait: TimeInterval = 8
+    /// The longest the app's answer with the plan is waited for.
+    static let askWait: TimeInterval = 3
+    /// The longest a server just connected (no cached tool list) is given to start and list its tools, so they are this
+    /// first session's direct tools (MCPHubSession.warm).
+    static let warmWait: TimeInterval = 4
+
+    private let ready = DispatchSemaphore(value: 0)
+    /// The reports to the app on their way, which the bridge lets finish before it goes: a server's tool list among them.
+    private let reports = DispatchGroup()
+    private let lock = NSLock()
+    private var made: MCPHubSession?
+    private var terminate: DispatchSourceSignal?
+
+    init(socket: String, version: String, environment: [String: String]) {
+        // Where the agent works, for an agent outside Next Term's tabs: the app takes its tab's folder for one in a tab.
+        let folder = FileManager.default.currentDirectoryPath
+        let fetch: MCPHubSession.Refresh = { Self.plan(socket: socket, folder: folder) }
+        let nxtrm = [Bundle.main.executablePath ?? CommandLine.arguments[0], "--cli"]
+        // No list of the user's, no server (R17): the app isn't asked, and nothing waits. The file is made with the first
+        // server the user adds (MCPHubScope.save); a project's list starts nothing until the user approves it, and that
+        // approval, when it comes, is kept in the user's list too.
+        guard FileManager.default.fileExists(atPath: Self.userFile(environment)) else {
+            made = MCPHubSession(plan: nil, refresh: { nil }, nxtrm: nxtrm, environment: environment, version: version)
+            ready.signal()
+            return
+        }
+        // How a start ended goes to the app, never waited for: Settings › MCP Servers shows the last one.
+        let reports = self.reports
+        let report: MCPHubSession.Report = { server, list, failure, tools in
+            reports.enter()
+            DispatchQueue.global(qos: .utility).async {
+                var arguments: [String: Any] = ["server": server, "list": list, "tools": tools, "folder": folder]
+                if let failure { arguments["failure"] = failure }
+                _ = MCPBridge.attempt(MCPHubPlan.reportTool, arguments, socket: socket, wait: 2)
+                reports.leave()
+            }
+        }
+        // A local server's tools, when they are not the cached list the session started with: the app keeps them for
+        // the next sessions' direct tools.
+        let remember: MCPHubSession.Remember = { server, list, manifest in
+            let encoder = JSONEncoder()
+            guard let data = try? encoder.encode(manifest), let object = try? JSONSerialization.jsonObject(with: data) else { return }
+            reports.enter()
+            DispatchQueue.global(qos: .utility).async {
+                _ = MCPBridge.attempt(MCPHubPlan.reportTool, ["server": server, "list": list, "manifest": object, "folder": folder], socket: socket, wait: 5)
+                reports.leave()
+            }
+        }
+        // A remote server is reached by the app, which alone fills its keys in: the bridge runs as the user under the
+        // agent, so a key it held, or could ask the socket for, the agent could read too.
+        let remote: MCPHubSession.Remote = { arguments, wait in
+            var arguments = arguments
+            arguments["folder"] = folder
+            guard case .success(let answer) = MCPBridge.attempt(MCPHubPlan.remoteTool, arguments, socket: socket, wait: wait) else { return nil }
+            return (answer.text, answer.isError)
+        }
+        DispatchQueue.global(qos: .userInitiated).async {
+            // Only an app that didn't answer leaves the catalog on: one that answered with no plan has no server here.
+            let asked = Self.ask(socket: socket, folder: folder)
+            let session = MCPHubSession(plan: asked.plan, refresh: fetch, nxtrm: nxtrm, environment: environment, version: version,
+                                        report: report, remote: remote, remember: remember, assumeActive: !asked.answered)
+            self.lock.lock()
+            self.made = session
+            self.lock.unlock()
+            if session.isActive {
+                self.stopOnTerminate()
+                session.warm(seconds: Self.warmWait)
+            }
+            self.ready.signal()
+        }
+    }
+
+    /// The session, once the plan came or its wait ran out (then, one with no plan: the catalog stays out).
+    var session: MCPHubSession? {
+        if ready.wait(timeout: .now() + Self.planWait) == .success { ready.signal() }
+        lock.lock()
+        defer { lock.unlock() }
+        return made
+    }
+
+    /// Ends the servers the session started, and lets the reports on their way reach the app (5 seconds at most).
+    func stop() {
+        lock.lock()
+        let session = made
+        lock.unlock()
+        session?.stop()
+        _ = reports.wait(timeout: .now() + 5)
+    }
+
+    /// An agent that ends its servers with SIGTERM ends this bridge's servers too, before the bridge goes.
+    private func stopOnTerminate() {
+        signal(SIGTERM, SIG_IGN)
+        let source = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .global())
+        source.setEventHandler { [weak self] in
+            self?.stop()
+            exit(0)
+        }
+        source.resume()
+        terminate = source
+    }
+
+    /// The user's list, whose being there is the bridge's sign that a server may apply.
+    static func userFile(_ environment: [String: String]) -> String {
+        #if DEBUG
+        // The self-test's own list (SelfTestMCPHub), which its app reads through MCPHubControl.userFile.
+        if let file = environment[selfTestUserFileVariable], !file.isEmpty { return file }
+        #endif
+        return MCPHubScope.userPath()
+    }
+
+    #if DEBUG
+    static let selfTestUserFileVariable = "NEXTTERM_SELFTEST_MCP_HUB_FILE"
+    #endif
+
+    /// The app's plan for this bridge's agent, or nil (no app, a remote tab, no server). `folder`: where the bridge runs,
+    /// which the app uses for an agent outside its tabs.
+    static func plan(socket: String, folder: String) -> MCPHubPlan? { ask(socket: socket, folder: folder).plan }
+
+    /// The plan, and whether the app answered at all (an answer with no plan: no server applies here).
+    static func ask(socket: String, folder: String) -> (plan: MCPHubPlan?, answered: Bool) {
+        guard case .success(let answer) = MCPBridge.attempt(MCPHubPlan.tool, ["folder": folder], socket: socket, wait: askWait) else {
+            return (nil, false)
+        }
+        return answer.isError ? (nil, true) : (MCPHubPlan.decode(answer.text), true)
+    }
+
+    static func toolName(_ message: [String: Any]) -> String {
+        (message["params"] as? [String: Any])?["name"] as? String ?? ""
+    }
+}
+
+/// `nxtrm call`: an MCP tool of the running Next Term, through its socket as an agent's calls go, so a tool that asks the
+/// user on the Mac asks here too.
+enum CommandLineCall {
+    static let usage = """
+        usage: nxtrm call TOOL ['{"argument": "value"}']
+          nxtrm call list_tabs
+          nxtrm call show_tab '{"tab_id": "…"}'
+        Prints the tool's answer; exits 1 when the tool refuses. nxtrm call lists the tools.
+        """
+
+    static func run(_ arguments: [String]) -> Never {
+        guard let tool = arguments.first, !["-h", "--help", "help"].contains(tool) else {
+            print(usage + "\n\n" + MCPServer.tools.map(\.name).sorted().joined(separator: "\n"))
+            exit(0)
+        }
+        var input: [String: Any] = [:]
+        if arguments.count > 1 {
+            guard let object = try? JSONSerialization.jsonObject(with: Data(arguments[1].utf8)) as? [String: Any] else {
+                FileHandle.standardError.write(Data("nxtrm call: the arguments are one JSON object, such as '{\"tab_id\": \"…\"}'\n".utf8))
+                exit(2)
+            }
+            input = object
+        }
+        let socket = ProcessInfo.processInfo.environment[MCPServer.socketVariable].flatMap { $0.isEmpty ? nil : $0 } ?? MCPServer.socketPath()
+        let result = MCPBridge.forward(tool, input, socket: socket)
+        if result.isError {
+            FileHandle.standardError.write(Data(("nxtrm call: " + result.text + "\n").utf8))
+            exit(1)
+        }
+        print(result.text)
+        exit(0)
     }
 }

@@ -3,7 +3,8 @@ import NextTermCore
 
 /// The question asked once where a plugin owns Tab (Auto): Next Term's list, or the plugin. Raised only by a
 /// real Tab. No button answers Return, so a habitual Return chooses nothing; Esc is Not Now, which leaves
-/// Tab to the plugin until Next Term starts again (the second time, for good).
+/// Tab to the plugin until Next Term starts again (the second time, for good). Next Term's list, the choice it
+/// offers, is tinted as the primary (ApprovalLayout), for a click.
 enum CompletionPluginQuestion {
     enum Answer {
         case nextTerm
@@ -18,7 +19,9 @@ enum CompletionPluginQuestion {
         let alert = NSAlert()
         alert.messageText = "Use Next Term’s list for Tab?"
         alert.informativeText = text(plugin)
-        alert.addButton(withTitle: "Use Next Term’s List").keyEquivalent = ""
+        let list = alert.addButton(withTitle: "Use Next Term’s List")
+        list.keyEquivalent = ""
+        MainActor.assumeIsolated { ApprovalLayout.style(list, look: .accent) }
         alert.addButton(withTitle: "Keep \(plugin.name)").keyEquivalent = ""
         alert.addButton(withTitle: "Not Now").keyEquivalent = "\u{1b}"
         return alert

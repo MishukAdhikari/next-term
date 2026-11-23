@@ -1,0 +1,144 @@
+import AppKit
+import NextTermCore
+
+/// Review comments (plan 039 U3), in a repository of its own: lines selected in a file's uncommitted diff offer
+/// Comment; two comments make Review (2); lines added above move a comment with its lines, and one whose lines
+/// changed is outdated; the review goes to a program as one bracketed paste and Return, and is empty after. The
+/// program is a stand-in that turns bracketed paste on and writes what it reads to a file.
+extension SelfTest {
+    static func reviewCommentsChecks() async {
+        guard let app = AppDelegate.shared, let git = GitRunner.locateGit() else { return }
+        let fm = FileManager.default
+        let repo = URL(fileURLWithPath: canonicalPath(NSTemporaryDirectory())).appendingPathComponent("nt-review-\(getpid())")
+        try? fm.removeItem(at: repo)
+        try? fm.createDirectory(at: repo.appendingPathComponent("src"), withIntermediateDirectories: true)
+        func run(_ args: String...) {
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: git)
+            p.arguments = ["-C", repo.path, "-c", "user.name=T", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"] + args
+            p.standardOutput = FileHandle.nullDevice
+            p.standardError = FileHandle.nullDevice
+            try? p.run()
+            p.waitUntilExit()
+        }
+        let file = repo.appendingPathComponent("src/app.txt")
+        var lines = (1...40).map { "line \($0)" }
+        try? (lines.joined(separator: "\n") + "\n").write(to: file, atomically: true, encoding: .utf8)
+        run("init", "-q")
+        run("add", "-A")
+        run("commit", "-qm", "Base")
+        lines[1] = "line two"
+        lines[34] = "line thirty-five"
+        try? (lines.joined(separator: "\n") + "\n").write(to: file, atomically: true, encoding: .utf8)
+        let got = repo.appendingPathComponent("got").path
+
+        let holder = app.openWindow(directory: repo.path)
+        guard let tab = holder.tabs.first, let window = holder.window else { return check(false, "review: the window has a tab") }
+        defer {
+            ReviewList.close()
+            tab.view.send(txt: "\u{03}")
+            window.close()
+            try? fm.removeItem(at: repo)
+        }
+        window.makeKeyAndOrderFront(nil)
+        holder.showChanges(of: file)
+        guard await wait(10, { holder.editorArea.activeDiff?.hunkCount == 2 }), let diff = holder.editorArea.activeDiff,
+              let side = diff.focusView as? NSTextView else {
+            return check(false, "review: the file's diff shows")
+        }
+        let room = diff.askRoom
+        window.setContentSize(NSSize(width: max(window.frame.width, 1400), height: max(window.frame.height, 800)))
+        window.contentView?.layoutSubtreeIfNeeded()
+        window.makeFirstResponder(side)
+        var missed = ""
+        /// Selects `text` and adds a comment on it: by the diff's menu, or by Comment in the toolbar when asked and
+        /// the toolbar has room for it (it has none at some widths; the menu always has).
+        func comment(on text: String, saying: String, toolbar: Bool) async -> Bool {
+            let range = (side.string as NSString).range(of: text)
+            side.setSelectedRange(range)
+            guard await wait(3, { window.contentView?.layoutSubtreeIfNeeded(); return room.commentWanted }) else {
+                missed = "found \(range.location != NSNotFound), offers \(diff.offersAsk)"
+                return false
+            }
+            if toolbar && !room.comment.isHidden {
+                room.comment.performClick(nil)
+            } else {
+                if toolbar { note("review: the toolbar has \(Int(room.bounds.width)) points free in a diff \(Int(diff.bounds.width)) wide, too few for Comment; the menu's item instead") }
+                guard let item = (side as? DiffTextView)?.commentItem(), let action = item.action else {
+                    missed = "the diff's menu has no Add Review Comment…"
+                    return false
+                }
+                NSApp.sendAction(action, to: item.target, from: item)
+            }
+            guard await wait(3, { NoteEditor.shown != nil }), let editor = NoteEditor.shown else { missed = "no note editor"; return false }
+            editor.note = saying
+            editor.saveNote()
+            return true
+        }
+        check(await comment(on: "line two", saying: "Spell it as a digit", toolbar: false),
+              "review: lines selected in an uncommitted diff offer Add Review Comment… in its menu, which takes a note", missed)
+        check(await comment(on: "line thirty-five", saying: "Keep this one", toolbar: true), "review: a second comment, by Comment in the toolbar where it fits", missed)
+        let draft = ReviewDraft.of(window)
+        check(draft.comments.map(\.lines) == [2...2, 35...35] && draft.comments.allSatisfy(\.inFile),
+              "review: the comments hold the lines in the file now", "\(draft.comments.map(\.lines))")
+        check(await wait(3) { room.review.title == "Review (2)" && (side as? DiffTextView)?.reviewItem()?.title == "Review (2)…" },
+              "review: Review (2) in the toolbar where it fits, and in the diff's menu", room.review.title)
+        check(await wait(3) { diff.commentedLines.right == [2, 35] && diff.commentedLines.left.isEmpty },
+              "review: the diff marks the commented lines", "\(diff.commentedLines)")
+        check(diff.shownNotes.right == [2: "Spell it as a digit", 35: "Keep this one"] && diff.shownNotes.left.isEmpty,
+              "review: each note shows after its line", "\(diff.shownNotes)")
+        // The Unified layout marks the same lines and shows the same notes; then side by side again.
+        let layout = DiffLayout.current
+        DiffLayout.current = .unified
+        let unifiedMarked = await wait(5) { diff.unified.column.commentedRows.count == 2 }
+        let unifiedNotes = Set(diff.unified.column.shownNotes.values)
+        check(unifiedMarked && unifiedNotes == ["Spell it as a digit", "Keep this one"],
+              "review: the Unified layout marks the commented lines, with their notes",
+              "rows \(diff.unified.column.commentedRows), notes \(diff.unified.column.shownNotes)")
+        DiffLayout.current = layout
+        _ = await wait(5) { !diff.showsUnified || layout == .unified }
+
+        // Three lines added at the top, the second comment's line changed: the first follows, the second is outdated.
+        var moved = ["new 1", "new 2", "new 3"] + lines
+        moved[3 + 34] = "line 35 again"
+        try? (moved.joined(separator: "\n") + "\n").write(to: file, atomically: true, encoding: .utf8)
+        draft.reanchor()
+        check(draft.comments.map(\.lines) == [5...5, 35...35] && draft.comments.map(\.outdated) == [false, true],
+              "review: a comment follows its lines; one whose lines changed is outdated",
+              "\(draft.comments.map(\.lines)) \(draft.comments.map(\.outdated))")
+        if !room.review.isHidden {
+            room.review.performClick(nil)
+        } else if let item = (side as? DiffTextView)?.reviewItem(), let action = item.action {
+            NSApp.sendAction(action, to: item.target, from: item)
+        }
+        check(await wait(3) { ReviewList.isShown }, "review: Review (2) lists the comments")
+        ReviewList.close()
+
+        _ = await wait(20) { tab.status.integrated }
+        // Under sh, not the tab's zsh, whose settings for the terminal may come back before cat runs.
+        let script = "stty raw -echo; printf '\\033[?2004h'; exec cat > \(ShellQuote.quote(got))"
+        tab.view.send(txt: "/bin/sh -c \(ShellQuote.quote(script))\r")
+        // zsh's own prompt has bracketed paste on too: the file cat writes is there once raw mode is set and cat reads.
+        _ = await wait(10) { FileManager.default.fileExists(atPath: got) && tab.view.getTerminal().bracketedPasteMode }
+        ReviewUI.send(draft, to: tab)
+        func read() -> String { (try? String(contentsOfFile: got, encoding: .utf8)) ?? "" }
+        let sent = await wait(5) { read().hasSuffix("\u{1b}[201~\r") }
+        let text = read()
+        check(sent && text.contains("src/app.txt:5\r```") && text.contains("Spell it as a digit") && text.contains("src/app.txt:35 (outdated")
+              && text.contains("Keep this one") && text.hasPrefix("\u{1b}[200~Review comments on your changes:"),
+              "review: it goes to the program as one paste, then Return", text.debugDescription)
+        check(draft.comments.isEmpty && room.review.isHidden, "review: sent, the review is empty and Review is gone")
+
+        // The All files page marks a commented file's lines too.
+        if let gitDiff = holder.editorArea.activeGitDiff {
+            draft.add(ReviewComment(path: canonicalPath(file.path), lines: 5...5, quoted: "line two", note: "On the page", inFile: true))
+            gitDiff.select(path: nil)
+            check(await wait(8) { gitDiff.allFiles?.commentedRows(of: "src/app.txt").isEmpty == false },
+                  "review: the All files page marks the commented lines",
+                  "page \(gitDiff.allFiles != nil), files \(gitDiff.allFiles?.paths ?? []), scope \(gitDiff.scope), rows \(gitDiff.allFiles?.commentedRows(of: "src/app.txt") ?? [])")
+            draft.clear()
+        } else {
+            check(false, "review: the All files page marks the commented lines", "no Git Diff tab")
+        }
+    }
+}

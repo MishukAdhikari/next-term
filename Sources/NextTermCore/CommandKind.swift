@@ -202,7 +202,10 @@ public enum CommandClassifier {
     /// not set-up (`cd`, `export`, `nvm use`), else the first. An agent run as a script names the agent
     /// (`node …/@anthropic-ai/claude-code/cli.js` is claude), judged by `scriptAgentName`.
     public static func programName(_ commandLine: String) -> String {
-        programCommand(commandLine)?.name ?? ""
+        guard let command = programCommand(commandLine) else { return "" }
+        // An agent session names itself so, never "NextTerm" or "nxtrm" (plan 030).
+        if ["nxtrm", "NextTerm"].contains(command.name), kind(name: command.name, args: command.args) == .agent { return agentSessionProgram }
+        return command.name
     }
 
     /// That program with its arguments, as the close alerts name what runs: `PATH=~/bin:$PATH claude --resume`
@@ -294,6 +297,11 @@ public enum CommandClassifier {
 
     static func kind(name: String, args: [String]) -> CommandKind {
         if name.isEmpty { return .command }
+        // `nxtrm agent NAME`: an agent session (plan 030), an agent the tab follows by its reports.
+        let cli: ArraySlice<String> = name == "NextTerm" && args.first == "--cli" ? args.dropFirst() : args[...]
+        if name == "nxtrm" || name == "NextTerm", cli.first == "agent", cli.count > 1, !cli.contains(where: { ["-h", "--help", "help"].contains($0) }) {
+            return .agent
+        }
         if agents.contains(name) { return isServer(name, args: args) ? .command : .agent }
         // herdr's own screen hosts agents (HerdrClient); its other commands run and exit.
         if name == "herdr" { return HerdrClient.session(args) != nil ? .agent : .command }
@@ -315,6 +323,7 @@ public enum CommandClassifier {
     /// Classifies the process in the foreground. This sees through shell functions and aliases,
     /// which the command line cannot: `claude-auto-danger` (a function) runs a process named claude.
     public static func kind(of process: ForegroundProcess) -> CommandKind {
+        if isAgentSession(process.arguments) { return .agent }
         if isAgent(process) {
             return runsServer(executable: process.executablePath, arguments: process.arguments) ? .command : .agent
         }
@@ -324,6 +333,7 @@ public enum CommandClassifier {
     }
 
     public static func programName(of process: ForegroundProcess) -> String {
+        if isAgentSession(process.arguments) { return agentSessionProgram }
         if HerdrClient.match(arguments: process.arguments) != nil { return "herdr" } // a wrapper script too
         if isAgent(process) {
             let names = ([process.name] + process.arguments.prefix(1)).map(baseName)
@@ -359,6 +369,17 @@ public enum CommandClassifier {
 
     public static func hostsAgents(_ process: ForegroundProcess) -> Bool {
         !process.isShell && HerdrClient.match(arguments: process.arguments) != nil
+    }
+
+    /// What an agent session's tab names its program: never the agent's own name, whose screen readers (OpenCode's)
+    /// would read the session's text as that agent's screen.
+    public static let agentSessionProgram = "nxtrm agent"
+
+    /// Next Term's own binary running `--cli agent NAME` (the `nxtrm` script execs it so).
+    static func isAgentSession(_ arguments: [String]) -> Bool {
+        guard let cli = arguments.firstIndex(of: "--cli"), arguments.index(after: cli) < arguments.endIndex,
+              arguments[arguments.index(after: cli)] == "agent", arguments.count > cli + 2 else { return false }
+        return baseName(arguments.first ?? "") == "NextTerm"
     }
 
     // MARK: helpers

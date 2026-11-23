@@ -8,41 +8,45 @@ import NextTermCore
 /// showing it everywhere, Don't Ask Again ending it, a change of the setting taking it away, the launch's reopening and
 /// a second window in one launch offering nothing. Part of NEXTTERM_SELFTEST_ONLY=windowColumn.
 extension SelfTest {
-    /// Quiet on purpose: this window's badge sits in a darker well 2 points round it, with no ring, edged only with
-    /// Increase Contrast, which draws that badge alone again; the worktree's dot is 6 points at the badge's corner, its cut
-    /// inside the button; two capitals are set 0.7 points apart and mixed case not; a working mark in the column or ⌘O
-    /// never turns, while a tab's does; done is a dark ✓ on a softer green, plain green with Increase Contrast.
+    /// Quiet on purpose: on the rail, this window's dot sits in a darker well 5 points round it, with no ring, edged only
+    /// with Increase Contrast, which draws that button alone again; the worktree's window, which needs you, shows its mark
+    /// in its dot's place; a mark's count goes before it; a working mark in the column or ⌘O never turns, while a tab's
+    /// does; done is a dark ✓ on a softer green, plain green with Increase Contrast.
     static func calmChecks(_ app: AppDelegate, _ five: [TerminalWindowController], worktree: TerminalWindowController) async {
         let column: WindowColumnView = five[0].windowColumn
         guard let own = column.button(for: five[0].indexID), let marked = column.button(for: worktree.indexID) else {
-            return check(false, "window column: the calm look's badges to check")
+            return check(false, "window column: the calm look's rows to check")
         }
-        let badge: NSRect = own.badgeForTest
-        // As the window shows it: just outside the badge, in the well, the darker colour of the tab you are in, not a
+        let dot: NSRect = own.dotForTest
+        // As the window shows it: just outside the dot, in the well, the darker colour of the tab you are in, not a
         // light ring.
         if let window = five[0].window { _ = await bringToFront(window) }
         await pause(0.3)
-        let wellColor: NSColor? = shownColor(of: own, at: NSPoint(x: badge.minX - 1, y: badge.midY))
+        let wellColor: NSColor? = shownColor(of: own, at: NSPoint(x: dot.minX - 3, y: dot.midY))
         // The terminal's own background, as the same image shows it (an image of the screen is in the display's colours,
         // not the theme's numbers): the well is that colour.
         let terminal: NSView? = five[0].activeTab?.view
         let backgroundColor: NSColor? = terminal.flatMap { shownColor(of: $0, at: NSPoint(x: $0.bounds.maxX - 30, y: $0.bounds.midY)) }
-        let well: Bool = own.isCurrent && own.plateForTest == badge.insetBy(dx: -2, dy: -2)
+        let well: Bool = own.isCurrent && own.plateForTest == dot.insetBy(dx: -(WindowColumnGrid.plate - WindowColumnRail.dot) / 2, dy: -(WindowColumnGrid.plate - WindowColumnRail.dot) / 2)
             && wellColor != nil && backgroundColor != nil && close(wellColor!, backgroundColor!)
-        let corner: NSRect = marked.badgeForTest
-        let dot: NSRect? = marked.dotFrameForTest
-        let dotPlaced: Bool = dot == NSRect(x: corner.maxX - 5, y: corner.minY - 1, width: 6, height: 6)
-            && dot.map { marked.bounds.contains($0.insetBy(dx: -2, dy: -2)) } == true
-        check(well && dotPlaced, "window column: this window's badge sits in a darker well, and a dot is 6 points at a badge's corner, its cut inside",
-              "well \(own.plateForTest) round \(badge), coloured \(wellColor.map { "\($0)" } ?? "none") against \(backgroundColor.map { "\($0)" } ?? "none"), dot \(dot.map { "\($0)" } ?? "none") at \(corner)")
+        // The worktree's window needs you (bellChecks): its mark stands in its dot's place, the dot's size, in its button.
+        let place: NSRect = marked.dotForTest
+        let mark: NSRect? = marked.dotFrameForTest
+        let markPlaced: Bool = marked.row?.urgent == .attention && mark == place && place.width == WindowColumnRail.dot
+            && marked.bounds.contains(place.insetBy(dx: -2, dy: -2))
+        // A window that only finished or works shows its plain dot.
+        let plainDots: Bool = column.shownButtons.filter { $0.row?.urgent != .attention && $0.row?.urgent != .failed }.allSatisfy { $0.dotFrameForTest == nil }
+        check(well && markPlaced && plainDots,
+              "window column: on the rail this window's dot sits in a darker well, a window that needs you shows its mark in its dot's place, and the others a plain dot",
+              "well \(own.plateForTest) round \(dot), coloured \(wellColor.map { "\($0)" } ?? "none") against \(backgroundColor.map { "\($0)" } ?? "none"), "
+                  + "mark \(mark.map { "\($0)" } ?? "none") at \(place) (\(marked.row?.urgent?.rawValue ?? "no mark")), plain \(plainDots)")
 
-        let font = NSFont.systemFont(ofSize: 10, weight: .medium)
-        func width(_ text: String) -> CGFloat { NSAttributedString(string: text, attributes: [.font: font]).size().width }
-        let spread: CGFloat = WindowColumnButton.lettersText("XC").size().width - width("XC")
-        let mixed: CGFloat = WindowColumnButton.lettersText("Ag").size().width - width("Ag")
-        // Tracking takes the place of the pair's own kerning, so two capitals open by a little more than its 0.7 points.
-        check(spread > 0.5 && spread < 1.3 && abs(mixed) < 0.01, "window column: two capitals are set a little apart, mixed case as the font sets it",
-              "XC +\(spread), Ag +\(mixed)")
+        // A mark's count before it ("2 ✓"), so the marks end a row in one place, with a count or without, in the column
+        // and ⌘O alike.
+        let counted = SwitcherMarksView()
+        counted.show([AgentMarks.Mark(state: .attention, count: 1), AgentMarks.Mark(state: .done, count: 2)], color: Theme.textDim)
+        let kinds: [String] = counted.arrangedSubviews.map { (view: NSView) -> String in view is NSTextField ? "count" : "mark" }
+        check(kinds == ["mark", "count", "mark"], "window column: a mark's count goes before it, as in ⌘O", "\(kinds)")
 
         // As View › Agent Spinner has it: a tab's mark turns with Spinning; the marks ⌘O's rows and the unfolded column's
         // rows show (SwitcherMarksView, the same view in both) never.
@@ -65,7 +69,7 @@ extension SelfTest {
         let redrawn: [Int] = column.shownButtons.filter { $0.drawCount > 0 }.map(\.id)
         DisplayOptions.increasesContrastOverride = contrast
         check(quiet != nil && plain != nil && quiet?.tiffRepresentation != plain?.tiffRepresentation && redrawn == [five[0].indexID],
-              "window column: Increase Contrast makes done plain green and draws this window's badge alone again, for its edge",
+              "window column: Increase Contrast makes done plain green and draws this window's dot alone again on the rail, for its well's edge",
               "redrawn \(redrawn) of \(column.shownButtons.map(\.id))")
     }
 
@@ -111,10 +115,25 @@ extension SelfTest {
         check(hidden && offTitle == "Show Window Column" && kept && back && onTitle == "Hide Window Column",
               "window column: ⌃⇧⌘S hides the column in every window and brings it back, the menu and the setting following",
               "hidden \(hidden), menu \(offTitle), count kept \(kept), back \(back), menu \(onTitle)")
-        // The column's own right-click menu shows both keys as the user has them.
+        // The column's own right-click menu, in three groups: Collapse or Expand and Move to the other edge, then Merge All
+        // Windows, then Hide, with
+        // the keys as the user has them; Move moves it, as View › Window Column Position does, and names the edge back.
         let menu = WindowColumnView.columnMenu()
-        let keys: [String] = menu.items.map { KeyboardShortcuts.chord(of: $0)?.display ?? "" }
-        check(keys == ["⌃⇧⌘S", "⌃⌘S"], "window column: its right-click menu shows ⌃⇧⌘S and ⌃⌘S", keys.joined(separator: ", "))
+        let onRight: Bool = app.windowColumnOnRight
+        let other: String = onRight ? "Left" : "Right"
+        let titles: [String] = menu.items.map { $0.isSeparatorItem ? "—" : $0.title }
+        let keys: [String] = menu.items.filter { !$0.isSeparatorItem }.map { KeyboardShortcuts.chord(of: $0)?.display ?? "" }
+        let merge: String = KeyboardShortcuts.shared.chord(for: "mergeAllWindows:")?.display ?? ""
+        check(titles == ["Keep Window Column Open", "Collapse Window Column", "Move to the \(other) Edge", "—", "Merge All Windows", "—", "Hide Window Column"]
+              && keys == ["", "⌃⌘S", "", merge, "⌃⇧⌘S"],
+              "window column: its right-click menu groups Pin or Unpin, Collapse and Move to the \(other) Edge, then Merge All Windows, then Hide, with ⌃⌘S and ⌃⇧⌘S",
+              "\(titles.joined(separator: " | ")); keys \(keys.joined(separator: ", "))")
+        if let move = menu.items.first(where: { $0.title.hasPrefix("Move to the") }) { menu.performActionForItem(at: menu.index(of: move)) }
+        let moved: Bool = app.windowColumnOnRight != onRight
+        let named: String = WindowColumnView.columnMenu().items.first { $0.title.hasPrefix("Move to the") }?.title ?? ""
+        check(moved && named == "Move to the \(onRight ? "Right" : "Left") Edge",
+              "window column: Move to the \(other) Edge moves it there, and the menu then offers the edge it left", "moved \(moved), then “\(named)”")
+        app.setWindowColumnSide(onRight ? .right : .left)
     }
 
     /// set_layout under a grant (as a remote door's own setting has it): hidden in every window, with a notice saying so

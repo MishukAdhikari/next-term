@@ -33,7 +33,7 @@ final class GoToHeadingController: NSObject, NSTextFieldDelegate, NSTableViewDat
         let height = 52 + Self.rowHeight * 12 + 30
         let frame = parent.frame
         let width = min(GoToFileController.width, frame.width - 40)
-        panel.setFrame(NSRect(x: frame.midX - width / 2, y: frame.maxY - 72 - height, width: width, height: height), display: false)
+        panel.setFrame(NSRect(x: frame.midX - width / 2, y: parent.contentTop - 72 - height, width: width, height: height), display: false)
         if panel.parent == nil { parent.addChildWindow(panel, ordered: .above) }
         panel.makeKeyAndOrderFront(nil)
         panel.makeFirstResponder(field)
@@ -125,10 +125,10 @@ final class GoToHeadingController: NSObject, NSTextFieldDelegate, NSTableViewDat
         panel.hasShadow = true
         panel.backgroundColor = .clear
         panel.isOpaque = false
-        panel.appearance = NSAppearance(named: .darkAqua)
+        panel.appearance = nil // the app\'s look (Settings › General › Appearance)
         let background = NSView()
         background.wantsLayer = true
-        background.layer?.backgroundColor = Theme.bar.cgColor
+        background.themedBackground(Theme.bar)
         background.layer?.cornerRadius = 10
         background.layer?.masksToBounds = true
         background.layer?.borderWidth = 1
@@ -279,7 +279,7 @@ final class GoToHeadingCell: NSTableCellView {
             let isMarked = (i..<j).contains { marked.contains($0) }
             text.append(NSAttributedString(string: String(decoding: utf8[i..<j], as: UTF8.self), attributes: [
                 .font: NSFont.systemFont(ofSize: 13, weight: isMarked ? .bold : weight),
-                .foregroundColor: isMarked ? (chosen ? NSColor.white : NSColor(hex: 0x6EA4F7)) : Theme.text,
+                .foregroundColor: isMarked ? (chosen ? NSColor.white : Theme.gitModified) : Theme.text,
             ]))
             i = j
         }

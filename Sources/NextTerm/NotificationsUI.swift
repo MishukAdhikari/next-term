@@ -145,7 +145,7 @@ final class NotificationSettingsView: NSView {
         case .allowed: permission.stringValue = "macOS lets Next Term show notifications."
         case .quiet: permission.stringValue = "Allowed, but set to None in System Settings: they go to Notification Center without a banner."
         case .off: permission.stringValue = "Notifications for Next Term are off in System Settings."
-        case .notAsked: permission.stringValue = "You haven’t answered macOS’s question yet. Send Test Notification asks again."
+        case .notAsked: permission.stringValue = "macOS hasn’t asked yet. It asks the first time a tab needs you, or now with Send Test Notification."
         case .unavailable: permission.stringValue = "Only the installed app can show notifications."
         }
         openSystemSettings.isHidden = status != .off && status != .quiet

@@ -1,0 +1,207 @@
+import Foundation
+
+/// One sign-in to a remote MCP server, start to end, off the main thread: where it signs in (MCPHubOAuthDiscovery),
+/// as which client (MCPHubOAuthRegistration), the loopback listener (MCPHubLoopback), the browser (`open`, which the
+/// app gives as NSWorkspace's, never a shell), the callback checked (MCPHubOAuthFlow), the code exchanged, and the
+/// sign-in kept (SignInStore). Only the user's click starts one: agents never do.
+public final class MCPHubSignIn: @unchecked Sendable {
+    public let name: String
+    public let server: URL
+    let challenge: MCPHubOAuthChallenge?
+    let own: MCPHubOAuthRegistration.Own?
+    /// The user's own app's secret, read from Secrets when the code is exchanged and not before (`own.secretName`): the
+    /// value, or why not. Never asked for the authorization request, which carries no secret.
+    let readSecret: (@Sendable (_ host: String) -> Result<String, MCPHubOAuth.Failure>)?
+    let store: SignInStore
+    let fetch: MCPHubOAuth.Fetch
+    let metadataDocument: String?
+    /// Scopes a reconnect for more access asks for, in place of the chosen ones.
+    let scopes: [String]?
+
+    private let lock = NSLock()
+    private var listener: MCPHubLoopback?
+    private var cancelled = false
+    /// Where it signs in, once found: for "Finish signing in at github.com".
+    public private(set) var metadata: MCPHubOAuthDiscovery.Metadata?
+
+    public init(name: String, server: URL, challenge: MCPHubOAuthChallenge?, own: MCPHubOAuthRegistration.Own? = nil,
+                readSecret: (@Sendable (_ host: String) -> Result<String, MCPHubOAuth.Failure>)? = nil,
+                store: SignInStore, fetch: @escaping MCPHubOAuth.Fetch, metadataDocument: String? = nil, scopes: [String]? = nil) {
+        self.name = name
+        self.server = server
+        self.challenge = challenge
+        self.own = own
+        self.readSecret = readSecret
+        self.store = store
+        self.fetch = fetch
+        self.metadataDocument = metadataDocument
+        self.scopes = scopes
+    }
+
+    /// Ends a sign-in waiting for the browser; `run` returns `cancelled`.
+    public func cancel() {
+        lock.lock()
+        cancelled = true
+        let waiting = listener
+        lock.unlock()
+        waiting?.close()
+    }
+
+    public static let cancelledText = "Sign-in was cancelled."
+
+    /// The token endpoint refused the user's own app (GitHub's `incorrect_client_credentials`).
+    public static func ownAppRefused(_ name: String) -> String {
+        "\(name) refused the client ID or secret. Check them in Settings \u{203A} MCP Servers \u{203A} Edit\u{2026}"
+    }
+
+    /// The server refused the loopback address as the app's callback (GitHub's `redirect_uri_mismatch`).
+    public static func callbackRefused(_ name: String) -> String {
+        "\(name) refused Next Term\u{2019}s sign-in address. Set your OAuth app\u{2019}s callback URL to \(MCPHubOAuthRegistration.redirect)."
+    }
+
+    /// The sign-in, waiting for the browser until `deadline` (10 minutes at most). `open` opens the authorization URL
+    /// and says whether it did. The record kept, or why not, as a sentence.
+    public func run(open: (URL) -> Bool, until deadline: Date = Date().addingTimeInterval(MCPHubLoopback.life)) -> Result<SignInFile.Record, MCPHubOAuth.Failure> {
+        let metadata: MCPHubOAuthDiscovery.Metadata
+        switch MCPHubOAuthDiscovery.discover(server: server, name: name, challenge: challenge, fetch: fetch) {
+        case .failure(let failure): return .failure(failure)
+        case .success(let found): metadata = found
+        }
+        lock.lock()
+        self.metadata = metadata
+        lock.unlock()
+
+        // The client first, then the listener at its port: a server may hold a registration's redirect to its port.
+        let registered: [MCPHubOAuthRegistration.Client]
+        switch store.read() {
+        case .success(let body): registered = body.registered(key: store.key)
+        case .failure: registered = []
+        }
+        var chosen: MCPHubOAuthRegistration.Client?
+        var endpoint: URL?
+        switch MCPHubOAuthRegistration.choose(name: name, metadata: metadata, own: own, registered: registered, metadataDocument: metadataDocument) {
+        case .none(let why): return .failure(MCPHubOAuth.Failure(why))
+        case .use(let found): chosen = found
+        case .register(let url): endpoint = url
+        }
+
+        let state = MCPHubOAuthFlow.random(32)
+        let box = PendingBox()
+        let listener: MCPHubLoopback
+        // The user's own app registered with an exact callback (Slack holds it to its port): that port, or nothing.
+        let exact = chosen?.kind == .preRegistered ? own?.redirect : nil
+        let exactPort = exact.flatMap(MCPHubServer.OAuthApp.redirectPort)
+        do {
+            listener = try MCPHubLoopback(port: exactPort ?? chosen?.port ?? 0, strict: exactPort != nil) { [name] query in
+                guard let pending = box.pending else { return nil }
+                switch MCPHubOAuthFlow.callback(query: query, pending: pending) {
+                case .notOurs: return nil
+                case .code: return MCPHubLoopback.page("Signed in to \(name). You can close this tab and go back to Next Term.")
+                case .denied: return MCPHubLoopback.page("Signing in to \(name) was cancelled. You can close this tab.")
+                case .wrongIssuer: return MCPHubLoopback.page("This sign-in came back from another server, so Next Term didn\u{2019}t use it.")
+                case .error: return MCPHubLoopback.page("\(name) didn\u{2019}t sign you in. You can close this tab and try again in Next Term.")
+                }
+            }
+        } catch {
+            if let exactPort {
+                return .failure(MCPHubOAuth.Failure("Another program on this Mac is using port \(exactPort), the one your OAuth app\u{2019}s callback "
+                    + "names, so Next Term can\u{2019}t listen for the sign-in. Quit it and try again, or give the app another callback."))
+            }
+            return .failure(MCPHubOAuth.Failure("Next Term couldn\u{2019}t listen for the sign-in\u{2019}s answer on this Mac."))
+        }
+        defer { listener.close() }
+        lock.lock()
+        self.listener = listener
+        let stop = cancelled
+        lock.unlock()
+        if stop { return .failure(MCPHubOAuth.Failure(Self.cancelledText)) }
+
+        // A registration whose port is unknown (kept before ports were) or taken now is made again, at this port.
+        if let found = chosen, !found.fits(listening: listener.port) {
+            chosen = nil
+            endpoint = metadata.registrationEndpoint.flatMap(URL.init(string:))
+            if endpoint == nil { return .failure(MCPHubOAuth.Failure("\(name) doesn\u{2019}t let Next Term register again. Remove \(name) and add it again.")) }
+        }
+        var client: MCPHubOAuthRegistration.Client
+        if let chosen {
+            client = chosen
+        } else if let endpoint {
+            switch MCPHubOAuthRegistration.register(at: endpoint, issuer: metadata.issuer, name: name, exact: listener.redirect, fetch: fetch) {
+            case .failure(let failure): return .failure(failure)
+            case .success(let made): client = made
+            }
+        } else {
+            return .failure(MCPHubOAuth.Failure("Next Term couldn\u{2019}t find how to sign in to \(name)."))
+        }
+        let wanted = scopes ?? metadata.scopes(challenge: challenge)
+        let pending = MCPHubOAuthFlow.Pending(state: state, metadata: metadata, client: client, redirect: exact ?? listener.redirect, scopes: wanted)
+        box.pending = pending
+        guard let url = pending.authorizationURL, MCPHubOAuthURL.isOpenable(url, server: server) else {
+            return .failure(MCPHubOAuth.Failure("\(name)\u{2019}s sign-in address isn\u{2019}t one Next Term opens."))
+        }
+        guard open(url) else { return .failure(MCPHubOAuth.Failure("Next Term couldn\u{2019}t open your browser to sign in to \(name).")) }
+
+        guard let query = listener.wait(until: min(deadline, Date().addingTimeInterval(MCPHubLoopback.life))) else {
+            lock.lock()
+            let stopped = cancelled
+            lock.unlock()
+            return .failure(MCPHubOAuth.Failure(stopped ? Self.cancelledText : "Signing in to \(name) took too long; try again."))
+        }
+        let code: String
+        switch MCPHubOAuthFlow.callback(query: query, pending: pending) {
+        case .code(let found): code = found
+        case .denied: return .failure(MCPHubOAuth.Failure("Signing in to \(name) was cancelled in the browser."))
+        case .wrongIssuer: return .failure(MCPHubOAuth.Failure("The sign-in came back from another server than \(metadata.issuerHost), so Next Term didn\u{2019}t use it."))
+        case .error("redirect_uri_mismatch"): return .failure(MCPHubOAuth.Failure(Self.callbackRefused(name)))
+        case .error(let error): return .failure(MCPHubOAuth.Failure("\(name) didn\u{2019}t sign you in (\(error))."))
+        case .notOurs: return .failure(MCPHubOAuth.Failure("The sign-in\u{2019}s answer wasn\u{2019}t this sign-in\u{2019}s."))
+        }
+        // The user's own app's secret, read now, for this one request: the pending sign-in never held it.
+        var exchange = pending
+        if client.kind == .preRegistered, client.secret == nil, own?.secretName != nil {
+            guard let readSecret else { return .failure(MCPHubOAuth.Failure("Next Term couldn\u{2019}t read your OAuth app\u{2019}s secret for \(name).")) }
+            switch readSecret(metadata.issuerHost) {
+            case .failure(let failure): return .failure(failure)
+            case .success(let secret):
+                client.secret = secret
+                exchange = MCPHubOAuthFlow.Pending(state: pending.state, pkce: pending.pkce, metadata: metadata, client: client,
+                                                   redirect: pending.redirect, scopes: pending.scopes)
+            }
+        }
+        guard let request = exchange.tokenRequest(code: code) else {
+            return .failure(MCPHubOAuth.Failure("\(name)\u{2019}s token address isn\u{2019}t one Next Term uses."))
+        }
+        let tokens: MCPHubOAuthFlow.Tokens
+        switch fetch(request) {
+        case .failure(let failure): return .failure(MCPHubOAuth.Failure("Next Term couldn\u{2019}t finish signing in to \(name): \(failure.text)"))
+        case .success(let response):
+            switch MCPHubOAuthFlow.tokens(response) {
+            case .success(let got): tokens = got
+            case .failure(.invalidClient) where client.kind == .preRegistered:
+                return .failure(MCPHubOAuth.Failure(Self.ownAppRefused(name)))
+            case .failure(.other("redirect_uri_mismatch")):
+                return .failure(MCPHubOAuth.Failure(Self.callbackRefused(name)))
+            case .failure(.invalidClient):
+                if client.kind == .registered { _ = try? store.update { body in body.forgetClient(issuer: metadata.issuer); return (true, ()) } }
+                return .failure(MCPHubOAuth.Failure("\(name) no longer knows Next Term\u{2019}s registration. Sign in again."))
+            case .failure(.invalidGrant): return .failure(MCPHubOAuth.Failure("\(name) didn\u{2019}t accept the sign-in\u{2019}s code; try again."))
+            case .failure(.other(let code)): return .failure(MCPHubOAuth.Failure("\(name) didn\u{2019}t finish the sign-in (\(code))."))
+            }
+        }
+        do {
+            let record = try SignInFile.record(name: name, server: server, metadata: metadata, client: client, tokens: tokens, scopes: wanted, key: store.key)
+            return .success(try store.add(record, client: client))
+        } catch {
+            return .failure(MCPHubOAuth.Failure("Next Term couldn\u{2019}t keep the sign-in to \(name): \(error.localizedDescription)"))
+        }
+    }
+
+    private final class PendingBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var held: MCPHubOAuthFlow.Pending?
+        var pending: MCPHubOAuthFlow.Pending? {
+            get { lock.lock(); defer { lock.unlock() }; return held }
+            set { lock.lock(); held = newValue; lock.unlock() }
+        }
+    }
+}

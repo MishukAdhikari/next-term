@@ -388,7 +388,7 @@ private final class RailMarkButton: NSButton {
             place.fill()
         }
         if hovering || isHighlighted {
-            NSColor.white.withAlphaComponent(isHighlighted ? 0.14 : 0.08).setFill()
+            Theme.overlay(isHighlighted ? 0.14 : 0.08).setFill()
             place.fill()
         }
         // An idle tab has no mark in the tab bar (nor a working one with Agent Spinner off); here it still needs

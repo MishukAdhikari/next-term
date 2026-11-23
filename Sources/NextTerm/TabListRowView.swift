@@ -27,7 +27,7 @@ final class TabListRowView: NSView, NSTextFieldDelegate {
     private static let hintFont = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular)
     /// A hovered row: a step darker than the top bar's hover, so the dim second line on it still reads at 4.5:1
     /// (4.56:1 here, 4.28:1 on the bar's).
-    static let hoverFill = NSColor(hex: 0x35373B)
+    static let hoverFill = Theme.hoverFill
     /// The row's own layers change at once, as its view's colours do: never a fade.
     private static let noAnimations: [String: CAAction] = [
         "backgroundColor": NSNull(), "bounds": NSNull(), "position": NSNull(), "hidden": NSNull(),
@@ -52,7 +52,13 @@ final class TabListRowView: NSView, NSTextFieldDelegate {
     private let detail = TabListText(labelWithString: "")
     /// The place mark, right after the title.
     private let placeMark = NSImageView()
+    /// An agent's context usage, after the title (and its place mark), as on the top bar.
+    private let gauge = ContextGaugeView()
     private let closeButton = NSButton()
+    /// A pinned tab's pin, where its × would be, and the hairline under the last pinned tab (plan 045).
+    private let pinView = NSImageView()
+    private let pinLine = NSView()
+    var showsPin: Bool { !pinView.isHidden }
     /// "⌘1": how to get to this tab from the keyboard, in the ×'s place on the rows that show none.
     private let hint = TabListText(labelWithString: "")
     private var renameField: NSTextField?
@@ -110,8 +116,7 @@ final class TabListRowView: NSView, NSTextFieldDelegate {
         idleDot.zPosition = -1
         slot.cornerRadius = 4
         idleDot.cornerRadius = 2.5
-        idleDot.backgroundColor = Theme.textDim.withAlphaComponent(0.7).cgColor
-        edge.backgroundColor = Theme.accent.cgColor
+        setMarkColours()
 
         label.font = Self.font
         label.textColor = Theme.text
@@ -129,6 +134,7 @@ final class TabListRowView: NSView, NSTextFieldDelegate {
         placeMark.contentTintColor = Theme.textDim
         placeMark.isHidden = true
         addSubview(placeMark)
+        addSubview(gauge)
 
         closeButton.bezelStyle = .regularSquare
         closeButton.isBordered = false
@@ -140,6 +146,16 @@ final class TabListRowView: NSView, NSTextFieldDelegate {
         closeButton.refusesFirstResponder = true // the list never takes the keyboard from the terminal
         closeButton.isHidden = true
         addSubview(closeButton)
+        pinView.image = NSImage(systemSymbolName: "pin.fill", accessibilityDescription: "Pinned")?
+            .withSymbolConfiguration(.init(pointSize: 9, weight: .semibold))
+        pinView.contentTintColor = Theme.textDim
+        pinView.isHidden = true
+        pinView.toolTip = "Pinned: Close Other Tabs leaves it, and closing it asks first."
+        addSubview(pinView)
+        pinLine.wantsLayer = true
+        pinLine.themedBackground(Theme.textDim.withAlphaComponent(0.35))
+        pinLine.isHidden = true
+        addSubview(pinLine)
         KeyHint.style(hint) // said in the row's own help, as the buttons' keys are in theirs
         hint.font = Self.hintFont
         hint.isHidden = true
@@ -194,6 +210,8 @@ final class TabListRowView: NSView, NSTextFieldDelegate {
         // The title makes room for the place mark, or takes it back; the mark follows the title's end.
         let placeMoved: Bool = (newRow.place == nil) != (old?.place == nil) || (newRow.place != nil && newRow.title != old?.title)
         if placeMoved { needsLayout = true }
+        if (newRow.context == nil) != (old?.context == nil) || (newRow.context != nil && newRow.title != old?.title) { needsLayout = true }
+        gauge.usage = newRow.context
         row = newRow
         selected = isSelected
         setAccessibilityLabel(newRow.accessibilityLabel)
@@ -215,17 +233,33 @@ final class TabListRowView: NSView, NSTextFieldDelegate {
     var shownDetail: String? { detail.isHidden ? nil : detail.stringValue }
     var showsClose: Bool { !closeButton.isHidden }
     var showsPlaceMark: Bool { !placeMark.isHidden }
+    /// For the self-test: the context gauge's percent, when it shows.
+    var shownContextPercent: Int? { gauge.shownPercent }
     var shownRemoteLink: RemoteLink? { remoteMark.isHidden ? nil : remoteMark.link }
 
     /// Whether `point`, in the row's coordinates, is on the × it shows.
     func closeContains(_ point: NSPoint) -> Bool { !closeButton.isHidden && closeButton.frame.contains(point) }
 
+    /// The look changed (Light, Dark, the Mac's): the fills set as layers' colours follow it.
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        setMarkColours()
+        refresh()
+    }
+
+    /// The idle dot's and the selection edge's colours, in the look the row is in now.
+    private func setMarkColours() {
+        idleDot.backgroundColor = ThemeLayers.resolved(Theme.textDim.withAlphaComponent(0.7), for: self)
+        edge.backgroundColor = ThemeLayers.resolved(Theme.accent, for: self)
+    }
+
     private func refresh() {
         let pane = isPane
-        layer?.backgroundColor = rowFill.cgColor
+        // Each fill in the look the row is in now, never the one current wherever this runs.
+        layer?.backgroundColor = ThemeLayers.resolved(rowFill, for: self)
         edge.isHidden = collapsed || pane || !selected
         slot.isHidden = !collapsed || !(selected || hovering)
-        if collapsed { slot.backgroundColor = Self.slotFill(selected: selected, hovering: hovering).cgColor }
+        if collapsed { slot.backgroundColor = ThemeLayers.resolved(Self.slotFill(selected: selected, hovering: hovering), for: self) }
         // An idle tab has no mark (nor a working one with Agent Spinner off); collapsed it still needs something to
         // see and click, as on the rail.
         idleDot.isHidden = !collapsed || StatusDotView.shows(row?.state ?? .idle)
@@ -245,19 +279,30 @@ final class TabListRowView: NSView, NSTextFieldDelegate {
         return hovering ? Self.hoverFill : .clear
     }
 
+    /// The selected tab under the pointer, collapsed: lighter on dark, as it was; the hover fill on light (lighter than
+    /// the paper would not show).
+    private static let selectedHover = NSColor(name: nil) { appearance in
+        let palette = Theme.palette(for: appearance)
+        let paper = NSColor(hex: palette.background)
+        return palette.isDark ? (paper.blended(withFraction: 0.08, of: .white) ?? paper) : NSColor(hex: palette.hoverFill)
+    }
+
     /// The selected tab's place in the collapsed column, lighter under the pointer, as the rail's.
     private static func slotFill(selected: Bool, hovering: Bool) -> NSColor {
-        let lift = NSColor.white.withAlphaComponent(0.08)
+        let lift = Theme.overlay(0.08)
         guard selected else { return hovering ? lift : .clear }
         guard hovering else { return Theme.background }
-        return Theme.background.blended(withFraction: 0.08, of: .white) ?? Theme.background
+        return selectedHover
     }
 
     /// The × and "⌘N" share one place at the row's end: the × on the selected or hovered row, the key on the
     /// others. So the title is as wide in every state, and never re-truncates as the pointer passes.
     private func updateCloseAndHint() {
         let tabRow = !isPane && !collapsed && !isEditing
-        let closeShown = tabRow && (selected || hovering)
+        let pinned = row?.pinned == true
+        if pinView.isHidden == (tabRow && pinned) { pinView.isHidden = !(tabRow && pinned) }
+        if pinLine.isHidden == (row?.endsPinnedGroup == true) { pinLine.isHidden = row?.endsPinnedGroup != true }
+        let closeShown = tabRow && !pinned && (selected || hovering)
         if closeButton.isHidden == closeShown { closeButton.isHidden = !closeShown }
         let hintShown = tabRow && !closeShown && hintFits
         if hint.isHidden == hintShown { hint.isHidden = !hintShown }
@@ -282,7 +327,7 @@ final class TabListRowView: NSView, NSTextFieldDelegate {
         dot.frame = NSRect(x: markX, y: markY, width: 10, height: 10)
         slot.frame = bounds.insetBy(dx: 3, dy: 2)
         idleDot.frame = CGRect(x: bounds.midX - 2.5, y: bounds.midY - 2.5, width: 5, height: 5)
-        let words: [NSView] = [label, detail, remoteMark, placeMark]
+        let words: [NSView] = [label, detail, remoteMark, placeMark, gauge]
         for view in words { view.isHidden = true }
         hintFits = false
     }
@@ -313,7 +358,8 @@ final class TabListRowView: NSView, NSTextFieldDelegate {
         // "⌘N" ends 14 points from the edge, in the ×'s place, as long as the title keeps 40 points to be read
         // (the bar's rule without its ×). Every tab row leaves the widest key's room, so they all decide alike.
         let closeX: CGFloat = w - 24
-        let hintEnd: CGFloat = w - 14
+        // A pinned tab's pin keeps the ×'s place: its key ends just before the pin.
+        let hintEnd: CGFloat = row.pinned && !pane ? closeX - 4 : w - 14
         let keyRoom: CGFloat = max(hintWidth, listHintWidth)
         let keysShow: Bool = !pane && listHintWidth > 0 && hintEnd - listHintWidth - 6 - labelX >= 40
         hintFits = keysShow && hintWidth > 0
@@ -325,13 +371,15 @@ final class TabListRowView: NSView, NSTextFieldDelegate {
         } else {
             titleEnd = w - 28
         }
-        let placeRoom: CGFloat = row.place == nil ? 0 : 15
+        let placeRoom: CGFloat = (row.place == nil ? 0 : 15) + (row.context == nil ? 0 : ContextGaugeView.size + 5)
         let titleWidth: CGFloat = max(0, titleEnd - labelX - placeRoom)
         let words = fittedTitle(within: titleWidth)
         if let words, label.stringValue != words { label.stringValue = words }
         label.frame = NSRect(x: labelX, y: titleY, width: titleWidth, height: titleHeight)
         label.isHidden = isEditing
         closeButton.frame = NSRect(x: closeX, y: lineMid - 9, width: 18, height: 18)
+        pinView.frame = closeButton.frame
+        pinLine.frame = NSRect(x: 8, y: bounds.height - 1, width: max(0, bounds.width - 16), height: 1) // flipped: the bottom
         let hintHeight: CGFloat = Self.hintHeight
         hint.frame = NSRect(x: hintEnd - hintWidth, y: lineMid - hintHeight / 2, width: hintWidth, height: hintHeight)
 
@@ -339,6 +387,10 @@ final class TabListRowView: NSView, NSTextFieldDelegate {
         placeMark.isHidden = row.place == nil
         let text: CGFloat = (label.stringValue as NSString).size(withAttributes: [.font: Self.font]).width + 4
         placeMark.frame = NSRect(x: labelX + min(titleWidth, ceil(text)) + 1, y: lineMid - 5.5, width: 11, height: 11)
+        // The context gauge after the place mark, or where it would be.
+        gauge.isHidden = row.context == nil
+        let gaugeX: CGFloat = placeMark.isHidden ? placeMark.frame.minX + 2 : placeMark.frame.maxX + 4
+        gauge.frame = NSRect(x: gaugeX, y: lineMid - ContextGaugeView.size / 2, width: ContextGaugeView.size, height: ContextGaugeView.size)
 
         remoteMark.isHidden = !remote
         let markSize: NSSize = RemoteMarkView.size

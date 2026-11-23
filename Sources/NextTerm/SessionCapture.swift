@@ -17,15 +17,25 @@ enum SessionCapture {
 
     /// Every terminal window. `scrollback` names the scrollback a quit saves for each tab, by tab id.
     static func windows(_ controllers: [TerminalWindowController], scrollback: [UUID: UUID] = [:]) -> [SessionSnapshot.Window] {
-        let numbered: [(offset: Int, element: TerminalWindowController)] = Array(controllers.enumerated())
+        // An agent's scratch window (AgentScratch) is not brought back.
+        let kept: [TerminalWindowController] = controllers.filter { !$0.isAgentScratch }
+        let numbered: [(offset: Int, element: TerminalWindowController)] = Array(kept.enumerated())
         let ordered = numbered.sorted { (a: (offset: Int, element: TerminalWindowController),
                                          b: (offset: Int, element: TerminalWindowController)) -> Bool in
             a.element.lastKey != b.element.lastKey ? a.element.lastKey > b.element.lastKey : a.offset < b.offset
         }
         let opened: [ObjectIdentifier: Int] = openingOrder(controllers)
+        // Windows merged into one, numbered as they first come front to back: an unchanged session saves the same numbers.
+        var tabGroups: [ObjectIdentifier: Int] = [:]
         let windows = ordered.map { (entry: (offset: Int, element: TerminalWindowController)) -> SessionSnapshot.Window in
             var saved = window(entry.element, scrollback: scrollback)
             saved.opened = opened[ObjectIdentifier(entry.element)]
+            if let shown = entry.element.window, let group = shown.tabGroup, group.windows.count > 1,
+               let place = group.windows.firstIndex(where: { $0 === shown }) {
+                let number: Int = tabGroups[ObjectIdentifier(group)] ?? tabGroups.count
+                tabGroups[ObjectIdentifier(group)] = number
+                saved.windowTab = SessionSnapshot.WindowTab(group: number, place: place, front: group.selectedWindow === shown)
+            }
             return saved
         }
         let open = Set(controllers.flatMap(\.tabs).map(\.id))
@@ -55,10 +65,11 @@ enum SessionCapture {
         let project = controller.project
         let groups: [SessionSnapshot.Group] = controller.groups.map { (group: PaneGroup) -> SessionSnapshot.Group in
             SessionSnapshot.Group(root: node(group.root, project: project, scrollback: scrollback), focused: group.focused.id,
-                                  zoomed: group.zoomed?.id)
+                                  zoomed: group.zoomed?.id, pinned: group.pinned)
         }
         var window = SessionSnapshot.Window(project: project, groups: groups, selected: controller.activeIndex)
-        if let shown = controller.window {
+        // Merged behind another's tab, the window takes the frame, screen and state of the tab in front: they are one.
+        if let shown = controller.window?.shownWindow {
             let frame = shown.frame
             window.frame = SessionSnapshot.Frame(x: Double(frame.origin.x), y: Double(frame.origin.y), width: Double(frame.width),
                                                  height: Double(frame.height))
@@ -101,7 +112,11 @@ enum SessionCapture {
         } else {
             pane.folder = tab.liveDirectory
             pane.systemZsh = tab.shellPath == "/bin/zsh"
-            if status.running && !tab.exited {
+            if status.running && !tab.exited, let record = AgentSessionSocket.record(of: tab) {
+                // An agent session (`nxtrm agent NAME`, plan 035 U7): its own record, not the agent process under it, which
+                // runs in the session's protocol and resumes through it.
+                pane.agentSession = record
+            } else if status.running && !tab.exited {
                 pane.agent = ProcessInspector.agentEvidence(ptyFileDescriptor: tab.view.process.childfd,
                                                             shellPid: tab.view.process.shellPid, status: status,
                                                             home: RestorePlanning.agentHome, shownSession: tab.shownSessionID)

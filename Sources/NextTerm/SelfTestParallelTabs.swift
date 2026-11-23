@@ -60,19 +60,26 @@ extension SelfTest {
             try? FileManager.default.removeItem(atPath: home)
             try? FileManager.default.removeItem(atPath: proj.path + "/.agents")
         }
-        func library(_ tool: String, _ arguments: [String: Any]) async -> MCPServer.CallResult {
+        func library(_ tool: String, _ arguments: [String: Any], caller: pid_t? = nil) async -> MCPServer.CallResult {
             var result = MCPServer.CallResult(text: "", isError: false)
-            MCPControl.call(tool, arguments, caller: nil) { result = $0 }
+            MCPControl.call(tool, arguments, caller: caller) { result = $0 }
             _ = await wait(10) { !result.text.isEmpty }
             return result
         }
-        let skills = await library("list_skills", ["project": proj.path])
-        let ours = await library("get_skill", ["name": "next-term-tabs"]), mine = await library("get_skill", ["name": "/selftest-local", "project": proj.path])
+        // As the worker's agent asks, naming no project: its tab's folder is the project's (SkillsMCP.libraryStart). This
+        // window is a plain one, in no project, so a project named outright is refused, as the tools' contract says.
+        let asker: pid_t = worker.view.process.shellPid
+        let skills = await library("list_skills", [:], caller: asker)
+        let ours = await library("get_skill", ["name": "next-term-tabs"], caller: asker)
+        let mine = await library("get_skill", ["name": "/selftest-local"], caller: asker)
+        let named = await library("list_skills", ["project": proj.path])
         check(skills.text.contains("\"selftest-local\"") && skills.text.contains("\"project\"") && mine.text.contains("A project skill.")
               && (offerBefore ? ours.text.contains("name: next-term-tabs") && skills.text.contains("next-term-tabs") : ours.isError)
               && !FileManager.default.fileExists(atPath: home + "/.agents/skills/next-term-tabs"),
               "parallel tabs: list_skills and get_skill give the project's skills and Next Term's own while it is on, writing nothing",
               String((skills.text + " " + ours.text + " " + mine.text).prefix(600)))
+        check(c.project != nil || (named.isError && named.text.hasPrefix("Not in an open project: \(proj.path).")),
+              "parallel tabs: list_skills refuses a project that is not open", String(named.text.prefix(200)))
 
         let editor = EditorSettingsView()
         var set = MCPServer.CallResult(text: "", isError: false)

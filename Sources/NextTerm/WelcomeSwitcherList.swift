@@ -267,7 +267,7 @@ final class SwitcherHeadingRowView: NSTableRowView {
 enum SwitcherRowStyle {
     /// Secondary text (folder, branch, destination) on a selected row. `Theme.textDim` is 3.74:1 on the selection's
     /// blue, under the 4.5:1 small text needs; this is 5.10:1.
-    static let selectedSecondary = NSColor(hex: 0xB8BBC2)
+    static let selectedSecondary = Theme.pair(light: NSColor(hex: 0x4A4F5A), dark: NSColor(hex: 0xB8BBC2))
     static let gutterCenter: CGFloat = 20
     /// Where the names start in a row: the gutter, 14 to 26, then 8.
     static let nameX: CGFloat = 34
@@ -372,19 +372,29 @@ final class SwitcherMarksView: NSStackView {
         }
         counts = []
         links = []
+        // Each count before its mark ("2 ✓"), so the marks keep one place at the row's end, with or without a count.
         for mark in marks {
-            let view: NSView = mark.disconnected ? link(color) : dot(mark.state)
-            addArrangedSubview(view)
-            guard mark.count > 1 else { continue }
-            let count = NSTextField(labelWithString: "\(mark.count)")
-            count.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
-            count.textColor = color
-            count.setAccessibilityElement(false)
-            addArrangedSubview(count)
-            setCustomSpacing(3, after: view)
-            counts.append(count)
+            if mark.count > 1 {
+                let count = NSTextField(labelWithString: "\(mark.count)")
+                count.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+                count.textColor = color
+                count.setAccessibilityElement(false)
+                addArrangedSubview(count)
+                setCustomSpacing(3, after: count)
+                counts.append(count)
+            }
+            addArrangedSubview(mark.disconnected ? link(color) : dot(mark.state))
         }
         isHidden = marks.isEmpty
+    }
+
+    /// Where its first count's baseline is under its top, laid out `height` tall; nil with no count.
+    func countBaseline(height: CGFloat) -> CGFloat? {
+        guard let count = counts.first else { return nil }
+        if frame.height != height { setFrameSize(NSSize(width: fittingSize.width, height: height)) }
+        layoutSubtreeIfNeeded()
+        // The stack is not flipped: its top is at its height.
+        return height - count.frame.maxY + count.firstBaselineOffsetFromTop
     }
 
     private func dot(_ state: TabState) -> StatusDotView {

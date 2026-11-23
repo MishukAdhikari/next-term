@@ -14,8 +14,11 @@ extension SecretsView {
         let alert = NSAlert()
         alert.messageText = "Never show \(name) again?"
         alert.informativeText = neverShowInfo
-        alert.addButton(withTitle: neverShowButton)
-        alert.addButton(withTitle: "Cancel")
+        // It can't be undone: Cancel holds Return, and Never Show is marked destructive.
+        let never = alert.addButton(withTitle: neverShowButton)
+        never.keyEquivalent = ""
+        never.hasDestructiveAction = true
+        alert.addButton(withTitle: "Cancel").keyEquivalent = "\r"
         return alert
     }
 

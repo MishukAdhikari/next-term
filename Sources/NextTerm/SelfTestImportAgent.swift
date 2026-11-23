@@ -105,8 +105,8 @@ extension SelfTest {
             window.applyForTest()
         }
         let text = shown.joined(separator: "\n")
-        check(text.contains("outside Next Term's tabs") && text.contains("asks to bring these over from NT Agent Editor")
-              && text.contains("“\(reason)”") && shown.contains("Decline and Stop Asking"),
+        check(text.contains("outside Next Term’s tabs") && text.contains("asks to bring these over from NT Agent Editor")
+              && text.contains("“\(reason)”") && shown.contains("Don’t Ask Again"),
               "import tools: apply_import opens the import window with a banner naming who asks, in their words", text)
         check(states == ["preset": true, "set:fontSize": true, "set:softWrap": false, "set:terminalCursorBlink": false],
               "import tools: the agent's rows start ticked and the others unticked", "\(states)")
@@ -174,11 +174,11 @@ extension SelfTest {
               busy.text)
         window.window?.close()
 
-        // One request at a time across the write tools; Decline and Stop Asking stops the agent's write tools too.
+        // One request at a time across the write tools; Don’t Ask Again stops the agent's write tools too.
         var meanwhile: (text: String, isError: Bool) = ("", false)
         let stopped = await importAsked(["source": "nt-agent-editor", "items": ["set:terminalCursorBlink"]]) {
             meanwhile = await importRawCall("settings_set", ["values": ["soft_wrap": !app.softWrap]])
-            importButton(window, "Decline and Stop Asking")?.performClick(nil)
+            importButton(window, "Don’t Ask Again")?.performClick(nil)
         }
         check(meanwhile.isError && meanwhile.text.contains("Another change is waiting"),
               "import tools: another write tool waits while an import request is open", meanwhile.text)
@@ -186,7 +186,7 @@ extension SelfTest {
         let settingsAfter = await importRawCall("settings_set", ["values": ["soft_wrap": !app.softWrap]])
         check(stopped.json["status"] as? String == "declined" && afterStop.json["status"] as? String == "stopped" && window.agentAsk == nil
               && settingsAfter.isError && settingsAfter.text == MCPWriteControl.stoppedText && MCPWriteControl.pending == nil,
-              "import tools: after Decline and Stop Asking, apply_import and settings_set are refused without a window", afterStop.text)
+              "import tools: after Don’t Ask Again, apply_import and settings_set are refused without a window", afterStop.text)
         MCPWriteControl.stopped = []
         // The request declined above had this source and plan: forgotten, or the next one would answer declined at once.
         MCPImportControl.declined = []

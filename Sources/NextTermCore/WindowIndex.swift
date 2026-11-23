@@ -50,6 +50,17 @@ public struct AgentMarks: Equatable, Sendable {
         }
     }
 
+    /// Two windows' marks counted together: a folded group's row shows its worktrees' with its own.
+    public static func + (lhs: AgentMarks, rhs: AgentMarks) -> AgentMarks {
+        var sum: AgentMarks = lhs
+        sum.attention += rhs.attention
+        sum.failed += rhs.failed
+        sum.done += rhs.done
+        sum.working += rhs.working
+        sum.disconnected += rhs.disconnected
+        return sum
+    }
+
     /// The terminals and herdr's agents that need you: the ones Go to Next Agent Needing You goes to.
     public var needingYou: Int { attention + failed + done }
 
@@ -195,6 +206,14 @@ public struct WindowIndex: Sendable {
             let lost: [Tab] = own.filter { (tab: Tab) -> Bool in tab.disconnected && tab.state == .idle }
             marks.disconnected = lost.count
             return marks
+        }
+
+        /// What is in front in it, as its title says after its name (WindowTitle.make): the file the editor has the
+        /// keyboard in, else its tab's title ("claude", "npm run dev"); nil when the title is the name alone.
+        public var front: String? {
+            let lead: String = name + " — "
+            guard title.count > lead.count, title.hasPrefix(lead) else { return nil }
+            return String(title.dropFirst(lead.count))
         }
 
         /// What the index knows its entries by: each terminal's id, and each of herdr's agents' key.

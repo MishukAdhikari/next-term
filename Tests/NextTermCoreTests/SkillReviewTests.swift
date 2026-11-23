@@ -471,8 +471,8 @@ import Testing
         for text in [parts, runners, downloads, decodes, opencode, plugins, spans, lines] {
             for pattern in patterns { #expect(text.range(of: pattern, options: .regularExpression) == nil) }
         }
-        // About half a second alone; the read-forward forms took 40 s and more. The margin is for a loaded machine.
-        #expect(Date().timeIntervalSince(start) < 6)
+        // About 1.4 s on a Mac, and CI runners have taken 6.8; the read-forward forms took 40 s and more.
+        #expect(Date().timeIntervalSince(start) < 20)
     }
 
     // MARK: server JSON files

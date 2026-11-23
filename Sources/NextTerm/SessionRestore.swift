@@ -94,18 +94,24 @@ final class SessionRestore {
         let scrollback = takeScrollback(decision, snapshot: read.snapshot, files: files)
         writer = SessionWriter(files: files, after: read.snapshot?.header.generation ?? 0, bootSession: UpdateMarker.currentBootSession())
         startSaving()
-        var opened = false
+        var restored: Restored?
         switch decision.kind {
         case .restore(let kind):
             let consent = decision.consentHolds(recorded: recorded)
-            if let snapshot = read.snapshot { opened = restore(snapshot, kind: kind, safeMode: false, consent: consent, scrollback: scrollback) }
+            if let snapshot = read.snapshot { restored = restore(snapshot, kind: kind, safeMode: false, consent: consent, scrollback: scrollback) }
         case .safeMode(let kind):
-            if let snapshot = read.snapshot { opened = restore(snapshot, kind: kind, safeMode: true, consent: false, scrollback: [:]) }
+            if let snapshot = read.snapshot { restored = restore(snapshot, kind: kind, safeMode: true, consent: false, scrollback: [:]) }
         case .quarantine:
             setAside(files)
         case .normal:
             break
         }
+        // Why each pane came back as it did, kept until the next launch replaces it (plan 046).
+        let report = RestoreReport(decision: decision, snapshot: restored == nil ? nil : read.snapshot, plans: restored?.planned.plans ?? [],
+                                   planTimedOut: restored?.planned.timedOut ?? false, appVersion: version)
+        report.write(in: files)
+        self.report = report
+        let opened = restored?.opened ?? false
         openGate()
         if decision.attemptsReset == .afterLaunch { settle(after: RestoreAttempts.settleTime) }
         return decision.launchRestore(openedWindow: opened)
@@ -122,11 +128,17 @@ final class SessionRestore {
         return ScrollbackText.take(ids, quit: decision.scrollbackQuit, from: files)
     }
 
+    /// What a restore built: whether a window opened, and the plan it built from.
+    private struct Restored {
+        var opened: Bool
+        var planned: RestorePlanning.Planned
+    }
+
     /// Builds the snapshot's windows in this turn (KTD10) and hands each pane's action to `RestoreActions`. Nothing a
     /// request names has opened yet: AppDelegate holds what `application(_:open:)` names until this has run, and opens it
-    /// after, in front of these windows (R32). True when a window was built.
+    /// after, in front of these windows (R32). Its `opened` is true when a window was built.
     private func restore(_ snapshot: SessionSnapshot, kind: SessionSnapshot.RestoreKind, safeMode: Bool, consent: Bool,
-                         scrollback: [UUID: String]) -> Bool {
+                         scrollback: [UUID: String]) -> Restored {
         RemoteConnection.holdRestore()
         let planned = RestorePlanning.plan(snapshot, kind: kind, safeMode: safeMode, quitConsent: consent)
         let savedAt: ScrollbackText.SavedAt? = kind == .update ? .update : kind == .quit ? .quit : nil
@@ -134,13 +146,25 @@ final class SessionRestore {
         RemoteConnection.releaseRestore(kept: built.keptRemote)
         RemoteConnection.tellSkipped(built.skipped, kept: false)
         let actions = RestoreActions(panes: built.panes, safeMode: safeMode)
+        actions.onRecheck = { [weak self] (pane: UUID, entry: RestoreRecheck.Entry) in self?.recordRecheck(entry, pane: pane) }
         MCPRestoredTabs.restored(built.panes)
         self.actions = actions
         actions.onSettled = { [weak self] in self?.restoreSettled() }
         phase = safeMode ? .safeMode : .restoringTabs
         actions.start()
         if safeMode { DispatchQueue.main.async { SessionRestoreAlerts.askAfterSafeMode() } }
-        return !built.windows.isEmpty
+        return Restored(opened: !built.windows.isEmpty, planned: planned)
+    }
+
+    /// The launch's restore report (`last-restore.json`), as last written.
+    private var report: RestoreReport?
+
+    /// A held pane was checked again (RestoreRecheck): the report is written again with it, on the saves' queue.
+    private func recordRecheck(_ entry: RestoreRecheck.Entry, pane: UUID) {
+        guard var report, let files else { return }
+        report.record(entry, pane: pane)
+        self.report = report
+        queue.async { report.write(in: files) }
     }
 
     /// Safe mode's Try Again (R21): one more try, counted first, applies each pane's action. A try the folder refuses to
@@ -257,6 +281,8 @@ final class SessionRestore {
             }
         }
         let windows = SessionCapture.windows(controllers, scrollback: named)
+        // An update's quit: the windows kept apart too, until its relaunch has shown them all back (BeforeUpdate).
+        if case .update = intent { BeforeUpdateControl.save(windows, in: files) }
         let scrollback: [QuitScrollback] = captures.map { (capture: SessionScrollback.Capture) -> QuitScrollback in
             QuitScrollback(id: capture.id) { capture.text() }
         }

@@ -273,7 +273,7 @@ final class Updater {
     private static var frontWindow: NSWindow? {
         let candidates = [NSApp.mainWindow, NSApp.keyWindow] + NSApp.orderedWindows
         return candidates.compactMap { $0 }.first { window in
-            window.isVisible && !window.isMiniaturized && (window is TerminalWindow || window === AppDelegate.shared.welcomeController?.window)
+            window.isShownFrame && (window is TerminalWindow || window === AppDelegate.shared.welcomeController?.window)
         }
     }
 
@@ -687,6 +687,7 @@ final class UpdateProgressWindow: NSObject, URLSessionTaskDelegate, URLSessionDo
         panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 360, height: 92), styleMask: [.titled], backing: .buffered, defer: false)
         super.init()
         panel.title = "Software Update"
+        panel.keepsItsOwnFrame()
         label.stringValue = title
         Typography.singleLine(label, truncation: .byTruncatingTail)
         bar.isIndeterminate = false

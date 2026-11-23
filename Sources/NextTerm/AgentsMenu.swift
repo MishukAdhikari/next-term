@@ -6,6 +6,8 @@ import NextTermCore
 /// title ("Skills… (2 updates)"). Nothing shows with no update, or before any check has answered.
 extension AppDelegate {
     @objc func showSkillsSettings(_ sender: Any?) { showSettings(tab: "skills") }
+    /// Agents › MCP Servers…: Settings › MCP Servers, the servers every agent in Next Term reaches.
+    @objc func showMCPServersSettings(_ sender: Any?) { showSettings(tab: "mcp") }
 }
 
 @MainActor
@@ -85,7 +87,8 @@ enum SkillsUpdateCheck {
         guard !checking, SkillsStore.home == NSHomeDirectory() else { return }
         // Due a day after the last check (Window › Skills' and Check for Updates count), or with no answers kept yet.
         let kept = UserDefaults.standard.data(forKey: answersKey) != nil
-        let due = SkillsWindowController.checksOnOpen
+        // Update automatically checks daily too, even with the check's own box off: it needs the day's answers.
+        let due = (SkillsWindowController.checksOnOpen || SkillsAutoUpdate.isOn)
             && SkillUpdates.isDue(now: Date(), lastCheck: kept ? SkillsInstaller.lastCheck : nil, lastFailure: failedAt)
         guard due || !SkillsInstaller.updates.isEmpty else { return }
         checking = true
@@ -94,6 +97,8 @@ enum SkillsUpdateCheck {
             let tracked = await SkillsInstaller.tracked()
             guard due, !tracked.isEmpty else { return prune(to: tracked) }
             failedAt = await SkillsInstaller.checkForUpdates(tracked, quietly: true) ? nil : Date()
+            // Then, with Update automatically on, the day's updates that may go unattended install (SkillsAutoUpdate).
+            if failedAt == nil { await SkillsAutoUpdate.run() }
         }
     }
 

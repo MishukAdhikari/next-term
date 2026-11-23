@@ -199,7 +199,7 @@
       {
         "allowed" : true,
         "from" : "map cmd+shift+w → close_os_window",
-        "id" : "key:performClose:",
+        "id" : "key:closeWindow:",
         "new" : "⇧⌘W",
         "note" : null,
         "now" : "no key",

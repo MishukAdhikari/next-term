@@ -42,6 +42,9 @@ final class SecretLinkField: NSStackView, NSTextFieldDelegate {
 
     required init?(coder: NSCoder) { fatalError("not used") }
 
+    /// "Where it came from" over the field, styled as the window around it styles its captions.
+    let captionLabel = NSTextField(labelWithString: SecretLinkField.caption)
+
     private func build() {
         orientation = .vertical
         alignment = .leading
@@ -65,9 +68,8 @@ final class SecretLinkField: NSStackView, NSTextFieldDelegate {
         refusalLabel.font = .systemFont(ofSize: 11)
         refusalLabel.textColor = .systemOrange
         refusalLabel.isHidden = true
-        let caption = NSTextField(labelWithString: Self.caption)
-        caption.font = .systemFont(ofSize: 12, weight: .semibold)
-        for view in [caption, field, chip, refusalLabel] { addArrangedSubview(view) }
+        captionLabel.font = .systemFont(ofSize: 12, weight: .semibold)
+        for view in [captionLabel, field, chip, refusalLabel] { addArrangedSubview(view) }
         for view in [field, refusalLabel] { view.widthAnchor.constraint(equalTo: widthAnchor).isActive = true }
         refresh()
     }

@@ -726,14 +726,19 @@ public enum SecretImport {
         guard let value, case .object(let headers) = value else { return [] }
         var found: [Detected] = []
         for header in headers.members {
-            guard case .scalar(let range) = header.value, let raw = header.value.object(in: text) as? String else { continue }
-            let bare = raw.hasPrefix("Bearer ") ? String(raw.dropFirst(7)) : raw
-            let name = header.key.lowercased() == "authorization" ? "AUTH" : header.key
-            guard let kind = detect(name: name, value: bare) else { continue }
+            guard case .scalar(let range) = header.value, let raw = header.value.object(in: text) as? String,
+                  let kind = headerKind(name: header.key, value: raw) else { continue }
             found.append(Detected(field: .header(header.key), variable: header.key, value: SecretBytes(utf8: raw), kind: kind, notMovable: headerReason,
                                   range: offsets(range, in: text)))
         }
         return found
+    }
+
+    /// Whether a header's value holds a key, and what kind (`detect`): an `Authorization` header is one by its name, and
+    /// its `Bearer ` is not part of the key. The MCP hub's rules refuse one too (MCPHubRules).
+    static func headerKind(name: String, value: String) -> String? {
+        let bare = value.hasPrefix("Bearer ") ? String(value.dropFirst(7)) : value
+        return detect(name: name.lowercased() == "authorization" ? "AUTH" : name, value: bare)
     }
 
     // MARK: TOML

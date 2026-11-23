@@ -42,7 +42,8 @@ enum SecretsMCP {
     }
 
     static let cantOpenNote = "Secrets can't be opened on this Mac. The user can see why in Settings › Secrets."
-    static let listNote = "Values are never returned. Use run_with_secrets, or nxtrm secret run in an MCP server's config."
+    /// With every list_secrets answer that lists keys: how to use one by name (MCPServer.secretsListNote).
+    static let listNote = MCPServer.secretsListNote
     static let atTheMacNote = "Only someone at the Mac can add keys."
 
     /// A call through the remote door: one with a `requester`, or a `connection`.
@@ -84,12 +85,14 @@ enum SecretsMCP {
     static func listSecrets() -> [String: Any] {
         let store = SecretsStore.shared
         store.reloadIfChanged()
-        guard let index = store.index else { return ["vault": "none", "secrets": [Any](), "note": listNote] }
+        // A vault that can't be read says so before "none": a tampered one may have no index read yet, and "none" would
+        // send the agent to the user's own setup.
         switch store.protection {
         case .cantOpen: return ["vault": "cant_open", "secrets": [Any](), "note": cantOpenNote]
         case .tampered: return ["vault": "tampered", "secrets": [Any](), "note": cantOpenNote]
         default: break
         }
+        guard let index = store.index else { return ["vault": "none", "secrets": [Any](), "note": MCPServer.secretsNoneNote] }
         let time = ISO8601DateFormatter()
         let now = Date()
         let secrets: [[String: Any]] = index.entries.map { (entry: SecretVault.Entry) -> [String: Any] in
@@ -150,7 +153,7 @@ enum SecretsMCP {
         if let connection = facts.connection { return "The remote connection “\(connection)”" }
         if let agent = facts.agent { return agent }
         if let tab = facts.tab { return "An agent in \(tab)" }
-        return "An agent outside Next Term's tabs"
+        return "An agent outside Next Term’s tabs"
     }
 
     // MARK: request_secret
@@ -313,6 +316,15 @@ enum SecretsMCP {
             result["tab_id"] = tabID
             resolve(call, result)
         }
+        // The calling agent's own process (above the MCP bridge), with its run in its tab: "Allow for this session" binds to
+        // it, so a background job of the tab or a later agent there is another session. None without both.
+        // Only when that agent is the one in front of its tab, which the panel names, by its process: an agent another one
+        // started (a codex its Bash runs) gets no session choice; one started by an alias, a script or npx does.
+        if let caller, let bridge = facts.pid, let agent = SecretSocket.agentAbove(bridge), SecretSocket.isFrontAgent(agent, in: caller) {
+            ticket.session = SecretRequests.session(agent: agent.pid, in: caller)
+            ticket.agent = agent
+            ticket.callerTab = caller.id
+        }
         calls[call.id] = call
         requests.add(ticket)
         MCPControl.driven.insert(ticketTab.id)
@@ -325,6 +337,8 @@ enum SecretsMCP {
                     : "Next Term couldn't type the line in that tab."
                 return resolve(call, told(["status": "refused", "note": note, "tab_id": tabID]))
             }
+            // A new tab of its own closes by itself once the command finishes well (CommandPaneAutoClose).
+            if target == nil { CommandPaneAutoClose.watch(ticketTab, before: ticketTab.status.commandsAtPrompt) }
             MCPControl.type(line, into: ticketTab, submit: true)
             requests.typed(ticket)
         }
@@ -444,6 +458,10 @@ enum SecretsMCP {
             case .once, .remote: approved = "once"
             case .fifteenMinutes: approved = "for 15 minutes"
             case .untilLock: approved = "until the Mac locks"
+            case .session: approved = "for this session"
+            case .worktreeUntilQuit: approved = "in this worktree until Next Term quits"
+            case .folderUntilQuit: approved = "in this folder until Next Term quits"
+            case .always: approved = "always, here"
             case .grant: approved = "by an earlier approval"
             }
             return ["status": Status.started.rawValue, "approved": approved,
@@ -451,7 +469,7 @@ enum SecretsMCP {
         case .saved(let name, let replaced):
             return ["status": Status.saved.rawValue, "name": name, "replaced": replaced]
         case .declined(let stopAsking):
-            let note = stopAsking ? "The user chose Decline and Stop Asking: Next Term won't ask them for you again until it quits."
+            let note = stopAsking ? "The user chose Don’t Ask Again: Next Term won't ask them for you again until it quits."
                 : "The user declined, so \(nothing)."
             return ["status": Status.declined.rawValue, "note": note]
         case .answered(let answer):
@@ -486,7 +504,7 @@ enum SecretsMCP {
             return ["status": Status.declined.rawValue, "note": "paused because you declined this at \(SecretRequests.clockText(declinedAt))"]
         case .stopped:
             return ["status": Status.declined.rawValue,
-                    "note": "The user chose Decline and Stop Asking for you: Next Term won't ask again until it quits."]
+                    "note": "The user chose Don’t Ask Again for you: Next Term won't ask again until it quits."]
         case .declining(let until):
             return ["status": Status.declined.rawValue, "note": "Next Term is pausing key requests until \(SecretRequests.clockText(until))."]
         }

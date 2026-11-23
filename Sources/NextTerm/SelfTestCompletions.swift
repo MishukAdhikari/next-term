@@ -870,7 +870,7 @@ extension SelfTest {
         let settings = SettingsWindowController()
         settings.showTab("terminal")
         guard let settingsWindow = settings.window, let tabs = settingsWindow.contentView as? NSTabView,
-              let view = tabs.selectedTabViewItem?.view else { return check(false, "Tab completion: Settings › Terminal opens") }
+              let view = tabs.selectedTabViewItem?.pane else { return check(false, "Tab completion: Settings › Terminal opens") }
         func find(_ root: NSView) -> CompletionSettingsPane? {
             if let pane = root as? CompletionSettingsPane { return pane }
             for sub in root.subviews { if let pane = find(sub) { return pane } }

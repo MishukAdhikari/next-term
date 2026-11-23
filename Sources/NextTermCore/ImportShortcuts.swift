@@ -23,7 +23,7 @@ public enum ImportShortcuts {
             "splitDown:": "Split Down",
             "renameTab:": "Rename Tab…",
             "closeTab:": "Close Tab",
-            "performClose:": "Close Window",
+            "closeWindow:": "Close Window",
             "undo:": "Undo",
             "redo:": "Redo",
             "cut:": "Cut",
@@ -52,7 +52,6 @@ public enum ImportShortcuts {
             "revealInSidebar:": "Show File in Project Sidebar",
             "showChanges:": "Show Changes",
             "toggleSoftWrap:": "Soft Wrap",
-            "toggleSidebarSide:": "Project Sidebar on the Right",
             "increaseFontSize:": "Bigger",
             "decreaseFontSize:": "Smaller",
             "resetFontSize:": "Actual Size",
@@ -60,6 +59,12 @@ public enum ImportShortcuts {
             "performMiniaturize:": "Minimize",
             "showNextTab:": "Show Next Tab",
             "showPreviousTab:": "Show Previous Tab",
+            "selectPreviousTab:": "Show Previous Project Tab",
+            "selectNextTab:": "Show Next Project Tab",
+            "moveTabToNewWindow:": "Move Project to New Window",
+            "mergeAllWindows:": "Merge All Windows",
+            "toggleTabBar:": "Show Project Tab Bar",
+            "toggleTabOverview:": "Show All Project Tabs",
             "selectPaneLeft:": "Select Pane on the Left",
             "selectPaneRight:": "Select Pane on the Right",
             "selectPaneAbove:": "Select Pane Above",
@@ -86,6 +91,12 @@ public enum ImportShortcuts {
         for position in ["bottom", "right", "left", "top"] {
             titles["setTerminalPosition:" + position] = "Terminal Position › " + position.capitalized
         }
+        for side in ["left", "right"] {
+            titles["chooseSidebarSide:" + side] = "Project Sidebar Position › " + side.capitalized
+            titles["chooseWindowColumnSide:" + side] = "Window Column Position › " + side.capitalized
+        }
+        titles["toggleSidebarSide:"] = "Project Sidebar Position › Move to the Other Side"
+        titles["toggleWindowColumnSide:"] = "Window Column Position › Move to the Other Side"
         for n in 1...8 { titles["selectTabByNumber:#\(n)"] = "Select Tab \(n)" }
         return titles
     }()

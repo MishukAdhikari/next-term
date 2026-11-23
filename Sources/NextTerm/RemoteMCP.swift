@@ -10,11 +10,23 @@ enum RemoteMCP {
     private static func fail(_ text: String) -> MCPServer.CallResult { MCPControl.fail(text) }
     private static func ok(_ value: Any) -> MCPServer.CallResult { MCPControl.ok(value) }
 
-    static func call(_ tool: String, _ arguments: [String: Any], caller: TerminalTab?, reply: @escaping Reply) {
+    /// `approval`, `requester` and `connection`: as MCPControl.call has them, for the tools that ask on the Mac first
+    /// (saving, changing and forgetting a host, ending a session; MCPWriteControl.approve).
+    static func call(_ tool: String, _ arguments: [String: Any], caller: TerminalTab?, approval: MCPApproval = .askOnMac,
+                     requester: String? = nil, connection: String? = nil, reply: @escaping Reply) {
         switch tool {
         case "list_hosts": reply(ok(["hosts": RemoteHosts.all.map(describe)]))
-        case "add_host": reply(addHost(arguments))
-        case "remove_host": reply(removeHost(arguments))
+        case "add_host", "remove_host", "edit_host", "end_session":
+            MainActor.assumeIsolated {
+                let context = MCPWriteControl.context(arguments, caller: caller, approval: approval, requester: requester,
+                                                      connection: connection)
+                switch tool {
+                case "add_host": addHost(arguments, context, reply: reply)
+                case "remove_host": removeHost(arguments, context, reply: reply)
+                case "edit_host": editHost(arguments, context, reply: reply)
+                default: endSession(arguments, context, reply: reply)
+                }
+            }
         case "check_host": checkHost(arguments, reply: reply)
         case "new_remote_tab": newRemoteTab(arguments, caller: caller, reply: reply)
         case "host_sessions": hostSessions(arguments, reply: reply)
@@ -27,7 +39,19 @@ enum RemoteMCP {
         var info: [String: Any] = ["id": host.id, "name": host.name, "destination": host.destination,
                                    "directory": host.directory, "keep": host.keep.rawValue]
         if let port = host.port { info["port"] = port }
+        if let prefix = host.tmuxPrefix { info["tmux_prefix"] = prefix.rawValue }
+        if let history = host.tmuxHistory { info["tmux_history"] = history }
         return info
+    }
+
+    /// One line for the approval window: “web-1 (dev@203.0.113.5, port 2222)”.
+    private static func named(_ host: RemoteHost) -> String {
+        "“\(host.name)” (\(host.destination)\(host.port.map { ", port \($0)" } ?? ""))"
+    }
+
+    /// The tabs open on `host` now.
+    private static func openTabs(on host: RemoteHost) -> [TerminalTab] {
+        AppDelegate.shared.controllers.flatMap(\.tabs).filter { (tab: TerminalTab) -> Bool in tab.remote?.host.id == host.id && !tab.exited }
     }
 
     private static func host(_ arguments: [String: Any]) -> Result<RemoteHost, MCPControl.MCPError> {
@@ -44,41 +68,209 @@ enum RemoteMCP {
 
     // MARK: hosts
 
-    private static func addHost(_ arguments: [String: Any]) -> MCPServer.CallResult {
+    /// add_host: every check first, so a call that would fail never asks; then the user approves on the Mac, and the
+    /// host is looked at again before it is saved.
+    @MainActor
+    private static func addHost(_ arguments: [String: Any], _ context: MCPWriteControl.Context, reply: @escaping Reply) {
         let name = (arguments["name"] as? String ?? "").trimmingCharacters(in: .whitespaces)
         let destination = (arguments["destination"] as? String ?? "").trimmingCharacters(in: .whitespaces)
         let existing = RemoteHosts.all.first { $0.name.caseInsensitiveCompare(name) == .orderedSame }
         var host = existing ?? RemoteHost(name: name, destination: destination)
         let port = arguments["port"] as? Int
-        // A saved host keeps where it points: tabs saved for it, and the user, trust that. Re-pointing it
-        // is remove_host and a fresh add_host (a new id, which saved tabs do not follow).
+        // A saved host keeps where it points: tabs saved for it, and the user, trust that. Re-pointing it is edit_host,
+        // which gives it a new id that saved tabs do not follow.
         if let existing, existing.destination != destination || (arguments["port"] != nil && existing.port != port) {
-            return fail("“\(existing.name)” points to \(existing.destination)\(existing.port.map { " port \($0)" } ?? ""). To point it elsewhere, remove_host it and add_host it again.")
+            return reply(fail("“\(existing.name)” points to \(existing.destination)\(existing.port.map { " port \($0)" } ?? ""). To point it elsewhere, use edit_host, or remove_host it and add_host it again."))
         }
         host.name = name
         host.destination = destination
         if let port { host.port = port }
         if let directory = arguments["directory"] as? String { host.directory = directory.trimmingCharacters(in: .whitespaces) }
         switch keep(arguments["keep"]) {
-        case .failure(let error): return fail(error.text)
+        case .failure(let error): return reply(fail(error.text))
         case .success(let mode): if let mode { host.keep = mode }
         }
-        if let problem = host.problem { return fail(problem) }
-        RemoteHosts.save(host)
-        return ok(["host": describe(host), "saved": true])
+        if let problem = host.problem { return reply(fail(problem)) }
+        if existing?.name != host.name, let problem = RemoteHost.nameProblem(host.name) { return reply(fail(problem)) }
+        if let existing, existing == host { return reply(ok(["host": describe(host), "saved": true, "unchanged": true])) }
+        let details: String
+        if let existing {
+            // Which server, then what changes: a name alone does not say where it points.
+            details = named(existing) + ":\n" + HostEdit.changes(from: existing, to: host).joined(separator: "\n")
+        } else {
+            details = "\(named(host)), folder \(host.directory), keep \(host.keep.rawValue). Next Term connects to it only when a tab opens there, with your own ssh and keys; nothing is installed or run on it now."
+        }
+        let title = existing == nil ? "An agent asks to save a server" : "An agent asks to change a saved server"
+        MCPWriteControl.approve(MCPWriteControl.Ask(title: title, details: details), context, reply: reply) { approved, window in
+            window?.finish()
+            // Looked at again: the saved host as it was asked about, and the name still free.
+            let now = RemoteHosts.all
+            let same: Bool = existing.map { (saved: RemoteHost) -> Bool in now.contains(saved) } ?? true
+            let taken: Bool = now.contains { (other: RemoteHost) -> Bool in
+                other.id != host.id && other.name.caseInsensitiveCompare(host.name) == .orderedSame
+            }
+            guard same, !taken else { return reply(fail("The saved servers changed while you were asked; nothing changed. list_hosts shows them.")) }
+            RemoteHosts.save(host)
+            reply(ok(["host": describe(host), "saved": true, "approved": approved]))
+        }
     }
 
-    private static func removeHost(_ arguments: [String: Any]) -> MCPServer.CallResult {
-        switch host(arguments) {
-        case .failure(let error): return fail(error.text)
-        case .success(let host):
+    @MainActor
+    private static func removeHost(_ arguments: [String: Any], _ context: MCPWriteControl.Context, reply: @escaping Reply) {
+        let host: RemoteHost
+        switch self.host(arguments) {
+        case .failure(let error): return reply(fail(error.text))
+        case .success(let found): host = found
+        }
+        let open: Int = openTabs(on: host).count
+        let tabs = open == 0 ? "" : " \(open) tab\(open == 1 ? "" : "s") on it stay open until closed, and are not reopened at the next launch."
+        let ask = MCPWriteControl.Ask(title: "An agent asks to forget a saved server",
+                                      details: "\(named(host)) leaves Next Term’s servers.\(tabs) Sessions kept there (tmux, herdr) keep running.")
+        MCPWriteControl.approve(ask, context, reply: reply) { approved, window in
+            window?.finish()
+            guard RemoteHosts.all.contains(where: { (saved: RemoteHost) -> Bool in saved.id == host.id }) else {
+                return reply(fail("“\(host.name)” was removed meanwhile; nothing changed."))
+            }
             RemoteHosts.remove(id: host.id)
-            let open = AppDelegate.shared.controllers.flatMap(\.tabs).filter { $0.remote?.host.id == host.id && !$0.exited }.count
-            var info: [String: Any] = ["id": host.id, "removed": true]
+            let open: Int = openTabs(on: host).count
+            var info: [String: Any] = ["id": host.id, "removed": true, "approved": approved]
             if open > 0 {
                 info["note"] = "\(open) tab\(open == 1 ? "" : "s") on it stay open until closed, and will not be reopened at the next launch. Sessions kept there (tmux, herdr) keep running."
             }
-            return ok(info)
+            reply(ok(info))
+        }
+    }
+
+    /// edit_host: the fields given replace the saved ones (HostEdit), checked before anything is asked. A new destination
+    /// or port gives the host a new id, as New Remote Tab does.
+    @MainActor
+    private static func editHost(_ arguments: [String: Any], _ context: MCPWriteControl.Context, reply: @escaping Reply) {
+        let saved: RemoteHost
+        switch host(arguments) {
+        case .failure(let error): return reply(fail(error.text))
+        case .success(let found): saved = found
+        }
+        let applied: HostEdit.Applied
+        switch HostEdit.parse(arguments).flatMap({ (edit: HostEdit) in edit.apply(to: saved, others: RemoteHosts.all) }) {
+        case .failure(let error): return reply(fail(error.text))
+        case .success(let result): applied = result
+        }
+        guard !applied.changes.isEmpty else { return reply(ok(["host": describe(saved), "unchanged": true])) }
+        let open: Int = openTabs(on: saved).count
+        var lines: [String] = applied.changes
+        if applied.repointed {
+            lines.append("It then points at another server: tabs saved for it are not reopened there.")
+        }
+        if open > 0 {
+            // A host pointed elsewhere gets a new id, which open tabs don't follow: they keep their old options.
+            lines.append(applied.repointed
+                ? "\(open) tab\(open == 1 ? "" : "s") open on it keep their connection, and its old tmux prefix and history, until they close."
+                : "\(open) tab\(open == 1 ? "" : "s") open on it keep their connection; tmux's prefix and history reach them as they reconnect.")
+        }
+        let ask = MCPWriteControl.Ask(title: "An agent asks to change a saved server", details: named(saved) + ":\n" + lines.joined(separator: "\n"))
+        MCPWriteControl.approve(ask, context, reply: reply) { approved, window in
+            window?.finish()
+            let now: [RemoteHost] = RemoteHosts.all
+            guard now.contains(saved) else {
+                return reply(fail("“\(saved.name)” changed or was removed while you were asked; nothing changed. list_hosts shows it now."))
+            }
+            // The new name still free: another server may have taken it while the user was asked.
+            let taken: Bool = now.contains { (other: RemoteHost) -> Bool in
+                other.id != saved.id && other.name.caseInsensitiveCompare(applied.host.name) == .orderedSame
+            }
+            guard !taken else { return reply(fail("Another saved server took the name “\(applied.host.name)” while you were asked; nothing changed.")) }
+            if applied.repointed { RemoteHosts.remove(id: saved.id) }
+            RemoteHosts.save(applied.host)
+            var info: [String: Any] = ["host": describe(applied.host), "changed": applied.changes, "approved": approved]
+            if applied.repointed { info["repointed"] = true }
+            if open > 0 {
+                info["note"] = applied.repointed
+                    ? "Tabs open on it keep their connection, and the old tmux prefix and history, until they close."
+                    : "Tabs open on it keep their connection; tmux's prefix and history reach them as they reconnect."
+            }
+            reply(ok(info))
+        }
+    }
+
+    /// end_session: one of Next Term's tmux sessions on a host, over a tab's open connection. herdr's sessions are never
+    /// stopped. Tabs here that show it close once it has ended.
+    @MainActor
+    private static func endSession(_ arguments: [String: Any], _ context: MCPWriteControl.Context, reply: @escaping Reply) {
+        let found: RemoteHost
+        switch host(arguments) {
+        case .failure(let error): return reply(fail(error.text))
+        case .success(let host): found = host
+        }
+        guard let raw = (arguments["session"] as? String)?.trimmingCharacters(in: .whitespaces), !raw.isEmpty else {
+            return reply(fail("Give the session's name: host_sessions lists Next Term's tmux sessions."))
+        }
+        let name = RemoteShell.safeName(raw)
+        guard name == raw else { return reply(fail("“\(raw)” is not one of Next Term's tmux session names; host_sessions lists them.")) }
+        if let own = context.caller?.remote, own.host.id == found.id, own.session == name {
+            return reply(fail("That is your own tab's session."))
+        }
+        let showing: [TerminalTab] = openTabs(on: found).filter { (tab: TerminalTab) -> Bool in
+            tab.remote?.keep == .tmux && tab.remote?.session == name
+        }
+        endTmuxSession(found, session: name, closing: showing, context, reply: reply) {
+            var closed: [String] = []
+            for tab in showing {
+                guard let controller = MCPControl.controller(of: tab), !controller.asksToSave(closing: tab) else { continue }
+                controller.remove(tab)
+                closed.append(tab.id.uuidString.lowercased())
+            }
+            var info: [String: Any] = ["host": found.name, "session": name, "ended": true]
+            if !closed.isEmpty { info["closed_tabs"] = closed }
+            reply(ok(info))
+        }
+    }
+
+    /// Ends Next Term's tmux session `session` on `host` once the user approves on the Mac: who is attached is read
+    /// first and shown, and read again after Approve; a client that attached meanwhile (another Mac, say) stops it.
+    /// `closing`: the tabs here that show it, named in the window. `ended` runs once the session is gone; every refusal
+    /// and failure is answered here.
+    @MainActor
+    static func endTmuxSession(_ host: RemoteHost, session: String, closing: [TerminalTab], _ context: MCPWriteControl.Context,
+                               reply: @escaping Reply, ended: @escaping () -> Void) {
+        guard RemoteConnection.masterAlive(host) else {
+            return reply(fail("To end a session on \(host.name), a tab there must be connected: Next Term never logs in for it."))
+        }
+        RemoteConnection.run(host, script: RemoteShell.clientsScript(session: session), timeout: 15) { output in
+            MainActor.assumeIsolated {
+                let before: [String]
+                switch RemoteShell.parseClients(output.output) {
+                case .unread: return reply(fail("Could not read the session on \(host.name): \(output.problem)"))
+                case .gone: return reply(fail("\(host.name) has no tmux session “\(session)”; host_sessions lists them."))
+                case .attached(let clients): before = clients
+                }
+                let attached = before.isEmpty ? "No client is attached to it now." : "Attached now: \(before.joined(separator: ", "))."
+                let shown = closing.isEmpty ? "" : " \(closing.count == 1 ? "A tab here shows it and closes" : "\(closing.count) tabs here show it and close")."
+                let ask = MCPWriteControl.Ask(title: "An agent asks to end a tmux session",
+                                              details: "“\(session)” on \(named(host)): what runs in it stops for good. \(attached)\(shown)")
+                MCPWriteControl.approve(ask, context, reply: reply) { _, window in
+                    window?.finish()
+                    // The second look: nobody new attached while the user was asked.
+                    RemoteConnection.run(host, script: RemoteShell.clientsScript(session: session), timeout: 15) { again in
+                        MainActor.assumeIsolated {
+                            switch RemoteShell.parseClients(again.output) {
+                            case .unread: return reply(fail("Could not read the session on \(host.name) again, so it was not ended: \(again.problem)"))
+                            case .gone: return ended()
+                            case .attached(let now):
+                                let new: [String] = now.filter { (client: String) -> Bool in !before.contains(client) }
+                                guard new.isEmpty else {
+                                    return reply(fail("\(new.joined(separator: ", ")) attached to “\(session)” on \(host.name) while you were asked, so it was not ended."))
+                                }
+                            }
+                            RemoteConnection.endSession(host, session: session) { problem in
+                                if let problem {
+                                    return reply(fail("Could not end tmux session \(session) on \(host.name): \(problem)"))
+                                }
+                                ended()
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -143,6 +335,8 @@ enum RemoteMCP {
         if let problem = RemoteHost.directoryProblem(directory) { return reply(fail(problem)) }
         let command = (arguments["command"] as? String)?.trimmingCharacters(in: .whitespaces) ?? ""
         if command.contains("\n") { return reply(fail("The command must be one line.")) }
+        // The title's check first, so a refused one opens nothing; open(...) sets it.
+        if case .failure(let refusal) = TabRename.given(arguments["title"]) { return reply(fail(refusal.text)) }
         if !command.isEmpty && mode == .herdr {
             return reply(fail("A herdr tab shows herdr itself, not a shell: give herdr's agents work with send_to_tab on their ids from list_tabs, or open the tab with keep tmux or off to run a command."))
         }
@@ -164,8 +358,38 @@ enum RemoteMCP {
                 }
             }
         }
+        // One of Next Term's tmux sessions: while a tab on the host is connected, only one the host lists, never made by
+        // its name. With no connection nothing can list them: the tab expects it, and says so if it was gone.
+        if mode == .tmux, let named {
+            let name = RemoteShell.safeName(named)
+            guard RemoteConnection.masterAlive(found) else {
+                return open(found, directory: directory, mode: mode, session: name, herdrSession: nil, command: "",
+                            expectsSession: true, arguments: arguments, caller: caller, reply: reply)
+            }
+            return tmuxSessionListed(name, on: found) { refusal in
+                if let refusal { return reply(fail(refusal.text)) }
+                open(found, directory: directory, mode: mode, session: name, herdrSession: nil, command: "", expectsSession: true,
+                     arguments: arguments, caller: caller, reply: reply)
+            }
+        }
         open(found, directory: directory, mode: mode, session: named.map(RemoteShell.safeName), herdrSession: nil, command: command,
              arguments: arguments, caller: caller, reply: reply)
+    }
+
+    /// Whether Next Term's tmux on `host` lists the session `name` (as host_sessions does), asked on the open connection:
+    /// nil when it does, else why not.
+    private static func tmuxSessionListed(_ name: String, on host: RemoteHost, _ done: @escaping (MCPControl.MCPError?) -> Void) {
+        RemoteConnection.run(host, script: RemoteShell.sessionsScript, timeout: 25) { output in
+            guard let listed = RemoteSession.parseList(output.output) else {
+                return done(.init("Could not list the tmux sessions on \(host.name): \(output.problem)"))
+            }
+            guard listed.sessions.contains(where: { (session: RemoteSession) -> Bool in session.name == name }) else {
+                let known: String = listed.sessions.map(\.name).joined(separator: ", ")
+                let lists: String = known.isEmpty ? " (it has none)" : " (it lists \(known))"
+                return done(.init("\(host.name) has no tmux session “\(name)”\(lists); nothing was opened. Leave session out for a new one."))
+            }
+            done(nil)
+        }
     }
 
     /// The herdr session `name` names on `host`, as `herdr session list --json` lists it there: nil for herdr's default.
@@ -191,7 +415,8 @@ enum RemoteMCP {
     }
 
     private static func open(_ found: RemoteHost, directory: String, mode: KeepMode, session: String?, herdrSession: String?,
-                             command: String, arguments: [String: Any], caller: TerminalTab?, reply: @escaping Reply) {
+                             command: String, expectsSession: Bool = false, arguments: [String: Any], caller: TerminalTab?,
+                             reply: @escaping Reply) {
         let app: AppDelegate = AppDelegate.shared
         let controller = caller.flatMap(MCPControl.controller(of:)) ?? (NSApp.keyWindow?.windowController as? TerminalWindowController)
             ?? app.controllers.first ?? app.openWindow(directory: nil, forAgent: true)
@@ -199,7 +424,8 @@ enum RemoteMCP {
         // (another tab may be logging in to this host already: then that one), selected even in the window they are in.
         // It waits for their click like any tab an agent opened, so nothing they were typing goes to ssh (AgentArrival).
         let mustLogIn = !RemoteConnection.masterAlive(found)
-        let remote = RemoteTab(host: found, directory: directory, session: session, keep: mode, herdrSession: herdrSession)
+        let remote = RemoteTab(host: found, directory: directory, session: session, keep: mode, herdrSession: herdrSession,
+                               expectsSession: expectsSession)
         let tab = controller.addRemoteTab(remote, select: false, byAgent: true)
         if mustLogIn {
             let asking = RemoteConnection.loginTab(for: found) ?? tab
@@ -211,7 +437,8 @@ enum RemoteMCP {
             controller.presentForAgent(tab)
         }
         MCPControl.driven.insert(tab.id)
-        if let title = arguments["title"] as? String, !title.isEmpty { tab.userTitle = String(title.prefix(100)) }
+        if case .success(let title?) = TabRename.given(arguments["title"]) { tab.userTitle = title }
+        MCPTabOpeners.record(tab, openedBy: caller)
         controller.refresh()
         var answer: [String: Any] = ["id": tab.id.uuidString.lowercased(), "host": found.name, "directory": directory,
                                      "keep": mode.rawValue, "session": tab.remote?.session ?? ""]

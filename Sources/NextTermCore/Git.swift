@@ -249,16 +249,30 @@ public enum GitRunner {
     /// checks that a writer in an ignored folder, or a closed window, runs no git.
     public static func runs(in folder: String) -> Int { runCounts.total(in: folder) }
 
+    /// The last few commands run in `folder` or below it, oldest first (their arguments after `-C <folder>`): for a
+    /// self-test failure that says git ran, which git it was.
+    public static func recentRuns(in folder: String) -> [String] { runCounts.recent(in: folder) }
+
     private static let runCounts = RunCounts()
 
     private final class RunCounts: @unchecked Sendable {
         private let lock = NSLock()
         private var counts: [String: Int] = [:]
+        /// The last 16 commands, as folder and arguments.
+        private var last: [(folder: String, command: String)] = []
 
-        func add(_ folder: String) {
+        func add(_ folder: String, _ arguments: [String]) {
             lock.lock()
             counts[folder, default: 0] += 1
+            last.append((folder, arguments.joined(separator: " ")))
+            if last.count > 16 { last.removeFirst(last.count - 16) }
             lock.unlock()
+        }
+
+        func recent(in folder: String) -> [String] {
+            lock.lock()
+            defer { lock.unlock() }
+            return last.filter { $0.folder == folder || $0.folder.hasPrefix(folder + "/") }.map(\.command)
         }
 
         func total(in folder: String) -> Int {
@@ -518,7 +532,9 @@ public enum GitRunner {
     /// `environment` is added last, over the defaults. `input` is the standard input, from a file too.
     static func run(_ executable: String, _ arguments: [String], timeout: TimeInterval,
                     acceptedStatus: Set<Int32> = [0], environment: [String: String] = [:], input: Data? = nil) -> Data? {
-        if let flag = arguments.firstIndex(of: "-C"), flag + 1 < arguments.count { runCounts.add(arguments[flag + 1]) }
+        if let flag = arguments.firstIndex(of: "-C"), flag + 1 < arguments.count {
+            runCounts.add(arguments[flag + 1], Array(arguments[(flag + 2)...]))
+        }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments

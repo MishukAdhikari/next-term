@@ -4,7 +4,7 @@ import NextTermCore
 /// The MCP tools that change things (MCPServer.controlTools): file edits, staging and commits, panes, the
 /// layout and a few settings. Each change waits for its approval first (MCPApproval):
 /// - `.askOnMac`, always for local agents: an AgentApprovalWindow shows what would change and who asks,
-///   with Approve, Decline, and Decline and Stop Asking. Decline, closing the window, or no answer within
+///   with Approve, Decline, and Don’t Ask Again. Decline, closing the window, or no answer within
 ///   `answerWithin` seconds changes nothing, and the agent is told which. One change waits at a time.
 /// - `.preApprovedByGrant(id)`: from the remote door, for a connection whose “Ask on this Mac before
 ///   changes” is off. The change runs at once and its answer names the grant.
@@ -29,7 +29,7 @@ enum MCPWriteControl {
         let approval: MCPApproval
         /// The agent's reason, shown as its own words.
         let reason: String?
-        /// Who Decline and Stop Asking stops: the tab, the remote connection, or every caller outside the tabs.
+        /// Who Don’t Ask Again stops: the tab, the remote connection, or every caller outside the tabs.
         let asker: String
         /// Who asks, as the approval window names it.
         let who: String
@@ -48,9 +48,11 @@ enum MCPWriteControl {
         case "create_file": writeFile(arguments, context, creating: true, reply: reply)
         case "stage", "commit": git(tool, arguments, context, reply: reply)
         case "focus_tab": focusTab(arguments, context, reply: reply)
+        case "run_command": runCommand(arguments, context, reply: reply)
         case "split_pane": splitPane(arguments, context, reply: reply)
         case "close_pane": closePane(arguments, context, reply: reply)
         case "zoom_pane": zoomPane(arguments, context, reply: reply)
+        case "reopen_before_update": reopenBeforeUpdate(context, reply: reply)
         case "set_layout": setLayout(arguments, context, reply: reply)
         case "settings_get": reply(MCPControl.ok(settingsList(context)))
         case "settings_set": setSettings(arguments, context, reply: reply)
@@ -69,7 +71,7 @@ enum MCPWriteControl {
                        who: requester ?? SkillsMCP.describe(caller), projects: projects, isRemote: requester != nil)
     }
 
-    /// Who Decline and Stop Asking stops (here and in SkillsMCP): a remote connection by its grant id
+    /// Who Don’t Ask Again stops (here and in SkillsMCP): a remote connection by its grant id
     /// (by its name when the door gives no id), a tab, or every other caller outside the tabs.
     static func asker(connection: String?, requester: String?, caller: TerminalTab?) -> String {
         if let connection { return "remote:" + connection }
@@ -91,11 +93,11 @@ enum MCPWriteControl {
 
     /// The change the user is asked about now.
     private(set) static var pending: Asking?
-    /// Askers who chose Decline and Stop Asking: refused without a window until Next Term quits.
+    /// Askers who chose Don’t Ask Again: refused without a window until Next Term quits.
     static var stopped = Set<String>()
-    static let stoppedText = "The user chose Decline and Stop Asking for your requests, until Next Term quits; nothing changed. Ask the user directly."
+    static let stoppedText = "The user chose Don’t Ask Again for your requests, until Next Term quits; nothing changed. Ask the user directly."
 
-    /// Whether the asker chose Decline and Stop Asking. Only asking on the Mac stops: a grant asks nothing.
+    /// Whether the asker chose Don’t Ask Again. Only asking on the Mac stops: a grant asks nothing.
     static func isStopped(_ context: Context) -> Bool {
         guard case .askOnMac = context.approval else { return false }
         return stopped.contains(context.asker)
@@ -105,6 +107,8 @@ enum MCPWriteControl {
     struct Ask {
         let title: String
         let details: String
+        /// A command the change runs, shown in its own box as it will be typed (run_command).
+        var command: String?
         /// The approve button's title: "Allow" for the remote door's own asks (R59).
         var approveTitle = "Approve"
     }
@@ -124,7 +128,7 @@ enum MCPWriteControl {
         let asking = Asking(asker: context.asker)
         pending = asking
         let request = AgentApprovalWindow.Request(title: ask.title, requester: context.who, agentWords: context.reason, details: ask.details,
-                                                  approveTitle: ask.approveTitle, stopTitle: "Decline and Stop Asking")
+                                                  approveTitle: ask.approveTitle, stopTitle: "Don’t Ask Again", command: ask.command)
         let window = AgentApprovalWindow(request, approve: { window in
             guard !asking.answered else { return }
             asking.answered = true

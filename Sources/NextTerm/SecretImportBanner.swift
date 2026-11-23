@@ -59,7 +59,7 @@ extension SecretImportAsk {
         + "replaced only if you tick its row."
 }
 
-/// The banner's Decline and Stop Asking: the agent's request is declined, and it is asked nothing more until Next Term
+/// The banner's Don’t Ask Again: the agent's request is declined, and it is asked nothing more until Next Term
 /// quits. Off once the request has ended, as after a copy-in.
 final class SecretImportStopButton: NSButton {
     private weak var ask: SecretImportAsk?
@@ -67,7 +67,7 @@ final class SecretImportStopButton: NSButton {
     init(_ ask: SecretImportAsk) {
         self.ask = ask
         super.init(frame: .zero)
-        title = "Decline and Stop Asking"
+        title = "Don’t Ask Again"
         setButtonType(.momentaryPushIn)
         bezelStyle = .rounded
         controlSize = .small

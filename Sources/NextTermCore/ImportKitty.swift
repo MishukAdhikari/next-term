@@ -398,7 +398,7 @@ public enum ImportKitty {
     static let plainActions: [String: String] = [
         "new_tab": "newTab:", "new_tab_with_cwd": "newTab:", "new_os_window": "newWindow:", "new_os_window_with_cwd": "newWindow:",
         "close_tab": "closeTab:", "close_window": "closeTab:", // kitty's window is a pane; Close Tab closes the pane in front
-        "close_os_window": "performClose:", "next_tab": "showNextTab:", "previous_tab": "showPreviousTab:",
+        "close_os_window": "closeWindow:", "next_tab": "showNextTab:", "previous_tab": "showPreviousTab:",
         "next_window": "selectNextPane:", "previous_window": "selectPreviousPane:", "copy_to_clipboard": "copy:",
         "copy_or_noop": "copy:", "paste_from_clipboard": "paste:", "toggle_fullscreen": "toggleFullScreen:",
         "edit_config_file": "showSettings:", "set_tab_title": "renameTab:", "search_scrollback": "performFindPanelAction:#1",

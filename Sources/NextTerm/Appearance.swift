@@ -240,7 +240,18 @@ final class TerminalSettingsView: NSView {
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 14
-        stack.insertArrangedSubview(row("Links:", [studioLinks]), at: stack.arrangedSubviews.firstIndex(of: note) ?? 0)
+        // The checkbox and, under it, when it applies: the row fits Settings' own width rather than widen the window.
+        let linksNote = NSTextField(wrappingLabelWithString: "When Safari is the default browser: Safari won’t let Studio reach langgraph\u{00A0}dev on this Mac.")
+        linksNote.textColor = .secondaryLabelColor
+        linksNote.font = .systemFont(ofSize: 11)
+        linksNote.preferredMaxLayoutWidth = 330
+        let links = NSStackView(views: [studioLinks, linksNote])
+        links.orientation = .vertical
+        links.alignment = .leading
+        links.spacing = 4
+        let linksRow = row("Links:", [links])
+        linksRow.alignment = .firstBaseline
+        stack.insertArrangedSubview(linksRow, at: stack.arrangedSubviews.firstIndex(of: note) ?? 0)
         stack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stack)
         NSLayoutConstraint.activate([

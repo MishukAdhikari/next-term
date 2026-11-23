@@ -92,11 +92,13 @@ exec "${SHELL:-/bin/sh}" -l
 
     /// Next Term's own tmux settings on a hooked host: the private key is a key tmux knows (user-keys), and goes on
     /// to the pane as it came.
-    static let tmuxConfig = RemoteShell.tmuxConfig + """
+    static func tmuxConfig(_ options: TmuxOptions = TmuxOptions()) -> String {
+        RemoteShell.tmuxConfig(options) + """
 
-        set -sq user-keys[0] "\\e[6973~"
-        bind -n User0 send-keys -l "\\e[6973~"
-        """
+            set -sq user-keys[0] "\\e[6973~"
+            bind -n User0 send-keys -l "\\e[6973~"
+            """
+    }
 
     /// The same, on a tmux server that is already running (tmux reads its config only as it starts). Needs T.
     static let tmuxLive = """
@@ -200,7 +202,8 @@ exec "${SHELL:-/bin/sh}" -l
             "rm -rf \"$H\"",
             RemoteShell.findTmux,
             "if [ -n \"$T\" ]; then \"$T\" -L nextterm set -su 'user-keys' 2>/dev/null; \"$T\" -L nextterm unbind -n User0 2>/dev/null; fi",
-            "if [ -f \"$C/tmux.conf\" ] && grep -q 6973 \"$C/tmux.conf\" 2>/dev/null; then printf '%s\\n' \(RemoteShell.quote(RemoteShell.tmuxConfig)) > \"$C/tmux.conf\"; fi",
+            // The key's two lines out of the settings; the rest (the host's prefix and history) stays.
+            "if [ -f \"$C/tmux.conf\" ] && grep -q 6973 \"$C/tmux.conf\" 2>/dev/null; then grep -v 6973 \"$C/tmux.conf\" > \"$C/tmux.conf.nt\" 2>/dev/null && mv -f \"$C/tmux.conf.nt\" \"$C/tmux.conf\"; fi",
             "printf '\\n%s\\n' \(RemoteShell.quote(RemoteShell.marker))",
             "[ -e \"$H\" ] && printf 'failed\\t%s\\n' 'the folder is still there' || printf 'removed\\n'",
         ].joined(separator: "\n")

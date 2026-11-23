@@ -58,6 +58,13 @@ public enum MCPRedaction {
         return (redacted.text, redacted.count)
     }
 
+    /// As `redact(_:)`, but a path keeps its word parts, as command lines keep them (CommandSecrets.maskedRun): a chat's
+    /// tool row says `Read(/…/scratchpad/agent-check/README.md)`, with only a part that is itself a long random run
+    /// masked, never the whole path.
+    public static func redactSparingPaths(_ text: String, mask secrets: SecretMask = .current) -> String {
+        redact(text, maskingRun: CommandSecrets.maskedRun, mask: secrets).text
+    }
+
     /// As `redact(_:)`, with `maskingRun` deciding what a long run becomes (nil keeps it), and whether
     /// every pattern read the whole text (see `replace`). Command lines pass one that spares paths
     /// (CommandSecrets).

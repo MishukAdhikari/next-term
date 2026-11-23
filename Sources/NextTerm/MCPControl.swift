@@ -109,12 +109,17 @@ final class MCPControlServer: @unchecked Sendable {
         // found before its line came is no MCP caller either: no MCP answer goes to it. Its connection closes as the call
         // ends, as every other one does.
         // `nxtrm secret import`'s header answers itself the same way; its keys come after, raw, never through this reader.
+        // An agent session's report or Allow always (AgentSessionSocket) answers itself the same way.
         let selfAnswering = request?.tool == SecretSocket.tool || request?.tool == SecretPipeSocket.tool
+            || request?.tool == AgentSessionSocket.tool
         let route = calls.route(call, read: request, selfAnswering: selfAnswering) {
-            SecretSocket.isWrapper(pid: peer)
+            SecretSocket.isWrapper(pid: peer) || AgentSessionSocket.isSession(pid: peer)
         }
         switch route {
         case .answerItself:
+            if request?.tool == AgentSessionSocket.tool {
+                return AgentSessionSocket.handle(fd: fd, arguments: request?.arguments ?? [:], peer: peer, auditToken: token)
+            }
             if request?.tool == SecretPipeSocket.tool {
                 return SecretPipeSocket.handle(fd: fd, arguments: request?.arguments ?? [:], peer: peer, auditToken: token)
             }
@@ -172,7 +177,10 @@ final class MCPControlServer: @unchecked Sendable {
     /// time, whatever tool made it (RemoteMCP, MCPWriteControl, SkillsMCP included), in its JSON's strings too, where
     /// a value's quotes and line breaks are escaped.
     private func send(_ answer: MCPServer.CallResult, on fd: Int32) {
-        let masked = MCPServer.CallResult(text: SecretMask.current.mask(answer: answer.text), isError: answer.isError)
+        // The structured part too (forward_prompt's): masked, and dropped if masking left it unreadable.
+        let structured = answer.structured.map { SecretMask.current.mask(answer: $0) }
+            .flatMap { (try? JSONSerialization.jsonObject(with: Data($0.utf8))) != nil ? $0 : nil }
+        let masked = MCPServer.CallResult(text: SecretMask.current.mask(answer: answer.text), isError: answer.isError, structured: structured)
         let data = MCPServer.encodeAnswer(masked)
         data.withUnsafeBytes { raw in
             var offset = 0
@@ -212,6 +220,7 @@ enum MCPControl {
         driven.remove(tab.id)
         HerdrMCP.userTyped(in: tab) // its herdr agents too
         MCPRestoredTabs.typedByUser(tab) // a restored tab's details count your commands from here (U13)
+        MainActor.assumeIsolated { CommandPaneAutoClose.typedByUser(tab) } // a finished command's pane stays (auto-close)
     }
 
     /// The tab closed.
@@ -249,7 +258,7 @@ enum MCPControl {
     }
 
     private static var app: AppDelegate { AppDelegate.shared }
-    private static var allTabs: [TerminalTab] { app.controllers.flatMap(\.tabs) }
+    static var allTabs: [TerminalTab] { app.controllers.flatMap(\.tabs) }
 
     /// A tab's text an agent reads (title, command, screen, question, choices, served URL, selected text), with stored
     /// keys' exact values masked. Pattern masking is not added here: it would change what agents read today. The
@@ -273,7 +282,7 @@ enum MCPControl {
 
     /// The screen and `input` for read_tab and wait_for_tab: the line being typed at a zsh prompt, and a plugin's ghost,
     /// which is left out of the screen.
-    private static func screenFields(_ tab: TerminalTab, lines: Int) -> [String: Any] {
+    static func screenFields(_ tab: TerminalTab, lines: Int) -> [String: Any] {
         let typed = tab.typedInput(mask: field)
         let ghost = typed?.ghost ?? []
         let rows = fieldMasks ? tab.screenTail(lines, masked: SecretMask.current, excludingGhost: ghost) : tab.screenTail(lines, excludingGhost: ghost)
@@ -303,30 +312,41 @@ enum MCPControl {
     static func ok(_ value: Any) -> MCPServer.CallResult { MCPServer.CallResult(text: MCPServer.json(value)) }
 
     /// Runs a tool. `approval`, `requester` and `connection` are for the write tools that MCPWriteControl
-    /// runs, and for install_skill and remove_skill: who approves their change, who asks as the approval
-    /// window names it, and which remote connection (its grant id) a Decline and Stop Asking stops. The
-    /// local socket passes none, so a local agent's change always waits for Approve on the Mac; the remote
-    /// door passes its connection's policy, name and grant id (see MCPApproval).
+    /// runs, for install_skill and remove_skill, and for the host and tab changes that ask (add_host,
+    /// remove_host, edit_host, end_session through RemoteMCP.call, and close_tab): who approves their change,
+    /// who asks as the approval window names it, and which remote connection (its grant id) a Decline and Stop
+    /// Asking stops. The local socket passes none, so a local agent's change always waits for Approve on the
+    /// Mac; the remote door passes its connection's policy, name and grant id (see MCPApproval). start_agent
+    /// and close_tab on a herdr agent's id always ask on the Mac (HerdrMCP), whatever is passed.
     /// `herdrCaller`: what the bridge said of the agent that called, its herdr pane (MCPCalls.Request.caller).
     static func call(_ tool: String, _ arguments: [String: Any], caller pid: pid_t?, herdrCaller: [String: String] = [:],
                      approval: MCPApproval = .askOnMac, requester: String? = nil, connection: String? = nil, reply: @escaping Reply) {
         let caller = pid.flatMap { ClaudeIDEServer.tab(for: $0, among: allTabs) }
         // Safe mode runs only tools that read; an update's wait refuses new work elsewhere (U13).
         if let refusal = MCPRestoredTabs.refusal(tool, arguments) { return reply(fail(refusal)) }
+        // Through a remote connection (its grant id, or only a requester's name, as SecretsMCP.isRemote counts it): no herdr
+        // agent's id, nor edit_host, end_session, rename_tab or start_agent, until the door names them (MCPRemoteReach).
+        if connection != nil || requester != nil, let refusal = MCPRemoteReach.refusal(tool, arguments) { return reply(fail(refusal)) }
         // One of herdr's agents: its id stands where a tab's does, its tab's refusals first (HerdrMCP).
         if let raw = arguments["tab_id"] as? String, let target = HerdrTarget.parse(raw) {
             if let refusal = MCPRestoredTabs.refusal(tool, ["tab_id": target.tabID]) { return reply(fail(refusal)) }
             if HerdrMCP.route(tool, target, arguments, caller: caller, herdrCaller: herdrCaller, reply: reply) { return }
         }
         switch tool {
-        case "list_tabs": reply(listTabs(project: arguments["project"] as? String, caller: caller, herdrCaller: herdrCaller))
+        case "forward_prompt": MainActor.assumeIsolated { MCPHandoverControl.call(arguments, caller: caller, reply: reply) }
+        case "list_tabs":
+            if arguments["herdr_layout"] as? Bool == true { return HerdrMCP.listWithLayout(listTabs(project: arguments["project"] as? String, caller: caller, herdrCaller: herdrCaller), reply: reply) } // plan 040 U6
+            reply(listTabs(project: arguments["project"] as? String, caller: caller, herdrCaller: herdrCaller))
         case "list_projects": reply(listProjects())
         case "read_tab":
+            if let gone = MainActor.assumeIsolated({ CommandPaneAutoClose.closedAnswer(arguments["tab_id"]) }) { return reply(gone) }
             guard let tab = findTab(arguments["tab_id"]) else { return reply(fail("No tab with that id; list_tabs shows them.")) }
             readTab(tab, lines: arguments["lines"] as? Int ?? 80, reply: reply)
         case "wait_for_tab":
+            if let gone = MainActor.assumeIsolated({ CommandPaneAutoClose.closedAnswer(arguments["tab_id"]) }) { return reply(gone) }
             guard let tab = findTab(arguments["tab_id"]) else { return reply(fail("No tab with that id; list_tabs shows them.")) }
             let seconds = min(300, max(1, arguments["timeout_seconds"] as? Int ?? 50))
+            if arguments["match"] != nil { return MCPWaitMatch.wait(tab, arguments, until: TerminalTab.now + Double(seconds), reply: reply) } // plan 040 U2
             waitFor(tab, until: TerminalTab.now + Double(seconds), sawWork: false, reply: reply)
         case "get_editor_selection": reply(editorSelection(caller: caller))
         case "get_open_files": reply(openFiles())
@@ -337,12 +357,18 @@ enum MCPControl {
         case "answer_agent": answerAgent(arguments, caller: caller, reply: reply)
         case "read_file", "find_in_files", "git_status", "get_diff": projectTool(tool, arguments, caller: caller, reply: reply)
         case "show_tab": reply(withTab(arguments) { tab in showTab(tab) })
-        case "close_tab": closeTab(arguments, caller: caller, reply: reply)
+        case "switch_view": reply(withTab(arguments) { tab in MainActor.assumeIsolated { LiveChatMCP.switchView(tab, arguments) } }) // plan 041
+        case "set_token_budget": reply(withTab(arguments) { tab in MainActor.assumeIsolated { TokenBudgets.setFromMCP(tab, arguments) } }) // a session's budget
+        case "close_tab": closeTab(arguments, caller: caller, approval: approval, requester: requester, connection: connection, reply: reply)
+        case "rename_tab": reply(renameTab(arguments, caller: caller))
+        case "start_agent": MainActor.assumeIsolated { HerdrMCP.startAgent(arguments, caller: caller, reply: reply) }
         case "open_in_editor": reply(openInEditor(arguments))
-        case "list_hosts", "add_host", "remove_host", "check_host", "new_remote_tab", "host_sessions", "host_changes":
-            RemoteMCP.call(tool, arguments, caller: caller, reply: reply)
+        case "list_hosts", "add_host", "remove_host", "edit_host", "check_host", "new_remote_tab", "host_sessions", "end_session",
+             "host_changes":
+            RemoteMCP.call(tool, arguments, caller: caller, approval: approval, requester: requester, connection: connection, reply: reply)
         case "list_shortcuts": MainActor.assumeIsolated { reply(ShortcutsMCP.listShortcuts(arguments)) }
         case "show_settings": MainActor.assumeIsolated { reply(ShortcutsMCP.showSettings(arguments)) }
+        case "list_agent_clis": MainActor.assumeIsolated { AgentCLIManager.listForMCP(all: arguments["all"] as? Bool ?? false, reply: reply) }
         case "list_skills", "get_skill", "install_skill", "remove_skill":
             MainActor.assumeIsolated {
                 SkillsMCP.call(tool, arguments, caller: caller, callerPID: pid, approval: approval, connection: connection,
@@ -357,6 +383,14 @@ enum MCPControl {
             MainActor.assumeIsolated {
                 TasksMCP.addTask(arguments, caller: caller, approval: approval, requester: requester, connection: connection, reply: reply)
             }
+        case _ where MCPServer.isHubTool(tool):
+            MainActor.assumeIsolated {
+                MCPHubAgentTools.call(tool, arguments, caller: caller, approval: approval, requester: requester, connection: connection, reply: reply)
+            }
+        case "apply_setup":
+            MainActor.assumeIsolated {
+                MCPSetupControl.call(arguments, caller: caller, approval: approval, requester: requester, connection: connection, reply: reply)
+            }
         case _ where MCPServer.isImportTool(tool):
             MainActor.assumeIsolated {
                 MCPImportControl.call(tool, arguments, caller: caller, approval: approval, requester: requester, connection: connection, reply: reply)
@@ -365,6 +399,12 @@ enum MCPControl {
             MainActor.assumeIsolated {
                 MCPWriteControl.call(tool, arguments, caller: caller, approval: approval, requester: requester, connection: connection, reply: reply)
             }
+        // Never listed: the bridge's question as its session starts, of which hub servers apply to its agent (MCPHubControl).
+        case MCPHubPlan.tool: MainActor.assumeIsolated { MCPHubControl.plan(arguments, caller: caller, reply: reply) }
+        // Never listed either: how a hub server's start ended, for Settings › MCP Servers.
+        case MCPHubPlan.reportTool: MainActor.assumeIsolated { MCPHubControl.report(arguments, caller: caller, reply: reply) }
+        // Never listed: a bridge's need of a remote hub server, which the app reaches with its keys (MCPHubRemoteControl).
+        case MCPHubPlan.remoteTool: MainActor.assumeIsolated { MCPHubRemoteControl.call(arguments, caller: caller, pid: pid, reply: reply) }
         default: reply(fail("Unknown tool \(tool)"))
         }
     }
@@ -411,6 +451,7 @@ enum MCPControl {
         if let index = controller.groups.firstIndex(where: { $0.contains(tab) }) {
             info["tab_bar_position"] = index + 1
             if controller.groups[index].isSplit { info["split"] = true }
+            if controller.groups[index].pinned { info["pinned"] = true } // plan 045: close_tab asks the user first
         }
         if tab.status.running {
             info["program"] = tab.status.program
@@ -419,7 +460,11 @@ enum MCPControl {
         }
         info.merge(questionInfo(tab)) { $1 }
         info.merge(restoredFields(tab)) { $1 } // what a restart did to it (U13)
+        // An agent session (plan 030): its agent, CLI version and model (plan 035); read_tab gives its last message.
+        info.merge(MainActor.assumeIsolated { AgentSessionSocket.listFields(tab) }) { $1 }
         if let code = tab.status.exitCode, tab.status.state == .failed { info["exit_code"] = Int(code) }
+        if MCPRegistration.needsRestart(tab) { info["needs_restart"] = true } // its agent started before Next Term's tools reached it
+        info.merge(MainActor.assumeIsolated { LiveChatMCP.listFields(tab) }) { $1 } // its view: chat or terminal (plan 041)
         if tab === caller { info["you"] = true }
         if let openedBy = tab.openedBy {
             info["opened_by"] = openedBy.uuidString.lowercased()
@@ -427,6 +472,7 @@ enum MCPControl {
         }
         // A dev server's local address, without the query, where a login token goes (Jupyter's `?token=`).
         if let url = tab.servedURL { info["served_url"] = field(ServedURL.shared(url)) }
+        if let usage = tab.contextUsage { info["context"] = usage.fields } // how full its agent's context is
         info.merge(AgentPlaces.shared.fields(of: tab, in: controller)) { $1 } // where its agent works, against the window
         if let remote = tab.remote {
             if tab.loginPrompt { info["login_prompt"] = true } // ssh asks the user something in that tab
@@ -436,6 +482,7 @@ enum MCPControl {
             // A tab whose tmux or herdr was missing on the host is a plain shell that nothing keeps: off, not as opened.
             info["keep"] = remote.keep.shown(fellBack: tab.fellBack).rawValue
             if tab.fellBack { info["fell_back"] = true }
+            if tab.sessionCreated { info["session_created"] = true } // its tmux session was gone, so this one is new
             if tab.fellBack, remote.keep == .herdr {
                 let why = tab.fellBackReason ?? "herdr wasn’t found on the host"
                 info["herdr_missing_reason"] = "\(why). Next Term never installs it: \(RemoteShell.herdrInstallPage)"
@@ -472,6 +519,14 @@ enum MCPControl {
                 window["project"] = project
                 window["name"] = (project as NSString).lastPathComponent
             }
+            // Merged with other project windows into one, as macOS's tabs (plan 032): the others' projects, and whether
+            // its tab is behind the one in front, out of sight.
+            if let shown = controller.window, shown.mergedWindows.count > 1 {
+                window["merged_with"] = shown.mergedWindows.filter { $0 !== shown }.compactMap { (other: NSWindow) -> String? in
+                    (other.windowController as? TerminalWindowController).map { $0.project ?? $0.windowName }
+                }
+                window["behind"] = shown.isBackgroundTab
+            }
             return window
         }
         if windows.isEmpty, let wanted { return fail("No window has the project \(wanted) open; open_project opens it.") }
@@ -491,6 +546,7 @@ enum MCPControl {
             var info: [String: Any] = ["id": tab.id.uuidString.lowercased(), "state": state(tab)]
             info.merge(questionInfo(tab)) { $1 }
             info.merge(restoredFields(tab)) { $1 }
+            info.merge(MainActor.assumeIsolated { AgentSessionSocket.fields(tab) }) { $1 } // an agent session's own (plan 030)
             info.merge(screenFields(tab, lines: min(2000, max(1, lines)))) { $1 }
             reply(ok(info))
         }
@@ -508,6 +564,7 @@ enum MCPControl {
                 var info: [String: Any] = ["id": tab.id.uuidString.lowercased(), "state": state(tab), "timed_out": busy || starting]
                 info.merge(questionInfo(tab)) { $1 }
                 info.merge(restoredFields(tab)) { $1 }
+                info.merge(MainActor.assumeIsolated { AgentSessionSocket.fields(tab) }) { $1 } // stop_reason, last_message
                 info.merge(screenFields(tab, lines: 40)) { $1 }
                 reply(ok(info))
             }
@@ -539,6 +596,8 @@ enum MCPControl {
         if secret != nil || document.holdsSecrets {
             if range.length > 0 { info["withheld"] = "The selection is in a file that usually holds secrets, so its text isn't shared." }
         } else if range.length > 0 {
+            // An agent reads the selection itself: the hint on sending it has nothing left to teach.
+            MainActor.assumeIsolated { HintCenter.shared.retire(.sendSelection, reason: .actionPerformed) }
             let selected = field(text.substring(with: range))
             info["text"] = selected.count > 200_000 ? String(selected.prefix(200_000)) + "\n… (cut at 200,000 characters)" : selected
         }
@@ -575,6 +634,11 @@ enum MCPControl {
 
     private static func openProject(_ raw: String) -> MCPServer.CallResult {
         guard let path = absolute(raw), isFolder(path) else { return fail("Not a folder (give an absolute path): \(raw)") }
+        // A project open already: the agent switched to it, and the hint on switching back has nothing left to teach.
+        let wanted: String = canonicalPath(path)
+        if app.controllers.contains(where: { !$0.hasClosed && $0.project.map(canonicalPath) == wanted }) {
+            MainActor.assumeIsolated { HintCenter.shared.retire(.switchBack, reason: .actionPerformed) }
+        }
         let controller = app.openFolder(path, newWindow: false, forAgent: true)
         let shown = controller.presentForAgent(nil, explicit: true)
         var answer: [String: Any] = ["project": path, "tabs": controller.tabs.map { describe($0, in: controller, caller: nil) }]
@@ -583,8 +647,29 @@ enum MCPControl {
     }
 
     private static func newTab(_ arguments: [String: Any], caller: TerminalTab?, reply: @escaping Reply) {
+        if let raw = arguments["split_beside"] as? String, let herdr = HerdrTarget.parse(raw) { return MainActor.assumeIsolated { HerdrMCP.runBeside(herdr, arguments, caller: caller, reply: reply) } } // plan 040 U4: its folder is on herdr's side
         guard let directory = absolute(arguments["directory"]), isFolder(directory) else {
             return reply(fail("Not a folder (give an absolute path): \(arguments["directory"] as? String ?? "")"))
+        }
+        let title: String?
+        switch TabRename.given(arguments["title"]) {
+        case .failure(let refusal): return reply(fail(refusal.text))
+        case .success(let given): title = given
+        }
+        // An agent session (plan 030): `nxtrm agent ID` instead of a command, checked before any tab opens.
+        var sessionLine: String?
+        var sessionName: String?
+        if let refusal = MainActor.assumeIsolated({ AgentChatWatch.viewRefusal(arguments) }) { return reply(fail(refusal)) } // plan 047
+        if let name = arguments["agent_session"] as? String {
+            if let command = arguments["command"] as? String, !command.trimmingCharacters(in: .whitespaces).isEmpty {
+                return reply(fail("Give command or agent_session, not both."))
+            }
+            switch ACPSessionTabs.agent(named: name) {
+            case .failure(let refusal): return reply(fail(refusal.text))
+            case .success(let agent):
+                sessionLine = agent.sessionLine(launcher: ACPSessionTabs.launcher, prompt: arguments["prompt"] as? String)
+                sessionName = agent.name
+            }
         }
         let tab: TerminalTab
         let controller: TerminalWindowController
@@ -600,8 +685,10 @@ enum MCPControl {
             controller = owner
             tab = pane
         } else {
-            // The window of the project that holds the folder; else the folder's project, opened.
-            let (owner, opened) = window(for: directory)
+            // The window of the project that holds the folder; else the asking agent's own window, as a tab is what it asked
+            // for; else (an agent outside Next Term, or new_window) the folder's project, opened.
+            let ownWindow: TerminalWindowController? = arguments["new_window"] as? Bool == true ? nil : caller.flatMap { self.controller(of: $0) }
+            let (owner, opened) = window(for: directory, else: ownWindow)
             controller = owner
             // Never a restored tab: it may hold a put-back line (KTD10). Never the tab of the window the user is in.
             if opened, controller.tabs.count == 1, let first = controller.tabs.first, first.remote == nil, first.isUntouched,
@@ -617,10 +704,12 @@ enum MCPControl {
         // A pane beside another tab: its window, as the tab beside it is already there.
         let arrived = controller.presentForAgent(arguments["split_beside"] == nil ? tab : nil)
         driven.insert(tab.id)
+        if sessionLine != nil, let view = arguments["view"] as? String { MainActor.assumeIsolated { AgentChatWatch.started(tab, asChat: view == "chat") } } // plan 047
         // An agent's worker: it opens no tabs of its own unless the user asks it to. A hand-off carries on the user's own
         // conversation (next-term-worktrees), so it is nobody's worker.
         if arguments["hand_off"] as? Bool != true { tab.openedBy = caller?.id }
-        if let title = arguments["title"] as? String, !title.isEmpty { tab.userTitle = String(title.prefix(100)) }
+        if let title = title ?? sessionName { tab.userTitle = title }
+        MCPTabOpeners.record(tab, openedBy: caller)
         controller.refresh()
         let answer = {
             var info: [String: Any] = ["id": tab.id.uuidString.lowercased(), "directory": tab.directory,
@@ -628,11 +717,12 @@ enum MCPControl {
             if let note = arrived.note { info["note"] = note }
             reply(ok(info))
         }
-        guard let command = arguments["command"] as? String, !command.trimmingCharacters(in: .whitespaces).isEmpty else { return answer() }
-        guard !command.contains("\n") else { return reply(fail("The command must be one line.")) }
-        let line = MCPServer.commandLine(command, prompt: arguments["prompt"] as? String)
+        guard let command = sessionLine ?? arguments["command"] as? String, !command.trimmingCharacters(in: .whitespaces).isEmpty else { return answer() }
+        guard sessionLine != nil || !command.contains("\n") else { return reply(fail("The command must be one line.")) }
+        let line = sessionLine ?? MCPServer.commandLine(command, prompt: arguments["prompt"] as? String)
         // Type it once the shell is at its first prompt (its integration reports in), or after 3 s.
         whenReady(tab, until: TerminalTab.now + 3) {
+            if sessionLine == nil { MainActor.assumeIsolated { CommandPaneAutoClose.watchNewTab(tab, command: command) } } // closes after exit 0
             type(line, into: tab, submit: true)
             answer()
         }
@@ -642,7 +732,9 @@ enum MCPControl {
     /// project that holds the folder, the deepest one; else the folder's project, opened (`opened` is then true); in a
     /// folder that is never a project (the home folder: ProjectRoot.project), the window with no project that has a tab
     /// there already, else a new one.
-    static func window(for directory: String) -> (controller: TerminalWindowController, opened: Bool) {
+    /// `fallback`: the window that takes the tab when no open project holds the folder (the asking agent's own), before
+    /// any window is opened for it.
+    static func window(for directory: String, else fallback: TerminalWindowController? = nil) -> (controller: TerminalWindowController, opened: Bool) {
         // A window that closed stays in `controllers` for a run-loop turn: never one to open a tab in.
         let owners = app.controllers.filter { !$0.hasClosed && ($0.project.map { directory == $0 || directory.hasPrefix($0 + "/") } ?? false) }
         if let owner = owners.max(by: { ($0.project?.count ?? 0) < ($1.project?.count ?? 0) }) {
@@ -650,6 +742,7 @@ enum MCPControl {
             guard let worktree = owner.project.flatMap({ MCPServer.ownWorktree(of: directory, inside: $0) }) else { return (owner, false) }
             return (app.openFolder(worktree, newWindow: false, forAgent: true), true)
         }
+        if let fallback, !fallback.hasClosed { return (fallback, false) }
         guard let project = ProjectRoot.project(from: directory) else {
             // A folder that is never a project (the home folder): the window with no project that has a tab there already
             // (one an earlier call opened) takes the tab, as a project's window does; else a new one.
@@ -935,13 +1028,32 @@ enum MCPControl {
         return ok(answer)
     }
 
-    private static func closeTab(_ arguments: [String: Any], caller: TerminalTab?, reply: @escaping Reply) {
+    /// Pinned tabs the user let an agent close, each for the one close_tab that asked.
+    private static var pinnedCloseApproved = Set<UUID>()
+
+    private static func closeTab(_ arguments: [String: Any], caller: TerminalTab?, approval: MCPApproval, requester: String?,
+                                 connection: String?, reply: @escaping Reply) {
         guard let tab = findTab(arguments["tab_id"]), let controller = controller(of: tab) else {
             return reply(fail("No tab with that id; list_tabs shows them."))
         }
         if tab === caller { return reply(fail("That is your own tab.")) }
         // Closing would lose text someone else put on its line, force or not.
         if let why = MCPInputLine.refusal(tab) { return reply(fail(why)) }
+        // A pinned tab (plan 045): the user is asked on the Mac first, force or not, whatever the connection's grant.
+        if controller.group(of: tab)?.pinned == true, pinnedCloseApproved.remove(tab.id) == nil {
+            return MainActor.assumeIsolated {
+                let ask = MCPWriteControl.Ask(title: "An agent asks to close a pinned tab",
+                                              details: "\u{201C}\(tab.title)\u{201D} is pinned in its window. "
+                                                + (tab.closeNote.map { "Closing it stops \($0)." } ?? "Closing it ends what runs there."),
+                                              approveTitle: "Close Tab")
+                let context = MCPWriteControl.context(arguments, caller: caller, approval: .askOnMac, requester: requester, connection: connection)
+                MCPWriteControl.approve(ask, context, reply: reply) { _, window in
+                    window?.finish()
+                    pinnedCloseApproved.insert(tab.id)
+                    closeTab(arguments, caller: caller, approval: approval, requester: requester, connection: connection, reply: reply)
+                }
+            }
+        }
         let force = arguments["force"] as? Bool ?? false
         let id = tab.id.uuidString.lowercased()
         // The window's last tab, with files unsaved in its editor (or a database value): closing it closes the
@@ -974,19 +1086,36 @@ enum MCPControl {
                 info["note"] = "The tmux session keeps running on the host: reattach with new_remote_tab (session), or end it with close_tab force."
                 return reply(close(info))
             }
-            // force: end the tmux session first; the tab closes only once it has ended.
-            RemoteConnection.endSession(remote.host, session: remote.session) { problem in
-                if let problem {
-                    return reply(fail("Could not end tmux session \(remote.session) on \(remote.host.name), so the tab stays open: \(problem)"))
+            // force: asked on the Mac first, then the tmux session ended (looked at again first); the tab closes only once
+            // it has ended.
+            return MainActor.assumeIsolated {
+                let context = MCPWriteControl.context(arguments, caller: caller, approval: approval, requester: requester,
+                                                      connection: connection)
+                RemoteMCP.endTmuxSession(remote.host, session: remote.session, closing: [tab], context, reply: reply) {
+                    reply(close(["id": id, "closed": true, "session_ended": remote.session]))
                 }
-                reply(close(["id": id, "closed": true, "session_ended": remote.session]))
             }
-            return
         }
         if let warning = tab.closeWarning, !force {
             return reply(fail("The tab is running \(warning); pass force: true to stop it and close the tab."))
         }
         reply(close(["id": id, "closed": true]))
+    }
+
+    /// rename_tab: the title Rename Tab… sets; "" gives the tab its own back. It only changes a label, so it asks nothing,
+    /// on the caller's own tab too.
+    private static func renameTab(_ arguments: [String: Any], caller: TerminalTab?) -> MCPServer.CallResult {
+        guard let tab = findTab(arguments["tab_id"]), let controller = controller(of: tab) else {
+            return fail("No tab with that id; list_tabs shows them.")
+        }
+        guard MCPTabOpeners.mayRename(tab, caller: caller) else { return fail(MCPTabOpeners.refusal) }
+        guard let raw = arguments["title"] as? String else { return fail("Give title: the new name, or \"\" for the tab's own.") }
+        switch TabRename.title(raw) {
+        case .failure(let refusal): return fail(refusal.text)
+        case .success(let title): tab.userTitle = title
+        }
+        controller.refresh()
+        return ok(["id": tab.id.uuidString.lowercased(), "title": field(tab.title), "own_title": tab.userTitle == nil])
     }
 
     private static func openInEditor(_ arguments: [String: Any]) -> MCPServer.CallResult {

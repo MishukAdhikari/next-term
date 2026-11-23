@@ -20,7 +20,7 @@ import Testing
     }
 
     @Test func everyLineIsItsAgentsAddWithTheTrackersURLAndAnOwnSource() throws {
-        #expect(everyLine.count >= 12)
+        #expect(everyLine.count >= 11)
         for (tracker, agent, line, source) in everyLine {
             let program = try #require(TrackerLines.program(agent))
             #expect(line.hasPrefix(program + " mcp add "), "\(line)")
@@ -53,20 +53,22 @@ import Testing
             #expect(MCPRedaction.redact(line, mask: .empty).count == 0, "\(line)")
             #expect(!ScrollbackText.holdsSecret(typed: line), "\(line)")
         }
-        let github = try tracker("GitHub")
-        guard case .line(let line, _) = github.cell(for: .codex) else {
-            Issue.record("GitHub has a Codex line")
-            return
+        // No line has an agent read a token from its own environment: GitHub's Codex line did, and is held for Secrets.
+        for tracker in TrackerLines.catalog {
+            for agent in TrackerLines.agents {
+                if case .line(let line, _) = tracker.cell(for: agent) { #expect(!line.contains("--bearer-token-env-var"), "\(line)") }
+            }
         }
-        #expect(line.hasSuffix(" --bearer-token-env-var GITHUB_PAT_TOKEN"))
-        #expect(line.components(separatedBy: "GITHUB_PAT_TOKEN").count == 2)
-        #expect(github.note(for: .codex) == "Codex reads your token from GITHUB_PAT_TOKEN in its environment; "
-            + "Next Term doesn\u{2019}t set it or see it.")
+        let github = try tracker("GitHub")
+        #expect(github.cell(for: .codex).reason?.contains("Next Term\u{2019}s Secrets") == true)
+        #expect(github.cell(for: .codex).reason?.contains("nxtrm secret run") == true && github.note(for: .codex) == nil)
     }
 
     @Test func heldPairsSayWhy() throws {
         let github = try tracker("GitHub")
-        #expect(github.cell(for: .claude).reason == "GitHub\u{2019}s line writes your token into Claude Code\u{2019}s settings file.")
+        let why: String = "GitHub\u{2019}s lines put your token in Claude Code\u{2019}s settings file or Codex\u{2019}s environment. "
+            + "Keep it in Next Term\u{2019}s Secrets and start the server with nxtrm secret run (nxtrm secret help)."
+        #expect(github.cell(for: .claude).reason == why && github.cell(for: .codex).reason == why)
         for agent in TrackerLines.agents where agent != .opencode {
             #expect(try tracker("Asana").cell(for: agent).reason == "Asana\u{2019}s server needs an OAuth app of your own.")
             #expect(try tracker("ClickUp").cell(for: agent).reason == "No line from ClickUp\u{2019}s own page yet.")
@@ -100,13 +102,8 @@ import Testing
     }
 
     @Test func aTokenLineHasNoSignInStepAndItsRowSaysWhereTheTokenComesFrom() throws {
-        let github = try tracker("GitHub")
-        guard case .line(let line, _) = github.cell(for: .codex) else {
-            Issue.record("GitHub has a Codex line")
-            return
-        }
-        #expect(TrackerLines.signIn(.codex, line: line) == nil)
-        #expect(github.notes(for: .codex, line: line) == [try #require(github.note(for: .codex))])
+        // A Codex line that reads a token from the environment has no OAuth step (none is in the catalog now).
+        #expect(TrackerLines.signIn(.codex, line: "codex mcp add x --url https://x.example/mcp --bearer-token-env-var X_TOKEN") == nil)
         let linear = try tracker("Linear")
         let codex = "codex mcp add linear --url https://mcp.linear.app/mcp"
         #expect(linear.notes(for: .codex, line: codex) == ["Then: codex mcp login linear"])
@@ -118,6 +115,8 @@ import Testing
         let rows: [String] = TrackerLines.heldSummary
         #expect(rows.count == TrackerLines.held.count)
         #expect(Set(rows) == [
+            "GitHub: GitHub\u{2019}s lines put your token in Claude Code\u{2019}s settings file or Codex\u{2019}s environment. "
+                + "Keep it in Next Term\u{2019}s Secrets and start the server with nxtrm secret run (nxtrm secret help).",
             "Asana: Asana\u{2019}s server needs an OAuth app of your own.",
             "Azure DevOps: No line from Azure DevOps\u{2019}s own page yet.",
             "ClickUp: No line from ClickUp\u{2019}s own page yet.",
@@ -131,8 +130,8 @@ import Testing
         #expect(rest == rest.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending })
         for tracker in TrackerLines.shown { #expect(tracker.hasLine) }
         #expect(!names.contains("Asana") && !names.contains("ClickUp") && !names.contains("Azure DevOps"))
-        #expect(Set(TrackerLines.held.map(\.name)) == ["Asana", "ClickUp", "Azure DevOps"])
-        #expect(names == ["Linear", "GitHub", "Jira", "Notion", "Plane", "Shortcut", "TickTick", "Todoist"])
+        #expect(Set(TrackerLines.held.map(\.name)) == ["Asana", "ClickUp", "Azure DevOps", "GitHub"])
+        #expect(names == ["Linear", "Jira", "Notion", "Plane", "Shortcut", "TickTick", "Todoist"])
     }
 
     @Test func theSheetRunsNothingWritesNoConfigAndReachesNoNetwork() throws {

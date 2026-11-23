@@ -411,7 +411,7 @@ public enum ImportGhostty {
     static let actions: [String: String] = {
         var actions = [
             "new_tab": "newTab:", "new_window": "newWindow:", "close_surface": "closeTab:", "close_tab": "closeTab:",
-            "close_window": "performClose:", "new_split:right": "splitRight:", "new_split:down": "splitDown:",
+            "close_window": "closeWindow:", "new_split:right": "splitRight:", "new_split:down": "splitDown:",
             "goto_split:left": "selectPaneLeft:", "goto_split:right": "selectPaneRight:", "goto_split:up": "selectPaneAbove:",
             "goto_split:down": "selectPaneBelow:", "goto_split:next": "selectNextPane:", "goto_split:previous": "selectPreviousPane:",
             "next_tab": "showNextTab:", "previous_tab": "showPreviousTab:", "last_tab": "selectTabByNumber:#9",

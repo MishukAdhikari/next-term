@@ -77,7 +77,7 @@ final class AllFilesView: NSView, DiffSelectionHost {
     override init(frame: NSRect) {
         super.init(frame: frame)
         wantsLayer = true
-        layer?.backgroundColor = Theme.background.cgColor
+        themedBackground(Theme.background)
         build()
     }
 
@@ -122,6 +122,7 @@ final class AllFilesView: NSView, DiffSelectionHost {
         }
         let kept = Set(entries.map(ObjectIdentifier.init))
         for entry in old.values where !kept.contains(ObjectIdentifier(entry)) { drop(entry) }
+        updateFoldAllTitle() // files come and go: a new one comes open
         let totals = files.reduce(LineStats()) { LineStats(added: $0.added + ($1.added ?? 0), removed: $0.removed + ($1.removed ?? 0), files: $0.files + 1) }
         let numbers = NSMutableAttributedString(string: totals.files == 1 ? "1 file  " : "\(totals.files.formatted()) files  ", attributes: [
             .font: NSFont.systemFont(ofSize: 12), .foregroundColor: Theme.textDim,
@@ -247,7 +248,7 @@ final class AllFilesView: NSView, DiffSelectionHost {
     }
 
     private func updateFoldAllTitle() {
-        foldAll.title = entries.contains { !$0.collapsed } ? "Collapse All" : "Expand All"
+        foldAll.title = FoldAllTitle.title(collapsed: entries.map(\.collapsed))
     }
 
     private func showAnyway(_ entry: Entry) {
@@ -430,6 +431,7 @@ final class AllFilesView: NSView, DiffSelectionHost {
                 self.selectionMayHaveChanged()
             }
             block.column = column
+            markComments(entry, in: column) // entry.block is set once the block is made
         case let .note(text, action):
             let note = AllFilesNote(frame: NSRect(x: 0, y: Self.headerHeight, width: block.bounds.width, height: Self.noteHeight))
             note.autoresizingMask = [.width]
@@ -458,7 +460,7 @@ final class AllFilesView: NSView, DiffSelectionHost {
         header.spacing = 10
         header.edgeInsets = NSEdgeInsets(top: 0, left: 12, bottom: 0, right: 12)
         header.wantsLayer = true
-        header.layer?.backgroundColor = Theme.bar.cgColor
+        header.themedBackground(Theme.bar)
         scroll.documentView = page
         scroll.hasVerticalScroller = true
         scroll.autohidesScrollers = true
@@ -466,6 +468,7 @@ final class AllFilesView: NSView, DiffSelectionHost {
         scroll.backgroundColor = Theme.background
         scroll.contentView.postsBoundsChangedNotifications = true
         NotificationCenter.default.addObserver(self, selector: #selector(pageScrolled), name: NSView.boundsDidChangeNotification, object: scroll.contentView)
+        NotificationCenter.default.addObserver(self, selector: #selector(reviewChanged(_:)), name: ReviewDraft.changed, object: nil)
         message.textColor = Theme.textDim
         message.alignment = .center
         message.isHidden = true
@@ -503,6 +506,36 @@ final class AllFilesView: NSView, DiffSelectionHost {
         if view.selectedRange().length > 0 || window?.firstResponder === view { selectedColumn = column }
         selectionMayHaveChanged()
     }
+
+    @objc private func reviewChanged(_ notification: Notification) {
+        guard notification.object as? NSWindow === window else { return }
+        entries.forEach { markComments($0) }
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        entries.forEach { markComments($0) }
+    }
+
+    /// The window's review comments on a file shown here: every one for uncommitted changes; for the branch's changes
+    /// (All), those on the file's lines now, as the new side is the file on disk (the old side is the base's, not
+    /// HEAD's); none for a commit's.
+    private func markComments(_ entry: Entry, in made: UnifiedColumn? = nil) {
+        guard let column = made ?? entry.block?.column else { return }
+        let all = ReviewDraft.existing(window)?.comments ?? []
+        let comments: [ReviewComment]
+        if isUncommitted(entry.file.path) {
+            comments = all
+        } else if case .all = scope {
+            comments = all.filter(\.inFile)
+        } else {
+            comments = []
+        }
+        column.mark(ReviewComments.marks(comments, path: canonicalPath((root as NSString).appendingPathComponent(entry.file.path))))
+    }
+
+    /// For the self-test: the rows marked as commented in a file's column, by its path in the repository.
+    func commentedRows(of path: String) -> [Int] { entries.first { $0.file.path == path }?.block?.column?.commentedRows ?? [] }
 
     /// The column whose selection counts (`selectedColumn`), and its file.
     private var selected: (column: UnifiedColumn, entry: Entry)? {
@@ -591,7 +624,7 @@ final class AllFilesHeader: NSView {
     override init(frame: NSRect) {
         super.init(frame: frame)
         wantsLayer = true
-        layer?.backgroundColor = Theme.bar.cgColor
+        themedBackground(Theme.bar)
         chevron.contentTintColor = Theme.textDim
         Typography.singleLine(name, truncation: .byTruncatingMiddle)
         name.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)

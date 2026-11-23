@@ -492,4 +492,14 @@ final class FixtureHome {
         HomeAgentOffer.turnOff(defaults)
         #expect(!HomeAgentOffer.isOn(defaults))
     }
+
+    /// Skip writes no setting: the offer stays on, and a window that has not offered yet still offers.
+    @Test func skipLeavesTheOfferOn() throws {
+        let (defaults, name) = try TestDefaults.make("home-agent-skip")
+        defer { TestDefaults.remove(defaults, name) }
+        #expect(HomeAgentOffer.skip == "Skip")
+        #expect(defaults.object(forKey: HomeAgentOffer.key) == nil)
+        let agent = HomeAgentOffer.Tab(directory: "/Users/ada", runsAgent: true)
+        #expect(HomeAgentOffer.offers(on: HomeAgentOffer.isOn(defaults), windowProject: nil, offered: false, tabs: [agent], home: "/Users/ada"))
+    }
 }

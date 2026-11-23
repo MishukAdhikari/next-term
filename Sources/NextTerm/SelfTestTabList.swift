@@ -73,7 +73,7 @@ extension SelfTest {
         // Settings › Terminal › Tabs follows the menus and chooses Right: the list mirrored at the terminal's right.
         let settings = SettingsWindowController()
         let settingsTabs = settings.window?.contentView as? NSTabView
-        let terminalSettings = settingsTabs?.tabViewItems.first { $0.identifier as? String == "terminal" }?.view as? TerminalSettingsView
+        let terminalSettings = settingsTabs?.tabViewItems.first { $0.identifier as? String == "terminal" }?.pane as? TerminalSettingsView
         terminalSettings?.refresh()
         let popup = terminalSettings?.behaviour.tabs
         let choices: [String] = popup?.itemTitles ?? []
@@ -159,6 +159,9 @@ extension SelfTest {
         check(column && !list.isCollapsed && abs(list.frame.width - openWidth) < 1 && toggled.most <= 2,
               "tab list: Collapse Tab List folds it to its column of marks, Expand brings it back at its width, each terminal resized once each way",
               "column \(column), width \(openWidth) → \(list.frame.width), resized \(toggled.most) times")
+        #if DEBUG
+        await collapsedDragChecks(c, list: list, in: window) // a paced drag, as SelfTestTabListBudget's
+        #endif
         if let project = c.project {
             let entry = TabListWidths(propertyList: defaults.dictionary(forKey: TabListWidths.key)).entry(for: project)
             check(entry?.collapsed == false && abs((entry?.width ?? 0) - openWidth) < 1, "tab list: the project keeps its list's width and collapse",
@@ -169,13 +172,19 @@ extension SelfTest {
         // with none yet (a whole run's earlier tabs can have one) has nothing to say there, and shows one line.
         if let folders = tabsMenu.items.first(where: { $0.title == "Show Folders" }) {
             let known: Int = c.groups.firstIndex { !$0.focused.directory.isEmpty } ?? 0
+            let before: Bool = app.tabListShowsFolders
+            // As opening the menu does: performActionForItem goes by the item's isEnabled, which is what the menu's last
+            // update left: one made while the tabs were on top (the whole run's earlier parts send keys, and AppKit
+            // updates the menus to match their key equivalents) left it off, and the click would do nothing.
+            tabsMenu.update()
+            let itemOn: Bool = folders.isEnabled
             tabsMenu.performActionForItem(at: tabsMenu.index(of: folders))
             window.layoutIfNeeded()
             // What the toggle did, for a failure: the setting, the menu item, the list's feed and its rows.
             let toggledOn: Bool = app.tabListShowsFolders
-            let enabled: Bool = AppDelegate.shared.validateMenuItem(folders)
+            let enabled: Bool = itemOn && AppDelegate.shared.validateMenuItem(folders)
             let fedDetail: String = list.rows.filter { !$0.isPane }[safe: known]?.detail ?? "none"
-            let state = "folders \(toggledOn), item enabled \(enabled), list shows \(c.listShowsTabs), dragging \(list.isDragging), fed \(fedDetail)"
+            let state = "folders \(before) → \(toggledOn), item enabled \(enabled), list shows \(c.listShowsTabs), dragging \(list.isDragging), fed \(fedDetail)"
             let detail = list.tabRowView(at: known)?.shownDetail
             let tall: Bool = abs((list.tabRowView(at: known)?.frame.height ?? 0) - TabListLayout.twoLineHeight) < 1
             tabsMenu.performActionForItem(at: tabsMenu.index(of: folders))

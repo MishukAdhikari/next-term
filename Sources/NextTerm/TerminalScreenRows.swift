@@ -12,6 +12,12 @@ extension TerminalTab {
         return AgentScreen.isOpencode(title: programTitle)
     }
 
+    /// The agent whose own screen shapes the tab's screen is read with (AgentScreen.activity(screenLines:agent:)): OpenCode
+    /// when the tab shows it, else the agent the program in front is (Command Code's prompt says it waits).
+    var screenAgent: AgentKind? {
+        isOpencodeScreen ? .opencode : AgentKind(program: status.program)
+    }
+
     /// The rows an agent's screen is read over (pollAgentScreen, `agentMenu`): OpenCode's whole screen, so a fullscreen
     /// prompt's header, at its top, is read with its buttons at the bottom however tall the pane; every other agent's
     /// last `AgentScreen.scannedLines`.
@@ -51,14 +57,16 @@ extension TerminalTab {
         return Array(rows.suffix(live.count))
     }
 
-    /// A line's text, as `translateToString(trimRight: true)` gives it, and the background of each of its cells. That
-    /// text has a character for every cell, a wide character's second cell its own "\0", so each colour falls on its
-    /// own character (ScreenRowTests); where characters join (a combining mark), the row keeps no colours.
+    /// A line's text, as `screenText()` gives it, and the background of each of its cells. That text has a character for
+    /// every cell but a wide character's second cell, which has no colour here either, so each colour falls on its own
+    /// character (ScreenRowTests); where characters join (a combining mark), the row keeps no colours.
     static func screenRow(_ line: BufferLine?) -> ScreenRow {
         guard let line else { return ScreenRow("") }
-        let text = line.translateToString(trimRight: true)
+        let text = line.screenText()
         let cells = min(line.count, line.getTrimmedLength())
-        let colors: [Int] = (0..<max(0, cells)).map { (column: Int) -> Int in background(line[column].attribute) }
+        let colors: [Int] = (0..<max(0, cells)).filter { !line.isWideHalf($0) }.map { (column: Int) -> Int in
+            background(line[column].attribute)
+        }
         return ScreenRow(text: text, cells: colors)
     }
 

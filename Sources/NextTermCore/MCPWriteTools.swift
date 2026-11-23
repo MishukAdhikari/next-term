@@ -7,8 +7,10 @@ import Glibc
 
 /// Who approves the change one of Next Term's write tools would make (the tools tagged `write` that the
 /// app's MCPWriteControl runs: write_file, create_file, stage, commit, focus_tab, split_pane, close_pane,
-/// zoom_pane, set_layout and settings_set, and add_task through its approval), and the skill requests
-/// install_skill and remove_skill.
+/// zoom_pane, set_layout and settings_set, and add_task through its approval), the skill requests
+/// install_skill and remove_skill, and the host and tab changes that ask (add_host, remove_host, edit_host,
+/// end_session and close_tab). start_agent and close_tab on a herdr agent's id always ask on the Mac, and so does
+/// run_command, under either policy: what it runs is the user's to start.
 ///
 /// The entry point is `MCPControl.call(tool, arguments, caller: pid, approval:, requester:, connection:,
 /// reply:)` in the app, on the main thread; its reply can come from any thread.
@@ -17,7 +19,7 @@ import Glibc
 /// - The remote door calls it with `caller: nil`, `requester:` the connection's name as the approval
 ///   window should show it (for example “the connection “Claude, phone””), `connection:` its grant id,
 ///   and `.askOnMac` while the connection's “Ask on this Mac before changes” is on,
-///   `.preApprovedByGrant(grantID)` while it is off. Decline and Stop Asking stops the asker by
+///   `.preApprovedByGrant(grantID)` while it is off. Don’t Ask Again stops the asker by
 ///   `connection`: that connection only, not another of the same name, and not lifted by a rename.
 ///
 /// propose_edit takes the policy too, but its ask is its proposal: under either policy the change opens
@@ -50,13 +52,17 @@ extension MCPServer {
     static let scopeTags: [String: Scope] = {
         let read = ["list_tabs", "read_tab", "wait_for_tab", "list_projects", "get_editor_selection", "get_open_files",
                     "read_file", "find_in_files", "git_status", "get_diff", "list_hosts", "check_host", "host_sessions",
-                    "host_changes", "list_skills", "get_skill", "list_shortcuts", "settings_get", "list_import_sources",
-                    "preview_import", "list_secrets"]
-        let write = ["open_project", "new_tab", "send_to_tab", "press_keys", "answer_agent", "show_tab", "close_tab",
-                     "add_host", "remove_host", "new_remote_tab", "install_skill", "remove_skill", "open_in_editor", "show_settings",
-                     "propose_edit", "write_file", "create_file", "stage", "commit", "focus_tab", "split_pane",
-                     "close_pane", "zoom_pane", "set_layout", "settings_set", "apply_import", "undo_import", "add_task",
-                     "request_secret", "store_secret", "run_with_secrets", "import_secrets"]
+                    "host_changes", "list_skills", "get_skill", "list_shortcuts", "list_agent_clis", "settings_get", "list_import_sources",
+                    "preview_import", "list_secrets", "list_mcp_servers",
+                    "mcp_servers"] // the MCP hub's catalog (MCPHubCatalog), listed only once a server applies
+        let write = ["open_project", "new_tab", "send_to_tab", "press_keys", "answer_agent", "show_tab", "switch_view", "set_token_budget", "close_tab", "rename_tab", "start_agent",
+                     "add_host", "remove_host", "edit_host", "end_session", "new_remote_tab", "install_skill", "remove_skill", "open_in_editor", "show_settings",
+                     "propose_edit", "write_file", "create_file", "stage", "commit", "run_command", "focus_tab", "split_pane",
+                     "close_pane", "zoom_pane", "set_layout", "settings_set", "apply_import", "undo_import", "apply_setup", "add_task",
+                     "add_mcp_server", "forward_prompt",
+                     "reopen_before_update",
+                     "request_secret", "store_secret", "run_with_secrets", "import_secrets",
+                     "mcp_tools", "mcp_call"] // they start the user's servers on this Mac
         var tags: [String: Scope] = [:]
         for name in read { tags[name] = .read }
         for name in write { tags[name] = .write }
@@ -66,7 +72,7 @@ extension MCPServer {
     private static let pathArgument = #""path": {"type": "string", "description": "The file: relative to the project, or absolute inside an open project."}"#
     private static let projectArgument = #""project": {"type": "string", "description": "An open project's folder (as list_projects gives it), its name, or a folder inside one. Default: your window's project, or the only one open."}"#
     private static let tabArgument = #""tab_id": {"type": "string", "description": "A tab's id from list_tabs (a pane of a split tab has its own)."}"#
-    private static let reasonArgument = #""reason": {"type": "string", "description": "Why, in a sentence; shown to the user as your words when they are asked."}"#
+    static let reasonArgument = #""reason": {"type": "string", "description": "Why, in a sentence; shown to the user as your words when they are asked."}"#
 
     /// The tools that edit files, commit, and control panes, the layout and settings. Each one tagged write
     /// takes an approval policy (MCPApproval) and asks the user on the Mac before it changes anything.
@@ -92,9 +98,13 @@ extension MCPServer {
              inputSchema: #"{"type": "object", "properties": {"message": {"type": "string", "description": "The commit message."}, "paths": {"type": "array", "items": {"type": "string"}, "maxItems": 200, "description": "Files to stage and commit, relative to the project or absolute."}, "include_staged": {"type": "boolean", "description": "Also commit what is staged already. Default false."}, \#(projectArgument), \#(reasonArgument)}, "required": ["message"], "additionalProperties": false}"#,
              readOnly: false, destructive: true, idempotent: false, timeout: 120),
         Tool(name: "focus_tab", title: "Focus a tab",
-             description: "Puts a tab (or a pane of a split tab) in front of its window and gives it that window's keyboard, so what the user types there goes to it: a tab an agent opened takes it only this way, or by the user's click. Unlike show_tab, it does not bring the window or Next Term forward. The user is asked on the Mac first. A herdr agent's id also moves herdr's view to that agent's pane.",
-             inputSchema: #"{"type": "object", "properties": {\#(MCPServer.agentTabID), \#(reasonArgument)}, "required": ["tab_id"], "additionalProperties": false}"#,
+             description: "Puts a tab (or a pane of a split tab) in front of its window and gives it that window's keyboard, so what the user types there goes to it: a tab an agent opened takes it only this way, or by the user's click. Unlike show_tab, it does not bring the window or Next Term forward. The user is asked on the Mac first. A herdr agent's id also moves herdr's view to that agent's pane; with direction (left, right, up, down), herdr's focus goes to its neighbour there instead. A herdr tab's or workspace's id moves herdr's view to it.",
+             inputSchema: #"{"type": "object", "properties": {\#(MCPServer.agentTabID), "direction": {"type": "string", "enum": ["left", "right", "up", "down"], "description": "With a herdr pane's id: its neighbour there (herdr pane focus)."}, \#(reasonArgument)}, "required": ["tab_id"], "additionalProperties": false}"#,
              readOnly: false, destructive: false, idempotent: true, timeout: 60),
+        Tool(name: "run_command", title: "Ask the user to run a command",
+             description: "For a command the user has to run themselves (sudo, a login such as gh auth login or gcloud auth login, anything that asks for their password or a browser), instead of asking them to copy it or type it after !. The user is asked on the Mac first, seeing the exact command and your reason as your words, and chooses Run or Decline; it never runs on your word alone, under any connection's grant either. On Run it runs in a new pane below your tab (on the same host for a remote tab), in your tab's folder or directory, and that pane takes the keyboard for a password or a prompt. Outside Next Term's tabs, give directory: it runs in a new tab there. Answers within about 50 seconds: ran with exit_code (when the shell reports it) and output (the pane's last lines, stored keys masked), declined, or running or pending with a request_id: call again with only request_id to keep waiting. The pane stays open for the user; its id is tab_id, for read_tab.",
+             inputSchema: #"{"type": "object", "properties": {"command": {"type": "string", "maxLength": 2000, "description": "One line, run at the pane's shell prompt as typed."}, "directory": {"type": "string", "description": "Absolute folder it runs in. Default: your tab's folder; needed outside Next Term's tabs."}, \#(reasonArgument), "request_id": {"type": "string", "description": "A request's id, to keep waiting for its answer."}}, "additionalProperties": false}"#,
+             readOnly: false, destructive: true, idempotent: false, timeout: 60),
         Tool(name: "split_pane", title: "Split a pane",
              description: "Opens a new terminal pane beside a tab's pane: to its right, or below it with direction down, in that pane's folder or directory, without taking the keyboard. Beside a remote tab with no directory, the new pane opens on the same host. The user is asked on the Mac first. Returns the new pane's id, which works like any tab's.",
              inputSchema: #"{"type": "object", "properties": {\#(tabArgument), "direction": {"type": "string", "enum": ["right", "down"], "description": "Default right."}, "directory": {"type": "string", "description": "Absolute folder on this Mac. Default: the pane's folder."}, \#(reasonArgument)}, "required": ["tab_id"], "additionalProperties": false}"#,
@@ -104,19 +114,23 @@ extension MCPServer {
              inputSchema: #"{"type": "object", "properties": {\#(tabArgument), "force": {"type": "boolean"}, \#(reasonArgument)}, "required": ["tab_id"], "additionalProperties": false}"#,
              readOnly: false, destructive: true, idempotent: true, timeout: 60),
         Tool(name: "zoom_pane", title: "Zoom a pane",
-             description: "Makes one pane of a split tab fill the tab while the others keep running behind it (zoomed true, the default), or brings every pane back (zoomed false), as Window › Maximize Pane does. The zoomed pane takes its window's keyboard; bringing the panes back leaves the keyboard where it is. The user is asked on the Mac first; a call that changes nothing answers at once.",
+             description: "Makes one pane of a split tab fill the tab while the others keep running behind it (zoomed true, the default), or brings every pane back (zoomed false), as Window › Maximize Pane does; with a herdr pane's id, herdr zooms it in its herdr tab (herdr pane zoom). The zoomed pane takes its window's keyboard; bringing the panes back leaves the keyboard where it is. The user is asked on the Mac first; a call that changes nothing answers at once.",
              inputSchema: #"{"type": "object", "properties": {\#(tabArgument), "zoomed": {"type": "boolean", "description": "Default true."}, \#(reasonArgument)}, "required": ["tab_id"], "additionalProperties": false}"#,
              readOnly: false, destructive: false, idempotent: true, timeout: 60),
+        Tool(name: "reopen_before_update", title: "Reopen the windows from before the update",
+             description: "Reopens the windows that were open when the last update was installed and did not come back after its relaunch, each with a tab for each of its tabs on this Mac, in their folders and with the titles the user gave them; windows that were merged are merged again. The user is asked on the Mac first; with nothing to reopen it answers at once. Next Term keeps that list for a day, and 5 minutes once every window is back.",
+             inputSchema: #"{"type": "object", "properties": {\#(reasonArgument)}, "additionalProperties": false}"#,
+             readOnly: false, destructive: false, idempotent: true, timeout: 60, alwaysLoad: false),
         Tool(name: "set_layout", title: "Set the layout",
-             description: "Changes the layout as the View menu does. terminal_position (bottom, right, left or top), sidebar_side (left or right), terminal_tabs (top, or left or right for a list of the tabs down that side of the terminal), window_column (shown or hidden: a badge for each open window at every window's outer edge, while two or more are open) and window_column_folded (false unfolds it to a row per window with its name and marks) apply to every window. sidebar (shown or hidden) and terminal_folded (true folds the terminal to its tab bar, or to a rail beside the editor) apply to one window: your window, or the one with project open. The user is asked on the Mac first; a call that changes nothing answers at once with the layout.",
-             inputSchema: #"{"type": "object", "properties": {"terminal_position": {"type": "string", "enum": ["bottom", "right", "left", "top"]}, "sidebar_side": {"type": "string", "enum": ["left", "right"]}, "terminal_tabs": {"type": "string", "enum": ["top", "left", "right"]}, "window_column": {"type": "string", "enum": ["shown", "hidden"]}, "window_column_folded": {"type": "boolean"}, "sidebar": {"type": "string", "enum": ["shown", "hidden"]}, "terminal_folded": {"type": "boolean"}, \#(projectArgument), \#(reasonArgument)}, "additionalProperties": false}"#,
+             description: "Changes the layout as the View menu does. terminal_position (bottom, right, left or top), sidebar_side (left or right), terminal_tabs (top, or left or right for a list of the tabs down that side of the terminal), window_column (shown or hidden: a rail with a dot for each open window at every window's outer edge, while two or more are open; resting the pointer on it shows the list) and window_column_folded (false pins it unfolded to a row per window with its name and marks) and window_column_side (left or right: by default the project sidebar's side) apply to every window. sidebar (shown or hidden) and terminal_folded (true folds the terminal to its tab bar, or to a rail beside the editor) apply to one window: your window, or the one with project open. The user is asked on the Mac first; a call that changes nothing answers at once with the layout.",
+             inputSchema: #"{"type": "object", "properties": {"terminal_position": {"type": "string", "enum": ["bottom", "right", "left", "top"]}, "sidebar_side": {"type": "string", "enum": ["left", "right"]}, "terminal_tabs": {"type": "string", "enum": ["top", "left", "right"]}, "window_column": {"type": "string", "enum": ["shown", "hidden"]}, "window_column_folded": {"type": "boolean"}, "window_column_side": {"type": "string", "enum": ["left", "right"]}, "sidebar": {"type": "string", "enum": ["shown", "hidden"]}, "terminal_folded": {"type": "boolean"}, \#(projectArgument), \#(reasonArgument)}, "additionalProperties": false}"#,
              readOnly: false, destructive: false, idempotent: true, timeout: 60),
         Tool(name: "settings_get", title: "Get settings",
-             description: "The settings that settings_set may change, with their values and what each takes: font_size, line_height, soft_wrap, terminal_position, the notification choices, agent_spinner, agents_offer_tabs and agents_bring_tabs_forward. Other settings are not listed. Also layout: the layout as set_layout answers it, for your window or the front one.",
+             description: "The settings that settings_set may change, with their values and what each takes: the editor's font_size, line_height and soft_wrap; the terminal's font, size, colours, cursor and scrollback, new_tab_folder and terminal_position; the notification choices; agent_spinner, agents_offer_tabs and agents_bring_tabs_forward; open_projects_in, at_launch, sidebar_single_click and shortcut_set; chat_token_usage and agents_open_as_chat. Other settings are not listed. Also layout: the layout as set_layout answers it, for your window or the front one.",
              inputSchema: #"{"type": "object", "properties": {}, "additionalProperties": false}"#,
              readOnly: true, destructive: false, idempotent: true, timeout: 15),
         Tool(name: "settings_set", title: "Change settings",
-             description: "Changes some of Next Term's settings, given as values: {name: value}. Only these: font_size (8 to 32, the editor's, which the terminal uses too unless it has a size of its own), line_height (the editor's, 1.0 to 2.0), soft_wrap, terminal_position (bottom, right, left or top), notify_decisions, notify_agent_finished, notify_program_alerts and notification_sound (true or false), notify_commands (in_another_app, always or never), agent_spinner (spinning, still or off: how a tab shows its agent working) agents_offer_tabs (true or false: agents offer to run parallel work in Next Term tabs, with the next-term-tabs skill) and agents_bring_tabs_forward (focus, show or off: whether the window of a tab an agent opens comes forward and takes focus; the tab itself waits for the user's click either way). Never agent control, remote access, the IDE links, updates or keys. The user is asked on the Mac first, seeing each change; values already set need no asking.",
+             description: "Changes some of Next Term's settings, given as values: {name: value}. Only these: appearance (system, light or dark: the whole app's look; system follows the Mac's as it changes), light_theme (next-term-light) and dark_theme (next-term-dark): the theme each look takes; font_size (8 to 32, the editor's, which the terminal uses too unless it has a size of its own), line_height (the editor's, 1.0 to 2.0), soft_wrap; terminal_font_family (a monospaced family installed on this Mac, or default), terminal_font_size (8 to 32, or same_as_editor), terminal_colours (next_term, or imported: the colours an import brought over), terminal_cursor (block, bar or underline), terminal_cursor_blink, terminal_scrollback (1000 to 100000 lines), new_tab_folder (project, current, home or an existing folder's absolute path), terminal_position (bottom, right, left or top); notify_decisions, notify_agent_finished, notify_program_alerts and notification_sound (true or false), notify_commands (in_another_app, always or never), notify_threshold_seconds (5, 30, 60 or 300: finished work notifies only when it took that long); agent_spinner (spinning, still or off: how a tab shows its agent working), agents_offer_tabs (true or false: agents offer to run parallel work in Next Term tabs, with the next-term-tabs skill), agents_bring_tabs_forward (focus, show or off: whether the window of a tab an agent opens comes forward and takes focus; the tab itself waits for the user's click either way); open_projects_in (ask, this_window, new_window, new_tab or as_macos: where a project opens from a window already in use; new_tab merges it into that window as a tab), at_launch (welcome, resume or new_terminal), sidebar_single_click (true: one click in the project sidebar opens a file or folder) and shortcut_set (next_term, vscode or jetbrains: the IDE shortcut set under the user's own keys, as Settings › Keyboard Shortcuts switches it); chat_token_usage (true or false: the chat view's one line under the composer with the tokens the agent recorded for its last request and how full its context is); agents_open_as_chat (a list of agent ids, such as [\"claude\", \"codex\"]: their new sessions open as Next Term's chat view, the terminal one click away, and every other agent's as its terminal; [] for all terminal; tabs open already keep their view, and switch_view changes one). Never agent control, remote access, the IDE links, updates or a single key. The user is asked on the Mac first, seeing each change; values already set need no asking.",
              inputSchema: #"{"type": "object", "properties": {"values": {"type": "object", "description": "Setting names and their new values, as settings_get lists them.", "minProperties": 1}, \#(reasonArgument)}, "required": ["values"], "additionalProperties": false}"#,
              readOnly: false, destructive: false, idempotent: true, timeout: 60),
     ]
@@ -129,8 +143,9 @@ extension MCPServer {
 }
 
 extension MCPServer.Tool {
-    /// Next Term's scope tag (nil only for a tool nobody tagged, which a unit test refuses).
-    public var scope: MCPServer.Scope? { MCPServer.scopeTags[name] }
+    /// Next Term's scope tag (nil only for a tool nobody tagged, which a unit test refuses). A hub server's direct tool
+    /// (MCPHubDirect) is write, as mcp_call is: it starts the user's server on this Mac.
+    public var scope: MCPServer.Scope? { MCPServer.scopeTags[name] ?? (MCPHubDirect.isDirectName(name) ? .write : nil) }
 
     /// The `_meta` it is listed with: Claude Code keeps it loaded (unless it is used only once in a while), and
     /// the scope tag is there for any client.
@@ -622,16 +637,28 @@ public enum MCPGitTools {
 // MARK: - settings and layout
 
 /// The settings agents may change with settings_set: a short, explicit list of harmless preferences. Agent
-/// control, remote access, the IDE links, updates and keys are never on it, so no agent can turn off its
-/// own guards or the user's view of them.
+/// control, remote access, the IDE links, updates and single keys are never on it, so no agent can turn off its
+/// own guards or the user's view of them. The shortcut set is on it: it changes which preset lies under the
+/// user's own keys, never the keys themselves.
 public enum MCPSettings {
     public enum Kind: Equatable, Sendable {
         case flag
         case number(ClosedRange<Double>, wholeNumbers: Bool)
         case choice([String])
+        /// A whole number in the range, or the one word that stands for having none of its own.
+        case numberOr(ClosedRange<Double>, String)
+        /// One of these whole numbers.
+        case numbers([Int])
+        /// A monospaced font family installed on this Mac, by its name, or "default" for Next Term's own face.
+        case fontFamily
+        /// One of the words, or an existing folder's absolute path.
+        case folder([String])
+        /// Some of these ids, as a list (an empty one for none). Its value is a choice: the ids sorted, joined by commas.
+        case ids([String])
     }
 
-    public enum Value: Equatable, Sendable {
+    /// Codable for Undo Agent Setup's snapshot (AgentSetupSnapshot).
+    public enum Value: Codable, Equatable, Sendable {
         case flag(Bool)
         case number(Double)
         case choice(String)
@@ -667,30 +694,77 @@ public enum MCPSettings {
                 let low = Value.number(range.lowerBound).text, high = Value.number(range.upperBound).text
                 return whole ? "a whole number, \(low) to \(high)" : "a number, \(low) to \(high)"
             case .choice(let options): return options.joined(separator: ", ")
+            case .numberOr(let range, let word):
+                return "a whole number, \(Value.number(range.lowerBound).text) to \(Value.number(range.upperBound).text), or \(word)"
+            case .numbers(let options): return "one of " + options.map(String.init).joined(separator: ", ")
+            case .fontFamily: return "a monospaced font family installed on this Mac, by its name, or default"
+            case .folder(let words): return words.joined(separator: ", ") + ", or an existing folder's absolute path"
+            case .ids(let ids): return "a list of any of " + ids.joined(separator: ", ") + " ([] for none)"
             }
         }
     }
+
+    /// "default" for terminal_font_family: Next Term's own face.
+    public static let defaultFont = "default"
+    /// "same_as_editor" for terminal_font_size: the terminal follows the editor's size.
+    public static let sameAsEditor = "same_as_editor"
 
     public static let allowlist: [Setting] = [
         Setting(name: "font_size", title: "Font size", kind: .number(8...32, wholeNumbers: true)),
         Setting(name: "line_height", title: "Editor line height", kind: .number(1...2, wholeNumbers: false)),
         Setting(name: "soft_wrap", title: "Soft wrap", kind: .flag),
+        Setting(name: "terminal_font_family", title: "Terminal font", kind: .fontFamily),
+        Setting(name: "terminal_font_size", title: "Terminal font size", kind: .numberOr(8...32, sameAsEditor)),
+        Setting(name: "appearance", title: "Appearance (system: the Mac’s own, as it changes)",
+                kind: .choice(AppAppearance.allCases.map(\.rawValue))),
+        Setting(name: "light_theme", title: "Light theme", kind: .choice(ThemePalette.lightThemes.map(\.id))),
+        Setting(name: "dark_theme", title: "Dark theme", kind: .choice(ThemePalette.darkThemes.map(\.id))),
+        Setting(name: "terminal_colours", title: "Terminal colours (imported: the ones an import brought over, which Settings keeps)",
+                kind: .choice(["next_term", "imported"])),
+        Setting(name: "terminal_cursor", title: "Terminal cursor", kind: .choice(CursorShape.allCases.map(\.rawValue))),
+        Setting(name: "terminal_cursor_blink", title: "Terminal cursor blinks", kind: .flag),
+        Setting(name: "terminal_scrollback", title: "Lines each terminal keeps above the screen",
+                kind: .number(Double(Scrollback.range.lowerBound)...Double(Scrollback.range.upperBound), wholeNumbers: true)),
+        Setting(name: "new_tab_folder", title: "Where a new tab opens (project: the window’s project)",
+                kind: .folder(["project", "current", "home"])),
         Setting(name: "terminal_position", title: "Terminal position", kind: .choice(["bottom", "right", "left", "top"])),
         Setting(name: "notify_decisions", title: "Notify when an agent needs your decision", kind: .flag),
         Setting(name: "notify_agent_finished", title: "Notify when an agent finishes", kind: .flag),
         Setting(name: "notify_program_alerts", title: "Notify on a program's own bell or notification", kind: .flag),
         Setting(name: "notification_sound", title: "Play a sound with notifications", kind: .flag),
         Setting(name: "notify_commands", title: "Notify when a command finishes or fails", kind: .choice(["in_another_app", "always", "never"])),
+        Setting(name: "notify_threshold_seconds", title: "Notify only for finished work that took at least this many seconds",
+                kind: .numbers(WorkThreshold.allCases.map(\.rawValue))),
         Setting(name: "agent_spinner", title: "How a tab shows its agent working (View › Agent Spinner)", kind: .choice(["spinning", "still", "off"])),
         Setting(name: "agents_offer_tabs", title: "Agents offer to run parallel work in tabs", kind: .flag),
         Setting(name: "agents_bring_tabs_forward", title: "When an agent opens a tab, its window comes forward (the tab never takes the keyboard by itself)",
                 kind: .choice(["focus", "show", "off"])),
+        Setting(name: "open_projects_in", title: "Where a project opens from a window in use (File › Open Projects In)",
+                kind: .choice(ProjectOpening.Setting.allCases.map(\.mcpName))),
+        Setting(name: "at_launch", title: "At launch (Settings › General)", kind: .choice(LaunchOpens.allCases.map(\.mcpName))),
+        Setting(name: "sidebar_single_click", title: "A single click in the project sidebar opens a file or folder", kind: .flag),
+        Setting(name: "shortcut_set", title: "IDE shortcut set, under your own keys (Settings › Keyboard Shortcuts)",
+                kind: .choice(KeymapPreset.allCases.map(\.mcpName))),
+        Setting(name: "chat_token_usage",
+                title: "Show token usage in chat: one quiet line under the composer, from what the agent records",
+                kind: .flag),
+        Setting(name: "agents_open_as_chat",
+                title: "Agents whose new sessions open as Next Term's chat view, the terminal one click away; the others open as their terminal (Settings › Agents › Opens as)",
+                kind: .ids(ChatFirst.agentIDs.sorted())),
     ]
 
     public static func setting(_ name: String) -> Setting? { allowlist.first { $0.name == name } }
 
-    /// The changes asked for, in the allowlist's order, each value checked; anything else refuses them all.
-    public static func changes(_ raw: Any?) -> Result<[(Setting, Value)], MCPToolError> {
+    /// An existing folder, as new_tab_folder checks it.
+    public static func isFolder(_ path: String) -> Bool {
+        var directory: ObjCBool = false
+        return FileManager.default.fileExists(atPath: path, isDirectory: &directory) && directory.boolValue
+    }
+
+    /// The changes asked for, in the allowlist's order, each value checked; anything else refuses them all. A font
+    /// family is looked up in `fonts` and a folder checked with `folderExists`; tests pass their own.
+    public static func changes(_ raw: Any?, fonts: FontCatalog = .system,
+                               folderExists: (String) -> Bool = isFolder) -> Result<[(Setting, Value)], MCPToolError> {
         guard let values = raw as? [String: Any], !values.isEmpty else {
             return .failure(MCPToolError("Give values: setting names and their new values, such as {\"font_size\": 14}."))
         }
@@ -704,7 +778,7 @@ public enum MCPSettings {
         var result: [(Setting, Value)] = []
         for setting in allowlist {
             guard let raw = values[setting.name] else { continue }
-            switch value(raw, for: setting) {
+            switch value(raw, for: setting, fonts: fonts, folderExists: folderExists) {
             case .failure(let error): return .failure(error)
             case .success(let value): result.append((setting, value))
             }
@@ -712,7 +786,7 @@ public enum MCPSettings {
         return .success(result)
     }
 
-    static func value(_ raw: Any, for setting: Setting) -> Result<Value, MCPToolError> {
+    static func value(_ raw: Any, for setting: Setting, fonts: FontCatalog, folderExists: (String) -> Bool) -> Result<Value, MCPToolError> {
         let refusal = MCPToolError("\(setting.name) takes \(setting.takes); nothing was changed.")
         switch setting.kind {
         case .flag:
@@ -725,6 +799,43 @@ public enum MCPSettings {
         case .choice(let options):
             guard let text = raw as? String, options.contains(text) else { return .failure(refusal) }
             return .success(.choice(text))
+        case .numberOr(let range, let word):
+            if let text = raw as? String { return text == word ? .success(.choice(word)) : .failure(refusal) }
+            return value(raw, for: Setting(name: setting.name, title: setting.title, kind: .number(range, wholeNumbers: true)),
+                         fonts: fonts, folderExists: folderExists).mapError { _ in refusal }
+        case .numbers(let options):
+            guard !MCPServer.isBoolean(raw), let number = (raw as? NSNumber)?.doubleValue,
+                  options.contains(where: { Double($0) == number }) else { return .failure(refusal) }
+            return .success(.number(number))
+        case .fontFamily:
+            guard let name = (raw as? String)?.trimmingCharacters(in: .whitespaces), !name.isEmpty else { return .failure(refusal) }
+            if name == defaultFont { return .success(.choice(defaultFont)) }
+            // The family's own name, whatever spelling or PostScript name it was asked by.
+            guard let font = fonts.lookup(name), font.monospaced else {
+                return .failure(MCPToolError("“\(MCPFileTools.cut(name))” is not a monospaced font family installed on this Mac; nothing was changed."))
+            }
+            return .success(.choice(font.family))
+        case .folder(let words):
+            guard let text = raw as? String, !text.isEmpty else { return .failure(refusal) }
+            if words.contains(text) { return .success(.choice(text)) }
+            let path = ((text as NSString).expandingTildeInPath as NSString).standardizingPath
+            guard path.hasPrefix("/") else { return .failure(refusal) }
+            guard folderExists(path) else {
+                return .failure(MCPToolError("There is no folder at \(MCPFileTools.cut(path)); nothing was changed."))
+            }
+            return .success(.choice(path))
+        case .ids(let known):
+            let given: [String]
+            if let list = raw as? [Any] {
+                guard let words = list as? [String] else { return .failure(refusal) }
+                given = words
+            } else if let text = raw as? String {
+                given = text.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+            } else {
+                return .failure(refusal)
+            }
+            guard given.allSatisfy(known.contains) else { return .failure(refusal) }
+            return .success(.choice(Set(given).sorted().joined(separator: ",")))
         }
     }
 }
@@ -741,13 +852,16 @@ public struct MCPLayoutChange: Equatable, Sendable {
     public var windowColumnShown: Bool?
     /// The window column folded to its badges or unfolded to its rows, in every window.
     public var windowColumnFolded: Bool?
+    /// The window column's edge, left or right, in every window: on the project sidebar's side unless set apart.
+    public var windowColumnSide: String?
 
     /// set_layout's arguments that change something.
     public static let arguments: [String] = ["terminal_position", "sidebar_side", "terminal_tabs", "window_column", "window_column_folded",
-                                              "sidebar", "terminal_folded"]
+                                              "window_column_side", "sidebar", "terminal_folded"]
 
     public init(terminalPosition: String? = nil, sidebarSide: String? = nil, terminalTabs: String? = nil, sidebarShown: Bool? = nil,
-                terminalFolded: Bool? = nil, windowColumnShown: Bool? = nil, windowColumnFolded: Bool? = nil) {
+                terminalFolded: Bool? = nil, windowColumnShown: Bool? = nil, windowColumnFolded: Bool? = nil,
+                windowColumnSide: String? = nil) {
         self.terminalPosition = terminalPosition
         self.sidebarSide = sidebarSide
         self.terminalTabs = terminalTabs
@@ -755,11 +869,12 @@ public struct MCPLayoutChange: Equatable, Sendable {
         self.terminalFolded = terminalFolded
         self.windowColumnShown = windowColumnShown
         self.windowColumnFolded = windowColumnFolded
+        self.windowColumnSide = windowColumnSide
     }
 
     public var isEmpty: Bool {
         let everyWindow: Bool = terminalPosition == nil && sidebarSide == nil && terminalTabs == nil && windowColumnShown == nil
-            && windowColumnFolded == nil
+            && windowColumnFolded == nil && windowColumnSide == nil
         return everyWindow && sidebarShown == nil && terminalFolded == nil
     }
 
@@ -788,10 +903,13 @@ public struct MCPLayoutChange: Equatable, Sendable {
                 change.windowColumnShown = try args.choice("window_column", of: ["shown", "hidden"], default: "shown") == "shown"
             }
             if given("window_column_folded") { change.windowColumnFolded = try args.bool("window_column_folded", default: true) }
+            if given("window_column_side") {
+                change.windowColumnSide = try args.choice("window_column_side", of: ["left", "right"], default: "left")
+            }
             if given("sidebar") { change.sidebarShown = try args.choice("sidebar", of: ["shown", "hidden"], default: "shown") == "shown" }
             if given("terminal_folded") { change.terminalFolded = try args.bool("terminal_folded", default: false) }
             guard !change.isEmpty else {
-                throw MCPToolError("Give at least one of terminal_position, sidebar_side, terminal_tabs, window_column, window_column_folded, sidebar and terminal_folded.")
+                throw MCPToolError("Give at least one of terminal_position, sidebar_side, terminal_tabs, window_column, window_column_folded, window_column_side, sidebar and terminal_folded.")
             }
             return change
         }

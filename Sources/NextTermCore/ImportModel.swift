@@ -45,11 +45,9 @@ public enum KeymapPreset: String, CaseIterable, Codable, Sendable {
                 "indentSelection:": none,          // ⌘] and ⌘[ are Forward and Back there; ⇥ and ⇧⇥ indent
                 "outdentSelection:": none,
                 "gitFetch:": KeyChord(key: "f", command: true, option: true), // ⌘R is Replace there; ⌥⌘F is free once Replace moves
-                // ⌘K clears only while a terminal has the keyboard (KeyBindings.terminalKeyboardCommands); ⇧⌘K is
-                // free once Delete Line moves to ⌘⌫. ⌘T stays New Tab, which it is in every terminal.
-                "gitCommit:": cmd("k"),
+                // ⌘K is Go to Anything outside a terminal, as in every set (plan 034): Commit… keeps Next Term's ⇧⌘C.
+                // ⇧⌘K is free once Delete Line moves to ⌘⌫. ⌘T stays New Tab, which it is in every terminal.
                 "gitPush:": KeyChord(key: "k", command: true, shift: true),
-                "insertMarkdownLink:": none,       // ⌘K is Commit… there, everywhere
                 "goToHeading:": cmd("\u{F70F}"),  // ⌘F12, the file's structure there; ⇧⌘O is Go to File
             ]
         }
@@ -62,6 +60,20 @@ public enum KeymapPreset: String, CaseIterable, Codable, Sendable {
     public func chord(for id: String, default fallback: KeyChord?) -> KeyChord? {
         if let preset = overrides[id] { return preset }
         return fallback
+    }
+
+    /// As settings_get and settings_set name it (shortcut_set).
+    public var mcpName: String {
+        switch self {
+        case .nextTerm: return "next_term"
+        case .vsCode: return "vscode"
+        case .jetBrains: return "jetbrains"
+        }
+    }
+
+    public init?(mcpName: String) {
+        guard let found = Self.allCases.first(where: { $0.mcpName == mcpName }) else { return nil }
+        self = found
     }
 }
 

@@ -145,6 +145,24 @@ public enum ProjectSearch {
         return result.sorted()
     }
 
+    /// Go to File's list: `files(in:git:)`, and the `.env` files git ignores (`.env`, `.env.local` and the like), since
+    /// they are the user's own to open. Only this list has them: the MCP tools keep refusing them (MCPProjects.secretReason).
+    public static func goToFiles(in root: String, git: String?, protected: ProtectedPlaces = .current) -> [String] {
+        let listed = files(in: root, git: git, protected: protected)
+        guard let git, protected.walk(from: root).skipped.isEmpty else { return listed }
+        let ignored = ["-C", root, "ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--",
+                       ":(glob)**/.env", ":(glob)**/.env.*"]
+        guard let data = GitRunner.run(git, ignored, timeout: 30) else { return listed }
+        let found: [String] = data.split(separator: 0).map { String(decoding: $0, as: UTF8.self) }.filter(isEnvFile)
+        return found.isEmpty ? listed : Array(Set(listed).union(found)).sorted()
+    }
+
+    /// `.env`, `.env.local`, `config/.env.production`: a dotenv file by its name.
+    public static func isEnvFile(_ path: String) -> Bool {
+        let name: String = (path as NSString).lastPathComponent
+        return name == ".env" || name.hasPrefix(".env.")
+    }
+
     /// Text of a file if it is searchable: not too big, not binary, valid UTF-8.
     static func text(of url: URL) -> String? {
         guard isRegularFile(url.path), let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize, size <= maxFileSize,

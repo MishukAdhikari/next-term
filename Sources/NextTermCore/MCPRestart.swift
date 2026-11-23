@@ -168,7 +168,8 @@ extension MCPServer {
 // MARK: - Restored details
 
 /// A restored tab's `restored` details, which list_tabs, read_tab and wait_for_tab give (R24): why it came back, what the
-/// restore does or did to it, its state before the restart, whether the restart cut its work off, and a one-line note.
+/// restore does or did to it, its state before the restart, whether the restart cut its work off, a one-line note, and
+/// for an agent held on the line, the checks that held it (`held_because`).
 /// They last until the first command the user or MCP starts in the tab after the restore: the shell's first prompt starts
 /// none, and the restore's own resume is not one of theirs. An automatic resume reads "pending" until the start watch
 /// settles it, and "resume" only once it settled it as resumed (KTD6, KTD17): a start that failed reads as the agent's
@@ -192,10 +193,13 @@ public struct MCPRestored: Equatable, Sendable {
     /// What the start watch told of the restore's own resume: nil when the restore pressed no Return, `watching` until
     /// it settles.
     public var start: StartWatch.Report?
+    /// The gate's checks that held an agent that could have resumed by itself, its resume command put on the line
+    /// instead (PanePlan.heldBecause).
+    public var heldBecause: [ResumeCheck]
 
     public init(reason: SessionSnapshot.RestoreKind, outcome: RestoreOutcome?, action: SessionSnapshot.ActionState,
                 stateBefore: SessionSnapshot.PriorState, interrupted: Bool, note: String?, lineHeld: Bool,
-                start: StartWatch.Report? = nil) {
+                start: StartWatch.Report? = nil, heldBecause: [ResumeCheck] = []) {
         self.reason = reason
         self.outcome = outcome
         self.action = action
@@ -204,6 +208,7 @@ public struct MCPRestored: Equatable, Sendable {
         self.note = note
         self.lineHeld = lineHeld
         self.start = start
+        self.heldBecause = heldBecause
     }
 
     /// What has happened in a restored tab since the restore, as its details read it.
@@ -247,7 +252,8 @@ public struct MCPRestored: Equatable, Sendable {
         let held = record.remote == nil
             && Self.lineHeld(action: pending.action, state: pending.state, userTyped: typed, commandsRun: since.commands, start: start)
         self.init(reason: plan.reason, outcome: outcome, action: pending.state, stateBefore: record.stateBefore,
-                  interrupted: record.interrupted, note: text, lineHeld: held, start: start)
+                  interrupted: record.interrupted, note: text, lineHeld: held, start: start,
+                  heldBecause: outcome == .agentOnTheLine && plan.outcome == .agentOnTheLine ? plan.heldBecause : [])
         guard shows(commands: since.commands) else { return nil }
     }
 
@@ -313,6 +319,7 @@ public struct MCPRestored: Equatable, Sendable {
         if read == "pending", let outcome { fields["planned_outcome"] = Self.word(outcome) }
         if action != .pending, let note { fields["note"] = note }
         if lineHeld { fields["line_held"] = true }
+        if read == "agent_on_the_line", !heldBecause.isEmpty { fields["held_because"] = heldBecause.map(\.word) }
         return fields
     }
 
@@ -376,9 +383,9 @@ public enum MCPRestoreGate {
     /// Tools where a call with an id asks again for the answer to a request already open, and that id's argument.
     static let followUpID: [String: String] = [
         "propose_edit": "proposal_id", "install_skill": "request_id", "remove_skill": "request_id",
-        "apply_import": "request_id", "undo_import": "request_id",
+        "apply_import": "request_id", "undo_import": "request_id", "apply_setup": "request_id",
         "request_secret": "request_id", "store_secret": "request_id", "run_with_secrets": "request_id",
-        "import_secrets": "request_id",
+        "import_secrets": "request_id", "run_command": "request_id",
     ]
 
     /// Whether the call asks again for the answer to a request already open (its proposal_id or request_id), which starts

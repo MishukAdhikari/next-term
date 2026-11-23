@@ -2,10 +2,10 @@ import AppKit
 import NextTermCore
 
 /// The resume question at a quit (QuitPolicy, R29): the plain "Quit Next Term?" dialog on its own, when no other quit
-/// alert shows, or the checkbox "Reopen windows and resume sessions when Next Term opens" on the save-changes or
-/// "Quitting stops…" alert. The box starts at the stored "At launch" choice, checked when none is stored. Its answer sets
-/// Settings › General's "At launch" once the quit goes ahead, and Quit with it checked is the quit consent (R30). And why
-/// the quit happens, read from its Apple event.
+/// alert shows, naming what can come back with "Reopen them next time" under it; or "Reopen windows and sessions next
+/// time" on the save-changes or "Quitting stops…" alert. The box starts checked. Its answer sets Settings › General's
+/// "At launch" once the quit goes ahead, and Quit with it checked is the quit consent (R30). And why the quit happens,
+/// read from its Apple event.
 final class QuitReopenPrompt {
     let alert = NSAlert()
     /// The buttons in the order they were added: "Quit", then "Cancel".
@@ -15,16 +15,20 @@ final class QuitReopenPrompt {
     /// For the windows' projects, each once, in order: the checkbox's tooltip names them.
     init(projects: [String], checked: Bool) {
         alert.messageText = QuitPolicy.promptTitle
-        alert.informativeText = ""
+        alert.informativeText = QuitPolicy.promptText(projects)
         // NSAlert gives the first button Return, and the button titled "Cancel" the ⎋ key, which ⌘. presses too. Quit's
-        // Return is cleared, so no button is the default and Return quits nothing.
+        // Return is cleared, so Return quits nothing; Quit is still tinted as the primary (ApprovalLayout), for a click.
         for button in buttons {
             let added = alert.addButton(withTitle: button.title)
-            if button == .quit { added.keyEquivalent = "" }
+            if button == .quit {
+                added.keyEquivalent = ""
+                MainActor.assumeIsolated { ApprovalLayout.style(added, look: .accent) }
+            }
         }
-        checkbox = Self.addCheckbox(to: alert, checked: checked, projects: projects)
+        checkbox = Self.addCheckbox(to: alert, checked: checked, projects: projects, title: QuitPolicy.promptCheckboxTitle)
         alert.showsSuppressionButton = true
         alert.suppressionButton?.title = "Don’t ask again"
+        Self.alignAccessory(of: alert)
     }
 
     /// The dialog as the quit asks it (`QuitAsking.ask`): Quit or Cancel, then the box and "Don’t ask again" as the user
@@ -42,18 +46,40 @@ final class QuitReopenPrompt {
         return buttons[index].answer(resume: checkbox.state == .on, dontAskAgain: dontAskAgain)
     }
 
-    /// "Reopen windows and resume sessions when Next Term opens", on the plain dialog or on the save-changes or "Quitting
-    /// stops…" alert, starting as given. Its tooltip names the projects. The alerts have no "Don’t ask again": their
-    /// checkbox sets only "At launch". Read once the alert returns.
+    /// The resume checkbox, on the plain dialog or on the save-changes or "Quitting stops…" alert, starting as given. Its
+    /// tooltip names the projects. The alerts have no "Don’t ask again": their checkbox sets only "At launch". Read once
+    /// the alert returns.
     @discardableResult
-    static func addCheckbox(to alert: NSAlert, checked: Bool, projects: [String]) -> NSButton {
-        let checkbox = NSButton(checkboxWithTitle: QuitPolicy.checkboxTitle, target: nil, action: nil)
+    static func addCheckbox(to alert: NSAlert, checked: Bool, projects: [String],
+                            title: String = QuitPolicy.checkboxTitle) -> NSButton {
+        let checkbox = NSButton(checkboxWithTitle: title, target: nil, action: nil)
         checkbox.state = checked ? .on : .off
         checkbox.toolTip = QuitPolicy.checkboxToolTip(projects)
         checkbox.sizeToFit()
-        alert.accessoryView = checkbox
+        // In a holder, so the box can line up with the alert's text column (`alignAccessory`).
+        let holder = NSView(frame: NSRect(origin: .zero, size: checkbox.frame.size))
+        holder.addSubview(checkbox)
+        alert.accessoryView = holder
         alert.showsSuppressionButton = false
+        alignAccessory(of: alert)
         return checkbox
+    }
+
+    /// NSAlert centres an accessory narrower than its text column, which put the box out of line with the title and with
+    /// "Don’t ask again". Laid out once, the holder takes the column's width and the box sits at its start, where the
+    /// suppression box's square is; laid out again by `runModal`. A box wider than the column keeps its own width.
+    static func alignAccessory(of alert: NSAlert) {
+        guard let holder = alert.accessoryView, let box = holder.subviews.first as? NSButton else { return }
+        alert.layout()
+        func labels(_ view: NSView) -> [NSTextField] {
+            view.subviews.flatMap { (sub: NSView) -> [NSTextField] in (sub as? NSTextField).map { [$0] } ?? labels(sub) }
+        }
+        let column = labels(alert.window.contentView ?? NSView()).filter { !$0.stringValue.isEmpty && !$0.isEditable }
+            .map(\.frame.width).max() ?? 0
+        let inset: CGFloat = 3 // the checkbox draws its square this far in from where the suppression box's sits
+        holder.setFrameSize(NSSize(width: max(column, box.frame.width + inset), height: box.frame.height))
+        box.setFrameOrigin(NSPoint(x: holder.frame.width > box.frame.width + inset ? inset : 0, y: 0))
+        alert.layout()
     }
 
     /// A logout, restart or shutdown, from the `kAEQuitReason` attribute loginwindow puts in its quit event, or the user's

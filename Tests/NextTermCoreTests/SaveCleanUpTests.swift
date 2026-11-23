@@ -78,12 +78,18 @@ import Testing
         // file along for each line, which took seconds.
         let lines = (1...100_000).map { "line \($0)" }
         let text = lines.map { $0 + "  " }.joined(separator: "\n") as NSString
-        let started = Date()
-        let replacements = SaveCleanUp.replacements(in: text, trimTrailingWhitespace: true, insertFinalNewline: true)
-        let one = SaveCleanUp.collapsed(replacements, in: text)
-        #expect(Date().timeIntervalSince(started) < 0.5)
+        let quarter = lines.prefix(25_000).map { $0 + "  " }.joined(separator: "\n") as NSString
+        func clean(_ text: NSString) -> [SaveCleanUp.Replacement] {
+            SaveCleanUp.collapsed(SaveCleanUp.replacements(in: text, trimTrailingWhitespace: true, insertFinalNewline: true), in: text)
+        }
+        let one = clean(text)
         #expect(one.count == 1)
         #expect(SaveCleanUp.applying(one, to: text) == lines.joined(separator: "\n") + "\n")
+        // One pass: four times the lines take about four times as long (4.0 here, 50 ms for the whole file in a debug
+        // build). Moving the rest of the file along for each line is quadratic: sixteen. Measured as a ratio on this
+        // machine, as a bound of 0.5 s was not, so a busy CI runner slows both sides alike.
+        let growth = Timing.ratio(of: 3, { _ = clean(text) }, to: { _ = clean(quarter) })
+        #expect(growth < 8, "\(growth)x for four times the lines")
     }
 
     @Test func markdownAndPatchesKeepTheirSpaces() {

@@ -583,7 +583,7 @@ import Testing
     @Test func theThreeWaysInKeepOneOrderAndSayWhatTheyOpen() {
         let ways: [SwitcherWayIn] = SwitcherWayIn.allCases
         #expect(ways == [.open, .connect, .newTerminal])
-        check(ways.map(\.title), ["Open…", "Connect to Server…", "New Terminal"])
+        check(ways.map(\.title), ["Open Project…", "Connect to Server…", "New Terminal"])
         check(ways.map(\.symbol), ["folder", "server.rack", "terminal"])
         // What each one's tooltip says, before the key the menus give it.
         let help: [String] = ways.map(\.help)

@@ -24,9 +24,9 @@ extension SelfTest {
               bar.map(\.title).joined(separator: ", "))
         guard let agents = bar.first(where: { $0.title == "Agents" })?.submenu else { return check(false, "agents menu: the menu bar has it") }
         let listed = agents.items.map { $0.isSeparatorItem ? "—" : $0.title }
-        let expected: [String] = ["Skills…", "—", "Go to Next Agent Needing You", "—", "Resume Agent Session…", "Send to Agent",
+        let expected: [String] = ["Skills…", "MCP Servers…", "—", "Go to Next Agent Needing You", "—", "New Agent Session…", "Resume Agent Session…", "Send to Agent",
                                   "Suggest a Command…"]
-        check(listed == expected, "agents menu: Skills…, Go to Next Agent Needing You, then the agents' commands",
+        check(listed == expected, "agents menu: Skills… and MCP Servers…, Go to Next Agent Needing You, then the agents' commands",
               listed.joined(separator: ", "))
         // Go to Next Agent Needing You: ⇧⌘U, the app's (it works from any window, the Welcome window too), under Agents.
         let next = agents.items.first { $0.action == #selector(AppDelegate.goToNextAgentNeedingYou(_:)) }
@@ -62,6 +62,16 @@ extension SelfTest {
         if skillsCommand?.path != "Agents" || skillsCommand?.defaultChord != nil { wrong.append("Skills… \(skillsCommand?.path ?? "not listed")") }
         check(wrong.isEmpty, "agents menu: the moved commands keep their actions and keys, and Settings lists them under Agents",
               wrong.joined(separator: "; "))
+
+        // MCP Servers… sits right under Skills… and opens Settings at MCP Servers.
+        let titles: [String] = agents.items.prefix(3).map { $0.isSeparatorItem ? "—" : $0.title }
+        let mcp: NSMenuItem? = agents.items.first { $0.action == #selector(AppDelegate.showMCPServersSettings(_:)) }
+        mcp.map { agents.performActionForItem(at: agents.index(of: $0)) }
+        let settings: () -> SettingsWindowController? = { NSApp.windows.compactMap { $0.windowController as? SettingsWindowController }.first }
+        let opened: Bool = await wait(3) { settings()?.window?.isVisible == true && settings()?.shownTab == "mcp" }
+        check(titles == ["Skills…", "MCP Servers…", "—"] && opened, "agents menu: MCP Servers… sits under Skills… and opens Settings › MCP Servers",
+              "\(titles.joined(separator: " | ")), opened \(opened)")
+        settings()?.window?.close()
 
         await skillsItemChecks(agents)
         await savedKeyChecks(c, agents)
@@ -116,6 +126,62 @@ extension SelfTest {
         agents.performActionForItem(at: index)
         let opened = await wait(3) { settings()?.window?.isVisible == true && selectedTab() == "skills" }
         check(opened, "agents menu: Skills… opens Settings on its Skills tab", "\(String(describing: settings()?.window?.isVisible)) \(selectedTab() ?? "no tab")")
+        if let shown = settings(), let window = shown.window {
+            // Settings is the Mac's toolbar Settings window: a section per item, each named whole, the one shown marked.
+            let names = SettingsWindowController.sections.map(\.label)
+            check(shown.toolbarItems.map(\.label) == names && window.toolbarStyle == .preference,
+                  "Settings: its sections are the Settings toolbar's items, in order", shown.toolbarItems.map(\.label).joined(separator: ", "))
+            check(window.toolbar?.selectedItemIdentifier?.rawValue == "skills" && window.title == "Skills",
+                  "Settings: the toolbar marks Skills, and the window is titled with it", "\(window.title) \(window.toolbar?.selectedItemIdentifier?.rawValue ?? "none")")
+            let whole = toolbarLabelsShownWhole(in: window)
+            check(names.allSatisfy { whole[$0] == true }, "Settings: every toolbar item's name is shown whole, none in an overflow menu",
+                  names.map { "\($0): \(whole[$0].map { $0 ? "whole" : "cut" } ?? "not shown")" }.joined(separator: ", "))
+            // The check sees a cut: squeezed below the window's least width, items go to the overflow menu.
+            let before = window.frame
+            window.setContentSize(NSSize(width: 420, height: window.contentLayoutRect.height))
+            window.layoutIfNeeded()
+            await pause(0.3)
+            let squeezed = toolbarLabelsShownWhole(in: window)
+            window.setFrame(before, display: true)
+            check(names.contains { squeezed[$0] != true } && window.minSize.width >= 600,
+                  "Settings: a window narrower than its toolbar would cut a name, so it is never let that narrow",
+                  "least width \(window.minSize.width)")
+            shown.showTab("keys")
+            check(window.title == "Keyboard Shortcuts" && window.toolbar?.selectedItemIdentifier?.rawValue == "keys"
+                  && shown.toolbarItems.first { $0.itemIdentifier.rawValue == "keys" }?.toolTip == "Keyboard Shortcuts",
+                  "Settings: Shortcuts is titled and tipped Keyboard Shortcuts", window.title)
+            // One steady size: no section switch moves or resizes the window, and nothing in any section is cut off.
+            let steady = window.frame
+            var cut: [String] = []
+            for section in SettingsWindowController.sections + SettingsWindowController.sections.reversed() {
+                shown.showTab(section.id)
+                window.layoutIfNeeded()
+                if window.frame != steady { cut.append("\(section.label) changed the window's frame to \(window.frame)") }
+                if let problem = settingsSectionCutOff(in: window) { cut.append("\(section.label): \(problem)") }
+            }
+            check(cut.isEmpty, "Settings: one steady size across every section switch, and every section whole or scrollable to its end",
+                  cut.joined(separator: "; "))
+            shown.showTab("general")
+            let general = (window.contentView as? NSTabView)?.selectedTabViewItem?.pane
+            let generalHeight = general.map { SettingsWindowController.flowingHeight(of: $0, width: $0.bounds.width) } ?? 0
+            let room = window.contentRect(forFrameRect: window.frame).height
+            let screenRoom = (window.screen ?? NSScreen.main).map { window.contentRect(forFrameRect: $0.visibleFrame).height } ?? .greatestFiniteMagnitude
+            check(room + 0.5 >= min(generalHeight, screenRoom) && window.frame.height <= ((window.screen ?? NSScreen.main)?.visibleFrame.height ?? .greatestFiniteMagnitude) + 0.5,
+                  "Settings: as tall as General needs, within the screen", "content \(Int(room)) pt, General \(Int(generalHeight)) pt")
+            check(window.collectionBehavior.contains(.fullScreenAuxiliary) && !window.collectionBehavior.contains(.fullScreenPrimary),
+                  "Settings: never a full-screen window, it joins the full-screen space it opens over", "\(window.collectionBehavior.rawValue)")
+            // The check sees a cut: General held at the height Settings used to have scrolls, its end out of sight.
+            let ownFrame = window.frame
+            window.setContentSize(NSSize(width: window.contentLayoutRect.width, height: SettingsWindowController.listHeight))
+            window.layoutIfNeeded()
+            let heldCut = (window.contentView as? NSTabView)?.selectedTabViewItem?.pane.flatMap(settingsViewCutOff(in:))
+            window.setFrame(ownFrame, display: true)
+            window.layoutIfNeeded()
+            check(heldCut != nil || generalHeight <= SettingsWindowController.listHeight,
+                  "Settings: General held at the old fixed height is seen cut off", heldCut ?? "nothing cut")
+            await screenshot(window, suffix: "-settings-toolbar")
+            shown.showTab("skills")
+        }
         // As it was: the tab it was on, and closed unless it was open.
         settings()?.showTab(previousTab)
         if !wasOpen { settings()?.window?.close() }
@@ -179,3 +245,64 @@ extension SelfTest {
         check(back == shortcuts.baseChord(for: "resumeSession:")?.display && back == "⌥⌘O", "agents menu: Default puts ⌥⌘O back on Resume Agent Session…", back)
     }
 }
+
+/// Each toolbar item's label, and whether the toolbar draws it whole: the item in the toolbar, not in its overflow
+/// menu, and its label's view as wide as the label needs. macOS draws the labels itself, left to right in the items' order.
+@MainActor
+func toolbarLabelsShownWhole(in window: NSWindow) -> [String: Bool] {
+    guard let toolbar = window.toolbar, let frame = window.contentView?.superview else { return [:] }
+    var labels: [NSView] = []
+    func walk(_ view: NSView) {
+        if NSStringFromClass(type(of: view)).contains("ToolbarItemViewerLabelView"), !view.isHiddenOrHasHiddenAncestor { labels.append(view) }
+        view.subviews.forEach(walk)
+    }
+    walk(frame)
+    let shown = labels.sorted { $0.convert($0.bounds, to: nil).minX < $1.convert($1.bounds, to: nil).minX }
+    let items = toolbar.items
+    var found: [String: Bool] = [:]
+    for (index, item) in items.enumerated() {
+        guard item.isVisible, index < shown.count, shown.count == items.count else { found[item.label] = false; continue }
+        let view = shown[index]
+        let needed = view.intrinsicContentSize.width == NSView.noIntrinsicMetric ? view.fittingSize.width : view.intrinsicContentSize.width
+        let inWindow = frame.bounds.contains(view.convert(view.bounds, to: nil))
+        found[item.label] = needed > 0 && view.bounds.width + 0.5 >= needed && inWindow
+    }
+    return found
+}
+
+/// What is wrong with the Settings section shown: a view the window cuts off, or for a section in its scroll view one
+/// that can't be scrolled to its end; nil when it shows whole.
+@MainActor
+func settingsSectionCutOff(in window: NSWindow) -> String? {
+    guard let item = (window.contentView as? NSTabView)?.selectedTabViewItem, let pane = item.pane else { return "no section" }
+    if let scroll = item.view as? SettingsPaneScroll {
+        let needed = SettingsWindowController.flowingHeight(of: pane, width: pane.bounds.width)
+        if (scroll.documentView?.frame.height ?? 0) + 0.5 < needed { return "can't be scrolled to its end" }
+        if needed > scroll.contentSize.height + 0.5 { return nil } // taller than the window: it scrolls
+    }
+    return settingsViewCutOff(in: pane)
+}
+
+/// The first view of a Settings section the window cuts off, lowest first, or nil when each shows whole. A scroll
+/// view counts as one view: what scrolls inside it is its own.
+@MainActor
+func settingsViewCutOff(in pane: NSView) -> String? {
+    var views: [NSView] = []
+    func walk(_ view: NSView) {
+        for sub in view.subviews where !sub.isHidden && sub.bounds.width > 1 && sub.bounds.height > 1 {
+            views.append(sub)
+            if !(sub is NSScrollView) && !(sub is NSControl) { walk(sub) }
+        }
+    }
+    walk(pane)
+    let lowestFirst = views.sorted { $0.convert($0.bounds, to: nil).minY < $1.convert($1.bounds, to: nil).minY }
+    for view in lowestFirst {
+        let seen = view.visibleRect
+        if seen.width + 0.5 < view.bounds.width || seen.height + 0.5 < view.bounds.height {
+            let text = (view as? NSTextField)?.stringValue ?? (view as? NSButton)?.title ?? ""
+            return "\(type(of: view)) \(text.prefix(40)) shows \(Int(seen.height)) of \(Int(view.bounds.height)) pt"
+        }
+    }
+    return nil
+}
+

@@ -72,7 +72,7 @@ struct MenuKeysTests {
 
     /// Tasks sits right after Agents, and Add Task… has ⌃⌘T in every set: no set gives that key to anything else.
     @Test func tasksComesAfterAgentsAndAddTaskIsControlCommandT() {
-        #expect(MenuBar.titles == ["File", "Edit", "View", "Agents", "Tasks", "Secrets", "Git", "Notifications", "Window"])
+        #expect(MenuBar.titles == ["File", "Edit", "View", "Agents", "Tasks", "Secrets", "Git", "Notifications", "Window", "Help"])
         let tasks = MenuBar.neighbours(of: "Tasks"), notifications = MenuBar.neighbours(of: "Notifications")
         #expect(tasks.before == "Agents" && tasks.after == "Secrets")
         #expect(notifications.before == "Git" && notifications.after == "Window" && MenuBar.neighbours(of: "File").before == nil)
@@ -100,7 +100,7 @@ struct MenuKeysTests {
             #expect(KeyBindings().owners(of: chord, defaults: keys, except: "wrapUp:").isEmpty, "\(preset.name)")
             #expect(KeyBindings().sharers(of: chord, defaults: keys, except: "wrapUp:").isEmpty, "\(preset.name)")
             // An imported row giving ⌃⌘W to Close Window, Soft Wrap or Close Tab: each is unticked, naming Wrap Up.
-            for other in ["performClose:", "toggleSoftWrap:", "closeTab:"] {
+            for other in ["closeWindow:", "toggleSoftWrap:", "closeTab:"] {
                 let row = ImportShortcuts.row(other, chord, source: "test: \(other)")
                 let plan = ImportPlan(preset: preset, shortcuts: [row])
                 let settled = plan.settlingShortcuts(current: keys, titles: ["wrapUp:": "Wrap Up…"])
@@ -194,8 +194,8 @@ struct MenuKeysTests {
         #expect(note == "⌘B is Bold while a Markdown file’s editor has the keyboard, Hide Project Sidebar everywhere else")
     }
 
-    /// ⌘K is Link in a Markdown file's editor and Clear Buffer everywhere else; under JetBrains' set ⌘K is Commit…, a
-    /// command for everywhere, so Link has no key there.
+    /// ⌘K is Link in a Markdown file's editor, Clear Buffer in a terminal and Go to Anything everywhere else, in every
+    /// set: JetBrains' Commit… keeps ⇧⌘C (plan 034).
     @Test func linkSharesCommandKWithClearBuffer() {
         let bindings = KeyBindings()
         let keys = Self.defaults(under: .nextTerm)
@@ -205,7 +205,9 @@ struct MenuKeysTests {
         let titles = ["insertMarkdownLink:": "Link", "clearBuffer:": "Clear Buffer"]
         let note = KeyBindings.sharingNote(commandK, ["insertMarkdownLink:", "clearBuffer:"], title: { titles[$0] ?? $0 })
         #expect(note == "⌘K is Link while a Markdown file’s editor has the keyboard, Clear Buffer everywhere else")
-        #expect(Self.defaults(under: .jetBrains)["insertMarkdownLink:"] == .some(nil))
+        #expect(Self.defaults(under: .jetBrains)["insertMarkdownLink:"] == .some(commandK))
+        #expect(keys["goToAnything:"] == .some(commandK) && Self.defaults(under: .jetBrains)["goToAnything:"] == .some(commandK))
+        #expect(KeyBindings.canShareKey("clearBuffer:", "goToAnything:") && KeyBindings.canShareKey("insertMarkdownLink:", "goToAnything:"))
     }
 
     @Test func theMarkdownKeys() {

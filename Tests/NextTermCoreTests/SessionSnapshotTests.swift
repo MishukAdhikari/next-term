@@ -70,7 +70,8 @@ import Testing
                                             interpreter: "/opt/agents/bin/node", script: "/opt/agents/lib/claude/cli.js",
                                             startedAt: Date(timeIntervalSince1970: 1_789_980_000.5),
                                             sessionDate: Date(timeIntervalSince1970: 1_789_990_000), routingMatchesShell: true,
-                                            autoContinueOff: true, ranAsTyped: true)
+                                            routingSet: ["ANTHROPIC_BASE_URL"], autoContinueOff: true, ranAsTyped: true,
+                                            ranPath: "/opt/agents/Cellar/node/22.1.0/bin/node")
         agentPane.systemZsh = true
         agentPane.scrollback = id(700)
         agentPane.pending = Snapshot.PendingAction(action: .resume, state: .pending, reason: .update)
@@ -95,6 +96,61 @@ import Testing
         #expect(back == snapshot)
         #expect(try back.encoded() == data)
         #expect(paneIDs(back.panes) == ids(1, 2, 3, 5, 4, 6))
+    }
+
+    /// Plan 046: which routing variables the agent had set (names only) and the real path of what ran are kept; a file
+    /// without them reads as not knowing either, and a list naming anything but the agent's own routing variables, or one
+    /// twice, as not known.
+    @Test func routingSetAndRanPathAreKeptAndCheckedOnRead() throws {
+        func read(_ evidence: [String: Any]) throws -> Snapshot.Evidence? {
+            var agentPane = pane(1)
+            agentPane.agent = Snapshot.Evidence(agent: .claude)
+            let snapshot = Snapshot(header: header(), windows: [Window(groups: [Group(root: .pane(agentPane), focused: id(1))])])
+            var json = try #require(try JSONSerialization.jsonObject(with: snapshot.encoded()) as? [String: Any])
+            var windows = try #require(json["windows"] as? [[String: Any]])
+            var groups = try #require(windows[0]["groups"] as? [[String: Any]])
+            var root = try #require(groups[0]["root"] as? [String: Any])
+            var paneJSON = try #require(root["pane"] as? [String: Any])
+            var agent = try #require(paneJSON["agent"] as? [String: Any])
+            for (key, value) in evidence { agent[key] = value }
+            paneJSON["agent"] = agent
+            root["pane"] = paneJSON
+            groups[0]["root"] = root
+            windows[0]["groups"] = groups
+            json["windows"] = windows
+            return try Snapshot.decode(JSONSerialization.data(withJSONObject: json)).panes.first?.agent
+        }
+        let none = try #require(try read([:]))
+        #expect(none.routingSet == nil && none.ranPath == nil)
+        let kept = try #require(try read(["routingSet": ["CLAUDE_CONFIG_DIR"], "ranPath": "/Users/x/.local/share/claude/versions/2.1.1"]))
+        #expect(kept.routingSet == ["CLAUDE_CONFIG_DIR"] && kept.ranPath == "/Users/x/.local/share/claude/versions/2.1.1")
+        #expect(try read(["routingSet": []])?.routingSet == [])
+        #expect(try read(["routingSet": ["PATH"]])?.routingSet == nil)
+        #expect(try read(["routingSet": ["CODEX_HOME"]])?.routingSet == nil)
+        #expect(try read(["routingSet": ["AWS_PROFILE", "AWS_PROFILE"]])?.routingSet == nil)
+        #expect(try read(["ranPath": "relative/claude"])?.ranPath == nil)
+    }
+
+    /// Windows merged into one (plan 032) record their group, their place in its tab bar and the one in front; a window of
+    /// its own, or a file written before windows merged, records none, and numbers no file holds read as none.
+    @Test func mergedWindowsRoundTripAndAWindowOfItsOwnRecordsNothing() throws {
+        let tab = SessionSnapshot.WindowTab(group: 0, place: 1, front: true)
+        let merged = Window(groups: [Group(root: .pane(pane(1)), focused: id(1))], windowTab: tab)
+        let apart = Window(groups: [Group(root: .pane(pane(2)), focused: id(2))])
+        let snapshot = Snapshot(header: header(), windows: [merged, apart])
+        let back = try Snapshot.decode(snapshot.encoded())
+        #expect(back == snapshot)
+        #expect(back.windows.map(\.windowTab) == [tab, nil])
+        let json = try JSONSerialization.jsonObject(with: snapshot.encoded())
+        let written = try #require((json as? [String: Any])?["windows"] as? [[String: Any]])
+        #expect(written.last?["windowTab"] == nil)
+        #expect(try decode(frozenV1).windows.allSatisfy { (window: Window) -> Bool in window.windowTab == nil })
+        #expect(try decode(oneTab(paneJSON(1), extra: #","windowTab":{"group":2,"place":0,"front":false}"#)).windows.first?.windowTab
+                == SessionSnapshot.WindowTab(group: 2, place: 0, front: false))
+        #expect(try decode(oneTab(paneJSON(1), extra: #","windowTab":{"group":-1,"place":0,"front":true}"#)).windows.first?.windowTab == nil)
+        #expect(try decode(oneTab(paneJSON(1), extra: #","windowTab":"merged""#)).windows.first?.windowTab == nil)
+        // A file that cannot be read whole still reads its windows.
+        #expect(try decode(oneTab(paneJSON(1), extra: #","windowTab":{"group":1}"#)).windows.count == 1)
     }
 
     @Test func eachWindowsPlaceInTheOrderTheyOpenedRoundTripsAndAFileWithoutItReadsNone() throws {

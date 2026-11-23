@@ -117,9 +117,12 @@ extension SessionSnapshot {
         /// Its place in the order the windows opened, 0 for the first, as every window's column and ⌘O list them: the
         /// windows themselves are saved front to back. Nil in a file written before it was kept.
         public var opened: Int?
+        /// Merged with other project windows as macOS's window tabs; nil for a window of its own (or a file written before
+        /// windows merged).
+        public var windowTab: WindowTab?
 
         public init(frame: Frame? = nil, screen: String? = nil, project: String? = nil, groups: [Group], selected: Int = 0,
-                    minimized: Bool = false, fullScreen: Bool = false, opened: Int? = nil) {
+                    minimized: Bool = false, fullScreen: Bool = false, opened: Int? = nil, windowTab: WindowTab? = nil) {
             self.frame = frame
             self.screen = screen
             self.project = project
@@ -128,6 +131,29 @@ extension SessionSnapshot {
             self.minimized = minimized
             self.fullScreen = fullScreen
             self.opened = opened
+            self.windowTab = windowTab
+        }
+    }
+
+    /// A project window's place among the windows merged into one (plan 032). Not `groups` or `selected`, which are its
+    /// own terminal tabs.
+    public struct WindowTab: Equatable, Sendable, Codable {
+        /// The same for every window merged into one, numbered within the file.
+        public var group: Int
+        /// Its place in that window's tab bar, from 0.
+        public var place: Int
+        /// The tab in front.
+        public var front: Bool
+
+        public init(group: Int, place: Int, front: Bool) {
+            self.group = group
+            self.place = place
+            self.front = front
+        }
+
+        /// Nil for numbers no saved file holds.
+        func repaired() -> Self? {
+            (0..<100_000).contains(group) && (0..<100_000).contains(place) ? self : nil
         }
     }
 
@@ -138,11 +164,14 @@ extension SessionSnapshot {
         public var focused: UUID
         /// The pane filling the tab, the others kept behind it.
         public var zoomed: UUID?
+        /// The user pinned the tab (PinnedTabs): it comes back pinned, first in its window.
+        public var pinned: Bool
 
-        public init(root: Node, focused: UUID, zoomed: UUID? = nil) {
+        public init(root: Node, focused: UUID, zoomed: UUID? = nil, pinned: Bool = false) {
             self.root = root
             self.focused = focused
             self.zoomed = zoomed
+            self.pinned = pinned
         }
 
         public var panes: [Pane] { root.panes }
@@ -224,6 +253,9 @@ extension SessionSnapshot {
         /// Its shell was the system /bin/zsh: only there does a typed line go back on the prompt (R9).
         /// Not known reads as false.
         public var systemZsh = false
+        /// The agent session (`nxtrm agent NAME`) it ran, with the id the session reported: a restore after an update
+        /// resumes it (plan 035 U7).
+        public var agentSession: AgentSessionRecord?
 
         public init(id: UUID, folder: String? = nil, userTitle: String? = nil, remote: RemoteTabRecord? = nil, command: Command? = nil,
                     stateBefore: PriorState = .unknown, interrupted: Bool = false, lastSelected: Date = .distantPast,
@@ -247,6 +279,21 @@ extension SessionSnapshot {
             guard let remote else { return nil }
             if keepIsUnknown { return .unknown }
             return Keep(rawValue: remote.keep.rawValue) ?? .unknown
+        }
+    }
+
+    /// An agent session a tab ran (`nxtrm agent NAME`, plan 035 U7): the agent's id in the catalog, the id its session
+    /// reported (Claude Code's session, Codex's thread), and the folder it ran in, where it resumes.
+    public struct AgentSessionRecord: Equatable, Sendable, Codable {
+        /// `ACPAgent.id`: claude or codex.
+        public var agent: String
+        public var sessionID: String
+        public var folder: String?
+
+        public init(agent: String, sessionID: String, folder: String?) {
+            self.agent = agent
+            self.sessionID = sessionID
+            self.folder = folder
         }
     }
 
@@ -290,11 +337,18 @@ extension SessionSnapshot {
 
         /// The line as a file keeps it for a pane that runs `agent`: its checks and state as they are, and the agent's
         /// program alone in place of the words typed, which hold its prompt (R8). Nothing reads them back: the put-back
-        /// line and the automatic resume come from the agent's evidence, and the gate asks only that a kept line was
-        /// typed. An agent the matrix does not know keeps no line.
+        /// line and the automatic resume come from the agent's evidence, and the gate asks nothing of the line. An agent the matrix does not know keeps no line.
         public func programOnly(of agent: Agent) -> Command {
             var kept = self
             if line != nil { kept.line = agent.program }
+            return kept
+        }
+
+        /// An agent session's line (`nxtrm agent NAME --prompt …`) with its prompt left out: `nxtrm agent NAME`. Nothing
+        /// reads it back but the note; the resume comes from the session's record.
+        public func sessionOnly(of record: AgentSessionRecord) -> Command {
+            var kept = self
+            if line != nil { kept.line = "nxtrm agent " + record.agent }
             return kept
         }
 
@@ -355,12 +409,21 @@ extension SessionSnapshot {
         /// The agent's provider and config-location variables matched the login shell's when captured.
         /// Compared in memory: no value is saved.
         public var routingMatchesShell: Bool
+        /// Which of the agent's routing variables (RestoreAgent.routingVariables) its process had set, by name only, read
+        /// from the process's own environment: none set lets it resume whatever the login shell sets (`routingHolds`).
+        /// Nil when not known: a file from before it was kept, or a variable whose value capture may not read.
+        public var routingSet: [String]?
         /// No auto-continue variable was set for the agent when captured.
         public var autoContinueOff: Bool
-        /// The typed line ran as typed (KTD5): its command's first word was the agent's program, or an alias whose
-        /// expansion is the agent's program and options, with no assignment, wrapper or function in between. Compared in
-        /// memory: the expanded line is not saved.
+        /// The typed line ran as typed: its command's first word was the agent's program, or an alias whose expansion is
+        /// the agent's program and options, with no assignment, wrapper or function in between. Compared in memory: the
+        /// expanded line is not saved. Only the start watch's fallback reads it (StartWatch.Start); the automatic-resume
+        /// gate judges what ran, not how it was typed (plan 046).
         public var ranAsTyped: Bool
+        /// The real path of the file the kernel ran: the executable, or a script agent's interpreter. A resume runs only
+        /// when its path still leads there, or to the agent's own install at another version (`codeChanged`). Nil when
+        /// not known: a file from before it was kept.
+        public var ranPath: String?
         /// The options it ran with, from its argv in order, each with its values as argv gave them (U2). Never a prompt
         /// word, a form or a one-shot option. A restore reads them again with the running build's table, which says what
         /// a line keeps, what a resume carries and what is left off (`launch`, KTD20). Nil when not known: no argv, a file
@@ -378,8 +441,8 @@ extension SessionSnapshot {
         /// Each fact not known reads as the answer that resumes nothing: nil, or false.
         public init(agent: Agent, sessionID: String? = nil, source: IDSource = .guess, sessionFolder: String? = nil, store: String? = nil,
                     executable: String? = nil, interpreter: String? = nil, script: String? = nil, startedAt: Date? = nil,
-                    sessionDate: Date? = nil, routingMatchesShell: Bool = false, autoContinueOff: Bool = false,
-                    ranAsTyped: Bool = false, options: [LaunchOption]? = nil, launcher: Launcher? = nil, confirmed: [LaunchOption] = [],
+                    sessionDate: Date? = nil, routingMatchesShell: Bool = false, routingSet: [String]? = nil, autoContinueOff: Bool = false,
+                    ranAsTyped: Bool = false, ranPath: String? = nil, options: [LaunchOption]? = nil, launcher: Launcher? = nil, confirmed: [LaunchOption] = [],
                     version: String? = nil) {
             self.agent = agent
             self.sessionID = sessionID
@@ -392,8 +455,10 @@ extension SessionSnapshot {
             self.startedAt = startedAt
             self.sessionDate = sessionDate
             self.routingMatchesShell = routingMatchesShell
+            self.routingSet = routingSet
             self.autoContinueOff = autoContinueOff
             self.ranAsTyped = ranAsTyped
+            self.ranPath = ranPath
             self.options = options
             self.launcher = launcher
             self.confirmed = confirmed
@@ -838,6 +903,7 @@ extension SessionSnapshot.Window {
         window.groups = kept
         window.selected = SessionSnapshot.surviving(selected, in: survived) ?? 0
         window.opened = opened.flatMap { (place: Int) -> Int? in place >= 0 ? place : nil }
+        window.windowTab = windowTab?.repaired()
         return window
     }
 }
@@ -1007,6 +1073,12 @@ extension SessionSnapshot.Evidence {
         fixed.executable = SnapshotText.plainPath(executable, max: limits.path)
         fixed.interpreter = SnapshotText.plainPath(interpreter, max: limits.path)
         fixed.script = SnapshotText.plainPath(script, max: limits.path)
+        fixed.ranPath = SnapshotText.plainPath(ranPath, max: limits.path)
+        // Names only, each one of this agent's routing variables, once: anything else and it is not known.
+        if let set = routingSet {
+            let known = agent.routingVariables
+            fixed.routingSet = set.count <= known.count && Set(set).count == set.count && set.allSatisfy(known.contains) ? set : nil
+        }
         // An option that breaks its rule drops its whole list: a line or a resume never carries part of what ran.
         fixed.options = options.flatMap(SessionSnapshot.LaunchOption.kept)
         fixed.confirmed = SessionSnapshot.LaunchOption.kept(confirmed) ?? []
@@ -1250,7 +1322,7 @@ extension SessionSnapshot.Header: Codable {
 }
 
 extension SessionSnapshot.Window: Codable {
-    private enum Keys: String, CodingKey { case frame, screen, project, groups, selected, minimized, fullScreen, opened }
+    private enum Keys: String, CodingKey { case frame, screen, project, groups, selected, minimized, fullScreen, opened, windowTab }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: Keys.self)
@@ -1266,6 +1338,7 @@ extension SessionSnapshot.Window: Codable {
         minimized = c.flag(.minimized)
         fullScreen = c.flag(.fullScreen)
         opened = c.optional(Int.self, .opened)
+        windowTab = c.optional(SessionSnapshot.WindowTab.self, .windowTab)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -1278,17 +1351,19 @@ extension SessionSnapshot.Window: Codable {
         try c.encode(minimized, forKey: .minimized)
         try c.encode(fullScreen, forKey: .fullScreen)
         try c.encodeIfPresent(opened, forKey: .opened)
+        try c.encodeIfPresent(windowTab, forKey: .windowTab)
     }
 }
 
 extension SessionSnapshot.Group: Codable {
-    private enum Keys: String, CodingKey { case root, focused, zoomed }
+    private enum Keys: String, CodingKey { case root, focused, zoomed, pinned }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: Keys.self)
         let root = try c.decode(SessionSnapshot.Node.self, forKey: .root)
         guard let first = root.panes.first else { throw SessionSnapshot.DecodeError.unreadable }
-        self.init(root: root, focused: c.uuid(.focused) ?? first.id, zoomed: c.uuid(.zoomed))
+        self.init(root: root, focused: c.uuid(.focused) ?? first.id, zoomed: c.uuid(.zoomed),
+                  pinned: (try? c.decodeIfPresent(Bool.self, forKey: .pinned)) ?? false)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -1296,6 +1371,7 @@ extension SessionSnapshot.Group: Codable {
         try c.encode(root, forKey: .root)
         try c.encode(focused.lowercased, forKey: .focused)
         try c.encodeIfPresent(zoomed?.lowercased, forKey: .zoomed)
+        if pinned { try c.encode(true, forKey: .pinned) } // absent when not: older snapshots read the same
     }
 }
 
@@ -1353,7 +1429,7 @@ extension SessionSnapshot.Split: Codable {
 extension SessionSnapshot.Pane: Codable {
     private enum Keys: String, CodingKey {
         case id, folder, userTitle, remote, command, stateBefore, interrupted, lastSelected, agent, scrollback, pending, note, reminted
-        case systemZsh
+        case systemZsh, agentSession
     }
 
     public init(from decoder: Decoder) throws {
@@ -1379,6 +1455,7 @@ extension SessionSnapshot.Pane: Codable {
         note = c.optional(SessionSnapshot.Note.self, .note)
         reminted = c.flag(.reminted)
         systemZsh = c.flag(.systemZsh)
+        agentSession = c.optional(SessionSnapshot.AgentSessionRecord.self, .agentSession)
         if let budget = decoder.snapshotBudget, !budget.takePane() { throw SessionSnapshot.DecodeError.tooLarge }
     }
 
@@ -1395,9 +1472,14 @@ extension SessionSnapshot.Pane: Codable {
             }
         }
         // An agent's typed line holds its prompt words: the file keeps its program alone (`Command.programOnly`).
-        let written: SessionSnapshot.Command? = agent.flatMap { (evidence: SessionSnapshot.Evidence) -> SessionSnapshot.Command? in
+        let program: SessionSnapshot.Command? = agent.flatMap { (evidence: SessionSnapshot.Evidence) -> SessionSnapshot.Command? in
             command?.programOnly(of: evidence.agent)
-        } ?? command
+        }
+        // An agent session's line holds its first prompt too.
+        let session: SessionSnapshot.Command? = agentSession.flatMap { (record: SessionSnapshot.AgentSessionRecord) -> SessionSnapshot.Command? in
+            command?.sessionOnly(of: record)
+        }
+        let written: SessionSnapshot.Command? = program ?? session ?? command
         try c.encodeIfPresent(written, forKey: .command)
         try c.encode(stateBefore.rawValue, forKey: .stateBefore)
         try c.encode(interrupted, forKey: .interrupted)
@@ -1408,6 +1490,7 @@ extension SessionSnapshot.Pane: Codable {
         try c.encodeIfPresent(note, forKey: .note)
         if reminted { try c.encode(true, forKey: .reminted) }
         try c.encode(systemZsh, forKey: .systemZsh)
+        try c.encodeIfPresent(agentSession, forKey: .agentSession)
     }
 }
 
@@ -1473,7 +1556,7 @@ extension SessionSnapshot.Command: Codable {
 extension SessionSnapshot.Evidence: Codable {
     private enum Keys: String, CodingKey {
         case agent, sessionID, source, sessionFolder, store, executable, interpreter, script, startedAt, sessionDate
-        case routingMatchesShell, autoContinueOff, ranAsTyped
+        case routingMatchesShell, routingSet, autoContinueOff, ranAsTyped, ranPath
         case options, launcher, confirmed, version
     }
 
@@ -1491,6 +1574,9 @@ extension SessionSnapshot.Evidence: Codable {
         routingMatchesShell = c.flag(.routingMatchesShell)
         autoContinueOff = c.flag(.autoContinueOff)
         ranAsTyped = c.flag(.ranAsTyped)
+        // Added with plan 046: a file without them reads as not knowing either.
+        routingSet = c.optional([String].self, .routingSet)
+        ranPath = c.optional(String.self, .ranPath)
         // Added after schema 1 shipped: a file without them reads as having none.
         if c.contains(.options) { options = c.launchOptions(.options, budget: decoder.snapshotBudget) }
         confirmed = c.launchOptions(.confirmed, budget: decoder.snapshotBudget) ?? []
@@ -1511,8 +1597,10 @@ extension SessionSnapshot.Evidence: Codable {
         try c.encodeIfPresent(startedAt.map(Millis.of), forKey: .startedAt)
         try c.encodeIfPresent(sessionDate.map(Millis.of), forKey: .sessionDate)
         try c.encode(routingMatchesShell, forKey: .routingMatchesShell)
+        try c.encodeIfPresent(routingSet, forKey: .routingSet)
         try c.encode(autoContinueOff, forKey: .autoContinueOff)
         try c.encode(ranAsTyped, forKey: .ranAsTyped)
+        try c.encodeIfPresent(ranPath, forKey: .ranPath)
         try c.encodeIfPresent(options, forKey: .options)
         try c.encodeIfPresent(launcher, forKey: .launcher)
         if !confirmed.isEmpty { try c.encode(confirmed, forKey: .confirmed) }

@@ -40,6 +40,9 @@ final class SkillsReviewSheet: NSWindowController, NSTableViewDataSource, NSTabl
     private(set) var claudeAvailable = false
     private(set) var installButton = NSButton(title: "Install", target: nil, action: nil)
     private let cancelButton = NSButton(title: "Cancel", target: nil, action: nil)
+    /// Every review on screen, kept until it answers: its buttons' target is the review itself (a weak reference), so a
+    /// review whose opener let go of it would show buttons that do nothing.
+    private(set) static var open: [ObjectIdentifier: SkillsReviewSheet] = [:]
 
     init(fetched: SkillsInstaller.Fetched, done: @escaping ([String]?) -> Void) {
         self.fetched = fetched
@@ -57,8 +60,10 @@ final class SkillsReviewSheet: NSWindowController, NSTableViewDataSource, NSTabl
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 640), styleMask: [.titled, .resizable],
                               backing: .buffered, defer: false)
         window.title = "Review Skills"
+        window.keepsItsOwnFrame()
         window.minSize = NSSize(width: 720, height: 480)
         super.init(window: window)
+        Self.open[ObjectIdentifier(self)] = self
         build()
         refreshPresets()
         redraw()
@@ -171,7 +176,7 @@ final class SkillsReviewSheet: NSWindowController, NSTableViewDataSource, NSTabl
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 10
-        stack.edgeInsets = NSEdgeInsets(top: 16, left: 18, bottom: 16, right: 18)
+        stack.edgeInsets = NSEdgeInsets(top: 20, left: 18, bottom: 20, right: 18)
         stack.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(stack)
         NSLayoutConstraint.activate([
@@ -390,6 +395,7 @@ final class SkillsReviewSheet: NSWindowController, NSTableViewDataSource, NSTabl
                     // Told over the window this sheet is on, never over the review itself, which closes here.
                     let parent = window?.sheetParent
                     if let window, let parent { parent.endSheet(window) } else { window?.close() }
+                    Self.open[ObjectIdentifier(self)] = nil
                     if let onDownloadGone {
                         onDownloadGone(failure.message)
                     } else {
@@ -412,6 +418,7 @@ final class SkillsReviewSheet: NSWindowController, NSTableViewDataSource, NSTabl
 
     private func finish(_ installed: [String]?) {
         if let window, let parent = window.sheetParent { parent.endSheet(window) } else { window?.close() }
+        Self.open[ObjectIdentifier(self)] = nil
         done(installed)
     }
 }

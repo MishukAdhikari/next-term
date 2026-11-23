@@ -14,8 +14,10 @@ import Testing
     /// commands that have no key.
     static let menuDefaults: [String: KeyChord?] = {
         var map: [String: KeyChord?] = MenuKeys.defaults.mapValues { $0 }
-        for id in ["closeProject:", "copyPathWithLine:", "revealInSidebar:", "toggleSoftWrap:", "toggleSidebarSide:", "equalizePanes:",
-                   "closeOtherTabs:", "closeTabsToTheRight:", "revealInFinder:", "copyFilePath:", "copyRelativeFilePath:"] {
+        for id in ["closeProject:", "copyPathWithLine:", "revealInSidebar:", "toggleSoftWrap:", "equalizePanes:",
+                   "closeOtherTabs:", "closeTabsToTheRight:", "revealInFinder:", "copyFilePath:", "copyRelativeFilePath:",
+                   "moveTabToNewWindow:", "mergeAllWindows:", "toggleTabBar:", "toggleSidebarSide:", "toggleWindowColumnSide:",
+                   "chooseSidebarSide:left", "chooseSidebarSide:right", "chooseWindowColumnSide:left", "chooseWindowColumnSide:right"] {
             map[id] = .some(nil)
         }
         return map
@@ -89,6 +91,15 @@ import Testing
         #expect(Set(Self.menuDefaults.keys).isSuperset(of: titles.filter { !$0.hasPrefix("setTerminalPosition:") }))
     }
 
+    /// The View menu's positions became submenus: the two switches they replaced keep their ids, so a key a user gave
+    /// either still works, and VS Code's Toggle Primary Side Bar Position still imports onto the sidebar's.
+    @Test func theSideSwitchesKeepTheirIDs() {
+        #expect(ImportShortcuts.titles["toggleSidebarSide:"] == "Project Sidebar Position › Move to the Other Side")
+        #expect(ImportShortcuts.titles["toggleWindowColumnSide:"] == "Window Column Position › Move to the Other Side")
+        #expect(ImportVSCode.commandMap["workbench.action.toggleSidebarPosition"] == "toggleSidebarSide:")
+        #expect(ImportShortcuts.titles["chooseWindowColumnSide:right"] == "Window Column Position › Right")
+    }
+
     @Test func replaceInTheOpenFile() {
         #expect(ImportJetBrains.actionMap["Replace"] == "replaceInFile:" && ImportJetBrains.actionMap["ReplaceInPath"] == "replaceInFiles:")
         #expect(ImportVSCode.commandMap["editor.action.startFindReplaceAction"] == "replaceInFile:")
@@ -105,9 +116,11 @@ import Testing
     }
 
     @Test func everyTitleIsAnActionInTheMenus() throws {
-        let source = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("Sources/NextTerm/AppDelegate.swift")
-        let menus = try String(contentsOf: source, encoding: .utf8)
+        let sources = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/NextTerm")
+        // The menu bar, and the layout items it shares with each place's right-click.
+        let menus = try ["AppDelegate.swift", "PlaceMenus.swift"]
+            .map { try String(contentsOf: sources.appendingPathComponent($0), encoding: .utf8) }.joined(separator: "\n")
         for id in ImportShortcuts.titles.keys {
             let action = String(id.prefix { $0 != ":" })
             #expect(menus.contains("\(action)(_:)") || menus.contains("(\"\(action):\")"), "\(id)")

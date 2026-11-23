@@ -659,7 +659,6 @@ final class FileCellView: NSTableCellView {
             addSubview($0)
         }
         imageView = icon
-        textField = name
         // Constraints, not frames: the counts resize themselves whenever their text changes, and the
         // name gives way (truncating in the middle) rather than the counts.
         stats.setContentHuggingPriority(.required, for: .horizontal)
@@ -702,12 +701,12 @@ final class FileCellView: NSTableCellView {
                 .font: NSFont.systemFont(ofSize: 12), .foregroundColor: Theme.textDim,
             ]))
             // The project name stays whole; its path gives way at the end.
-            name.attributedStringValue = Typography.truncating(text, .byTruncatingTail)
+            setName(Typography.truncating(text, .byTruncatingTail))
         } else {
-            name.attributedStringValue = NSAttributedString(string: node.name, attributes: [
+            setName(NSAttributedString(string: node.name, attributes: [
                 .font: NSFont.systemFont(ofSize: 12.5), .foregroundColor: color,
                 .paragraphStyle: Typography.paragraph(.byTruncatingMiddle),
-            ])
+            ]))
         }
         showStats(isRoot || linkedTo != nil ? nil : lines, isDirectory: node.isDirectory)
         var tip = node.path
@@ -758,11 +757,11 @@ final class FileCellView: NSTableCellView {
         icon.image = FileIcons.image(forDeleted: entry.name, parent: entry.url.deletingLastPathComponent().lastPathComponent,
                                      isDirectory: entry.isDirectory, expanded: expanded)
         icon.alphaValue = 0.45
-        name.attributedStringValue = NSAttributedString(string: entry.name, attributes: [
+        setName(NSAttributedString(string: entry.name, attributes: [
             .font: NSFont.systemFont(ofSize: 12.5), .foregroundColor: Theme.linesRemoved,
             .strikethroughStyle: NSUnderlineStyle.single.rawValue,
             .paragraphStyle: Typography.paragraph(.byTruncatingMiddle),
-        ])
+        ]))
         showStats(lines, isDirectory: entry.isDirectory)
         var tip = entry.url.path + "\nDeleted, not yet committed"
         if let lines, lines.removed > 0 {
@@ -771,6 +770,27 @@ final class FileCellView: NSTableCellView {
         if !entry.isDirectory { tip += "\nDouble-click to see what was removed." }
         tipText = tip
         setAccessibilityLabel([entry.name, "deleted", stats.stringValue.isEmpty ? nil : stats.stringValue].compactMap { $0 }.joined(separator: ", "))
+    }
+
+    /// The name as configured. The name field is not the cell's `textField`: in a source list, AppKit restyles that
+    /// field itself and drops the name's own colour and strikethrough. So a selected row's white text is drawn here.
+    private var nameText = NSAttributedString()
+
+    private func setName(_ text: NSAttributedString) {
+        nameText = text
+        showName()
+    }
+
+    override var backgroundStyle: NSView.BackgroundStyle {
+        didSet { if backgroundStyle != oldValue { showName() } }
+    }
+
+    private func showName() {
+        guard !isRenaming else { return }
+        guard backgroundStyle == .emphasized, nameText.length > 0 else { return name.attributedStringValue = nameText }
+        let selected = NSMutableAttributedString(attributedString: nameText)
+        selected.addAttribute(.foregroundColor, value: NSColor.alternateSelectedControlTextColor, range: NSRange(location: 0, length: selected.length))
+        name.attributedStringValue = selected
     }
 
     /// Whether the row shows a deleted file, for the self-test.
@@ -801,10 +821,10 @@ final class FileCellView: NSTableCellView {
         icon.image = nil
         stats.stringValue = ""
         let more = "\(entries.count.formatted()) more item\(entries.count == 1 ? "" : "s")"
-        name.attributedStringValue = NSAttributedString(string: "… " + more, attributes: [
+        setName(NSAttributedString(string: "… " + more, attributes: [
             .font: NSFont.systemFont(ofSize: 12, weight: .regular), .foregroundColor: Theme.textDim,
             .paragraphStyle: Typography.paragraph(.byTruncatingTail),
-        ])
+        ]))
         // Shown by the sidebar like every row's (see ProjectSidebarView.updateToolTips): a tooltip of the
         // cell's own would stay with it when a file's row reuses the cell.
         tipText = "This folder is too large to list in full."
@@ -857,6 +877,7 @@ final class FileCellView: NSTableCellView {
         name.delegate = nil
         renameWidth.isActive = false
         Typography.singleLine(name, truncation: .byTruncatingMiddle)
+        showName()
     }
 
     var renameText: String { name.stringValue }

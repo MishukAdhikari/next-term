@@ -250,8 +250,12 @@ extension SelfTest {
 
     /// A click as a hand makes one, from CGEvents at `point` in `view`: AppKit hit-tests it in the window as it would a
     /// real click, so one on a badge reaches the badge and one beside it the row. The mouse-up waits in the queue, where
-    /// the view's tracking loop takes it. `count` 2 is a double-click's second click. False when the mouse-up was left
-    /// over: the click never arrived. A menu it opens is noted in `clickMenus` and closed.
+    /// a view's tracking loop takes it; one still there after the mouse-down is sent through the app as the run loop
+    /// sends it. On newer macOS (seen on Darwin 27) a plain NSButton, a badge, no longer tracks inside its mouseDown: it
+    /// takes its mouse-up from the window as the next event, and an up dropped here left it pressed, with no action and
+    /// the next key lost.
+    /// `count` 2 is a double-click's second click. True when the view's own tracking loop took the mouse-up, false when
+    /// it went through the window after. A menu it opens is noted in `clickMenus` and closed.
     @discardableResult
     private static func linkClick(_ view: NSView, at point: NSPoint, count: Int = 1) -> Bool {
         guard let down = linkMouseEvent(.leftMouseDown, view, point, count),
@@ -266,12 +270,13 @@ extension SelfTest {
         }
         NSApp.postEvent(up, atStart: false)
         NSApp.sendEvent(down)
-        center.removeObserver(watch)
-        clickMenus += menus
         var tracked = true
         while let left = NSApp.nextEvent(matching: [.leftMouseDragged, .leftMouseUp], until: .distantPast, inMode: .default, dequeue: true) {
             if left.type == .leftMouseUp { tracked = false }
+            NSApp.sendEvent(left)
         }
+        center.removeObserver(watch)
+        clickMenus += menus
         return tracked
     }
 
@@ -455,12 +460,12 @@ extension SelfTest {
             let before = outline.selectedRowIndexes
             _ = takeOpened()
             _ = takeClickMenus()
-            let arrived = linkClick(neon)
+            let tracked = linkClick(neon)
             let opened = takeOpened()
             let menus = takeClickMenus()
             let onBadge = opened == [neonPage] && outline.selectedRowIndexes == before && menus.isEmpty
             check(onBadge, "links: a click on “Neon” opens the Neon project, and leaves the selection as it was, with no menu",
-                  "opened \(opened), selected \(Array(outline.selectedRowIndexes)), menus \(menus), arrived \(arrived), "
+                  "opened \(opened), selected \(Array(outline.selectedRowIndexes)), menus \(menus), up tracked in mouseDown \(tracked), "
                       + "on top \(isOnTop(neon))")
             // Only when the click stayed on the badge: one that reached the row makes this a double-click on a Postgres
             // row, which shows the row's menu.
@@ -593,12 +598,12 @@ extension SelfTest {
             let before = outline.selectedRowIndexes
             _ = takeOpened()
             _ = takeClickMenus()
-            let arrived = linkClick(badge)
+            let tracked = linkClick(badge)
             let byBadge = takeOpened()
             let menus = takeClickMenus()
             check(byBadge == [page] && outline.selectedRowIndexes == before && menus.isEmpty,
                   "links: a click on \(name)'s badge opens \(page), and leaves the selection as it was, with no menu",
-                  "opened \(byBadge), selected \(Array(outline.selectedRowIndexes)), menus \(menus), arrived \(arrived), "
+                  "opened \(byBadge), selected \(Array(outline.selectedRowIndexes)), menus \(menus), up tracked in mouseDown \(tracked), "
                       + "on top \(isOnTop(badge))")
             outline.selectRowIndexes(IndexSet(integer: shown.row), byExtendingSelection: false)
             window.makeFirstResponder(outline)

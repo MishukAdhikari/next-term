@@ -3,7 +3,7 @@ import NextTermCore
 import Shiki
 
 /// Side by Side or Unified: one choice for every diff, remembered, from the switch at the top of any diff
-/// or View › Unified Diffs.
+/// or View › Diffs & Blame › Unified Diffs.
 enum DiffLayout: String {
     case sideBySide, unified
 
@@ -21,7 +21,7 @@ enum DiffLayout: String {
     }
 }
 
-/// View › Unified Diffs: checked while diffs show in one column.
+/// View › Diffs & Blame › Unified Diffs: checked while diffs show in one column.
 final class DiffLayoutMenu: NSObject, NSMenuItemValidation {
     static let shared = DiffLayoutMenu()
 
@@ -58,6 +58,39 @@ final class UnifiedColumn: NSScrollView {
     }
     var onFoldClick: ((UnifiedFold) -> Void)?
     var onRowClick: ((Int) -> Void)?
+    /// The window's review comments on this file (ReviewComments.marks): lines marked, notes after their last line.
+    private(set) var marks = ReviewComments.Marks()
+
+    func mark(_ marks: ReviewComments.Marks) {
+        guard marks != self.marks else { return }
+        self.marks = marks
+        textView.needsDisplay = true
+    }
+
+    /// A row's line as the marks number it: a removed line by its old number, any other by its new one.
+    func markedNumber(at index: Int) -> (number: Int, old: Bool)? {
+        guard rows.indices.contains(index), let line = rows[index].line else { return nil }
+        if rows[index].kind == .removed { return line.oldNumber.map { ($0, true) } }
+        return line.newNumber.map { ($0, false) }
+    }
+
+    /// For the self-test: the rows marked as commented, and the notes shown, by row.
+    var commentedRows: [Int] { rows.indices.filter { isCommented($0) } }
+    var shownNotes: [Int: String] {
+        var shown: [Int: String] = [:]
+        for index in rows.indices { if let note = note(at: index) { shown[index] = note } }
+        return shown
+    }
+
+    func isCommented(_ index: Int) -> Bool {
+        guard let (number, old) = markedNumber(at: index) else { return false }
+        return old ? marks.old.contains(number) : marks.new.contains(number)
+    }
+
+    func note(at index: Int) -> String? {
+        guard let (number, old) = markedNumber(at: index) else { return nil }
+        return old ? marks.oldNotes[number] : marks.newNotes[number]
+    }
     /// The menu for a right-click on a row.
     var menuForRow: ((Int) -> NSMenu?)?
     /// The view scrolled (not the page around it).
@@ -379,9 +412,33 @@ final class UnifiedTextView: NSTextView {
             case .removed: Theme.linesRemoved.withAlphaComponent(0.12).setFill()
             case .added: Theme.linesAdded.withAlphaComponent(0.12).setFill()
             case .fold: UnifiedRuler.foldBand.setFill()
-            case .context: continue
+            case .context: NSColor.clear.setFill()
             }
-            band.fill()
+            if column.rows[index].kind != .context { band.fill() }
+            if !column.marks.isEmpty, column.isCommented(index) {
+                Theme.accent.withAlphaComponent(0.14).setFill()
+                band.fill()
+                Theme.accent.setFill()
+                NSRect(x: 0, y: band.minY, width: 3, height: band.height).fill()
+            }
+        }
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        guard let column, !column.marks.newNotes.isEmpty || !column.marks.oldNotes.isEmpty, let layout = layoutManager else { return }
+        let height = column.rowHeight
+        let top = textContainerInset.height
+        let first = max(0, Int((dirtyRect.minY - top) / height))
+        let last = min(column.rows.count - 1, Int((dirtyRect.maxY - top) / height) + 1)
+        guard first <= last else { return }
+        let limit = enclosingScrollView.map { convert($0.documentVisibleRect, from: $0.contentView).maxX } ?? bounds.maxX
+        for index in first...last {
+            guard let note = column.note(at: index), column.starts.indices.contains(index) else { continue }
+            let glyph = layout.glyphIndexForCharacter(at: column.starts[index])
+            let used = layout.lineFragmentUsedRect(forGlyphAt: glyph, effectiveRange: nil)
+            let band = NSRect(x: 0, y: top + CGFloat(index) * height, width: bounds.width, height: height)
+            ReviewNoteDrawing.draw(note, in: band, after: textContainerOrigin.x + used.maxX, limit: limit - 8)
         }
     }
 }
@@ -389,7 +446,7 @@ final class UnifiedTextView: NSTextView {
 /// The unified column's gutter: a bar, the line number and its "−" or "+" for each row, tinted as the row
 /// is; a fold's chevron. It stays put while the text scrolls sideways.
 final class UnifiedRuler: NSRulerView {
-    static let foldBand = NSColor(hex: 0x26282E)
+    static let foldBand = Theme.currentLine
     private weak var column: UnifiedColumn?
 
     init(column: UnifiedColumn) {
@@ -443,7 +500,7 @@ final class UnifiedRuler: NSRulerView {
                 break
             }
             let current = row.hunk != nil && row.hunk == column.currentHunk
-            let dim = NSColor(hex: current ? 0x8C909A : 0x5A5F69)
+            let dim = current ? Theme.lineNumberCurrent : Theme.lineNumber
             if let number = row.number {
                 let label = "\(number)" as NSString
                 let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: dim]
@@ -512,7 +569,7 @@ final class UnifiedDiffPart: NSObject, NSTextViewDelegate {
         control.target = self
         control.action = #selector(switched)
         control.selectedSegment = isOn ? 1 : 0
-        control.toolTip = "Both versions side by side, or one column top to bottom: every diff follows (View › Unified Diffs)"
+        control.toolTip = "Both versions side by side, or one column top to bottom: every diff follows (View › Diffs & Blame › Unified Diffs)"
         control.setAccessibilityLabel("Diff layout")
         if let at = header.arrangedSubviews.firstIndex(of: anchor) {
             header.insertArrangedSubview(control, at: at)

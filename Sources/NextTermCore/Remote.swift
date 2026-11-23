@@ -140,15 +140,26 @@ public struct RemoteHost: Codable, Equatable, Sendable {
     /// Folder new tabs open in, on the host: absolute, `~` or `~/…`.
     public var directory: String
     public var keep: KeepMode
+    /// Next Term's tmux server's prefix and history on this host; nil: tmux's C-b, and 50,000 lines. Saved hosts from
+    /// before have neither.
+    public var tmuxPrefix: TmuxPrefix?
+    public var tmuxHistory: Int?
 
     public init(id: String = RemoteHost.makeID(), name: String, destination: String, port: Int? = nil,
-                directory: String = "~", keep: KeepMode = .tmux) {
+                directory: String = "~", keep: KeepMode = .tmux, tmuxPrefix: TmuxPrefix? = nil, tmuxHistory: Int? = nil) {
         self.id = id
         self.name = name
         self.destination = destination
         self.port = port
         self.directory = directory
         self.keep = keep
+        self.tmuxPrefix = tmuxPrefix
+        self.tmuxHistory = tmuxHistory
+    }
+
+    /// What the host's tmux tabs write into Next Term's tmux config there.
+    public var tmuxOptions: TmuxOptions {
+        TmuxOptions(prefix: tmuxPrefix ?? .ctrlB, history: tmuxHistory ?? TmuxOptions.defaultHistory)
     }
 
     public static func makeID() -> String {
@@ -160,11 +171,20 @@ public struct RemoteHost: Codable, Equatable, Sendable {
         if let issue = Self.destinationProblem(destination) { return issue }
         if let port, !(1...65535).contains(port) { return "The port must be between 1 and 65535." }
         if let issue = Self.directoryProblem(directory) { return issue }
+        if let tmuxHistory, let issue = TmuxOptions.historyProblem(tmuxHistory) { return issue }
         let trimmed = name.trimmingCharacters(in: .whitespaces)
         if trimmed.isEmpty || trimmed.count > 64 || trimmed.unicodeScalars.contains(where: ShellQuote.isControl) {
             return "Give the host a name of up to 64 characters."
         }
         return nil
+    }
+
+    /// Why a name given now (add_host, edit_host, the sheet's save) can't be: approval windows name a host by it, so no
+    /// character that hides or reorders text (TabRename.hidden). Only for a new or changed name, never in `problem`:
+    /// decodeList drops a host with a problem, and a host saved under an older rule must never vanish.
+    public static func nameProblem(_ name: String) -> String? {
+        guard name.unicodeScalars.contains(where: TabRename.hidden) else { return nil }
+        return "The host's name must be one line of characters that show as themselves: no direction marks, zero-width spaces, other control or format characters, or line or paragraph separators."
     }
 
     /// ssh destinations: letters, digits and `. _ - @ : % +` (IPv6 as `user@2001:db8::1`; OpenSSH takes no
@@ -200,6 +220,22 @@ public struct RemoteHost: Codable, Equatable, Sendable {
 
     public static func encodeList(_ hosts: [RemoteHost]) -> Data {
         (try? JSONEncoder().encode(hosts)) ?? Data("[]".utf8)
+    }
+}
+
+extension RemoteHost {
+    /// As saved. The tmux options are read leniently: a prefix this version does not know (a later one saved it) reads
+    /// as none, so the host is never lost with it.
+    public init(from decoder: Decoder) throws {
+        let saved = try decoder.container(keyedBy: CodingKeys.self)
+        id = try saved.decode(String.self, forKey: .id)
+        name = try saved.decode(String.self, forKey: .name)
+        destination = try saved.decode(String.self, forKey: .destination)
+        port = try saved.decodeIfPresent(Int.self, forKey: .port)
+        directory = try saved.decode(String.self, forKey: .directory)
+        keep = try saved.decode(KeepMode.self, forKey: .keep)
+        tmuxPrefix = (try? saved.decodeIfPresent(TmuxPrefix.self, forKey: .tmuxPrefix)) ?? nil
+        tmuxHistory = (try? saved.decodeIfPresent(Int.self, forKey: .tmuxHistory)) ?? nil
     }
 }
 
@@ -349,19 +385,22 @@ public enum RemoteShell {
 
     /// Settings for Next Term's own tmux server (`-L nextterm`), never the user's default server.
     /// Next Term's tab bar replaces tmux's status line; the mouse wheel scrolls tmux's history; titles
-    /// (Claude Code names its task) reach the tab; Escape is not delayed (agents use it to interrupt).
-    static let tmuxConfig = """
-        set -g status off
-        set -g mouse on
-        set -g history-limit 50000
-        set -sg escape-time 10
-        set -g focus-events on
-        set -g set-titles on
-        set -g set-titles-string "#{pane_title}"
-        set -gq allow-passthrough on
-        set -sq extended-keys on
-        set -gq window-size latest
-        """
+    /// (Claude Code names its task) reach the tab; Escape is not delayed (agents use it to interrupt); true colour and
+    /// synchronized output reach the tab. The host's prefix and history (TmuxOptions) go in after the mouse.
+    static func tmuxConfig(_ options: TmuxOptions = TmuxOptions()) -> String {
+        let head: [String] = ["set -g status off", "set -g mouse on"]
+        let rest: [String] = [
+            "set -sg escape-time 10",
+            "set -g focus-events on",
+            "set -g set-titles on",
+            "set -g set-titles-string \"#{pane_title}\"",
+            "set -gq allow-passthrough on",
+            "set -sq extended-keys on",
+            "set -gq window-size latest",
+            TmuxOptions.featuresLine,
+        ]
+        return (head + options.configLines + rest).joined(separator: "\n")
+    }
 
     static func plainShell(_ note: String?) -> String {
         var lines: [String] = []
@@ -378,14 +417,19 @@ public enum RemoteShell {
     /// or tmux tab starts its shell through the hook's start command while the hook's files are there.
     /// `herdrSession`: a herdr tab's named herdr session, opened only while herdr lists it, so a restored tab never makes
     /// one by its name; nil for herdr's default.
+    /// `tmux`: the host's tmux prefix and history. `expectsSession`: a tmux tab that means to attach to its session again
+    /// (a reconnect, a restore, a session the user or an agent picked), so a session that is gone is made anew and the
+    /// tab says so (K.created); a brand-new tab's session is new by design and never marked.
     public static func tabScript(keep: KeepMode, directory: String, session: String, tabID: String, token: String = "",
-                                 completionHook: Bool = false, herdrSession: String? = nil) -> String {
+                                 completionHook: Bool = false, herdrSession: String? = nil, tmux: TmuxOptions = TmuxOptions(),
+                                 expectsSession: Bool = false) -> String {
         // K: this tab's files on the host. K.plain: tmux or herdr was missing, so this is a plain shell (it holds why,
-        // when a copy was there but did not run). K.nodir: the folder was not there.
+        // when a copy was there but did not run). K.nodir: the folder was not there. K.created: the tmux session this tab
+        // came back to was gone, so it is a new one.
         var lines = [
             "C=\(cacheDir)",
             "K=\"$C/tabs/\(safeName(tabID))\"",
-            "mkdir -p \"$C/tabs\" 2>/dev/null; rm -f \"$K.plain\" \"$K.nodir\"",
+            "mkdir -p \"$C/tabs\" 2>/dev/null; rm -f \"$K.plain\" \"$K.nodir\" \"$K.created\"",
             "if ! cd \(folder(directory)) 2>/dev/null; then",
             "  : > \"$K.nodir\" 2>/dev/null",
             "  printf 'Next Term: %s is not a folder on this host; this tab opened in your home folder.\\r\\n' \(quote(directory))",
@@ -408,10 +452,14 @@ public enum RemoteShell {
                 "  : > \"$K.plain\" 2>/dev/null",
                 plainShell("tmux is not installed on this host: this is a plain shell, and what runs in it stops if the connection drops."),
                 "fi",
-                "printf '%s\\n' \(quote(completionHook ? RemoteCompletionHook.tmuxConfig : tmuxConfig)) > \"$C/tmux.conf\" 2>/dev/null",
-                completionHook ? RemoteCompletionHook.tmuxLaunch(session: session)
-                    : "exec \"$T\" -L nextterm -f \"$C/tmux.conf\" new-session -A -s \(quote(safeName(session))) -c \"$PWD\"",
+                "printf '%s\\n' \(quote(completionHook ? RemoteCompletionHook.tmuxConfig(tmux) : tmuxConfig(tmux))) > \"$C/tmux.conf\" 2>/dev/null",
+                tmux.liveScript,
             ]
+            if expectsSession {
+                lines.append("\"$T\" -L nextterm has-session -t \(quote("=" + safeName(session))) 2>/dev/null || : > \"$K.created\" 2>/dev/null")
+            }
+            lines.append(completionHook ? RemoteCompletionHook.tmuxLaunch(session: session)
+                : "exec \"$T\" -L nextterm -f \"$C/tmux.conf\" new-session -A -s \(quote(safeName(session))) -c \"$PWD\"")
         case .herdr:
             // herdr's own socket variables (its running server's, or the login shell's) are exported by the finder, so
             // the tab attaches to the session the user has. A copy that answered --version is what runs.
@@ -521,6 +569,7 @@ public enum RemoteShell {
                 // Why it fell back, when a copy was there but did not run (one line, cut).
                 "[ -e \"$C/tabs/\(id).plain\" ] && printf '%s\\tplain\\t%s\\n' \(quote(id)) \"$(nt_clean \"$(head -n 1 \"$C/tabs/\(id).plain\" 2>/dev/null)\" 300)\"",
                 "[ -e \"$C/tabs/\(id).nodir\" ] && printf '%s\\tnodir\\n' \(quote(id))",
+                "[ -e \"$C/tabs/\(id).created\" ] && printf '%s\\tcreated\\n' \(quote(id))",
             ]
         }
         if !herdrSessions.isEmpty {
@@ -605,6 +654,37 @@ public enum RemoteShell {
     public static let herdrSessionsListed = 8
 
     /// Ends one of Next Term's tmux sessions (End Session on close, MCP close_tab with force).
+    /// The clients attached to Next Term's tmux session `session` (their ttys), one per line after the marker, and
+    /// `none` when no tmux or no such session: what end_session and close_tab force show, and look at again after Approve.
+    public static func clientsScript(session: String) -> String {
+        let target = quote("=" + safeName(session))
+        return [
+            findTmux,
+            "printf '\\n%s\\n' \(quote(marker))",
+            "if [ -n \"$T\" ] && \"$T\" -L nextterm has-session -t \(target) 2>/dev/null; then",
+            "  \"$T\" -L nextterm list-clients -t \(target) -F '#{client_tty}' 2>/dev/null | tr -d '\\001-\\010\\013-\\037\\177' | head -n 50",
+            "else",
+            "  printf 'none\\n'",
+            "fi",
+        ].joined(separator: "\n")
+    }
+
+    /// clientsScript's answer.
+    public enum SessionClients: Equatable, Sendable {
+        /// The session is there, with these clients attached (none, maybe).
+        case attached([String])
+        /// No such session, or no tmux.
+        case gone
+        /// The script's answer did not come back (the connection, say).
+        case unread
+    }
+
+    public static func parseClients(_ output: String) -> SessionClients {
+        guard let lines = payload(output) else { return .unread }
+        let clients: [String] = lines.map { String($0).trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        return clients == ["none"] ? .gone : .attached(clients)
+    }
+
     public static func killSessionScript(session: String) -> String {
         "\(findTmux)\n[ -n \"$T\" ] && \"$T\" -L nextterm kill-session -t \(quote("=" + safeName(session))) 2>/dev/null\nprintf '\\n%s\\n' \(quote(marker))"
     }
@@ -678,6 +758,8 @@ public struct RemoteTabReport: Equatable, Sendable {
     public var folderMissing = false
     /// A tmux tab's pane is in one of tmux's modes (copy mode): what is typed goes to tmux, not to the shell.
     public var inMode = false
+    /// The tmux session this tab came back to was gone, so its connection made a new one (tabScript's expectsSession).
+    public var sessionCreated = false
 }
 
 public struct RemotePoll: Equatable, Sendable {
@@ -717,6 +799,8 @@ public struct RemotePoll: Equatable, Sendable {
                 if fields.count >= 3, !fields[2].isEmpty { report.plainReason = fields[2...].joined(separator: " ") }
             case "nodir":
                 report.folderMissing = true
+            case "created":
+                report.sessionCreated = true
             case "mode":
                 report.inMode = true
             case "shell":

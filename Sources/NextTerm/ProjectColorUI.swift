@@ -59,11 +59,21 @@ enum ProjectColorStore {
         NotificationCenter.default.post(name: changed, object: nil)
     }
 
-    /// Each colour's glow on Theme.bar, and its swatch with the circle the menus show, worked out once.
+    /// Each colour's glow on the bar of the look it is drawn in (light or dark), and its swatch with the circle the menus
+    /// show. A glow resolves as it is drawn, so a change of look takes the other bar's lightness at once.
     static let glows: [NSColor] = ProjectColor.allCases.map { (color: ProjectColor) -> NSColor in
-        NSColor(hex: color.glow(on: Theme.bar.rgbHex))
+        NSColor(name: nil) { appearance in NSColor(hex: color.glow(on: Theme.palette(for: appearance).bar)) }
     }
-    static let swatches: [NSColor] = ProjectColor.allCases.map { (color: ProjectColor) -> NSColor in NSColor(hex: color.swatch) }
+    /// A window's dot (the window tabs, the window column, the menus, the Welcome window): the dark look's swatch, and on
+    /// light a darker shade of the hue that stands 3:1 on the light bars and paper.
+    static let swatches: [NSColor] = ProjectColor.allCases.map { (color: ProjectColor) -> NSColor in
+        let dark = NSColor(hex: color.swatch)
+        return NSColor(name: nil) { appearance in
+            guard !Theme.isDark(appearance) else { return dark }
+            let light = Theme.palettes.light
+            return NSColor(hex: color.swatch(onLight: [light.bar, light.background, light.tabHover]))
+        }
+    }
     static let swatchImages: [NSImage] = ProjectColor.allCases.map { (color: ProjectColor) -> NSImage in
         let fill: NSColor = swatches[color.rawValue]
         let image = NSImage(size: NSSize(width: 12, height: 12), flipped: false) { (rect: NSRect) -> Bool in
@@ -121,6 +131,10 @@ final class ProjectGlow {
     /// Where in the window the bar's left edge was when it last drew; nil, not yet.
     private var drawnFrom: CGFloat?
     private var gradient: NSGradient?
+    /// The look `gradient` was made for: its colours are fixed when it is made, so another look makes it again.
+    private var gradientDark: Bool?
+    /// The glow's strongest colour as last drawn (0xRRGGBB, its strength left out), for the self-test.
+    private(set) var drawnPeak: UInt32?
     private static let reach = CGFloat(ProjectColor.Glow.reach)
 
     init(_ view: NSView) {
@@ -159,8 +173,15 @@ final class ProjectGlow {
         let start: CGFloat = -x, end: CGFloat = Self.reach - x
         let width: CGFloat = min(rect.maxX, end) - rect.minX
         guard width > 0 else { return }
-        let gradient: NSGradient = self.gradient ?? makeGradient(peak)
+        let look = MainActor.assumeIsolated { Theme.appearance(of: target) }
+        let dark = Theme.isDark(look)
+        if dark != gradientDark { self.gradient = nil }
+        var made: NSGradient?
+        look.performAsCurrentDrawingAppearance { made = self.gradient ?? self.makeGradient(peak) }
+        guard let gradient = made else { return }
         self.gradient = gradient
+        gradientDark = dark
+        drawnPeak = gradient.interpolatedColor(atLocation: 0).rgbHex
         NSGraphicsContext.saveGraphicsState()
         NSRect(x: rect.minX, y: rect.minY, width: width, height: rect.height).clip()
         gradient.draw(from: NSPoint(x: start, y: rect.midY), to: NSPoint(x: end, y: rect.midY), options: [])
@@ -170,11 +191,14 @@ final class ProjectGlow {
     private func makeGradient(_ peak: NSColor) -> NSGradient {
         let strength: CGFloat = dimmed ? CGFloat(ProjectColor.Glow.inactive) : 1
         let stops = ProjectColor.Glow.stops()
+        // The peak as this look draws it (a glow is one colour for light bars and another for dark): a gradient keeps
+        // the colours it is made with.
+        let resolved: NSColor = peak.usingColorSpace(.sRGB) ?? peak
         let colors: [NSColor] = stops.map { (stop: (location: Double, strength: Double)) -> NSColor in
-            peak.withAlphaComponent(strength * CGFloat(stop.strength))
+            resolved.withAlphaComponent(strength * CGFloat(stop.strength))
         }
         var locations: [CGFloat] = stops.map { (stop: (location: Double, strength: Double)) -> CGFloat in CGFloat(stop.location) }
-        return NSGradient(colors: colors, atLocations: &locations, colorSpace: .sRGB) ?? NSGradient(starting: peak, ending: peak.withAlphaComponent(0))!
+        return NSGradient(colors: colors, atLocations: &locations, colorSpace: .sRGB) ?? NSGradient(starting: resolved, ending: resolved.withAlphaComponent(0))!
     }
 }
 
@@ -208,15 +232,15 @@ enum ProjectColorMenu {
         show.target = AppDelegate.shared
     }
 
-    /// The View menu's submenu.
-    static func submenu() -> NSMenu {
+    /// The View menu's submenu (`target` nil: the window in front), and a place's right-click's (`target` that window).
+    static func submenu(target: AnyObject? = nil) -> NSMenu {
         let menu = NSMenu(title: title)
-        items(into: menu, target: nil)
+        items(into: menu, target: target)
         return menu
     }
 
-    /// The top row's right-click for `controller`'s window: the same, under a heading, as the terminal's ⋯ has its
-    /// Move Terminal To.
+    /// The editor's top row's right-click for `controller`'s window: the same, under a heading, as the terminal's ⋯ has
+    /// its Move Terminal To. The other places have it as a submenu after their own commands (PlaceMenus).
     static func contextMenu(for controller: TerminalWindowController) -> NSMenu {
         let menu = NSMenu(title: title)
         let heading = menu.addItem(withTitle: title, action: nil, keyEquivalent: "")

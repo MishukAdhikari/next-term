@@ -6,13 +6,13 @@ import NextTermCore
 /// the user sees each in an AgentApprovalWindow and decides; nothing is fetched or written on an agent's
 /// say alone. One request is open at a time (others get `busy`). After the user declines, the asker
 /// (its tab, or every caller outside Next Term's tabs) is told "declined" for ten minutes, or until
-/// quit with Decline and Stop Asking, and a source declined once stays declined whatever ref or path is
+/// quit with Don’t Ask Again, and a source declined once stays declined whatever ref or path is
 /// asked next; no asker gets more than ten requests a session. A call answers within `answerWithin`
 /// seconds, with `pending` and a request id to ask again with when the user has not decided yet (some
 /// clients give up on a tool after 60 seconds).
 ///
 /// The remote door passes its connection's approval policy (MCPApproval), its name as `requester` and its
-/// grant id as `connection`, so a Decline and Stop Asking pauses that connection only. Under
+/// grant id as `connection`, so a Don’t Ask Again pauses that connection only. Under
 /// `.preApprovedByGrant` nothing asks: the install or removal runs at once (`runGranted`).
 @MainActor
 enum SkillsMCP {
@@ -60,7 +60,7 @@ enum SkillsMCP {
     static var open: Request? { requests.values.first { $0.answer == nil && !$0.granted } }
     /// Sources and names declined until quit.
     static var declined = Set<String>()
-    /// Askers refused until this date, or for good (Decline and Stop Asking).
+    /// Askers refused until this date, or for good (Don’t Ask Again).
     static var quietUntil: [String: Date] = [:]
     static var askedCount: [String: Int] = [:]
 
@@ -299,9 +299,9 @@ enum SkillsMCP {
     }
 
     static func describe(_ caller: TerminalTab?) -> String {
-        guard let caller else { return "an agent outside Next Term's tabs (another terminal or an editor)" }
+        guard let caller else { return "an agent outside Next Term’s tabs (another terminal or an editor)" }
         let project = MCPControl.controller(of: caller)?.project.map { " in \(($0 as NSString).lastPathComponent)" } ?? ""
-        return "the agent in the tab “\(caller.title)”\(project)"
+        return "the agent in \(MCPTabNames.named(caller))\(project)"
     }
 
     /// Answers with the request's outcome, or `pending` after `answerWithin` seconds.
@@ -358,7 +358,7 @@ enum SkillsMCP {
         let place = "github.com/\(source.shortName)" + (source.path.isEmpty ? "" : "/" + source.path) + (source.ref.map { " (\($0))" } ?? "")
         let details = "From \(place). Nothing has been fetched yet: Fetch and Review downloads one commit and shows you every file before anything is installed."
         let window = AgentApprovalWindow(.init(title: "An agent asks to install a skill", requester: requester, agentWords: reason,
-                                               details: details, approveTitle: "Fetch and Review…", stopTitle: "Decline and Stop Asking"),
+                                               details: details, approveTitle: "Fetch and Review…", stopTitle: "Don’t Ask Again"),
                                          approve: { window in fetchAndReview(request, source: source, approval: window) },
                                          decline: { stop in resolve(request, ["status": "declined"], stopAsking: stop) })
         request.window = window
@@ -413,7 +413,8 @@ enum SkillsMCP {
         lines += leftovers.map { "• " + $0 }
         lines.append("Undo in Settings › Skills puts it back.")
         let window = AgentApprovalWindow(.init(title: "An agent asks to remove the skill “\(name)”", requester: requester, agentWords: reason,
-                                               details: lines.joined(separator: "\n"), approveTitle: "Remove", stopTitle: "Decline and Stop Asking"),
+                                               details: lines.joined(separator: "\n"), approveTitle: "Remove", stopTitle: "Don’t Ask Again",
+                                               primaryLook: .destructive),
                                          approve: { window in
                                              window.setBusy(true)
                                              request.task = Task {

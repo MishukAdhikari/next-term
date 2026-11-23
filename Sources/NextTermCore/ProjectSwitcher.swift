@@ -726,7 +726,7 @@ public struct SwitcherWaysIn: Equatable, Sendable {
     }
 }
 
-/// The three ways in, for three kinds of user: Open… for one who works in a project, Connect to Server… for one who
+/// The three ways in, for three kinds of user: Open Project… for one who works in a project, Connect to Server… for one who
 /// works on a server, New Terminal for one who wants a shell now. Always all three, in this order, none of them the
 /// default and none moved by habit.
 public enum SwitcherWayIn: CaseIterable, Sendable {
@@ -735,7 +735,7 @@ public enum SwitcherWayIn: CaseIterable, Sendable {
     /// The row's and the card's title.
     public var title: String {
         switch self {
-        case .open: return "Open…"
+        case .open: return "Open Project…"
         case .connect: return "Connect to Server…"
         case .newTerminal: return "New Terminal"
         }
@@ -778,7 +778,7 @@ public enum SwitcherWayIn: CaseIterable, Sendable {
         }
     }
 
-    /// The menu command whose key it shows, by id: File › Open Project… (which is Open… on the Welcome window), New
+    /// The menu command whose key it shows, by id: File › Open Project… (on the Welcome window, the folder panel), New
     /// Remote Tab… and New Window.
     public var command: String {
         switch self {

@@ -16,6 +16,13 @@ import NextTermCore
 /// a start that failed has put its plain resume form back on the line. An agent's line put back is watched too, when the
 /// user runs it.
 ///
+/// A held agent whose only failures were transient (RestoreRecheck: its session not available yet, its folder or store
+/// not there yet) is checked again once its shell is ready, about 1 s after and then backing off, for up to about 30 s,
+/// with nothing on its line meanwhile. A pass resumes it as an automatic resume, once; a check that fails for a reason
+/// that guards the user, or the last one, puts its line back, unrun. Anything put in the tab, or a command run there,
+/// ends the checks. Each check is recorded in the restore report (SessionRestore.recordRecheck), and the tab says how
+/// they ended.
+///
 /// In safe mode nothing waits for a shell: each tab shows what it held, until Keep As Is drops every action or Try Again
 /// applies them, once.
 @MainActor
@@ -36,6 +43,16 @@ final class RestoreActions {
     private var typed: [UUID: (line: RestoreLayout.LineWatch, command: String, plan: PanePlan)] = [:]
     /// Automatic resumes whose Return went, by tab, until their start watch settles (KTD6).
     private var watching: [UUID: StartWatcher] = [:]
+    /// Held panes checked again (RestoreRecheck), by tab: the pane, when its shell was ready, and the checks run so far.
+    private var rechecking: [UUID: (entry: Waiting, ready: TimeInterval, done: Int, commands: Int)] = [:]
+    /// Tells the restore report of each re-check.
+    var onRecheck: ((UUID, RestoreRecheck.Entry) -> Void)?
+    /// The gate's facts for a held pane's agent, read now (ResumeFacts.read).
+    var recheckFacts: (SessionSnapshot.Evidence, String?) -> ResumeFacts = { (evidence: SessionSnapshot.Evidence, folder: String?) -> ResumeFacts in
+        let home = RestorePlanning.agentHome
+        let available = SessionLookup.live(home: home).available(evidence, home: home)
+        return ResumeFacts.read(for: evidence, projects: RestoreActions.openProjects, tabFolder: folder, sessionAvailable: available, home: home)
+    }
     /// Safe mode holds every action until Keep As Is or Try Again.
     private(set) var held: Bool
     private var queue = RestoreLayout.ResumeQueue()
@@ -72,7 +89,13 @@ final class RestoreActions {
 
     /// Whether any pane's action has not been applied, cancelled or dropped: one waiting for its shell, a resume typed
     /// whose Return has not gone, or one whose start is watched.
-    var isWaiting: Bool { !waiting.isEmpty || !typed.isEmpty || !watching.isEmpty }
+    var isWaiting: Bool { !waiting.isEmpty || !typed.isEmpty || !watching.isEmpty || !rechecking.isEmpty }
+
+    /// Every open window's project, each once.
+    static var openProjects: [String] {
+        var seen = Set<String>()
+        return AppDelegate.shared.controllers.compactMap(\.project).filter { seen.insert($0).inserted }
+    }
 
     /// Starts waiting for the shells; in safe mode, for Keep As Is or Try Again.
     func start() {
@@ -129,6 +152,9 @@ final class RestoreActions {
             case .ready where entry.plan.outcome == .resume:
                 ready.append(tab.id)
                 left.append(entry)
+            case .ready where entry.plan.rechecks && !held:
+                // Nothing on its line while it is checked again: a pass runs on a clean line.
+                rechecking[tab.id] = (entry, now, 0, tab.status.commandsAtPrompt)
             case .ready:
                 if let line = entry.plan.line {
                     tab.view.typeIn(line)
@@ -138,6 +164,7 @@ final class RestoreActions {
             }
         }
         waiting = left
+        recheck(now: now)
         let visible = Set(left.filter { (entry: Waiting) -> Bool in entry.tab.status.visible }.map(\.tab.id))
         if let next = queue.next(ready: ready, visible: visible, now: now), let index = waiting.firstIndex(where: { $0.tab.id == next }) {
             resume(waiting.remove(at: index))
@@ -150,7 +177,9 @@ final class RestoreActions {
     /// command, and the tab says why.
     private func resume(_ entry: Waiting) {
         let tab = entry.tab
-        let available = tab.restoredRecord?.agent.map(sessionAvailable) ?? false
+        // An agent session's (plan 035 U7) is its own record's: no other process runs it after the restart.
+        let record = tab.restoredRecord
+        let available: Bool = record?.agentSession != nil || (record?.agent.map(sessionAvailable) ?? false)
         switch RestoreLayout.resumeStart(entry.plan, sessionAvailable: available) {
         case .putBack(let line, let note):
             if let note { Self.note(note, in: tab) }
@@ -199,6 +228,83 @@ final class RestoreActions {
             MCPRestoredTabs.started(tab, StartWatch.Report(verdict: .watching))
             watcher.begin()
         }
+    }
+
+    /// The held panes' checks that are due: each runs the gate again on facts read now (RestoreRecheck). A pass resumes
+    /// the pane as an automatic resume, in the session's folder; a failure that guards the user, or the last check, puts
+    /// its line back, unrun, with a note; anything that reached the tab ends the checks with nothing typed.
+    private func recheck(now: TimeInterval) {
+        for (id, state) in rechecking {
+            let tab = state.entry.tab
+            let after = now - state.ready
+            let attempt = state.done + 1
+            if tab.exited {
+                endRecheck(id, RestoreRecheck.Entry(attempt: attempt, after: after, event: .stoppedShellEnded), event: .dismissed)
+                continue
+            }
+            if Self.taken(state.entry.line, in: tab) || tab.status.commandsAtPrompt != state.commands {
+                endRecheck(id, RestoreRecheck.Entry(attempt: attempt, after: after, event: .stoppedByInput), event: .userInput)
+                continue
+            }
+            let schedule = RestoreRecheck.schedule
+            guard state.done < schedule.count, after >= schedule[state.done] else { continue }
+            guard let evidence = tab.restoredRecord?.agent else {
+                endRecheck(id, RestoreRecheck.Entry(attempt: attempt, after: after, event: .held, failed: [.automatic]), putBack: true)
+                continue
+            }
+            let tabFolder = tab.liveDirectory
+            let facts = recheckFacts(evidence, tabFolder)
+            let result = RestoreRecheck.check(evidence, facts: facts, projects: Self.openProjects, tabFolder: tabFolder)
+            switch result {
+            case .resume(let command):
+                let plan = state.entry.plan
+                guard let line = RestoreRecheck.line(command: command, folder: evidence.sessionFolder, tabFolder: tabFolder) else {
+                    endRecheck(id, RestoreRecheck.Entry(attempt: attempt, after: after, event: .held, failed: [.folder]), putBack: true)
+                    continue
+                }
+                rechecking[id] = nil
+                onRecheck?(id, RestoreRecheck.Entry(attempt: attempt, after: after, event: .passed))
+                if let note = RestoreRecheck.note(.passed, agent: evidence.agent, session: plan.session?.id, failed: []) { Self.note(note, in: tab) }
+                // From here it is an automatic resume: its plan, its pending action and what MCP reads of it.
+                let resuming = plan.resuming(line)
+                tab.restoredRecord?.pending = SessionSnapshot.PendingAction(action: .resume, state: .pending, reason: plan.reason)
+                MCPRestoredTabs.replan(tab, resuming)
+                resume(Waiting(tab: tab, plan: resuming, since: state.entry.since, line: state.entry.line))
+            case .waiting(let failed):
+                let last = attempt == schedule.count
+                let entry = RestoreRecheck.Entry(attempt: attempt, after: after, event: last ? .exhausted : .waiting, failed: failed)
+                if last {
+                    endRecheck(id, entry, putBack: true)
+                } else {
+                    rechecking[id]?.done = attempt
+                    onRecheck?(id, entry)
+                }
+            case .held(let failed):
+                endRecheck(id, RestoreRecheck.Entry(attempt: attempt, after: after, event: .held, failed: failed), putBack: true)
+            }
+        }
+    }
+
+    /// The checks of a held pane end: recorded, and, when `putBack`, its line goes back, unrun, under a note on why, as for
+    /// any held agent; otherwise its action moves on by `event`.
+    private func endRecheck(_ id: UUID, _ entry: RestoreRecheck.Entry, putBack: Bool = false,
+                            event: SessionSnapshot.PendingAction.Event = .applied) {
+        guard let state = rechecking.removeValue(forKey: id) else { return }
+        onRecheck?(id, entry)
+        let tab = state.entry.tab
+        guard putBack else { return settle(tab, event) }
+        var plan = state.entry.plan
+        let note = RestoreRecheck.note(entry.event, agent: tab.restoredRecord?.agent?.agent, session: plan.session?.id, failed: entry.failed)
+        plan.note.rechecks = false
+        plan.note.recheckEnded = note
+        if !entry.failed.isEmpty { plan.note.heldBecause = entry.failed }
+        MCPRestoredTabs.replan(tab, plan)
+        if let note { Self.note(note, in: tab) }
+        if let line = plan.line {
+            tab.view.typeIn(line)
+            StartWatcher.arm(tab, session: plan.session?.id, line: line)
+        }
+        settle(tab, .applied)
     }
 
     /// Whether anything but the restore reached the tab's line since `line` was taken.
@@ -441,7 +547,7 @@ final class StartWatcher {
         var lines: [String] = []
         for row in from...last {
             guard let line = terminal.getScrollInvariantLine(row: row) else { continue }
-            let text = line.translateToString(trimRight: true)
+            let text = line.screenText()
             if line.isWrapped, !lines.isEmpty {
                 lines[lines.count - 1] += text
             } else {

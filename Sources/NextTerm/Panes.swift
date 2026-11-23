@@ -10,6 +10,18 @@ final class PaneView: NSView {
     private let veil = Veil()
     /// The header's room, taken from the pane's height (none while it is hidden).
     private var headerHeight: NSLayoutConstraint?
+    /// Below the terminal: the prompt box's room (View › Prompt Box), none while it is hidden.
+    private let boxArea = NSView()
+    private var boxAreaHeight: NSLayoutConstraint?
+    /// The prompt box, made the first time it shows.
+    private(set) var promptBox: AgentPromptBox?
+    /// While its agent has a live chat (plan 041): the terminal and chat buttons, floating small in the pane's top-right
+    /// corner over the terminal and the chat. It takes no row of its own.
+    let chatStrip = LiveChatStrip()
+    /// The live chat over the terminal, made the first time it shows. The terminal keeps running under it.
+    private(set) var liveChat: LiveChatView?
+    /// The agent the tab ran when its chat strip last looked: the prompt box closes when it ends or another takes its place.
+    private var boxAgent: AgentKind?
 
     init(tab: TerminalTab) {
         self.tab = tab
@@ -22,9 +34,24 @@ final class PaneView: NSView {
         veil.isHidden = true
         veil.translatesAutoresizingMaskIntoConstraints = false
         addSubview(veil)
+        boxArea.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(boxArea)
+        let boxHeight = boxArea.heightAnchor.constraint(equalToConstant: 0)
+        boxAreaHeight = boxHeight
         let height = header.heightAnchor.constraint(equalToConstant: 0)
         headerHeight = height
+        chatStrip.isHidden = true
+        chatStrip.translatesAutoresizingMaskIntoConstraints = false
+        // Over the terminal and the chat, under the veil.
+        addSubview(chatStrip, positioned: .below, relativeTo: veil)
+        chatStrip.onPick = { [weak self] chat in self?.setChat(shown: chat) }
         NSLayoutConstraint.activate([
+            chatStrip.topAnchor.constraint(equalTo: header.bottomAnchor, constant: LiveChatStrip.inset),
+            chatStrip.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -LiveChatStrip.inset - LiveChatStrip.scrollerRoom),
+            boxArea.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
+            boxArea.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+            boxArea.bottomAnchor.constraint(equalTo: bottomAnchor),
+            boxHeight,
             header.topAnchor.constraint(equalTo: topAnchor),
             header.leadingAnchor.constraint(equalTo: leadingAnchor),
             header.trailingAnchor.constraint(equalTo: trailingAnchor),
@@ -44,13 +71,159 @@ final class PaneView: NSView {
         guard view.superview !== self else { return }
         view.removeFromSuperview()
         view.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(view, positioned: .below, relativeTo: veil)
+        addSubview(view, positioned: .below, relativeTo: chatStrip)
+        // Covered by this pane's chat, it stays out of drawing (see setChat); anywhere else it shows.
+        view.isHidden = showsChat
         NSLayoutConstraint.activate([
             view.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 4),
             view.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
             view.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -2),
-            view.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -2),
+            view.bottomAnchor.constraint(equalTo: boxArea.topAnchor, constant: -2),
         ])
+    }
+
+    /// The corner whose hover shows the terminal and chat buttons over the terminal (LiveChatStrip).
+    private var chatCorner: NSTrackingArea?
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let chatCorner { removeTrackingArea(chatCorner) }
+        let size = LiveChatStrip.hoverRegion
+        let top = bounds.maxY - (showsHeader ? PaneHeaderView.height : 0)
+        let corner = NSRect(x: bounds.maxX - size.width, y: top - size.height, width: size.width, height: size.height)
+            .intersection(bounds)
+        guard !corner.isEmpty else { chatCorner = nil; return }
+        let area = NSTrackingArea(rect: corner, options: [.mouseEnteredAndExited, .activeInActiveApp], owner: chatStrip)
+        addTrackingArea(area)
+        chatCorner = area
+    }
+
+    /// Whether the prompt box shows under the terminal.
+    var showsPromptBox: Bool { promptBox?.isHidden == false }
+
+    /// Shows or hides the prompt box; shown, it takes the keyboard, and hidden, the terminal takes it back if the box had it.
+    func setPromptBox(shown: Bool) {
+        if shown {
+            let box = promptBox ?? {
+                let box = AgentPromptBox(tab: tab)
+                box.translatesAutoresizingMaskIntoConstraints = false
+                boxArea.addSubview(box)
+                NSLayoutConstraint.activate([
+                    box.topAnchor.constraint(equalTo: boxArea.topAnchor, constant: 4),
+                    box.leadingAnchor.constraint(equalTo: boxArea.leadingAnchor),
+                    box.trailingAnchor.constraint(equalTo: boxArea.trailingAnchor),
+                    box.bottomAnchor.constraint(equalTo: boxArea.bottomAnchor, constant: -8),
+                ])
+                promptBox = box
+                return box
+            }()
+            box.isHidden = false
+            boxAreaHeight?.isActive = false
+            box.refreshPlaceholder()
+            window?.makeFirstResponder(box.textView)
+        } else {
+            guard let box = promptBox, !box.isHidden else { return }
+            let had = window?.firstResponder === box.textView
+            box.isHidden = true
+            boxAreaHeight?.isActive = true
+            if had { window?.makeFirstResponder(tab.view) }
+        }
+    }
+
+    /// Whether the live chat shows over the terminal.
+    var showsChat: Bool { liveChat?.isHidden == false }
+
+    /// The strip follows the tab: shown while its agent has a live chat and the setting is on; gone (and the chat with
+    /// it) when the agent ends or the setting goes off.
+    func updateChatStrip() {
+        // The prompt box was for this agent: it ends, or another starts in its place, and the box goes with it. A box
+        // opened at the shell stays while an agent starts from it.
+        let agent = tab.localAgent
+        if let was = boxAgent, was != agent { setPromptBox(shown: false) }
+        boxAgent = agent
+        let offered = LiveChatView.isOn && LiveChatView.offers(tab)
+        if !offered, showsChat { setChat(shown: false) }
+        // The first time the tab offers a chat: its start view, else Settings › Agents › Open agent tabs as chat (plan 047).
+        // The keyboard stays where it is.
+        if offered, !showsChat, AgentChatWatch.firstView(tab) == true { setChat(shown: true, focus: false) }
+        if chatStrip.isHidden == offered { chatStrip.isHidden = !offered }
+        chatStrip.showing(chat: showsChat)
+        chatStrip.describe(sessionAgent: AgentChatWatch.offers(tab) ? AgentSessionSocket.reports[tab.id]?.agent : nil)
+    }
+
+    /// The crossfade between the terminal and the chat; none with Reduce Motion.
+    static let chatFade: TimeInterval = 0.2
+
+    private static var fades: Bool { !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
+
+    /// Shows the chat over the terminal, its composer with the keyboard; or the terminal again, with the keyboard, in a
+    /// short crossfade. The terminal, its scrollback and its program are never touched. While the chat covers it, the
+    /// terminal view is hidden, as a terminal in a background tab is: it reads its program and keeps its screen as
+    /// ever, it only draws nothing nobody could see, and it draws its screen as it is the moment it shows again.
+    func setChat(shown: Bool, focus: Bool = true) {
+        if shown {
+            guard LiveChatView.isOn, let source = LiveChatView.source(for: tab) else { return NSSound.beep() }
+            if let old = liveChat, old.source.object !== source.object {
+                old.removeFromSuperview()
+                liveChat = nil
+            }
+            let chat: LiveChatView
+            if let kept = liveChat {
+                chat = kept
+            } else {
+                chat = LiveChatView(tab: tab, source: source)
+                chat.translatesAutoresizingMaskIntoConstraints = false
+                addSubview(chat, positioned: .below, relativeTo: chatStrip)
+                NSLayoutConstraint.activate([
+                    chat.topAnchor.constraint(equalTo: header.bottomAnchor),
+                    chat.leadingAnchor.constraint(equalTo: leadingAnchor),
+                    chat.trailingAnchor.constraint(equalTo: trailingAnchor),
+                    chat.bottomAnchor.constraint(equalTo: bottomAnchor),
+                ])
+                chat.onShowTerminal = { [weak self] in self?.setChat(shown: false) }
+                liveChat = chat
+            }
+            let appearing = chat.isHidden || chat.alphaValue < 1
+            chat.isHidden = false
+            chat.refresh()
+            // The terminal's prompt box closes when the chat shows: the chat has its own, and the box sat above the
+            // chat's. It stays closed on the way back to the terminal (⇧⌘I opens it). The keyboard it had goes to the chat's.
+            let boxHadKeyboard = promptBox.map { window?.firstResponder === $0.textView } ?? false
+            setPromptBox(shown: false)
+            if focus || boxHadKeyboard || window?.firstResponder === tab.view { window?.makeFirstResponder(chat.composer.textView) }
+            let coverTerminal = { [weak self, weak chat] in
+                guard let self, let chat, self.liveChat === chat, !chat.isHidden else { return }
+                self.tab.view.isHidden = true
+            }
+            if appearing, Self.fades, window != nil {
+                chat.alphaValue = 0
+                NSAnimationContext.runAnimationGroup({ context in
+                    context.duration = Self.chatFade
+                    chat.animator().alphaValue = 1
+                }, completionHandler: { MainActor.assumeIsolated { coverTerminal() } })
+            } else {
+                chat.alphaValue = 1
+                coverTerminal()
+            }
+        } else {
+            guard let chat = liveChat else { return }
+            let had = chat.window != nil && !chat.isHidden
+            liveChat = nil
+            LiveChatView.release(tab)
+            // The terminal first, drawn as its screen is now, then the chat fades away above it.
+            tab.view.isHidden = false
+            tab.view.needsDisplay = true
+            if had { window?.makeFirstResponder(tab.view) }
+            if had, Self.fades {
+                NSAnimationContext.runAnimationGroup({ context in
+                    context.duration = Self.chatFade
+                    chat.animator().alphaValue = 0
+                }, completionHandler: { MainActor.assumeIsolated { chat.removeFromSuperview() } })
+            } else {
+                chat.removeFromSuperview()
+            }
+        }
+        chatStrip.showing(chat: showsChat)
     }
 
     var dimmed = false {
@@ -107,6 +280,7 @@ final class PaneView: NSView {
             guard showsHeader != oldValue else { return }
             header.isHidden = !showsHeader
             headerHeight?.constant = showsHeader ? PaneHeaderView.height : 0
+            updateTrackingAreas()
             if showsHeader { header.update() }
         }
     }
@@ -234,7 +408,7 @@ final class PaneHeaderView: NSView, NSTextFieldDelegate {
     }
 
     private func refresh() {
-        layer?.backgroundColor = (focused ? Theme.background : hovering ? Theme.tabHover : Theme.bar).cgColor
+        themedBackground((focused ? Theme.background : hovering ? Theme.tabHover : Theme.bar))
         label.textColor = focused || hovering ? Theme.text : Theme.textDim
         remoteMark.tint = label.textColor ?? Theme.textDim
         closeButton.isHidden = !(focused || hovering)
@@ -450,6 +624,8 @@ final class PaneGroup {
     var focused: TerminalTab
     /// One pane filling the tab, the others kept running behind it.
     var zoomed: TerminalTab?
+    /// The user pinned the tab (plan 045): first in its window, compact, left by bulk closes, asked about before ⌘W.
+    var pinned = false
     /// The tab's content, filling the terminal area.
     let view = NSView()
     private var paneViews: [UUID: PaneView] = [:]
@@ -663,12 +839,19 @@ extension PaneGroup {
     func refreshHeaders() {
         for tab in panes { paneViews[tab.id]?.header.update() }
     }
+
+    /// Each pane's live chat strip follows its agent (plan 041); panes not built yet have none.
+    func updateChatStrips() {
+        for tab in panes { paneViews[tab.id]?.updateChatStrip() }
+    }
 }
 
 extension TerminalWindowController {
     /// With the tab bar: the headers of every split tab follow their panes.
     func refreshPaneHeaders() {
         for group in groups where group.isSplit { group.refreshHeaders() }
+        // The live chat's strip follows each pane's agent (plan 041).
+        for group in groups { group.updateChatStrips() }
     }
 
     /// A header's ×: that pane alone, asking first as ⌘W on it does.

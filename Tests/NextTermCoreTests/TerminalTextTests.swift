@@ -485,6 +485,21 @@ import Testing
         #expect(ScrollbackText.preface("old", savedAt: .quit) == "old\r\n\u{1B}[2m\(quit)\u{1B}[0m\r\n")
     }
 
+    @Test func onALightTerminalTheDividerIsAGreyThatReads() {
+        let update = ScrollbackText.SavedAt.update.divider
+        #expect(ScrollbackText.preface("", savedAt: .update, light: true) == "\u{1B}[90m\(update)\u{1B}[0m\r\n")
+        // Dark as it always was.
+        #expect(ScrollbackText.preface("", savedAt: .update, light: false) == ScrollbackText.preface("", savedAt: .update))
+        // Bright black on Next Term Light's paper reads 4.5:1 at the least; faint (half way to the paper) would not.
+        let t = ThemePalette.nextLight.terminal
+        #expect(ThemePalette.contrast(t.ansi[8], t.background) >= 4.5)
+        func half(_ a: UInt32, _ b: UInt32) -> UInt32 {
+            func c(_ shift: UInt32) -> UInt32 { ((((a >> shift) & 0xFF) + ((b >> shift) & 0xFF)) / 2) << shift }
+            return c(16) | c(8) | c(0)
+        }
+        #expect(ThemePalette.contrast(half(t.foreground, t.background), t.background) < 4.5)
+    }
+
     @Test func questionsAreReadOnlyBelowTheDivider() {
         for divider in [ScrollbackText.SavedAt.update.divider, ScrollbackText.SavedAt.quit.divider] {
             let tail = ["Do you want to proceed? (y/n)", divider, "% claude --resume S", "Working"]
