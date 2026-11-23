@@ -1128,6 +1128,13 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         }
     }
 
+    /// Typing a name selects its row. AppKit would read the cell's `textField`, which file rows leave unset.
+    func outlineView(_ outlineView: NSOutlineView, typeSelectStringFor tableColumn: NSTableColumn?, item: Any) -> String? {
+        if let node = item as? FileNode { return node === root ? nil : node.name }
+        if let entry = item as? DeletedEntry { return entry.name }
+        return nil
+    }
+
     func outlineView(_ outlineView: NSOutlineView, viewFor tableColumn: NSTableColumn?, item: Any) -> NSView? {
         if item is DatabasesGroup || item is DatabaseItem {
             let id = NSUserInterfaceItemIdentifier("database")
