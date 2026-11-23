@@ -142,6 +142,7 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
         timer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.reload() }
         }
+        timer?.tolerance = 5 // its wakeups may join the system's others
         SecretsStore.shared.reloadIfChanged()
         reload()
     }

@@ -288,8 +288,10 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     /// Browse Home Folder was clicked in this window's "No project open": while its tab is in no project, the tree shows
     /// the home folder, as files only (ProjectSidebarView.browsingOnly).
     private(set) var browsesHome = false
-    private var ticker: Timer?
     private var tickCount = 0
+    /// A tab's change is waiting for the run loop's turn to end (tabDidChange), and a spinner frame (tabSpinnerTurned).
+    private var changeQueued = false
+    private var stripQueued = false
     private var closeConfirmed = false
     /// Closing a linked worktree's window reads whether its worktree could go before it asks: under way.
     private var readingWorktree = false
@@ -508,10 +510,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         setSidebarVisible(AppDelegate.shared.sidebarVisible)
         takeProjectColor()
 
-        let ticker = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in self?.tick() }
-        ticker.tolerance = 0.03
-        RunLoop.main.add(ticker, forMode: .common)
-        self.ticker = ticker
+        WindowTicker.shared.start() // every window's chores, on one beat paced by what they show
         // A window that refreshed once a second while no one could see it is up to date the moment it shows again.
         for (name, ofApp) in NSWindow.visibilityNotifications {
             NotificationCenter.default.addObserver(self, selector: #selector(visibilityChanged), name: name, object: ofApp ? NSApp : window)
@@ -593,6 +592,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     private func makeTab(directory: String?, remote: RemoteTab? = nil, id: UUID = UUID(), byAgent: Bool = false) -> TerminalTab {
         let tab = TerminalTab(directory: directory, fontSize: AppDelegate.shared.terminalFontSize, remote: remote, id: id)
+        if remote != nil { RemotePoller.shared.start() } // it runs while a remote tab is open, and stops itself after
         tab.view.awaitsChoice = byAgent
         wire(tab)
         return tab
@@ -1144,15 +1144,30 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         return last.isEmpty ? tab.directory : last
     }
 
-    private func tick() {
+    /// When the half-second and one-second chores last ran (TerminalTab.now): they keep their rhythm whatever the
+    /// beat's pace (WindowTicker).
+    private var choresRan = (half: TimeInterval(0), second: TimeInterval(0))
+
+    /// Something someone can look at: not minimised, hidden or covered (NSWindow.canBeSeen).
+    var canBeSeen: Bool { window?.canBeSeen != false }
+
+    /// A command or an agent runs in one of this window's tabs: the beat watches it (WindowTicker).
+    var runsSomething: Bool { tabs.contains { $0.status.running } }
+
+    /// One beat of the shared clock (WindowTicker), `interval` seconds after the last.
+    func tick(interval: TimeInterval) {
+        guard !hasClosed else { return }
         tickCount += 1
         let now = TerminalTab.now
+        let half = now - choresRan.half >= 0.45, second = now - choresRan.second >= 0.95
+        if half { choresRan.half = now }
+        if second { choresRan.second = now }
         refreshVisibility()
         for (index, tab) in tabs.enumerated() {
             tab.view.drawIfSeenAgain()
-            if tickCount % 2 == 0 { tab.pollForeground(); tab.pollServing() } // every 0.5 s
-            // The agent in sight every 0.25 s; the others every 0.5 s, half of them on each tick.
-            if isOnScreen(tab) || (tickCount + index) % 2 == 0 { tab.pollAgentScreen() }
+            if half { tab.pollForeground(); tab.pollServing() } // every 0.5 s
+            // The agent in sight on every beat; at the fastest beat the others on every other one, half on each.
+            if isOnScreen(tab) || interval > WindowTicker.Pace.watching.rawValue || (tickCount + index) % 2 == 0 { tab.pollAgentScreen() }
             tab.status.tick(at: now)
             tab.noteNeed(at: now)
             if let notice = tab.status.takeNotice() {
@@ -1160,21 +1175,24 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             }
         }
         if openedByAgent { armScratchClose() }
-        if tickCount % 4 == 0 { editorArea.checkDisk() } // agents edit the files you have open
+        if second { editorArea.checkDisk() } // agents edit the files you have open
         // A window no one can see refreshes once a second (its tabs' marks still reach the Dock badge and the
         // notifications), and at once when it shows again (visibilityChanged).
-        if window?.canBeSeen != false || tickCount % 4 == 0 { refresh() }
-        if tickCount % 4 == 0 { updateProjectTab() }
+        if canBeSeen || second { refresh() }
+        if second { updateProjectTab() }
     }
 
     @objc private func visibilityChanged() {
+        WindowTicker.shared.retune() // shown, hidden, the app in use or not: the beat's pace follows
         guard window?.canBeSeen == true else { return }
         refresh()
     }
 
-    func refresh() {
+    /// The tab strip's items, one for each tab: its title (the spinner frame as View › Agent Spinner shows it), mark,
+    /// tooltip and shortcut.
+    private func tabBarItems() -> [TabBarItem] {
         let shortcuts = Self.tabShortcuts(count: groups.count)
-        let items = groups.enumerated().map { index, group -> TabBarItem in
+        return groups.enumerated().map { index, group -> TabBarItem in
             let tab = group.focused
             guard group.isSplit else {
                 return TabBarItem(title: AgentSpinner.shown(tab.title), truncation: tab.titleTruncation, state: tab.status.state, tooltip: tab.tooltip,
@@ -1196,6 +1214,10 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
                               shorterTitles: tab.shorterTitles.map { AgentSpinner.shown($0) + others }, editableTitle: tab.editableTitle,
                               context: tab.contextUsage, pinned: group.pinned)
         }
+    }
+
+    func refresh() {
+        let items = tabBarItems()
         feedTabStrips(placeMarked(items))
         // An agent started or stopped, or another one is the one Send to Agent types into: the Ask hints follow.
         let asked = agentTab.map { "\(ObjectIdentifier($0).hashValue) \(Self.agentName(of: $0)) \($0.title)" }
@@ -3151,8 +3173,6 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         hasClosed = true
         scratchClose?.cancel()
         scratchClose = nil
-        ticker?.invalidate()
-        ticker = nil
         columnHost.windowClosing() // a pending open, the list, its reveal's timer and its Escape monitor go with it
         sidebar.stopWatching()
         _ = TerminalTab.terminate(tabs, finishLater: true)
@@ -3342,9 +3362,32 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     func tabDidChange(_ tab: TerminalTab) {
         // Events (command end, bell) can land between ticks; post their notices straight away.
         if let notice = tab.status.takeNotice() { AppDelegate.shared.post(notice, tab: tab, in: self) }
-        AppDelegate.shared.updateCopilotFolders() // a new folder for Copilot CLI to connect from
-        noticeServedURLs()
-        refresh()
+        // The rest once per run-loop turn, however many tabs changed in it (output in several tabs at once).
+        guard !changeQueued else { return }
+        changeQueued = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self, !self.hasClosed else { return }
+            self.changeQueued = false
+            AppDelegate.shared.updateCopilotFolders() // a new folder for Copilot CLI to connect from
+            self.noticeServedURLs()
+            self.refresh()
+            WindowTicker.shared.retune() // a command started or ended: the beat's pace may change
+        }
+    }
+
+    /// Only the frame of an agent's own spinner turned in its title (TerminalTab.setTerminalTitle). Nothing else
+    /// changed, so only the tab strip and the rail are drawn again, and only where the frame shows: in a window
+    /// someone can see, with the spinner turning (View › Agent Spinner).
+    func tabSpinnerTurned(_ tab: TerminalTab) {
+        guard AgentSpinner.turns, canBeSeen, !stripQueued else { return }
+        stripQueued = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self, !self.hasClosed else { return }
+            self.stripQueued = false
+            let items = self.tabBarItems()
+            self.feedTabStrips(self.placeMarked(items))
+            self.updateRailMarks(items)
+        }
     }
 
     /// A tab's served address came or went (a dev server started or stopped): the Services rows' ports are looked at

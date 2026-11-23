@@ -166,6 +166,7 @@ final class NextTermView: LocalProcessTerminalView {
         hasOutput = true
         super.dataReceived(slice: slice) // parse first: OSC marks in this chunk update the status
         outputBytes &+= slice.count
+        WindowTicker.shared.noteOutput() // while idle, a command may have started: the beat looks again
         if sequences != nil { watched(slice) }
         onOutput?()
     }
@@ -621,6 +622,8 @@ final class NextTermView: LocalProcessTerminalView {
 protocol TerminalTabDelegate: AnyObject {
     func tabDidChange(_ tab: TerminalTab)
     func tabDidExit(_ tab: TerminalTab)
+    /// Only the spinner frame at the start of the program's title turned (AgentTitle.withoutSpinnerFrame).
+    func tabSpinnerTurned(_ tab: TerminalTab)
 }
 
 /// One tab: a shell in a pty, its terminal view and its status. A remote tab runs ssh in the pty instead,
@@ -1877,7 +1880,12 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     }
 
     func setTerminalTitle(source: LocalProcessTerminalView, title: String) {
+        guard title != programTitle else { return } // the same title again: nothing changed
+        // An agent turns a spinner at the start of its title several times a second while it works: when that frame
+        // is all that changed, only the tab strip needs drawing, and only where the frame shows.
+        let frameOnly = programTitle.map { AgentTitle.withoutSpinnerFrame($0) == AgentTitle.withoutSpinnerFrame(title) } ?? false
         programTitle = title
+        if frameOnly { return delegate?.tabSpinnerTurned(self) ?? () }
         matchShownSession()
         delegate?.tabDidChange(self)
     }

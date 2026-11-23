@@ -940,13 +940,14 @@ struct GitActions {
         let tab = controller.addTab(directory: there?.folder ?? root)
         let command = GitWriter.commandLine(args)
         var tries = 0
-        Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { timer in
+        let wait = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { timer in
             tries += 1
             if tab.status.integrated || tries > 25 {
                 timer.invalidate()
                 tab.view.typeIn(command)
             }
         }
+        wait.tolerance = 0.05 // its wakeups may join the system's others
     }
 
     static func tail(_ output: String, lines: Int = 12) -> String {

@@ -224,6 +224,7 @@ final class SessionRestore {
         let timer = Timer(timeInterval: SessionWriter.interval, repeats: true) { _ in
             MainActor.assumeIsolated { SessionRestore.shared.tick() }
         }
+        timer.tolerance = 0.5 // a save may wait half a second more, so its wakeups join the system's others
         // The common modes include a modal panel's: a session is saved while a dialog is up too.
         RunLoop.main.add(timer, forMode: .common)
         self.timer = timer

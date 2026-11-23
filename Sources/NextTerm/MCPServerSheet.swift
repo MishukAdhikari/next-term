@@ -654,6 +654,7 @@ final class MCPServerSheet: NSWindowController, NSWindowDelegate, NSTextFieldDel
         clipboardWatch = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.checkClipboard() }
         }
+        clipboardWatch?.tolerance = 0.1 // its wakeups may join the system's others
     }
 
     private func stopWatchingClipboard() {

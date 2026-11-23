@@ -133,7 +133,7 @@ final class CopilotIDEServer: @unchecked Sendable { // mutable state lives on `q
         queue.sync {
             guard self.listener != nil else { return }
             let timer = DispatchSource.makeTimerSource(queue: queue)
-            timer.schedule(deadline: .now() + 30, repeating: 30)
+            timer.schedule(deadline: .now() + 30, repeating: 30, leeway: .seconds(5)) // its wakeups may join the system's others
             timer.setEventHandler { [weak self] in self?.keepStreamsAlive() }
             timer.resume()
             heartbeat = timer

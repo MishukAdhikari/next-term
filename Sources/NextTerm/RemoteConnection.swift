@@ -535,7 +535,8 @@ enum RemoteConnection {
 /// the host, what runs in front of its shell (so agents get the same status as local ones), its folder
 /// and jobs, and herdr's agents in each herdr session its tabs show (HerdrPollSession: at most 4 a check, taking
 /// turns past that). Only as a session on a master a tab opened: a check never logs in. When a master is up, kept
-/// tabs on it that lost their connection are reconnected.
+/// tabs on it that lost their connection are reconnected. It runs only while a remote tab is open: a check that finds
+/// none (after saving that) stops it, and the next remote tab starts it again (TerminalWindowController.makeTab).
 final class RemotePoller {
     static let shared = RemotePoller()
     private var timer: Timer?
@@ -553,6 +554,7 @@ final class RemotePoller {
         // before the first remote tab asks for it.
         if !SelfTest.isRequested { LoginShell.warmUp() }
         let timer = Timer(timeInterval: 2, repeats: true) { [weak self] _ in self?.poll() }
+        timer.tolerance = 0.5
         RunLoop.main.add(timer, forMode: .common)
         self.timer = timer
     }
@@ -561,6 +563,11 @@ final class RemotePoller {
     func poll(only: String? = nil) {
         let controllers = AppDelegate.shared.controllers
         if only == nil { RemoteConnection.saveTabs(controllers) }
+        // No remote tab, open or ended: the save above has recorded that, and nothing is left to check until one opens.
+        if only == nil, !controllers.contains(where: { $0.tabs.contains { $0.remote != nil } }) {
+            timer?.invalidate()
+            timer = nil
+        }
         let remoteTabs = controllers.flatMap(\.tabs).filter { $0.remote != nil && !$0.exited }
         // A master came up again (another tab reconnected, or the network is back): kept tabs that lost
         // theirs with it come back at once, once, without waiting for their timers.
