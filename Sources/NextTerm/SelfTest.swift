@@ -686,7 +686,7 @@ enum SelfTest {
               "a self-test's tabs read its own zsh config, never the user's", "test config \(ownConfig): " + zdotTab.screenTail(4).joined(separator: " | "))
         c.remove(zdotTab)
         #if DEBUG
-        // One part on the project set up so far (NEXTTERM_SELFTEST_ONLY=gitAndViewKeys, import, rollback, places, held, closeWorktree, moveTab, worktrees, markdown, mcpWrite, parallel (with scrollback), skills, notifications, services, runGroup, localModels, secrets, agentSession, mcpHub, mcpHubSettings, mcpHubOAuth (only when asked), opencode, tasks, welcome, tabList, terminalPosition, completion, ghostText, gitRefresh, clicks, mouse, remote, mcp, newTerminal, cellSnap, projectColor, windowNav, windowColumn, hints, settingsSections, agentsSettings, agentScratch, layoutPicker or database), for its own failures
+        // One part on the project set up so far (NEXTTERM_SELFTEST_ONLY=gitAndViewKeys, import, rollback, places, held, closeWorktree, moveTab, worktreeStrip, worktrees, markdown, mcpWrite, parallel (with scrollback), skills, notifications, services, runGroup, localModels, secrets, agentSession, mcpHub, mcpHubSettings, mcpHubOAuth (only when asked), opencode, tasks, welcome, tabList, terminalPosition, completion, ghostText, gitRefresh, clicks, mouse, remote, mcp, newTerminal, cellSnap, projectColor, windowNav, windowColumn, hints, settingsSections, agentsSettings, agentScratch, layoutPicker or database), for its own failures
         // without the whole run's 25 minutes.
         switch ProcessInfo.processInfo.environment["NEXTTERM_SELFTEST_ONLY"] {
         case "gitAndViewKeys": return await gitAndViewKeyChecks(c, proj: proj)
@@ -703,6 +703,7 @@ enum SelfTest {
         case "held": return await heldWorktreeChecks(c)
         case "closeWorktree": return await closeWorktreeChecks()
         case "moveTab": return await moveTabChecks() // a tab moved live into another window: same process, output, scrollback, draft
+        case "worktreeStrip": return await worktreeStripChecks() // the strip offering Open as Project above an agent's pane in another worktree
         case "parallel":
             await parallelTabsChecks(c, proj: proj)
             await arrivalChecks(c, proj: proj)

@@ -1191,6 +1191,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             updateAskHints()
         }
         refreshPaneHeaders()
+        updateWorktreeStrips()
         sidebar.showRemote(activeTab?.remoteMark) // the pane with the keyboard: the tree follows it
         updateRailMarks(items)
         announceBackgroundChanges()

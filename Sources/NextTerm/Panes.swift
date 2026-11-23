@@ -18,6 +18,11 @@ final class PaneView: NSView {
     /// While its agent has a live chat (plan 041): the terminal and chat buttons, floating small in the pane's top-right
     /// corner over the terminal and the chat. It takes no row of its own.
     let chatStrip = LiveChatStrip()
+    /// While this pane's agent works in another linked worktree of the window's repository: the offer to open it as a
+    /// project, over the pane's top rows (and the chat's), under the header. The terminal's size never changes for it.
+    let worktreeStrip = WorktreeStrip()
+    /// The chat strip's place: below the worktree strip while that shows.
+    private var chatStripTop: NSLayoutConstraint?
     /// The live chat over the terminal, made the first time it shows. The terminal keeps running under it.
     private(set) var liveChat: LiveChatView?
     /// The agent the tab ran when its chat strip last looked: the prompt box closes when it ends or another takes its place.
@@ -45,8 +50,15 @@ final class PaneView: NSView {
         // Over the terminal and the chat, under the veil.
         addSubview(chatStrip, positioned: .below, relativeTo: veil)
         chatStrip.onPick = { [weak self] chat in self?.setChat(shown: chat) }
+        worktreeStrip.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(worktreeStrip, positioned: .below, relativeTo: veil)
+        let chatTop = chatStrip.topAnchor.constraint(equalTo: header.bottomAnchor, constant: LiveChatStrip.inset)
+        chatStripTop = chatTop
         NSLayoutConstraint.activate([
-            chatStrip.topAnchor.constraint(equalTo: header.bottomAnchor, constant: LiveChatStrip.inset),
+            worktreeStrip.topAnchor.constraint(equalTo: header.bottomAnchor),
+            worktreeStrip.leadingAnchor.constraint(equalTo: leadingAnchor),
+            worktreeStrip.trailingAnchor.constraint(equalTo: trailingAnchor),
+            chatTop,
             chatStrip.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -LiveChatStrip.inset - LiveChatStrip.scrollerRoom),
             boxArea.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
             boxArea.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
@@ -89,13 +101,24 @@ final class PaneView: NSView {
         super.updateTrackingAreas()
         if let chatCorner { removeTrackingArea(chatCorner) }
         let size = LiveChatStrip.hoverRegion
-        let top = bounds.maxY - (showsHeader ? PaneHeaderView.height : 0)
+        let top = bounds.maxY - (showsHeader ? PaneHeaderView.height : 0) - worktreeStripRoom
         let corner = NSRect(x: bounds.maxX - size.width, y: top - size.height, width: size.width, height: size.height)
             .intersection(bounds)
         guard !corner.isEmpty else { chatCorner = nil; return }
         let area = NSTrackingArea(rect: corner, options: [.mouseEnteredAndExited, .activeInActiveApp], owner: chatStrip)
         addTrackingArea(area)
         chatCorner = area
+    }
+
+    /// The height the worktree strip takes over the pane's top rows, none while it is hidden.
+    private var worktreeStripRoom: CGFloat { worktreeStrip.worktree == nil ? 0 : WorktreeStrip.height }
+
+    /// Shows the worktree strip for `worktree`, or hides it; the chat strip moves below it while it shows.
+    func showWorktreeStrip(_ worktree: Checkout?) {
+        guard worktree != worktreeStrip.worktree else { return }
+        worktreeStrip.show(worktree)
+        chatStripTop?.constant = LiveChatStrip.inset + worktreeStripRoom
+        updateTrackingAreas()
     }
 
     /// Whether the prompt box shows under the terminal.

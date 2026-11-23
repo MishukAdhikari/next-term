@@ -15,6 +15,8 @@ final class AgentPlaces {
     private(set) var places: [String: AgentPlace] = [:]
     /// The linked worktrees each tab's agent worked in since this version first ran (by tab id), kept after it ends.
     private(set) var history: [String: [String]] = [:]
+    /// How each agent tab's agent came to be where it is (by tab id): whether that was before this version first ran.
+    private(set) var placements: [String: WorktreeLifecycle.Placement] = [:]
     /// Told, on the main thread, the tabs (by id) whose agents ended at the last look.
     var agentsEnded: ((Set<String>) -> Void)?
     /// Each agent tab's folder as last read, not held (by tab id), with the agent's process.
@@ -119,7 +121,87 @@ final class AgentPlaces {
             }
             if let key = switched.by.tabKey { fields["switched_by_tab"] = key.lowercased() }
         }
+        if let offer = offers.state(of: tab.id.uuidString, in: place.checkout.path) { fields["worktree_offer"] = offer.rawValue }
         return fields
+    }
+
+    // MARK: the offer to open a worktree as a project
+
+    /// What the strip above each agent tab has offered (WorktreeLifecycle.Offers), kept in UserDefaults; a self-test's
+    /// stays in memory.
+    private(set) var offers = WorktreeLifecycle.Offers(stored: SelfTest.isRequested ? nil
+        : UserDefaults.standard.object(forKey: WorktreeLifecycle.Offers.defaultsKey))
+
+    /// The linked worktree `tab`'s agent works in, when it is not the checkout `controller`'s window shows nor the
+    /// repository's main one, and git still lists it on disk.
+    private func otherWorktree(of tab: TerminalTab, in controller: TerminalWindowController) -> (checkout: Checkout, shown: String?)? {
+        guard let place = place(of: tab), !place.checkout.isMain else { return nil }
+        let shown = Self.shownFolder(of: controller).flatMap { self.shown[$0] }?.checkout.path
+        guard place.checkout.path != shown, FileManager.default.fileExists(atPath: place.checkout.path) else { return nil }
+        return (place.checkout, shown)
+    }
+
+    /// The worktree whose strip shows above `tab` now, in front in `controller`'s window: offered once the person
+    /// hasn't typed in that tab for HintRules' quiet interval.
+    func worktreeStrip(for tab: TerminalTab, in controller: TerminalWindowController) -> Checkout? {
+        guard let found = otherWorktree(of: tab, in: controller) else { return nil }
+        let key = tab.id.uuidString
+        return changingOffers { offers in
+            offers.strip(for: key, placement: placements[key], isMain: false, shown: found.shown,
+                         sinceUserKey: TerminalTab.now - tab.lastUserInputAt) == found.checkout.path ? found.checkout : nil
+        }
+    }
+
+    /// The worktree `tab`'s menu and its place mark may open as a project: offered, or held by Not Now.
+    func offerableWorktree(of tab: TerminalTab, in controller: TerminalWindowController) -> Checkout? {
+        guard let checkout = otherWorktree(of: tab, in: controller)?.checkout,
+              offers.offerable(tab.id.uuidString, checkout.path) else { return nil }
+        return checkout
+    }
+
+    /// Whether Not Now holds the strip for the worktree `tab`'s agent works in: its place mark brings it back.
+    func offerHeld(_ tab: TerminalTab, in controller: TerminalWindowController) -> Bool {
+        guard let checkout = otherWorktree(of: tab, in: controller)?.checkout else { return false }
+        return offers.state(of: tab.id.uuidString, in: checkout.path) == .dismissed
+    }
+
+    /// Not Now on `tab`'s strip for `worktree`.
+    func dismissOffer(_ tab: TerminalTab, worktree: String) {
+        changingOffers { $0.dismiss(tab.id.uuidString, worktree) }
+    }
+
+    /// The place mark's click: the strip Not Now held shows again. False when none was held.
+    @discardableResult
+    func reoffer(_ tab: TerminalTab, worktree: String) -> Bool {
+        changingOffers { $0.reoffer(tab.id.uuidString, worktree) }
+    }
+
+    /// `tab` was opened in `worktree`'s own window.
+    func offerOpened(_ tab: TerminalTab, worktree: String) {
+        changingOffers { $0.opened(tab.id.uuidString, worktree) }
+    }
+
+    /// Agents seen in a worktree before this version first ran keep it as the baseline, in tabs not in front too.
+    private func noteOfferBaselines() {
+        changingOffers { offers in
+            for (key, placement) in placements where placement.baseline {
+                offers.note(key, placement: placement, isMain: places[key]?.checkout.isMain ?? true)
+            }
+        }
+    }
+
+    /// Changes the offers and keeps them when they changed, forgetting tabs that closed.
+    @discardableResult
+    private func changingOffers<T>(_ change: (inout WorktreeLifecycle.Offers) -> T) -> T {
+        var changed = offers
+        let result = change(&changed)
+        guard changed != offers else { return result }
+        if !SelfTest.isRequested, let app = AppDelegate.shared {
+            changed.keep(only: Set(app.controllers.flatMap(\.tabs).map(\.id.uuidString)))
+            UserDefaults.standard.set(changed.stored, forKey: WorktreeLifecycle.Offers.defaultsKey)
+        }
+        offers = changed
+        return result
     }
 
     /// Keep Going: the branch now checked out becomes the chat's own.
@@ -191,7 +273,10 @@ final class AgentPlaces {
                 queue.async { [self] in
                     lifecycle.update(PlaceSighting(), at: now) { _, _, _ in .none }
                     let history = lifecycle.history, ended = lifecycle.ended
-                    DispatchQueue.main.async { self.publish(history: history, ended: ended) }
+                    DispatchQueue.main.async {
+                        self.placements = [:]
+                        self.publish(history: history, ended: ended)
+                    }
                 }
             }
             return
@@ -213,6 +298,8 @@ final class AgentPlaces {
                 places = read.places
                 folders = read.folders
                 shown = read.shown
+                placements = read.placements
+                noteOfferBaselines()
                 publish(history: read.history, ended: read.ended)
             }
         }
@@ -247,6 +334,7 @@ final class AgentPlaces {
         var shown: [String: (repository: String, checkout: Checkout)] = [:]
         var history: [String: [String]] = [:]
         var ended: Set<String> = []
+        var placements: [String: WorktreeLifecycle.Placement] = [:]
     }
 
     private func read(_ probes: [Probe], windows: Set<String>, sighting start: PlaceSighting, git: String, home: String, at now: Date) -> Read {
@@ -286,6 +374,7 @@ final class AgentPlaces {
         }
         result.places = lifecycle.places
         result.history = lifecycle.history
+        result.placements = lifecycle.placements
         result.ended = lifecycle.ended
         for (folder, repository) in windowRepositories {
             if let checkout = AgentLocation.checkout(containing: canonicalPath(folder), in: sighting.repositories[repository] ?? []) {

@@ -143,3 +143,98 @@ import Testing
         #expect(lifecycle.ended.isEmpty && lifecycle.history["7"] == [sibling])
     }
 }
+
+/// The strip's offer to open a worktree as its own project: once per worktree per tab, never while the person types in
+/// that tab, never for a worktree its agent was in before this version first ran, and brought back after Not Now.
+@Suite struct WorktreeOfferTests {
+    typealias Offers = WorktreeLifecycle.Offers
+    let t0 = Date(timeIntervalSince1970: 1_000_000)
+    let sibling = "/Code/xcloud-wt-11650", other = "/Code/xcloud-wt-11700", main = "/Code/xCloud"
+
+    func placed(_ checkout: String, baseline: Bool = false) -> WorktreeLifecycle.Placement {
+        .init(checkout: checkout, how: .wrote, at: t0, baseline: baseline)
+    }
+
+    /// The offers, held where #expect may change them.
+    final class Box { var offers = Offers() }
+
+    /// Asks for tab 7's strip, the window showing the main checkout.
+    func strip(_ box: Box, _ checkout: String?, baseline: Bool = false, sinceKey: TimeInterval = 60,
+               shown: String? = "/Code/xCloud") -> String? {
+        box.offers.strip(for: "7", placement: checkout.map { placed($0, baseline: baseline) }, isMain: checkout == main,
+                     shown: shown, sinceUserKey: sinceKey)
+    }
+
+    @Test func aWorktreeFromBeforeThisVersionIsNeverOfferedButANewOneIs() {
+        let box = Box()
+        #expect(strip(box, sibling, baseline: true) == nil)
+        #expect(box.offers.state(of: "7", in: sibling) == .baseline)
+        // Later writes there, dated after the first run, still offer nothing.
+        #expect(strip(box, sibling) == nil)
+        #expect(!box.offers.offerable("7", sibling))
+        #expect(strip(box, other) == other)
+        #expect(box.offers.state(of: "7", in: other) == .offered)
+    }
+
+    @Test func theStripWaitsUntilTheTabHasBeenQuietForTwoSeconds() {
+        let box = Box()
+        #expect(strip(box, sibling, sinceKey: 0.4) == nil)
+        #expect(strip(box, sibling, sinceKey: 1.9) == nil)
+        #expect(box.offers.state(of: "7", in: sibling) == nil)
+        #expect(strip(box, sibling, sinceKey: 2.1) == sibling)
+        // Shown, it stays while the person types again.
+        #expect(strip(box, sibling, sinceKey: 0.1) == sibling)
+    }
+
+    @Test func notNowHidesItForThatTabAndThePlaceMarkBringsItBack() {
+        let box = Box()
+        #expect(strip(box, sibling) == sibling)
+        box.offers.dismiss("7", sibling)
+        #expect(strip(box, sibling) == nil)
+        #expect(box.offers.state(of: "7", in: sibling) == .dismissed && box.offers.offerable("7", sibling))
+        // Another tab's agent in the same worktree gets its own offer.
+        let eight = box.offers.strip(for: "8", placement: placed(sibling), isMain: false, shown: main, sinceUserKey: 60)
+        #expect(eight == sibling)
+        let back = box.offers.reoffer("7", sibling)
+        #expect(back)
+        #expect(strip(box, sibling, sinceKey: 0) == sibling)
+        let notHeld = box.offers.reoffer("7", other)
+        #expect(!notHeld)
+    }
+
+    @Test func aNewerWorktreeTakesTheStripAndTheEarlierStaysOffered() {
+        let box = Box()
+        #expect(strip(box, sibling) == sibling)
+        #expect(strip(box, other, sinceKey: 0.5) == nil)
+        #expect(strip(box, other) == other)
+        #expect(box.offers.state(of: "7", in: sibling) == .offered)
+        #expect(strip(box, sibling) == sibling)
+    }
+
+    @Test func theStripHidesInTheWindowsOwnCheckoutTheMainOneAndOnceOpened() {
+        let box = Box()
+        #expect(strip(box, sibling) == sibling)
+        #expect(strip(box, main) == nil)
+        #expect(strip(box, nil) == nil)
+        #expect(strip(box, sibling, shown: sibling) == nil)
+        #expect(box.offers.state(of: "7", in: main) == nil)
+        #expect(strip(box, sibling) == sibling)
+        box.offers.opened("7", sibling)
+        #expect(strip(box, sibling) == nil && !box.offers.offerable("7", sibling))
+        #expect(box.offers.state(of: "7", in: sibling) == .opened)
+    }
+
+    @Test func itIsKeptAsUserDefaultsStoresItAndForgetsClosedTabs() {
+        let box = Box()
+        _ = strip(box, sibling, baseline: true)
+        _ = strip(box, other)
+        _ = box.offers.strip(for: "8", placement: placed(other), isMain: false, shown: main, sinceUserKey: 60)
+        box.offers.dismiss("8", other)
+        let back = Offers(stored: box.offers.stored as Any)
+        #expect(back == box.offers)
+        #expect(Offers(stored: nil) == Offers() && Offers(stored: ["7": [sibling: "nonsense"]]) == Offers())
+        var kept = back
+        kept.keep(only: ["8"])
+        #expect(kept.state(of: "7", in: other) == nil && kept.state(of: "8", in: other) == .dismissed)
+    }
+}

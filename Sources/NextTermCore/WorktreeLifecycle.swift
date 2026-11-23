@@ -167,3 +167,107 @@ public struct WorktreeLifecycle {
         history[key, default: []].append(placement.checkout)
     }
 }
+
+// MARK: - The offer: Open as Project, from the strip above the tab
+
+extension WorktreeLifecycle {
+    /// What the strip above an agent tab has offered: Open as Project for a linked worktree its agent works in, other
+    /// than the one the window shows. Once per worktree per tab, never while the person types in that tab, never for a
+    /// worktree its agent was in before this version first ran (and never after, in that tab: the person knew of it).
+    /// Not Now holds it until the tab's place mark brings it back. Pure, read from the record by the caller; kept in
+    /// UserDefaults by the app, as `stored`, so a restored tab doesn't ask again.
+    public struct Offers: Equatable, Sendable {
+        public enum State: String, Sendable {
+            /// Its agent was there before this version first ran: never offered.
+            case baseline
+            /// The strip shows it while the agent is there, until it is answered.
+            case offered
+            /// Not Now: held until the place mark brings it back.
+            case dismissed
+            /// Opened as its own project.
+            case opened
+        }
+
+        /// The UserDefaults key the app keeps it under.
+        public static let defaultsKey = "worktreeOffers"
+
+        /// By tab key, then by the worktree's path.
+        public private(set) var states: [String: [String: State]] = [:]
+
+        public init() {}
+
+        /// From what UserDefaults kept (`stored`); anything else is nothing.
+        public init(stored: Any?) {
+            guard let tabs = stored as? [String: [String: String]] else { return }
+            for (key, worktrees) in tabs {
+                let known = worktrees.compactMapValues(State.init(rawValue:))
+                if !known.isEmpty { states[key] = known }
+            }
+        }
+
+        /// As UserDefaults keeps it.
+        public var stored: [String: [String: String]] { states.mapValues { $0.mapValues(\.rawValue) } }
+
+        public func state(of key: String, in worktree: String) -> State? { states[key]?[worktree] }
+
+        /// The worktree `key`'s strip shows now, if any, given where its agent works (`placement`, nil when nowhere
+        /// known), whether that is the repository's main checkout, the checkout its window shows, and how long ago the
+        /// person last typed in that tab. A worktree first seen as the baseline stays it; one never seen is offered once
+        /// the tab has been quiet for HintRules' quiet interval.
+        public mutating func strip(for key: String, placement: Placement?, isMain: Bool, shown: String?,
+                                   sinceUserKey: TimeInterval) -> String? {
+            guard let placement, !isMain, placement.checkout != shown else { return nil }
+            let worktree = placement.checkout
+            switch state(of: key, in: worktree) {
+            case nil:
+                if placement.baseline {
+                    states[key, default: [:]][worktree] = .baseline
+                    return nil
+                }
+                guard sinceUserKey >= HintRules.quietKeys else { return nil }
+                states[key, default: [:]][worktree] = .offered
+                return worktree
+            case .offered?:
+                return worktree
+            case .baseline?, .dismissed?, .opened?:
+                return nil
+            }
+        }
+
+        /// Notes a placement seen in a tab the strip doesn't look at now (one not in front): a worktree first seen as
+        /// the baseline is kept as the baseline, so a later look doesn't take it for new.
+        public mutating func note(_ key: String, placement: Placement?, isMain: Bool) {
+            guard let placement, placement.baseline, !isMain, state(of: key, in: placement.checkout) == nil else { return }
+            states[key, default: [:]][placement.checkout] = .baseline
+        }
+
+        /// The strip or the tab's menu may open it as a project: offered, or held by Not Now.
+        public func offerable(_ key: String, _ worktree: String) -> Bool {
+            [.offered, .dismissed].contains(state(of: key, in: worktree))
+        }
+
+        /// Not Now.
+        public mutating func dismiss(_ key: String, _ worktree: String) {
+            guard state(of: key, in: worktree) == .offered else { return }
+            states[key]?[worktree] = .dismissed
+        }
+
+        /// The place mark's click after Not Now: offered again. False when it wasn't held.
+        @discardableResult
+        public mutating func reoffer(_ key: String, _ worktree: String) -> Bool {
+            guard state(of: key, in: worktree) == .dismissed else { return false }
+            states[key]?[worktree] = .offered
+            return true
+        }
+
+        /// Open as Project went through.
+        public mutating func opened(_ key: String, _ worktree: String) {
+            states[key, default: [:]][worktree] = .opened
+        }
+
+        /// Forgets the tabs not in `keys` (closed ones).
+        public mutating func keep(only keys: Set<String>) {
+            states = states.filter { keys.contains($0.key) }
+        }
+    }
+}

@@ -29,13 +29,20 @@ extension TerminalWindowController {
         if header.onTabPlaceClick == nil { header.onTabPlaceClick = { [weak self] in self?.showPlaceChoices() } }
         guard let tab = activeTab, let mark = AgentPlaces.shared.mark(for: tab, in: self) else { return header.showTabPlace(nil) }
         let facts = mark.facts(agent: AgentName.of(program: tab.status.program), when: { SessionStore.when($0) })
-        header.showTabPlace(TabPlace(prefix: mark.labelPrefix, branch: mark.labelBranch, facts: facts, hasChoices: mark.switched != nil))
+        let held = AgentPlaces.shared.offerHeld(tab, in: self)
+        header.showTabPlace(TabPlace(prefix: mark.labelPrefix, branch: mark.labelBranch, facts: facts,
+                                     hasChoices: mark.switched != nil || held, bringsBackOffer: held))
     }
 
     /// A click on the header's label: for a branch switched under the focused tab's chat, Keep Going, and Go to
-    /// That Tab when another tab made the switch.
+    /// That Tab when another tab made the switch. After Not Now on the tab's worktree strip, the strip again.
     func showPlaceChoices() {
         guard let tab = activeTab else { return }
+        if let worktree = AgentPlaces.shared.offerableWorktree(of: tab, in: self),
+           AgentPlaces.shared.reoffer(tab, worktree: worktree.path) {
+            refresh()
+            if AgentPlaces.shared.mark(for: tab, in: self)?.switched == nil { return }
+        }
         let menu = NSMenu()
         menu.autoenablesItems = false
         guard addPlaceChoices(for: tab, to: menu) else { return }
@@ -46,6 +53,13 @@ extension TerminalWindowController {
     /// of its panes (the one with the keyboard first), so they don't need the mouse on the header's label.
     func addPlaceChoices(to menu: NSMenu, for group: PaneGroup) {
         let panes = [group.focused] + group.panes.filter { $0 !== group.focused }
+        // Open as Project for a worktree its strip offered, or Not Now held: the keyboard's way to it.
+        if let tab = panes.first(where: { AgentPlaces.shared.offerableWorktree(of: $0, in: self) != nil }),
+           let worktree = AgentPlaces.shared.offerableWorktree(of: tab, in: self) {
+            let name = (worktree.path as NSString).lastPathComponent
+            menu.addBlock("Open \u{201C}\(name)\u{201D} as Project\u{2026}") { AppDelegate.shared.openAsProject(tab: tab, worktree: worktree.path) }
+            menu.addItem(.separator())
+        }
         guard let tab = panes.first(where: { AgentPlaces.shared.mark(for: $0, in: self)?.switched != nil }),
               addPlaceChoices(for: tab, to: menu) else { return }
         menu.addItem(.separator())
@@ -66,6 +80,32 @@ extension TerminalWindowController {
             }
         }
         return true
+    }
+}
+
+// MARK: - the worktree strip
+
+extension TerminalWindowController {
+    /// The strips above the panes of the tab in front: each pane's agent's offer to open its worktree as a project,
+    /// once the person isn't typing in it (AgentPlaces.worktreeStrip). Tabs not in front keep theirs until they are.
+    func updateWorktreeStrips() {
+        guard let group = activeGroup else { return }
+        for tab in group.panes {
+            let pane = group.paneView(tab)
+            let worktree = AgentPlaces.shared.worktreeStrip(for: tab, in: self)
+            if let worktree {
+                pane.worktreeStrip.onOpen = { [weak tab] in
+                    guard let tab else { return }
+                    AppDelegate.shared.openAsProject(tab: tab, worktree: worktree.path)
+                }
+                pane.worktreeStrip.onNotNow = { [weak self, weak tab] in
+                    guard let self, let tab else { return }
+                    AgentPlaces.shared.dismissOffer(tab, worktree: worktree.path)
+                    self.refresh()
+                }
+            }
+            pane.showWorktreeStrip(worktree)
+        }
     }
 }
 
@@ -107,8 +147,10 @@ struct TabPlace: Equatable {
     let branch: String
     /// The whole story, for the tooltip and VoiceOver.
     let facts: String
-    /// A click offers Keep Going (a branch switched under the chat).
+    /// A click offers Keep Going (a branch switched under the chat), or brings back the worktree strip.
     let hasChoices: Bool
+    /// A click brings back the worktree strip Not Now held.
+    var bringsBackOffer = false
 
     /// "this tab: fix/7027-sso".
     var label: String { prefix + " " + branch }
@@ -164,7 +206,7 @@ final class TabPlaceView: NSView {
         self.place = place
         prefix.stringValue = place.prefix
         label.stringValue = place.branch
-        toolTip = place.facts + (place.hasChoices ? "\nClick for Keep Going." : "")
+        toolTip = place.facts + (place.bringsBackOffer ? "\nClick to offer Open as Project again." : place.hasChoices ? "\nClick for Keep Going." : "")
         setAccessibilityRole(place.hasChoices ? .button : .staticText)
         setAccessibilityLabel(place.facts)
         needsLayout = true

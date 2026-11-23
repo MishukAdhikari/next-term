@@ -1385,6 +1385,9 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     var restoreNote: String?
     /// The user put something in this tab (`userInput`): an action the restore has not applied yet is theirs to drop (KTD6).
     private(set) var touchedByUser = false
+    /// When the user last put something in this tab (`userInput`), as `TerminalTab.now`: the worktree strip waits until
+    /// that is HintRules' quiet interval old, so it never appears under their typing.
+    private(set) var lastUserInputAt: TimeInterval = -.infinity
     /// The integration's command marks, a command starting or ending, each as it is read and before the status takes it:
     /// the screen then holds what came before the mark and nothing after it. The restore's start watch reads them
     /// (StartWatcher, KTD6). Nothing may be fed into the terminal from here, as its parser is still reading.
@@ -1395,6 +1398,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     /// typed that waits for its Return does not run; an agent over MCP no longer drives the tab.
     func userInput() {
         touchedByUser = true
+        lastUserInputAt = Self.now
         ghost.userKey()
         view.awaitsChoice = false // a paste or a drop into it is the user's choice
         MCPControl.typedByUser(self)

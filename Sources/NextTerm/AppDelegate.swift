@@ -1354,6 +1354,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         return openWindow(directory: path, project: path)
     }
 
+    /// Open as Project for the linked worktree `tab`'s agent works in, from its strip or its menu: the tab moves, live,
+    /// into the worktree's own window (moveTab), and the strip's offer is answered. Nil when the move couldn't happen.
+    @discardableResult
+    func openAsProject(tab: TerminalTab, worktree: String) -> TerminalWindowController? {
+        guard let destination = moveTab(tab, toProject: worktree) else { return nil }
+        AgentPlaces.shared.offerOpened(tab, worktree: worktree)
+        return destination
+    }
+
     /// Moves a tab into the window of the project at `path`, live: its program keeps running, with its scrollback, title,
     /// chat and prompt box (TerminalWindowController.attach, then detach in the window it leaves). The window already open
     /// on the project takes it; else a new one opens with no tab of its own, where ProjectOpening.openAsProject puts it,
