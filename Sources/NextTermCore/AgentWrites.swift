@@ -21,6 +21,18 @@ public struct WriteSignal: Equatable, Sendable {
     }
 }
 
+/// A signal with the time its transcript line was written: what came before this version first ran is the
+/// baseline, and a line read again is no new signal.
+public struct DatedWrite: Equatable, Sendable {
+    public let signal: WriteSignal
+    public let at: Date
+
+    public init(signal: WriteSignal, at: Date) {
+        self.signal = signal
+        self.at = at
+    }
+}
+
 /// Which places an agent writes to, read from one line of its transcript.
 ///
 /// Tools are matched by name, never by an argument called `path`: an MCP tool or a search carries one too, and a

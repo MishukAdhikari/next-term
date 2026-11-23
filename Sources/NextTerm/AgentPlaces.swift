@@ -1,17 +1,22 @@
 import AppKit
 import NextTermCore
 
-/// Where each local agent tab's agent works: its checkout and branch, held 3 s, for the one mark a tab gets
-/// when that is not what its window shows or its branch was switched under it. Once a second while an agent
-/// runs in a local tab: each agent's own folder (its process's, or the one its session record names after
-/// a move the process didn't make), git's worktree list for its repository (read again only when a HEAD or
-/// a git folder changed), then PlaceTracker. The reads run off the main thread; remote tabs get nothing.
+/// Where each local agent tab's agent works: its checkout and branch, for the one mark a tab gets when that is
+/// not what its window shows or its branch was switched under it. Once a second while an agent runs in a local
+/// tab: each agent's own folder (its process's, or the one its session record names after a move the process
+/// didn't make) and what its session record says it wrote since, git's worktree list for its repository (read
+/// again only when a HEAD or a git folder changed), then WorktreeLifecycle, the one record of where each agent
+/// works. The reads run off the main thread; remote tabs get nothing.
 /// Design: claudedocs/2026-10-09-brainstorm-branch-aware-agents (R1–R10, R30).
 final class AgentPlaces {
     static let shared = AgentPlaces()
 
     /// Where each agent tab's agent works, as it counts (by tab id).
     private(set) var places: [String: AgentPlace] = [:]
+    /// The linked worktrees each tab's agent worked in since this version first ran (by tab id), kept after it ends.
+    private(set) var history: [String: [String]] = [:]
+    /// Told, on the main thread, the tabs (by id) whose agents ended at the last look.
+    var agentsEnded: ((Set<String>) -> Void)?
     /// Each agent tab's folder as last read, not held (by tab id), with the agent's process.
     private var folders: [String: (pid: Int32, folder: String, at: Date)] = [:]
     /// What each window shows, by the folder it shows: its repository and checkout.
@@ -28,7 +33,7 @@ final class AgentPlaces {
 
     // Read and written on `queue` only.
     private let queue = DispatchQueue(label: "nextterm.places", qos: .utility)
-    private var tracker = PlaceTracker()
+    private var lifecycle = WorktreeLifecycle(since: AgentPlaces.firstRun)
     /// Each agent's process folder, and since when it has been there.
     private var processFolders: [String: (pid: Int32, folder: String?, since: Date)] = [:]
     /// The repository each agent run is matched against: the one it started in.
@@ -41,6 +46,18 @@ final class AgentPlaces {
     /// The agents' session records, followed as they grow.
     private var records = SessionRecords()
     private var missingTranscripts: [String: Date] = [:]
+    /// Command Code's session file for each agent run (by tab id), and when it was last looked for.
+    private var commandCodeFiles: [String: (startedAt: Date, path: String?, looked: Date)] = [:]
+
+    /// The moment this version first followed what agents write, kept once: what they did before it is the baseline,
+    /// never offered.
+    static let firstRun: Date = {
+        let key = "agentWorktreesSince"
+        if let stored = UserDefaults.standard.object(forKey: key) as? Date { return stored }
+        let now = Date()
+        UserDefaults.standard.set(now, forKey: key)
+        return now
+    }()
 
     private init() {
         let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in self?.tick() }
@@ -109,8 +126,8 @@ final class AgentPlaces {
     func keepGoing(_ tab: TerminalTab) {
         let key = tab.id.uuidString
         queue.async { [self] in
-            tracker.keepGoing(key)
-            let places = tracker.places
+            lifecycle.keepGoing(key)
+            let places = lifecycle.places
             DispatchQueue.main.async { self.places = places }
         }
     }
@@ -170,7 +187,12 @@ final class AgentPlaces {
             if !places.isEmpty || !folders.isEmpty {
                 places = [:]
                 folders = [:]
-                queue.async { [self] in tracker = PlaceTracker() }
+                // The record outlives the agents: it is told none runs, never started over.
+                queue.async { [self] in
+                    lifecycle.update(PlaceSighting(), at: now) { _, _, _ in .none }
+                    let history = lifecycle.history, ended = lifecycle.ended
+                    DispatchQueue.main.async { self.publish(history: history, ended: ended) }
+                }
             }
             return
         }
@@ -191,8 +213,14 @@ final class AgentPlaces {
                 places = read.places
                 folders = read.folders
                 shown = read.shown
+                publish(history: read.history, ended: read.ended)
             }
         }
+    }
+
+    private func publish(history: [String: [String]], ended: Set<String>) {
+        self.history = history
+        if !ended.isEmpty { agentsEnded?(ended) }
     }
 
     /// Shell tabs that started a git command that can move HEAD since the last look: a switch in that
@@ -217,6 +245,8 @@ final class AgentPlaces {
         var places: [String: AgentPlace] = [:]
         var folders: [String: (pid: Int32, folder: String, at: Date)] = [:]
         var shown: [String: (repository: String, checkout: Checkout)] = [:]
+        var history: [String: [String]] = [:]
+        var ended: Set<String> = []
     }
 
     private func read(_ probes: [Probe], windows: Set<String>, sighting start: PlaceSighting, git: String, home: String, at now: Date) -> Read {
@@ -234,14 +264,14 @@ final class AgentPlaces {
         }
         var sighted: [(probe: Probe, folder: String)] = []
         for probe in probes {
-            let folder = agentFolder(probe, home: home)
+            let (folder, writes) = agentFolder(probe, home: home)
             sighted.append((probe, folder))
             guard let repository = startRepository(probe, folder: folder, known: sighting.repositories, git: git, at: now) else { continue }
             if sighting.repositories[repository] == nil {
                 sighting.repositories[repository] = checkouts(of: repository, git: git, at: now)
             }
             sighting.agents.append(PlaceSighting.Agent(key: probe.key, title: probe.title, repository: repository, folder: folder,
-                                                       working: probe.working, startedAt: probe.startedAt))
+                                                       working: probe.working, startedAt: probe.startedAt, writes: writes))
         }
         // Every read of this look is done (git's can take a while under load, between one agent's folder and the
         // next): what it saw is stamped now, after it was read, so no move or switch holds from before it happened.
@@ -250,10 +280,13 @@ final class AgentPlaces {
         let keys = Set(probes.map(\.key))
         processFolders = processFolders.filter { keys.contains($0.key) }
         startRepositories = startRepositories.filter { keys.contains($0.key) }
-        tracker.update(sighting, at: seen) { checkout, from, commit in
+        commandCodeFiles = commandCodeFiles.filter { keys.contains($0.key) }
+        lifecycle.update(sighting, at: seen) { checkout, from, commit in
             AgentLocation.change(in: checkout, from: from, commit: commit, git: git)
         }
-        result.places = tracker.places
+        result.places = lifecycle.places
+        result.history = lifecycle.history
+        result.ended = lifecycle.ended
         for (folder, repository) in windowRepositories {
             if let checkout = AgentLocation.checkout(containing: canonicalPath(folder), in: sighting.repositories[repository] ?? []) {
                 result.shown[folder] = (repository, checkout)
@@ -262,27 +295,30 @@ final class AgentPlaces {
         return result
     }
 
-    /// Where an agent works now: its process's folder, or its session record's when that is newer.
-    private func agentFolder(_ probe: Probe, home: String) -> String {
+    /// Where an agent works now: its process's folder, or its session record's when that is newer; and what the
+    /// record says it wrote since the last look, its paths made canonical as the checkouts' are.
+    private func agentFolder(_ probe: Probe, home: String) -> (folder: String, writes: [DatedWrite]) {
         let process = ProcessInspector.currentDirectory(of: probe.pid)
         var since = probe.startedAt
         if let last = processFolders[probe.key], last.pid == probe.pid {
             since = last.folder == process ? last.since : Date()
         }
         processFolders[probe.key] = (probe.pid, process, since)
-        let record = recordedFolder(probe, home: home)
-        let folder = AgentLocation.folder(process: process, processSince: since, record: record, startedAt: probe.startedAt)
-        return canonicalPath(folder ?? probe.shellFolder)
+        let record = recorded(probe, home: home)
+        let folder = AgentLocation.folder(process: process, processSince: since, record: record?.folder, startedAt: probe.startedAt)
+        let writes = (record?.writes ?? []).map { DatedWrite(signal: WriteSignal(path: canonicalPath($0.signal.path), kind: $0.signal.kind), at: $0.at) }
+        return (canonicalPath(folder ?? probe.shellFolder), writes)
     }
 
-    /// The folder the agent's session record names last, for agents that record moves their process doesn't
-    /// make: Claude Code's shell `cd`, Codex's `/cd`, Copilot CLI's workspace. Only what was written to the
-    /// record since the last look is read; the folder named before holds until a newer line names another.
-    private func recordedFolder(_ probe: Probe, home: String) -> RecordedFolder? {
+    /// The agent's session record, for agents that record moves their process doesn't make (Claude Code's shell
+    /// `cd`, Codex's `/cd`, Copilot CLI's workspace) and what they write (Claude Code, Codex, Command Code). Only
+    /// what was written to the record since the last look is read; the folder named before holds until a newer
+    /// line names another.
+    private func recorded(_ probe: Probe, home: String) -> RecordRead? {
         switch probe.agent {
         case .claude?:
             guard let session = records.claudeSession(pid: probe.pid, home: home) else { return nil }
-            if let known = transcripts[session.id], isRegularFile(known) { return records.folder(known, kind: .claude) }
+            if let known = transcripts[session.id], isRegularFile(known) { return records.follow(known, kind: .claude) }
             // Where it should be, each time; a look through every project folder at most every 10 s (a new
             // session has no transcript until its first message).
             let scanning = missingTranscripts[session.id].map { Date().timeIntervalSince($0) >= 10 } ?? true
@@ -293,17 +329,27 @@ final class AgentPlaces {
             }
             if transcripts.count > 200 { transcripts.removeAll() }
             transcripts[session.id] = found
-            return records.folder(found, kind: .claude)
+            return records.follow(found, kind: .claude)
         case .codex?:
             // The rollout its process holds open (node's child, when Codex runs through npm).
             for pid in ProcessInspector.family(of: probe.pid).prefix(12) {
                 if let rollout = ProcessInspector.openFiles(of: pid).first(where: { AgentLocation.isCodexRollout($0, home: home) }) {
-                    return records.folder(rollout, kind: .codex)
+                    return records.follow(rollout, kind: .codex)
                 }
             }
             return nil
         case .copilot?:
-            return records.copilotFolder(pid: probe.pid, home: home)
+            return records.copilotFolder(pid: probe.pid, home: home).map { RecordRead(folder: $0) }
+        case .commandCode?:
+            // The newest session file started in its folder since it started, looked for again every 10 s until found.
+            var known = commandCodeFiles[probe.key]
+            if known?.startedAt != probe.startedAt || known?.path.map(isRegularFile) == false { known = nil }
+            if known == nil || (known?.path == nil && Date().timeIntervalSince(known?.looked ?? .distantPast) >= 10) {
+                known = (probe.startedAt, LiveChat.commandCodeFile(folder: probe.shellFolder, since: probe.startedAt, home: home), Date())
+            }
+            commandCodeFiles[probe.key] = known
+            // Its folder is where it started, which its process says too: only its writes are wanted.
+            return known?.path.map { RecordRead(folder: nil, writes: records.follow($0, kind: .commandCode).writes) }
         default:
             return nil
         }
