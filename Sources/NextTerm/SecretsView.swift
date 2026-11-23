@@ -1091,7 +1091,7 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
     @objc private func copyRevealed() {
         guard let value = revealedValue, let name = revealedName, SecretClipboard.shared.copy(value) else { return }
         // In the log as Copy is, though no second Touch ID was asked: the reveal before it was.
-        SecretsStore.shared.record(SecretAudit.Line(event: .copy, names: [name]))
+        SecretsStore.shared.record(SecretAudit.Line(event: .copy, names: [name], who: "you, in Settings › Secrets", outcome: "done"))
         say(SecretClipboard.copiedLine)
         guard let button = revealCopy else { return }
         button.image = NSImage(systemSymbolName: "checkmark", accessibilityDescription: "Copied")
