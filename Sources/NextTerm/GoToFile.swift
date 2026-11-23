@@ -391,10 +391,10 @@ final class GoToFileController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     }
 }
 
-/// The chosen row: a rounded highlight inside the panel's margins, in the editor's selection blue.
+/// The chosen row: a rounded highlight inside the panel's margins, in the theme's selection tint.
 final class GoToFileRowView: NSTableRowView {
     override func drawSelection(in dirtyRect: NSRect) {
-        Theme.pair(light: NSColor(hex: 0xD6E4FF), dark: NSColor(hex: 0x2E436E)).setFill()
+        Theme.selection.setFill()
         NSBezierPath(roundedRect: bounds.insetBy(dx: 6, dy: 1), xRadius: 5, yRadius: 5).fill()
     }
 

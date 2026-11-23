@@ -373,7 +373,7 @@ final class GitDiffListView: NSView, NSOutlineViewDataSource, NSOutlineViewDeleg
 
     func outlineView(_ outlineView: NSOutlineView, heightOfRowByItem item: Any) -> CGFloat { 24 }
 
-    func outlineView(_ outlineView: NSOutlineView, rowViewForItem item: Any) -> NSTableRowView? { GitLogRowView() }
+    func outlineView(_ outlineView: NSOutlineView, rowViewForItem item: Any) -> NSTableRowView? { ThemedRowView() }
 
     func outlineViewItemDidCollapse(_ notification: Notification) {
         if let item = notification.userInfo?["NSObject"] as? Item { closed.insert(item.key) }
@@ -421,7 +421,7 @@ final class GitDiffListView: NSView, NSOutlineViewDataSource, NSOutlineViewDeleg
 
     func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool { scopeRows[safe: row]?.scope != nil }
 
-    func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? { GitLogRowView() }
+    func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? { ThemedRowView() }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         guard let item = scopeRows[safe: row] else { return nil }

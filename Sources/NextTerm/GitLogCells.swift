@@ -233,10 +233,3 @@ final class GitTextCell: NSTableCellView {
     required init?(coder: NSCoder) { fatalError("not used") }
 }
 
-/// Full-width selection, so the graph's lines stay unbroken across the selected row.
-final class GitLogRowView: NSTableRowView {
-    override func drawSelection(in dirtyRect: NSRect) {
-        (isEmphasized ? Theme.selection : Theme.pair(light: Theme.dynamic(\.hoverFill), dark: NSColor(hex: 0x2E3138))).setFill()
-        bounds.fill()
-    }
-}

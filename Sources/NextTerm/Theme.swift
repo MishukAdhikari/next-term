@@ -285,3 +285,17 @@ enum DisplayOptions {
         didSet { NotificationCenter.default.post(name: AgentSpinner.changed, object: nil) }
     }
 }
+
+/// A row of a list or grid drawn in the window's own colours: selected, the theme's soft selection tint (the
+/// editor's and the terminal's), so the row's text keeps its colour and reads on it in every theme. AppKit's
+/// default, a saturated accent fill that expects white text, made themed text (dark on light) unreadable.
+/// When the list isn’t focused, the quieter hover fill. Full width, so Git Log’s graph lines stay unbroken across it.
+final class ThemedRowView: NSTableRowView {
+    override func drawSelection(in dirtyRect: NSRect) {
+        (isEmphasized ? Theme.selection : Theme.hoverFill).setFill()
+        bounds.fill()
+    }
+
+    /// The text on a selected row stays as it is: it is drawn for the tint, not for an accent fill.
+    override var interiorBackgroundStyle: NSView.BackgroundStyle { .normal }
+}

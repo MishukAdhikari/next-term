@@ -177,6 +177,9 @@ final class GitLogRefsView: NSView, NSOutlineViewDataSource, NSOutlineViewDelega
 
     // MARK: outline
 
+    /// Selected rows in the theme's selection tint, not AppKit's accent fill (see ThemedRowView).
+    func outlineView(_ outlineView: NSOutlineView, rowViewForItem item: Any) -> NSTableRowView? { ThemedRowView() }
+
     func outlineView(_ outlineView: NSOutlineView, numberOfChildrenOfItem item: Any?) -> Int {
         (item as? Node)?.children.count ?? roots.count
     }
