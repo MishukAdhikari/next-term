@@ -5,8 +5,8 @@ import NextTermCore
 /// takes the folder, when no other Next Term holds it, reads what the last update, quit or crash left, and brings it back
 /// as the restore step decides (LaunchDecision.restoring): every window, tab and split built in one turn
 /// (SessionRestoreBuild), then each pane's action applied once its shell is ready (RestoreActions). From then on it saves
-/// the session every 2 seconds when anything saved changed (`SessionWriter`), once the save gate opens: when the launch's
-/// windows are built. At every quit that holds the folder, `finishAtQuit` writes the quit's last save, in order: the
+/// the session when anything saved changed, looked at every 2 seconds (`SessionWriter`, `SessionSaveSchedule`), once the
+/// save gate opens: when the launch's windows are built. At every quit that holds the folder, `finishAtQuit` writes the quit's last save, in order: the
 /// state file, scrollback, the update's marker; then Updater spawns the install script, and the tabs are terminated.
 ///
 /// A copy of Next Term that cannot take the folder, or runs translocated, restores and saves nothing. Neither does the plain self-test; the
@@ -48,6 +48,8 @@ final class SessionRestore {
     private var timer: Timer?
     /// A periodic save is on the queue: the next tick waits for it.
     private var saving = false
+    /// When the periodic save captures the windows in full again.
+    private var schedule = SessionSaveSchedule()
     /// The restored panes' actions, while any waits (or safe mode holds them).
     private(set) var actions: RestoreActions?
     /// The quit consent (R30): the user let this quit go ahead with the resume box checked, on the dialog that carried it.
@@ -235,14 +237,30 @@ final class SessionRestore {
         writer?.openGate()
     }
 
-    /// A periodic save: the windows captured now, written on the writer's queue when anything saved changed.
+    /// A periodic save: the windows captured now, written on the writer's queue when anything saved changed. The capture
+    /// reads every running tab's agent from the kernel, so it runs only when the session's cheap signature moved, or
+    /// `SessionSaveSchedule.refresh` has passed since the last one; an idle session otherwise costs one walk of its
+    /// windows every 2 seconds. A save that was not written is captured again on the next tick.
     private func tick() {
-        guard let writer, !saving, !AppDelegate.shared.isTerminating, !writer.isWaiting(at: Date()) else { return }
-        let windows = SessionCapture.windows(AppDelegate.shared.controllers)
+        let now = Date()
+        guard let writer, !saving, !AppDelegate.shared.isTerminating, !writer.isWaiting(at: now) else { return }
+        let controllers = AppDelegate.shared.controllers
+        let signature = SessionCapture.signature(controllers)
+        guard schedule.needsCapture(signature, at: now) else { return }
+        let windows = SessionCapture.windows(controllers)
+        schedule.captured(signature, at: now)
         saving = true
         queue.async {
-            _ = writer.save(windows)
-            DispatchQueue.main.async { MainActor.assumeIsolated { SessionRestore.shared.saving = false } }
+            let saved = writer.save(windows)
+            let written: Bool
+            if case .wrote(let result) = saved { written = result.succeeded } else { written = true }
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    let sessions = SessionRestore.shared
+                    sessions.saving = false
+                    if !written { sessions.schedule.forget() }
+                }
+            }
         }
     }
 

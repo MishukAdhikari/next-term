@@ -4,8 +4,8 @@ import Darwin
 #endif
 
 // The sessions folder's one writer (KTD1, KTD18). While Next Term runs it keeps the session snapshot current: the app
-// captures its windows every 2 seconds and the writer saves them when anything saved changed, marked unclean, so a crash
-// leaves the layout. At the quit it writes the last save, in order: the state file (the whole session, or a tombstone),
+// looks at its windows every 2 seconds, captures them when they moved or every 30 seconds (SessionSaveSchedule), and
+// the writer saves them when anything saved changed, marked unclean, so a crash leaves the layout. At the quit it writes the last save, in order: the state file (the whole session, or a tombstone),
 // then scrollback, then the update's marker. Nothing is written until the save gate opens, so the windows a restore
 // builds from the snapshot are on screen before the snapshot is replaced; the gate opens by itself after 10 seconds.
 //
