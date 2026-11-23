@@ -644,6 +644,14 @@ final class PaneGroup {
         self.zoomed = fills && root.panes.count > 1 ? zoomed : nil
     }
 
+    /// A tab moved in from another window (TerminalWindowController.attach), in the pane it had there: its chat over the
+    /// terminal and its prompt box, with what is typed in it, come along.
+    init(moving tab: TerminalTab, paneView: PaneView?) {
+        root = .pane(tab)
+        focused = tab
+        if let paneView, paneView.tab === tab { paneViews[tab.id] = paneView }
+    }
+
     var panes: [TerminalTab] { root.panes }
     var isSplit: Bool { panes.count > 1 }
 
@@ -679,11 +687,13 @@ final class PaneGroup {
         }
     }
 
-    /// Takes a pane out; its room goes to its neighbour. False when it was the last one.
+    /// Takes a pane out; its room goes to its neighbour. False when it was the last one. `keepingView`: the pane moved to
+    /// another window, which shows its view now, so the view is let go of where it is.
     @discardableResult
-    func remove(_ tab: TerminalTab) -> Bool {
+    func remove(_ tab: TerminalTab, keepingView: Bool = false) -> Bool {
         if zoomed === tab { zoomed = nil }
-        paneViews.removeValue(forKey: tab.id)?.removeFromSuperview()
+        let paneView = paneViews.removeValue(forKey: tab.id)
+        if !keepingView { paneView?.removeFromSuperview() }
         guard let rest = Self.removing(tab, from: root) else { return false }
         if focused === tab {
             // The pane before it in reading order, else the first.

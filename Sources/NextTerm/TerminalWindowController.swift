@@ -588,10 +588,75 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     private func makeTab(directory: String?, remote: RemoteTab? = nil, id: UUID = UUID(), byAgent: Bool = false) -> TerminalTab {
         let tab = TerminalTab(directory: directory, fontSize: AppDelegate.shared.terminalFontSize, remote: remote, id: id)
         tab.view.awaitsChoice = byAgent
-        tab.delegate = self
-        // ⌘-click on "src/a.ts:42" in the output opens the editor there.
-        tab.view.openFile = { [weak self] url, line, column in self?.openFile(url, line: line, column: column) }
+        wire(tab)
         return tab
+    }
+
+    /// What ties a tab to the window it is in: its exit and changes reach this window, and ⌘-click on "src/a.ts:42" in
+    /// its output opens this window's editor there. Done again when the tab moves to another window (`attach`).
+    private func wire(_ tab: TerminalTab) {
+        tab.delegate = self
+        tab.view.openFile = { [weak self] url, line, column in self?.openFile(url, line: line, column: column) }
+    }
+
+    /// The pane `tab` shows in here, carried along when it moves to another window (`attach`).
+    func paneView(of tab: TerminalTab) -> PaneView? { group(of: tab)?.paneView(tab) }
+
+    /// Takes in a tab running in another window, as it is: its program, scrollback, title and state stay, and its pane
+    /// (`paneView`) brings its chat and prompt box. Nothing starts or restarts. It comes as a tab of its own, after the
+    /// tabs here; `detach` then lets go of it in the window it left. The tab does not come pinned.
+    func attach(_ tab: TerminalTab, paneView: PaneView?, select selectIt: Bool = true) {
+        wire(tab)
+        insertRestored(PaneGroup(moving: tab, paneView: paneView), starting: [])
+        AppDelegate.shared.projectsChanged()
+        if selectIt || groups.count == 1 {
+            select(groups.count - 1)
+        } else {
+            refresh()
+        }
+    }
+
+    /// Lets go of a tab `attach` took into another window: out of this window's tabs, without stopping its program or
+    /// listing it under Reopen Closed Tab. A window left with no tabs closes, asking only about unsaved files and values
+    /// in its editor; Cancel keeps the window, with a fresh shell in it.
+    func detach(_ tab: TerminalTab) {
+        guard let index = groups.firstIndex(where: { $0.contains(tab) }) else { return }
+        // A rename in progress refers to tabs by position: finish it while positions still hold.
+        if window?.firstResponder is NSTextView, tabBar.isEditing || tabList.isEditing { window?.makeFirstResponder(nil) }
+        let group = groups[index]
+        // The terminal had the keyboard here and took it along: nothing in this window has it now.
+        let keyboardLeft = !(window?.firstResponder is NSView)
+        defer { AppDelegate.shared.projectsChanged() }
+        if group.remove(tab, keepingView: true) {
+            // One pane fewer; the tab stays, its neighbour taking the room and the keyboard the moved pane had.
+            group.layout()
+            if index == activeIndex, keyboardLeft, !group.focused.view.awaitsChoice { window?.makeFirstResponder(group.focused.view) }
+            refreshVisibility()
+            refresh()
+            return
+        }
+        group.view.removeFromSuperview()
+        groups.remove(at: index)
+        if groups.isEmpty { return closeLeftEmpty(after: tab) }
+        if index == activeIndex {
+            select(max(0, index - 1), unfold: false, arming: false) // the left neighbour, an agent's still waiting for a click
+        } else {
+            if index < activeIndex { activeIndex -= 1 }
+            refresh()
+        }
+    }
+
+    /// The window's last tab moved out (`detach`): the window goes. Unsaved files or values in its editor are asked about
+    /// first, as closing the window asks, with a fresh shell put in so that Cancel leaves a usable window.
+    private func closeLeftEmpty(after moved: TerminalTab) {
+        opensWelcome = true
+        guard closeAsks || !editorArea.savingDatabases.isEmpty else {
+            closeConfirmed = true
+            window?.close()
+            return
+        }
+        addTab(directory: project ?? (moved.remote == nil ? moved.directory : nil))
+        window?.performClose(nil)
     }
 
     /// Brings a terminal to the front: its tab selected, its pane focused (and un-zoomed if hidden). `arming` false: an

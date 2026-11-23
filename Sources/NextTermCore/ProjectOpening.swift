@@ -83,6 +83,27 @@ public enum ProjectOpening {
         }
     }
 
+    /// Where Open as Project takes a running tab: the folder's window, which the tab moves into live.
+    public enum OpenAsProject: Equatable, Sendable {
+        /// The window already open on the folder.
+        case existing
+        case newWindow
+        /// A window of its own, merged into the tab's window as a tab.
+        case newTab
+    }
+
+    /// Open as Project never replaces the window the tab leaves, since that would stop the program it takes along, and
+    /// never asks: This Window and Ask open a window of its own. New Tab merges it into the tab's window, As macOS Prefers
+    /// follows the system there, and a window already open on the folder (`windowOpen`) takes the tab whatever the setting.
+    public static func openAsProject(windowOpen: Bool, setting: Setting, systemPrefersTabs: Bool = false) -> OpenAsProject {
+        if windowOpen { return .existing }
+        switch setting {
+        case .ask, .thisWindow, .newWindow: return .newWindow
+        case .newTab: return .newTab
+        case .asMacOS: return systemPrefersTabs ? .newTab : .newWindow
+        }
+    }
+
     /// What `application(_:open:)` names (a folder dropped on the Dock icon, `open -a "Next Term" dir`, Finder's Open
     /// With), by when it comes. Before the launch hook it is held: the restore builds its windows first, so the request
     /// never makes a window of its own for a project the restore brings back, nor a second one for a file in it. What was

@@ -1248,9 +1248,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// it), and its first tab waits for the user's choice.
     @discardableResult
     /// `tabInto`: merged into that window as a tab (plan 032), else a window of its own, never merged by macOS by itself.
+    /// `filling`: puts tabs in the window, placed at its size, before it shows (a tab moved in), in place of a first tab.
     func openWindow(directory: String?, project: String? = nil, forAgent: Bool = false,
-                    tabInto: TerminalWindowController? = nil) -> TerminalWindowController {
-        let controller = TerminalWindowController(directory: directory, project: project, byAgent: forAgent)
+                    tabInto: TerminalWindowController? = nil,
+                    filling: ((TerminalWindowController) -> Void)? = nil) -> TerminalWindowController {
+        let controller = TerminalWindowController(directory: directory, project: project, firstTab: filling == nil, byAgent: forAgent)
         controller.onClose = { [weak self] closed, welcome in self?.windowClosed(closed, welcome: welcome) }
         closeWelcome(forAgent: forAgent)
         // Cascade from the terminal window in front (not the About panel or a sheet), at its size unless it
@@ -1268,6 +1270,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         controllers.append(controller)
         indexed(controller) // in every window's column, before it shows
         if remoteRestorePending { restoreRemoteTabs() } // the launch's first terminal window
+        filling?(controller)
         projectsChanged()
         if forAgent { return controller }
         if let host = tabInto?.window, let window = controller.window, host.isVisible {
@@ -1339,6 +1342,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             return open
         }
         return openWindow(directory: path, project: path)
+    }
+
+    /// Moves a tab into the window of the project at `path`, live: its program keeps running, with its scrollback, title,
+    /// chat and prompt box (TerminalWindowController.attach, then detach in the window it leaves). The window already open
+    /// on the project takes it; else a new one opens with no tab of its own, where ProjectOpening.openAsProject puts it,
+    /// never in place of the window the tab leaves. Nil, with a beep, while that window asks something (a sheet is up) or
+    /// once the tab's shell has ended.
+    @discardableResult
+    func moveTab(_ tab: TerminalTab, toProject path: String) -> TerminalWindowController? {
+        let path = canonicalPath(path)
+        guard let source = controllers.first(where: { $0.group(of: tab) != nil }), source.window?.attachedSheet == nil, !tab.exited else {
+            NSSound.beep()
+            return nil
+        }
+        let open = controllers.first { $0.project == path }
+        if let open, open === source {
+            source.show(tab)
+            return source
+        }
+        let placement = ProjectOpening.openAsProject(windowOpen: open != nil, setting: projectTarget,
+                                                     systemPrefersTabs: WindowTabbing.systemPrefersTabs(over: source))
+        let paneView = source.paneView(of: tab)
+        let destination: TerminalWindowController
+        switch (placement, open) {
+        case (.existing, let open?):
+            destination = open
+            destination.attach(tab, paneView: paneView)
+        case (.newTab, _):
+            destination = openWindow(directory: path, project: path, tabInto: source) { $0.attach(tab, paneView: paneView) }
+        default:
+            destination = openWindow(directory: path, project: path) { $0.attach(tab, paneView: paneView) }
+        }
+        source.detach(tab)
+        destination.window?.makeKeyAndOrderFront(nil)
+        return destination
     }
 
     /// Where Open in New Worktree… puts new folders (Settings › Editor › Git): beside the repository, or in
