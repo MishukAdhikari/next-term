@@ -41,7 +41,7 @@ public enum RemoteAccessTunnelConfig {
                 return "TLS ends at Cloudflare, so Cloudflare can read the traffic. Whoever holds the Cloudflare "
                     + "account can also re-route it."
             case .ownServer:
-                return "TLS ends on your server, so your server can read the traffic, and so can the chat app's vendor, "
+                return "TLS ends on your server, so your server can read the traffic, and so can the chat app’s vendor, "
                     + "which sends every call. It reaches this Mac over ssh."
             case .advanced:
                 return "Whoever ends TLS for your tunnel can read the traffic."
@@ -65,7 +65,7 @@ public enum RemoteAccessTunnelConfig {
     }
 
     /// Advanced's warning (R35).
-    public static let advancedWarning = "Next Term doesn't stop your tunnel. It keeps forwarding to the door's port "
+    public static let advancedWarning = "Next Term doesn’t stop your tunnel. It keeps forwarding to the door’s port "
         + "while Remote access is off, when another program could listen there."
 
     // MARK: the public hostname a user types (own server, Advanced)
@@ -316,7 +316,7 @@ public enum RemoteAccessTunnelConfig {
             case .tooLong:
                 return "That is too long for a tunnel token. Paste only the token from the Cloudflare dashboard."
             case .notBase64, .notToken:
-                return "That is not a Cloudflare tunnel token. Copy it from the tunnel's install command in the "
+                return "That is not a Cloudflare tunnel token. Copy it from the tunnel’s install command in the "
                     + "Cloudflare dashboard."
             }
         }
@@ -503,20 +503,20 @@ public enum RemoteAccessTunnelConfig {
             let again = "then turn Remote access on again."
             switch self {
             case .unreadable:
-                return "Next Term can't read the tunnel's routing, so it stopped the tunnel."
+                return "Next Term can’t read the tunnel’s routing, so it stopped the tunnel."
             case .noRule:
                 return "The tunnel has no route for \(host). Add one to \(door), \(again)"
             case .localhost:
                 return "The tunnel points at localhost, which can resolve to ::1, where Next Term does not listen. "
                     + "Point it at \(door), \(again)"
             case .wrongService:
-                return "The tunnel's route for \(host) no longer goes to Next Term. Point it at \(door), \(again)"
+                return "The tunnel’s route for \(host) no longer goes to Next Term. Point it at \(door), \(again)"
             case .otherRule:
                 return "The tunnel carries more than Next Term. Keep only \(host) to \(door), \(again)"
             case .otherService:
-                return "The tunnel's route for \(host) is not a plain web route. Point it at \(door), \(again)"
+                return "The tunnel’s route for \(host) is not a plain web route. Point it at \(door), \(again)"
             case .noCatchAll:
-                return "The tunnel's last rule must answer everything else with 404 (http_status:404). Add it, "
+                return "The tunnel’s last rule must answer everything else with 404 (http_status:404). Add it, "
                     + again
             case .hostHeader:
                 return "The tunnel rewrites the Host header (httpHostHeader). Remove that setting, \(again)"
@@ -543,15 +543,15 @@ public enum RemoteAccessTunnelConfig {
             switch self {
             case .unknownSettings(let names):
                 let known = names.isEmpty ? "" : ": " + names.joined(separator: ", ")
-                return "The tunnel's route has settings Next Term doesn't know\(known)."
+                return "The tunnel’s route has settings Next Term doesn’t know\(known)."
             case .path:
-                return "The tunnel's route has a path, so part of Next Term can't be reached. Remove the path."
+                return "The tunnel’s route has a path, so part of Next Term can’t be reached. Remove the path."
             case .backgroundShare:
                 return "This Funnel share runs in the background, so it stays public while Remote access is off."
             case .otherShare:
                 return "Funnel also shares something else from this Mac. It stays public while Remote access is off."
             case .serverPortBusy(let server, let port):
-                let causes = "\(server) didn't let ssh listen on port \(port) for Next Term. An earlier connection may "
+                let causes = "\(server) didn’t let ssh listen on port \(port) for Next Term. An earlier connection may "
                     + "still hold it until \(server) drops it (ClientAliveInterval 15 in its sshd_config makes that "
                     + "take a minute), another program may use it, or its sshd may not allow it (AllowTcpForwarding, "
                     + "PermitListen)."
@@ -734,14 +734,14 @@ public enum RemoteAccessTunnelConfig {
 
         public var message: String {
             switch self {
-            case .unreadable: return "Next Term can't read Tailscale's status."
+            case .unreadable: return "Next Term can’t read Tailscale’s status."
             case .notLoggedIn: return "Tailscale is not logged in."
-            case .needsApproval: return "This Mac waits for approval in your tailnet's admin console."
+            case .needsApproval: return "This Mac waits for approval in your tailnet’s admin console."
             case .stopped: return "Tailscale is turned off. Turn it on from the Tailscale menu."
             case .notRunning: return "Tailscale is not running yet."
             case .noName: return "Tailscale has no name for this Mac. Turn on MagicDNS for your tailnet."
             case .noHTTPS:
-                return "Funnel needs HTTPS certificates. Turn on HTTPS for your tailnet in Tailscale's admin console."
+                return "Funnel needs HTTPS certificates. Turn on HTTPS for your tailnet in Tailscale’s admin console."
             case .funnelOff: return "Funnel is not enabled for your tailnet."
             case .port443Off: return "Funnel is not allowed on port 443 for this Mac."
             }
@@ -766,7 +766,7 @@ public enum RemoteAccessTunnelConfig {
         case .success:
             return .go
         case .failure(let problem) where problem == .funnelOff || problem == .noHTTPS:
-            let next = "Tailscale's own message in the tunnel's output has the link that turns it on. Remote access "
+            let next = "Tailscale’s own message in the tunnel’s output has the link that turns it on. Remote access "
                 + "connects once it is on."
             return .waitForEnabling(warning: "\(problem.message) \(next)")
         case .failure(let problem):
@@ -992,7 +992,7 @@ public enum RemoteAccessTunnelConfig {
     public static func sshSettingsProblem(_ printed: String?, server: OwnServer, doorPort: Int) -> String? {
         let name = server.name
         guard let printed, !printed.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            return "ssh can't read its settings for \(name). Run ssh -G \(server.host.destination) in a terminal to "
+            return "ssh can’t read its settings for \(name). Run ssh -G \(server.host.destination) in a terminal to "
                 + "see why."
         }
         let names = ["localforward": "LocalForward", "dynamicforward": "DynamicForward",
@@ -1017,15 +1017,15 @@ public enum RemoteAccessTunnelConfig {
         if !others.isEmpty {
             let listed = others.prefix(3).joined(separator: ", ") + (others.count > 3 ? ", …" : "")
             return "Your ssh config adds forwards for \(name) (\(listed)), and Remote access forwards only its own "
-                + "port. Remove them from that host's entry in ~/.ssh/config or /etc/ssh/ssh_config, then turn "
+                + "port. Remove them from that host’s entry in ~/.ssh/config or /etc/ssh/ssh_config, then turn "
                 + "Remote access on again."
         }
         if !doorFound {
-            return "ssh's settings for \(name) leave out the door's forward, so Remote access can't start. Check "
+            return "ssh’s settings for \(name) leave out the door’s forward, so Remote access can’t start. Check "
                 + "\(name)'s entry in ~/.ssh/config and /etc/ssh/ssh_config."
         }
         if forks {
-            return "ssh would go to the background for \(name), out of reach of Turn Off, so Remote access can't "
+            return "ssh would go to the background for \(name), out of reach of Turn Off, so Remote access can’t "
                 + "start. Check \(name)'s entry in ~/.ssh/config and /etc/ssh/ssh_config."
         }
         return nil
@@ -1131,7 +1131,7 @@ public enum RemoteAccessTunnelConfig {
 
     /// An unknown or changed host key: nothing starts (R47).
     public static func sshHostKeyProblem(_ server: String) -> String {
-        "Next Term doesn't know \(server)'s host key yet, or the key changed. Connect to \(server) once in a "
+        "Next Term doesn’t know \(server)'s host key yet, or the key changed. Connect to \(server) once in a "
             + "remote tab and check its key there, then turn Remote access on again."
     }
 

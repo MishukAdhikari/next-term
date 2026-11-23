@@ -189,10 +189,13 @@ enum MasterKeyGate {
     private static func askNewKey(title: String, note: String, over window: NSWindow?, done: @escaping (String?) -> Void) {
         let first = secureField(placeholder: "Master key (\(MasterKey.minimumLength) characters or more)")
         let second = secureField(placeholder: "The same again")
-        let fields = NSStackView(views: [first, second])
-        fields.orientation = .vertical
-        fields.spacing = 8
-        fields.frame = NSRect(x: 0, y: 0, width: 300, height: 56)
+        // Fixed frames in a plain view: an alert gives a stack view no width, and its fields collapse to nothing.
+        let fields = NSView(frame: NSRect(x: 0, y: 0, width: 300, height: 56))
+        first.frame = NSRect(x: 0, y: 32, width: 300, height: 24)
+        second.frame = NSRect(x: 0, y: 0, width: 300, height: 24)
+        fields.addSubview(first)
+        fields.addSubview(second)
+        first.nextKeyView = second
         let alert = NSAlert()
         alert.messageText = title
         alert.informativeText = note
@@ -249,10 +252,13 @@ enum MasterKeyGate {
             field.placeholderString = "Group \(index + 1)"
             return field
         }
-        let row = NSStackView(views: fields)
-        row.distribution = .fillEqually
-        row.spacing = 8
-        row.frame = NSRect(x: 0, y: 0, width: 300, height: 24)
+        let row = NSView(frame: NSRect(x: 0, y: 0, width: 300, height: 24))
+        let width = (300 - CGFloat(max(0, fields.count - 1)) * 8) / CGFloat(max(1, fields.count))
+        for (index, field) in fields.enumerated() {
+            field.frame = NSRect(x: CGFloat(index) * (width + 8), y: 0, width: width, height: 24)
+            row.addSubview(field)
+        }
+        for (field, next) in zip(fields, fields.dropFirst()) { field.nextKeyView = next }
         let alert = NSAlert()
         alert.messageText = "Type groups 2, 5 and 7 of your recovery key."
         alert.informativeText = "This checks that you saved it."

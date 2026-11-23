@@ -10,7 +10,7 @@ import Foundation
 /// The words Settings › Remote Access shows that no other part of Remote access owns.
 public enum RemoteAccessSettingsText {
     public static let intro = "claude.ai and chatgpt.com, and the Claude phone app through claude.ai, can reach Next "
-        + "Term's tools through a tunnel you own. Each connection is allowed here, on this Mac, and does only what "
+        + "Term’s tools through a tunnel you own. Each connection is allowed here, on this Mac, and does only what "
         + "its options let it."
     /// The switch is disabled while agent control is off (R1).
     public static let agentControlOff = "Turn on “Let agents control Next Term” in Settings › Editor first. Remote "
@@ -21,13 +21,13 @@ public enum RemoteAccessSettingsText {
         + "asking. Text in a tab or a file can trick it into sending what it reads somewhere else."
     public static let keepAwakeLabel = "Keep awake on battery"
     /// R41's note.
-    public static let lidNote = "While Remote access is on and this Mac is on power, it doesn't sleep by itself; "
+    public static let lidNote = "While Remote access is on and this Mac is on power, it doesn’t sleep by itself; "
         + "the display still can. Closing the lid sleeps the Mac unless it is on power with an external display."
     public static let leakedTokenTitle = "If the tunnel token leaked"
     /// What to do, in order, when the Cloudflare tunnel token leaked.
     public static let leakedTokenSteps = [
-        "Rotate the tunnel's token in the Cloudflare dashboard (Networking › Tunnels, then your tunnel).",
-        "Delete the tunnel's connections there, so a copy that runs elsewhere drops.",
+        "Rotate the tunnel’s token in the Cloudflare dashboard (Networking › Tunnels, then your tunnel).",
+        "Delete the tunnel’s connections there, so a copy that runs elsewhere drops.",
         "Turn Remote access off, then paste the new token here.",
         "Click Revoke All, then connect your clients again.",
     ]
@@ -65,16 +65,16 @@ public enum RemoteAccessSettingsText {
     /// The door's local address, or, with no port free to pick, what stands in for it.
     public static func doorAddress(port: Int?) -> String {
         port.map { RemoteAccessTunnelConfig.doorAddress(port: $0) }
-            ?? "http://127.0.0.1 at the door's port (none from 40000 to 48999 is free now)"
+            ?? "http://127.0.0.1 at the door’s port (none from 40000 to 48999 is free now)"
     }
 
     /// What to check in the Cloudflare dashboard (R33). Next Term reads the route itself, but not the rest.
     public static func cloudflareChecklist(port: Int?) -> [String] {
         let address = doorAddress(port: port)
         return [
-            "The public hostname is at the first level of your domain, such as mcp.example.com, so Cloudflare's "
+            "The public hostname is at the first level of your domain, such as mcp.example.com, so Cloudflare’s "
                 + "certificate covers it.",
-            "Its service is \(address), not localhost: localhost can mean ::1, where Next Term doesn't listen.",
+            "Its service is \(address), not localhost: localhost can mean ::1, where Next Term doesn’t listen.",
             "Bot Fight Mode is off for the domain (Security › Bots), so claude.ai and chatgpt.com get through.",
             "No Cloudflare Access application covers that hostname.",
             "The tunnel is made only for Next Term, with no private network routes.",
@@ -236,7 +236,7 @@ public enum RemoteAccessGuide {
             Step(title: "Log in to Tailscale", detail: login + "Log in from the Tailscale menu, then come back here.",
                  done: loggedIn),
             Step(title: "Allow Funnel for this Mac",
-                 detail: funnel + "In Tailscale's admin console, turn on HTTPS and Funnel for your tailnet, and let "
+                 detail: funnel + "In Tailscale’s admin console, turn on HTTPS and Funnel for your tailnet, and let "
                     + "this Mac use Funnel on port 443.",
                  done: allowed),
             Step(title: "Turn on Remote access",
@@ -254,8 +254,8 @@ public enum RemoteAccessGuide {
                  detail: "In Networking › Tunnels, create a tunnel just for Next Term and give it a public hostname "
                     + "whose service is \(address(port)). Check the list below.",
                  done: facts.tokenSaved),
-            Step(title: "Paste the tunnel's token",
-                 detail: "Copy it from the tunnel's install command. Next Term keeps it in your Keychain and shows "
+            Step(title: "Paste the tunnel’s token",
+                 detail: "Copy it from the tunnel’s install command. Next Term keeps it in your Keychain and shows "
                     + "only the tunnel id.",
                  done: facts.tokenSaved),
             Step(title: "Turn on Remote access, then confirm the hostname",
@@ -274,7 +274,7 @@ public enum RemoteAccessGuide {
             Step(title: "Choose the server and type its public hostname",
                  detail: "A hostname whose DNS points to the server, such as mcp.example.com.", done: chosen),
             Step(title: "Set up Caddy on the server",
-                 detail: "Caddy serves https for the hostname and passes requests to Next Term's forward. Next Term "
+                 detail: "Caddy serves https for the hostname and passes requests to Next Term’s forward. Next Term "
                     + "shows the commands first, and types them in a tab only when you say so.",
                  done: facts.caddyTyped || facts.on),
             Step(title: "Turn on Remote access",
@@ -285,14 +285,14 @@ public enum RemoteAccessGuide {
     private static func advancedSteps(_ facts: Facts, port: Int?) -> [Step] {
         let served = facts.host.map { "https://\($0)" } ?? "your hostname"
         return [
-            Step(title: "Type your tunnel's public hostname",
+            Step(title: "Type your tunnel’s public hostname",
                  detail: "The hostname your tunnel serves with https, such as mcp.example.com.",
                  done: facts.host != nil),
             Step(title: "Point your tunnel at this Mac",
                  detail: "Send \(served) to \(address(port)) on this Mac. " + Config.advancedWarning,
                  done: facts.on),
             Step(title: "Turn on Remote access",
-                 detail: "Next Term opens its door on that port. It doesn't start or stop your tunnel.",
+                 detail: "Next Term opens its door on that port. It doesn’t start or stop your tunnel.",
                  done: facts.on),
         ]
     }
@@ -537,7 +537,7 @@ public struct RemoteAccessActivityRow: Equatable, Sendable {
     private static func oauth(_ entry: RemoteAccessAuditEntry) -> (what: String, problem: Bool) {
         switch entry.event {
         case "client.registered": return ("A client registered", false)
-        case "client.dropped_values": return ("A client's registration was trimmed", false)
+        case "client.dropped_values": return ("A client’s registration was trimmed", false)
         case "pairing.opened": return ("Pairing opened", false)
         case "pairing.closed": return (pairingClosed(entry.reason), false)
         case "pairing.asked": return ("A browser asked to pair", false)

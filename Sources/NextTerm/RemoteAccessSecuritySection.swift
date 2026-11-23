@@ -6,7 +6,11 @@ import NextTermCore
 /// Settings. FileVault and the firewall are read off the main thread, once a minute at most.
 @MainActor
 final class RemoteAccessSecuritySection: NSStackView {
-    private let keyStatus = NSTextField(labelWithString: "")
+    /// The columns every row shares, so the marks, the words and the buttons line up: a mark, the words (a title
+    /// and a line under it), and the actions in one column at the right.
+    static let markWidth: CGFloat = 18
+    static let textWidth: CGFloat = 360
+    static let actionsWidth: CGFloat = 160
     private let setButton = NSButton(title: "Set Master Key…", target: nil, action: nil)
     private let changeButton = NSButton(title: "Change…", target: nil, action: nil)
     private let recoverButton = NSButton(title: "Use Recovery Key…", target: nil, action: nil)
@@ -35,27 +39,22 @@ final class RemoteAccessSecuritySection: NSStackView {
             button.action = action
             button.bezelStyle = .rounded
         }
-        keyStatus.textColor = .secondaryLabelColor
-        let keyRow = NSStackView(views: [keyStatus, setButton, changeButton, recoverButton])
-        keyRow.spacing = 8
+        for button in [setButton, changeButton, recoverButton] { button.controlSize = .small }
         rowsStack.orientation = .vertical
         rowsStack.alignment = .leading
-        rowsStack.spacing = 6
+        rowsStack.spacing = 10
         ruleNote.textColor = .secondaryLabelColor
         ruleNote.font = .systemFont(ofSize: 11)
-        ruleNote.preferredMaxLayoutWidth = 520
+        ruleNote.preferredMaxLayoutWidth = Self.textWidth
         ruleNote.isHidden = true
-        for view in [title, keyRow, rowsStack, ruleNote] { addArrangedSubview(view) }
+        for view in [title, rowsStack, ruleNote] { addArrangedSubview(view) }
+        setCustomSpacing(10, after: title)
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
 
     func refresh() {
         let set = MasterKeyGate.isSet
-        keyStatus.stringValue = set ? "Master key set." : "No master key yet. Remote access needs one to turn on."
-        setButton.isHidden = set
-        changeButton.isHidden = !set
-        recoverButton.isHidden = !set
         readSystemFactsIfStale()
         var facts = RemoteAccessChecklist.Facts()
         facts.masterKeySet = set
@@ -68,7 +67,8 @@ final class RemoteAccessSecuritySection: NSStackView {
     }
 
     private func show(_ rows: [RemoteAccessChecklist.Row]) {
-        rowsStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        for view in rowsStack.arrangedSubviews { view.removeFromSuperview() }
+        for button in [setButton, changeButton, recoverButton] { button.removeFromSuperview() }
         actions.removeAll()
         for row in rows {
             let mark = NSImageView()
@@ -78,25 +78,46 @@ final class RemoteAccessSecuritySection: NSStackView {
             case .notChecked: ("questionmark.circle", .tertiaryLabelColor)
             }
             mark.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+            mark.symbolConfiguration = .init(pointSize: 13, weight: .regular)
             mark.contentTintColor = tint
-            let title = NSTextField(labelWithString: row.title + (row.required ? " (required)" : ""))
+            mark.widthAnchor.constraint(equalToConstant: Self.markWidth).isActive = true
+            let title = NSTextField(labelWithString: row.title)
+            title.font = .systemFont(ofSize: 13)
+            var heading: [NSView] = [title]
+            if row.required {
+                let required = NSTextField(labelWithString: "Required")
+                required.font = .systemFont(ofSize: 11, weight: .medium)
+                required.textColor = row.state == .done ? .secondaryLabelColor : .systemRed
+                heading.append(required)
+            }
+            let headingRow = NSStackView(views: heading)
+            headingRow.alignment = .firstBaseline
+            headingRow.spacing = 6
             let detail = NSTextField(wrappingLabelWithString: row.detail)
             detail.textColor = .secondaryLabelColor
             detail.font = .systemFont(ofSize: 11)
-            detail.preferredMaxLayoutWidth = 420
-            let text = NSStackView(views: [title, detail])
+            detail.preferredMaxLayoutWidth = Self.textWidth
+            let text = NSStackView(views: [headingRow, detail])
             text.orientation = .vertical
             text.alignment = .leading
-            text.spacing = 1
-            var views: [NSView] = [mark, text]
-            if !row.actionTitle.isEmpty {
+            text.spacing = 2
+            text.widthAnchor.constraint(equalToConstant: Self.textWidth).isActive = true
+            var buttons: [NSButton] = []
+            if row.id == "master-key" {
+                buttons = MasterKeyGate.isSet ? [changeButton, recoverButton] : [setButton]
+            } else if !row.actionTitle.isEmpty {
                 let button = NSButton(title: row.actionTitle, target: self, action: #selector(rowAction(_:)))
                 button.bezelStyle = .rounded
                 button.controlSize = .small
                 actions[ObjectIdentifier(button)] = row.action
-                views.append(button)
+                buttons = [button]
             }
-            let line = NSStackView(views: views)
+            let actionsColumn = NSStackView(views: buttons)
+            actionsColumn.orientation = .vertical
+            actionsColumn.alignment = .leading
+            actionsColumn.spacing = 4
+            actionsColumn.widthAnchor.constraint(equalToConstant: Self.actionsWidth).isActive = true
+            let line = NSStackView(views: [mark, text, actionsColumn])
             line.alignment = .top
             line.spacing = 8
             line.setAccessibilityLabel("\(row.title): " + (row.state == .done ? "done" : row.state == .suggested ? "suggested" : "not checked"))

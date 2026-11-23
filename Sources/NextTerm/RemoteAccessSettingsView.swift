@@ -204,6 +204,18 @@ final class RemoteAccessSettingsView: NSView {
         return note
     }
 
+    /// A bulleted list whose wrapped lines start under the words, not under the bullet.
+    static func bullets(_ items: [String]) -> NSAttributedString {
+        let style = NSMutableParagraphStyle()
+        style.tabStops = [NSTextTab(textAlignment: .left, location: 12)]
+        style.defaultTabInterval = 12
+        style.headIndent = 12
+        style.paragraphSpacing = 3
+        return NSAttributedString(string: items.map { "•\t\($0)" }.joined(separator: "\n"), attributes: [
+            .font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.secondaryLabelColor, .paragraphStyle: style,
+        ])
+    }
+
     static func title(_ text: String) -> NSTextField {
         let title = NSTextField(labelWithString: text)
         title.font = .systemFont(ofSize: 13, weight: .semibold)
@@ -685,7 +697,9 @@ extension RemoteAccessSettingsView {
         let pointedByHand = kind == .cloudflare || kind == .advanced
         let port = (pointedByHand ? access.ensurePort() : access.settings.port).map(Int.init)
         providerTitle.stringValue = "\(kind.label) setup"
-        trafficLabel.stringValue = kind.traffic
+        // The Tunnel section above already says how this tunnel's traffic goes: said once.
+        trafficLabel.stringValue = ""
+        trafficLabel.isHidden = true
         refreshTool(kind)
         showSteps(Guide.steps(kind, facts, port: port))
         refreshToken(kind, locked: locked, port: port)
@@ -765,8 +779,7 @@ extension RemoteAccessSettingsView {
         saveTokenButton.isEnabled = !locked && !tokenBusy
         removeTokenButton.isEnabled = !locked && !tokenBusy
         tokenMessage.isHidden = tokenMessage.stringValue.isEmpty
-        checklistLabel.stringValue = Text.cloudflareChecklist(port: port).map { "• \($0)" }
-            .joined(separator: "\n")
+        checklistLabel.attributedStringValue = Self.bullets(Text.cloudflareChecklist(port: port))
     }
 
     private func refreshHost(_ kind: Kind, locked: Bool) {
@@ -1009,7 +1022,7 @@ extension RemoteAccessSettingsView {
         let access = RemoteAccess.shared
         guard let id = access.settings.server, let host = RemoteHosts.all.first(where: { $0.id == id }) else { return }
         access.newServerPort(for: host)
-        caddyMessage.stringValue = "Set up Caddy again, so the server's site uses the new port."
+        caddyMessage.stringValue = "Set up Caddy again, so the server’s site uses the new port."
         refresh()
     }
 
