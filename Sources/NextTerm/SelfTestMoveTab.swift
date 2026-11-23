@@ -119,10 +119,12 @@ extension SelfTest {
 
         mover.view.send(txt: "\u{03}")
         await pause(0.3)
-        mover.view.send(txt: "exit\r")
+        mover.view.send(txt: "exit 0\r") // the ^C left 130 as the last status: a shell ending in failure keeps its tab
         let gone = await wait(10) { !into1.tabs.contains { $0 === mover } }
         check(gone && into1.tabs.contains { $0 === solo } && source.tabs.count == 1,
-              "move tab: exit after the move closes the tab in its new window")
+              "move tab: exit after the move closes the tab in its new window",
+              "exited \(mover.exited), running \(mover.status.running), still in its window \(!gone), solo there \(into1.tabs.contains { $0 === solo }), "
+              + "left behind \(source.tabs.count)")
     }
 }
 #endif
