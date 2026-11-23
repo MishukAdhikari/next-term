@@ -8,8 +8,14 @@ import Testing
     typealias ID = RemoteAccessOption.ID
 
     /// Read only's ten tools, in MCPServer's order.
-    let readOnlyNames = ["list_tabs", "read_tab", "wait_for_tab", "list_projects", "get_editor_selection", "get_open_files",
-                         "read_file", "find_in_files", "git_status", "get_diff"]
+    /// Read only's tools, in MCPServer's order (the order a connection lists them in).
+    let readOnlyNames: [String] = {
+        let read: Set = ["list_tabs", "read_tab", "wait_for_tab", "list_projects", "get_editor_selection", "get_open_files",
+                         "read_file", "find_in_files", "git_status", "get_diff", "list_agent_clis", "list_shortcuts"]
+        return MCPServer.tools.map(\.name).filter { read.contains($0) }
+    }()
+    /// "Tabs and their output"'s tools.
+    let tabNames = ["list_tabs", "read_tab", "wait_for_tab", "list_agent_clis", "list_shortcuts"]
     let serverReadNames = ["list_hosts", "check_host", "host_sessions", "host_changes"]
 
     func names(_ options: RemoteAccessOptions) -> [String] {
@@ -79,6 +85,8 @@ import Testing
             .closeIdleTabs: "Close tabs where nothing runs",
             .closeBusyTabs: "Close busy tabs",
             .showOnMac: "Open projects and show things on the Mac",
+            .startAgents: "Start agents and hand prompts to another session",
+            .endSessions: "End agent sessions and change their token budgets",
             .servers: "Servers: add, remove and open tabs",
             .skills: "Skills",
             .writeTools: "Next Term's write tools",
@@ -105,7 +113,8 @@ import Testing
         }
         let named = Set(RemoteAccessOption.all.flatMap(\.tools))
         for tool in MCPServer.importTools { #expect(!named.contains(tool.name), "\(tool.name)") }
-        for name in ["add_task", "request_secret", "store_secret", "import_secrets"] {
+        for name in ["add_task", "request_secret", "store_secret", "import_secrets", "run_command", "mcp_call", "mcp_tools",
+                     "mcp_servers", "add_mcp_server", "list_mcp_servers", "apply_setup", "reopen_before_update", "edit_host"] {
             #expect(!named.contains(name), "\(name)")
         }
         let seeNames = RemoteAccessOption.all.filter { $0.group == .see }.flatMap(\.tools)
@@ -276,7 +285,7 @@ import Testing
 
     // MARK: the catalogue
 
-    @Test func readOnlyListsTheTenReadToolsAsLocally() throws {
+    @Test func readOnlyListsTheReadToolsAsLocally() throws {
         #expect(names(.readOnly) == readOnlyNames)
         let message: [String: Any] = ["jsonrpc": "2.0", "id": "a", "method": "tools/list"]
         let reply = remoteAnswer(message, options: .readOnly) { _, _ in .init(text: "") }
@@ -345,8 +354,8 @@ import Testing
         options[.askOnMac] = false
         #expect(options.preset == .custom)
         let listed = names(options)
-        for name in ["list_tabs", "read_tab", "wait_for_tab"] { #expect(!listed.contains(name), "\(name)") }
-        for name in readOnlyNames where !["list_tabs", "read_tab", "wait_for_tab"].contains(name) {
+        for name in tabNames { #expect(!listed.contains(name), "\(name)") }
+        for name in readOnlyNames where !tabNames.contains(name) {
             #expect(listed.contains(name), "\(name)")
         }
         let text = RemoteAccessTools.instructions(for: options)

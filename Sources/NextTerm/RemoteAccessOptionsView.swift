@@ -341,8 +341,12 @@ final class RemoteAccessOptionsView: NSView {
         case .closeBusyTabs:
             return "Close any tab, and stop what runs in it."
         case .showOnMac:
-            return "Open folders as projects, bring tabs to the front, open files in the editor, and open a new "
-                + "tab outside the open projects."
+            return "Open folders as projects, bring tabs to the front, open files in the editor, open a new tab "
+                + "outside the open projects, rename tabs, switch an agent tab between chat and terminal, and open Settings."
+        case .startAgents:
+            return "Start an agent in a herdr pane, and hand prompts to another agent session, which runs them."
+        case .endSessions:
+            return "End an agent's session, and set or clear its token budget."
         case .servers:
             return "Add and remove saved servers, and open tabs on them."
         case .skills:

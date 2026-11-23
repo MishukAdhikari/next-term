@@ -32,6 +32,8 @@ public struct RemoteAccessOption: Sendable {
         case closeIdleTabs = "tabs.close_idle"
         case closeBusyTabs = "tabs.close_busy"
         case showOnMac = "more.show_on_mac"
+        case startAgents = "more.start_agents"
+        case endSessions = "more.end_sessions"
         case servers = "more.servers"
         case skills = "more.skills"
         case writeTools = "more.write_tools"
@@ -79,7 +81,7 @@ public struct RemoteAccessOption: Sendable {
             rows.append(RemoteAccessOption(id: id, group: group, label: label, control: control, customStart: custom, tools: tools))
         }
         add(.tabs, .see, "Tabs and their output", control: true, custom: true,
-            tools: ["list_tabs", "read_tab", "wait_for_tab"])
+            tools: ["list_tabs", "read_tab", "wait_for_tab", "list_agent_clis", "list_shortcuts"])
         add(.projectFiles, .see, "Project files, diffs and git", control: true, custom: true,
             tools: ["list_projects", "read_file", "find_in_files", "git_status", "get_diff"])
         add(.editor, .see, "Editor selection and open files", control: true, custom: true,
@@ -104,7 +106,11 @@ public struct RemoteAccessOption: Sendable {
         add(.closeIdleTabs, .tabs, "Close tabs where nothing runs", control: true, custom: true, tools: ["close_tab"])
         add(.closeBusyTabs, .tabs, "Close busy tabs", control: true, custom: false, tools: ["close_tab"])
         add(.showOnMac, .moreTools, "Open projects and show things on the Mac", control: true, custom: false,
-            tools: ["open_project", "show_tab", "open_in_editor"])
+            tools: ["open_project", "show_tab", "open_in_editor", "switch_view", "rename_tab", "show_settings"])
+        add(.startAgents, .moreTools, "Start agents and hand prompts to another session", control: true, custom: false,
+            tools: ["start_agent", "forward_prompt"])
+        add(.endSessions, .moreTools, "End agent sessions and change their token budgets", control: true, custom: false,
+            tools: ["end_session", "set_token_budget"])
         add(.servers, .moreTools, "Servers: add, remove and open tabs", control: true, custom: false,
             tools: ["add_host", "remove_host", "new_remote_tab"])
         add(.skills, .moreTools, "Skills", control: true, custom: false,
