@@ -289,8 +289,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     /// the home folder, as files only (ProjectSidebarView.browsingOnly).
     private(set) var browsesHome = false
     private var tickCount = 0
-    /// A tab's change is waiting for the run loop's turn to end (tabDidChange), and a spinner frame (tabSpinnerTurned).
-    private var changeQueued = false
+    /// A spinner frame's strip redraw is waiting for the run loop's turn to end (tabSpinnerTurned).
     private var stripQueued = false
     private var closeConfirmed = false
     /// Closing a linked worktree's window reads whether its worktree could go before it asks: under way.
@@ -3364,21 +3363,16 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     func tabDidChange(_ tab: TerminalTab) {
         // Events (command end, bell) can land between ticks; post their notices straight away.
         if let notice = tab.status.takeNotice() { AppDelegate.shared.post(notice, tab: tab, in: self) }
-        // The rest once per run-loop turn, however many tabs changed in it (output in several tabs at once).
-        guard !changeQueued else { return }
-        changeQueued = true
-        DispatchQueue.main.async { [weak self] in
-            guard let self, !self.hasClosed else { return }
-            self.changeQueued = false
-            AppDelegate.shared.updateCopilotFolders() // a new folder for Copilot CLI to connect from
-            self.noticeServedURLs()
-            self.refresh()
-            WindowTicker.shared.retune() // a command started or ended: the beat's pace may change
-        }
+        // At once, as it always was: what changed (a state, a title) reaches the strip, the rail and the Dock badge in the
+        // same turn. The spinner's frames, which came several times a second, no longer come here (tabSpinnerTurned).
+        AppDelegate.shared.updateCopilotFolders() // a new folder for Copilot CLI to connect from
+        noticeServedURLs()
+        refresh()
+        WindowTicker.shared.retune() // a command started or ended: the beat's pace may change
     }
 
     /// Only the frame of an agent's own spinner turned in its title (TerminalTab.setTerminalTitle). Nothing else
-    /// changed, so only the tab strip and the rail are drawn again, and only where the frame shows: in a window
+    /// changed, so only the tab strip, the rail and the pane headers are drawn again, and only where the frame shows: in a window
     /// someone can see, with the spinner turning (View › Agent Spinner).
     func tabSpinnerTurned(_ tab: TerminalTab) {
         guard AgentSpinner.turns, canBeSeen, !stripQueued else { return }
@@ -3389,6 +3383,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             let items = self.tabBarItems()
             self.feedTabStrips(self.placeMarked(items))
             self.updateRailMarks(items)
+            self.refreshPaneHeaders() // a split's pane headers show the frame too (AgentSpinner)
         }
     }
 

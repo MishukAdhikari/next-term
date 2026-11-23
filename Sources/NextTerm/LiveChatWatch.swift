@@ -42,9 +42,9 @@ final class LiveChatFeed {
 
     /// How often the file is looked for until it is found.
     private static let finding: TimeInterval = 1
-    /// How often it is looked for once found: the file event drives the reads, and this only notices the agent moving
-    /// to another session (/clear, a resume).
-    private static let following: TimeInterval = 5
+    /// How often it is looked for once found: the file event drives the reads, and this notices the agent moving to
+    /// another session (/clear, a resume) within a second, as the chat always has.
+    private static let following: TimeInterval = 1
 
     /// The look's clock, at `interval`, replacing the one before.
     private func schedule(every interval: TimeInterval) {
