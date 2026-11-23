@@ -768,7 +768,8 @@ final class EditorArea: NSView, TabBarViewDelegate {
         let names = Dictionary(grouping: paths, by: { ($0 as NSString).lastPathComponent })
         func title(_ url: URL) -> String {
             let name = url.lastPathComponent
-            return (names[name]?.count ?? 0) > 1 ? name + " — " + url.deletingLastPathComponent().lastPathComponent : name
+            // One line in the tab bar, marks for any line break or control character in a name.
+            return CellText.line((names[name]?.count ?? 0) > 1 ? name + " — " + url.deletingLastPathComponent().lastPathComponent : name)
         }
         var items = panes.map { pane -> TabBarItem in
             if let diff = pane as? DiffPane {
