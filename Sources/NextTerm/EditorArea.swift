@@ -705,19 +705,27 @@ final class EditorArea: NSView, TabBarViewDelegate {
 
     // MARK: disk changes
 
-    /// Picks up changes other programs (agents, git) made to open files. Called about once a second.
+    /// Picks up changes other programs (agents, git) made to open files. Called about once a second. A window no one
+    /// can see checks nothing: it catches up all at once when it shows again (TerminalWindowController.visibilityChanged),
+    /// and a save still checks its own file first (EditorDocument.save).
     func checkDisk() {
+        guard window?.canBeSeen != false else { return missedChecks = true }
+        let catchingUp = missedChecks
+        missedChecks = false
         for editor in editors { editor.document.checkDisk() }
         for diff in diffs { diff.refreshIfChanged() }
         for notebook in notebooks { notebook.refreshIfChanged() }
         for database in databases { database.refreshIfChanged() }
         for data in dataFiles { data.refreshIfChanged() }
-        // The file being edited against the last commit: a commit (yours or an agent's) moves the marks.
+        // The file being edited against the last commit: a commit (yours or an agent's) moves the marks. Looked at every
+        // five seconds and on showing again, and read again only when git's HEAD or branch moved.
         checks += 1
-        if periodicBaselineChecks, checks % 5 == 0 { activeEditor?.refreshBaseline() }
+        if periodicBaselineChecks, catchingUp || checks % 5 == 0 { activeEditor?.refreshBaselineIfHeadMoved() }
     }
 
     private var checks = 0
+    /// A check was skipped while the window could not be seen: the next one also looks at the last commit at once.
+    private var missedChecks = false
 
     private func resolveConflict(keepMine: Bool) {
         guard let document = activeEditor?.document else { return }

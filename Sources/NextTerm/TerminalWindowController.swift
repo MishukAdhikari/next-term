@@ -1187,6 +1187,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         WindowTicker.shared.retune() // shown, hidden, the app in use or not: the beat's pace follows
         guard window?.canBeSeen == true else { return }
         refresh()
+        editorArea.checkDisk() // what agents and git changed while no one could see it
     }
 
     /// The tab strip's items, one for each tab: its title (the spinner frame as View › Agent Spinner shows it), mark,
