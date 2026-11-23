@@ -90,3 +90,44 @@ struct MasterKeyTests {
         #expect(MasterKey.attempt("", record: &made, onMac: true, now: start) == .wrong(triesLeftBeforeWait: 4))
     }
 }
+
+struct MasterKeyStoreTests {
+    @Test func savesA0600FileOfVerifiersOnly() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("mk-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let store = MasterKeyStore(folder: folder)
+        #expect(store.load() == nil)
+        var record = MasterKey.set("correct horse battery", recovery: "AAAA-BBBB", rounds: 1_000)
+        _ = MasterKey.attempt("nope", record: &record, onMac: true)
+        try store.save(record)
+        let mode = try FileManager.default.attributesOfItem(atPath: store.url.path)[.posixPermissions] as? Int
+        #expect(mode == 0o600)
+        let loaded = try #require(store.load())
+        #expect(loaded.key == record.key && loaded.wrongTries == 1)
+        #expect(!String(decoding: try Data(contentsOf: store.url), as: UTF8.self).contains("horse"))
+        store.remove()
+        #expect(store.load() == nil)
+    }
+}
+
+struct RemoteAccessWideningTests {
+    @Test func onlyWideningAsksForTheMasterKey() {
+        let read = RemoteAccessOptions.readOnly
+        #expect(!read.widens(from: read))
+        #expect(RemoteAccessOptions.control.widens(from: read))
+        #expect(RemoteAccessOptions.customStart.widens(from: read))
+        #expect(!read.widens(from: RemoteAccessOptions.control)) // narrowing
+        var quieter = read
+        quieter[.notify] = false
+        #expect(!quieter.widens(from: read))
+        var unasked = read
+        unasked[.askOnMac] = false
+        #expect(unasked.widens(from: read))
+        var faster = read
+        faster[.rateLimit] = false
+        #expect(faster.widens(from: read))
+        var more = read
+        more[.serversRead] = true
+        #expect(more.widens(from: read))
+    }
+}

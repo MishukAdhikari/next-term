@@ -332,6 +332,9 @@ final class RemoteAccessEditSheet: NSWindowController {
 
     /// Save: unchanged options just close. Otherwise Touch ID or the password, then the options shown are saved,
     /// if they are still what was confirmed.
+    /// The master key was entered for this Save: the next pass goes on to Touch ID.
+    private var masterKeyPassed = false
+
     @objc func save() {
         guard confirming == nil else { return }
         let options = optionsView.options
@@ -340,6 +343,19 @@ final class RemoteAccessEditSheet: NSWindowController {
             return say("That connection ended, so there is nothing to change.", problem: true)
         }
         saveButton.isEnabled = false
+        // Widening needs the master key first (owner, 2026-11-23); narrowing needs only Touch ID, as before.
+        if options.widens(from: started), !masterKeyPassed {
+            say("Enter your master key…", problem: false)
+            MasterKeyGate.require("give “\(name)” more access", over: window, presence: false) { [weak self] passed in
+                guard let self else { return }
+                self.saveButton.isEnabled = true
+                guard passed else { return self.say("The master key wasn’t entered, so nothing changed.", problem: true) }
+                self.masterKeyPassed = true
+                self.save()
+            }
+            return
+        }
+        masterKeyPassed = false
         say("Confirm on this Mac…", problem: false)
         let reason = RemoteAccessSettingsText.editReason(name: name)
         confirming = RemoteAccessConfirmation.ask(reason) { [weak self] confirmed in

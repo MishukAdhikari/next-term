@@ -126,6 +126,8 @@ final class RemoteAccessSettingsView: NSView {
     /// The saved token's tunnel id, as this pass read it.
     private var tunnelID: String?
     private let stack = NSStackView()
+    /// The master key and the security checklist (owner, 2026-11-23).
+    let security = RemoteAccessSecuritySection()
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -247,9 +249,14 @@ final class RemoteAccessSettingsView: NSView {
 
 extension RemoteAccessSettingsView {
     private func build() {
+        let tunnelSection = buildTunnel()
+        let connectionsSection = section("Connections", [connections])
+        security.connections = { [weak self] in self?.connections.rows ?? [] }
+        security.showTunnel = { tunnelSection.scrollToVisible(tunnelSection.bounds) }
+        security.showConnections = { connectionsSection.scrollToVisible(connectionsSection.bounds) }
         let sections: [NSView] = [
-            buildSwitch(), buildTunnel(), buildProvider(), buildStatus(), buildConnect(),
-            section("Connections", [connections]), buildKeepAwake(), buildLeaked(),
+            buildSwitch(), security, tunnelSection, buildProvider(), buildStatus(), buildConnect(),
+            connectionsSection, buildKeepAwake(), buildLeaked(),
             section("Activity", [activity]),
         ]
         for view in sections { stack.addArrangedSubview(view) }
@@ -554,6 +561,7 @@ extension RemoteAccessSettingsView {
         tunnelID = tunnel == nil || tunnel == .cloudflare ? RemoteAccess.shared.savedTunnelID : nil
         let facts = currentFacts()
         refreshSwitch()
+        security.refresh()
         refreshTunnel(facts)
         refreshProvider(facts)
         refreshStatus()
@@ -889,7 +897,13 @@ extension RemoteAccessSettingsView {
     @objc func switchFlipped() {
         let access = RemoteAccess.shared
         if onSwitch.state == .on {
-            access.turnOn()
+            // Turning on needs the master key, and sets one the first time (owner, 2026-11-23).
+            onSwitch.state = .off
+            MasterKeyGate.require("turn on Remote access", over: window) { [weak self] passed in
+                if passed { access.turnOn() }
+                self?.refresh()
+            }
+            return
         } else {
             access.turnOff()
         }

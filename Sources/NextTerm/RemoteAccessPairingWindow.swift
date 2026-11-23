@@ -351,11 +351,30 @@ final class RemoteAccessPairingWindow: NSWindowController, NSWindowDelegate, NST
     // MARK: answers
 
     /// Allow: Touch ID or the Mac password, then the connection exists with the name and the options shown.
+    /// The master key was entered for this Allow: the next pass goes on to Touch ID.
+    private var masterKeyPassed = false
+
     @objc private func allow() {
         guard let request = matched, allowButton.isEnabled, !answered, confirming == nil, !closedPairing else { return }
         let options = optionsView.options
         let name = Self.name(nameField.stringValue, request: request)
         allowButton.isEnabled = false
+        // More than Read only needs the master key first (owner, 2026-11-23); Touch ID follows as before.
+        guard !options.widens(from: .readOnly) || masterKeyPassed else {
+            setStatus("Enter your master key…")
+            MasterKeyGate.require("allow “\(name)” more than reading", over: window, presence: false) { [weak self] passed in
+                guard let self else { return }
+                guard passed else {
+                    self.allowButton.isEnabled = true
+                    return self.setStatus("The master key wasn’t entered, so nothing changed.", problem: true)
+                }
+                self.masterKeyPassed = true
+                self.allowButton.isEnabled = true
+                self.allow()
+            }
+            return
+        }
+        masterKeyPassed = false
         setStatus("Confirm on this Mac…")
         confirming = RemoteAccessConfirmation.ask(Self.reason(name: name, options: options)) { [weak self] confirmed in
             guard let self else { return }

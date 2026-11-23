@@ -214,3 +214,34 @@ public enum MasterKey {
         return Data(derived)
     }
 }
+
+/// Where the master key's record lives: `master-key.json`, a `0600` file in Remote access's `0700` folder, written
+/// whole and renamed into place as the grants file is. It holds verifiers and the wrong-try count, nothing else.
+public struct MasterKeyStore: Sendable {
+    public let url: URL
+
+    public init(folder: URL = RemoteAccessStore.defaultFolder()) {
+        url = folder.appendingPathComponent("master-key.json")
+    }
+
+    /// The record, or nil when no master key was set (or the file can't be read as one).
+    public func load() -> MasterKeyRecord? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try? decoder.decode(MasterKeyRecord.self, from: data)
+    }
+
+    public func save(_ record: MasterKeyRecord) throws {
+        try RemoteAccessStore.prepare(url.deletingLastPathComponent())
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.sortedKeys]
+        try RemoteAccessStore.replace(url, with: try encoder.encode(record))
+    }
+
+    /// Forgets the master key: only beside revoking every connection and forgetting the tunnel (Reset Remote Access).
+    public func remove() {
+        try? FileManager.default.removeItem(at: url)
+    }
+}

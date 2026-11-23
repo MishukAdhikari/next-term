@@ -214,6 +214,18 @@ public struct RemoteAccessOptions: Equatable, Sendable, Codable {
     public static let writeToolsSentence = "Next Term's write tools can make code run on this Mac: a commit runs the "
         + "repository's hooks, and an agent's settings file in a project runs what it lists."
 
+    /// Whether going from `before` to these options widens what a connection can do, so the master key is asked
+    /// for: an option outside Checks turns on, or "Ask on this Mac before changes" or the rate limit turns off.
+    /// Pairing compares with Read only, so pairing as Read only, narrowing, and Notify alone never ask.
+    public func widens(from before: RemoteAccessOptions) -> Bool {
+        let guards: [RemoteAccessOption.ID] = [.askOnMac, .rateLimit]
+        for option in RemoteAccessOption.all {
+            if option.group != .checks, self[option.id], !before[option.id] { return true }
+            if guards.contains(option.id), !self[option.id], before[option.id] { return true }
+        }
+        return false
+    }
+
     /// The sentences these options show above Allow or Save, in order: Control's, then the write tools'. Read only
     /// shows neither.
     public var sentences: [String] {
