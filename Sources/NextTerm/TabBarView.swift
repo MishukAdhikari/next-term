@@ -264,6 +264,9 @@ final class TabBarView: NSView, ProjectGlowing {
     func toolTip(at index: Int) -> String? { tabViews[safe: index]?.toolTip }
     /// For the self-test: whether tab `index` heard the pointer come in, and whether it counts its name as cut.
     func hoverState(at index: Int) -> String { tabViews[safe: index].map { $0.hoverStateForTest } ?? "no tab" }
+    /// For the self-test: whether tab `index` shows less than its whole name. A local tab's label keeps the whole name
+    /// and cuts it where it is drawn, so `shownTitle` alone cannot say.
+    func showsNameCut(at index: Int) -> Bool { tabViews[safe: index]?.showsNameCut ?? false }
     #if DEBUG
     /// For the self-test: the pointer rests on tab `index`, as the bar follows it there.
     func restPointerForTest(at index: Int) { tabViews[safe: index]?.pointerRests() }
@@ -1006,8 +1009,10 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
     }
 
     var hoverStateForTest: String {
-        "areas \(trackingAreas.count) \(trackingAreas.first.map { "\($0.rect)" } ?? ""), bounds \(bounds), hovering \(hovering), in strip \(isInTitleStrip), cut \(item.map { isNameCut($0.title) } ?? false), label “\(label.stringValue)” \(label.bounds.width) of \(label.attributedStringValue.size().width)"
+        "areas \(trackingAreas.count) \(trackingAreas.first.map { "\($0.rect)" } ?? ""), bounds \(bounds), hovering \(hovering), in strip \(isInTitleStrip), cut \(showsNameCut), label “\(label.stringValue)” \(label.bounds.width) of \(label.attributedStringValue.size().width)"
     }
+
+    var showsNameCut: Bool { item.map { isNameCut($0.title) } ?? false }
 
     /// In the window's title-bar strip, where AppKit shows no tooltip: anywhere else its own tooltip says the name.
     private var isInTitleStrip: Bool {
