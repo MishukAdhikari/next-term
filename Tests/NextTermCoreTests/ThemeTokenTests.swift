@@ -44,7 +44,7 @@ import Testing
         "RemoteAccessPairingWindow.swift": 7, "RemoteAccessSecuritySection.swift": 8, "RemoteAccessSettingsView.swift": 29, // Settings › Remote Access and its pairing window: native windows
         "SecretManagerImportSheetBuild.swift": 2, "SecretNewKeySettingsView.swift": 1, "SecretReminders.swift": 1,
         "SecretRequestWindow.swift": 6, "SecretRotateSheet.swift": 4, "SecretsSkillInstall.swift": 2,
-        "SecretsView.swift": 15, "SecretsViewAlways.swift": 2, "SecretsViewNeverShow.swift": 1,
+        "SecretsView.swift": 18, "SecretsViewAlways.swift": 2, "SecretsViewNeverShow.swift": 1,
         "SetupWithAgent.swift": 1, "SkillsClaudeChoice.swift": 3, "SkillsReviewSheet.swift": 1,
         "SkillsSettingsView.swift": 7, "SkillsWindow.swift": 7, "SlashMenu.swift": 5, "TabBarView.swift": 2,
         "TaskDestinationsView.swift": 3, "TaskHandoffFolderRow.swift": 2, "TaskSettingsView.swift": 2,

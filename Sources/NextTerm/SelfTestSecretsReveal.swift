@@ -115,7 +115,20 @@ extension SelfTest {
         check(first && second && quiet.isEmpty && shown,
               "secrets: Reveal again while Touch ID is up cancels the first without saying Not approved, and shows the key",
               "first \(first), cancelled \(second), said “\(quiet)”, shown \(shown)")
+
+        // Copy at the revealed value's right edge: the value shown goes to the clipboard (Next Term's own, cleared after
+        // 60 seconds) with no second Touch ID, and the button shows a check mark for a moment.
+        let asksBefore = reveals()
+        let copiesBefore = secretsAudit(SecretsStore.shared).filter { $0.event == .copy }.count
+        view.revealCopy?.performClick(nil)
+        let copied = SecretClipboard.shared.pasteboard.string(forType: .string) == shownValue
+        check(view.revealCopy != nil && copied && reveals() == asksBefore && view.revealCopy?.image?.accessibilityDescription == "Copied"
+              && view.actionLabel.stringValue == SecretClipboard.copiedLine
+              && secretsAudit(SecretsStore.shared).filter { $0.event == .copy }.count == copiesBefore + 1,
+              "secrets: Copy beside a revealed key copies it, without asking again, logs it and says so",
+              "button \(view.revealCopy != nil), copied \(copied), asked again \(reveals() != asksBefore), said “\(view.actionLabel.stringValue)”")
         view.closeReveal()
+        check(view.revealCopy == nil, "secrets: closing the reveal lets go of its Copy button and value")
 
         // The Mac locks while Touch ID is up for Reveal: it is cancelled, quietly, and no key is revealed.
         var before = reveals()
