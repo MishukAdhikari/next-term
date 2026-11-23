@@ -1,3 +1,4 @@
+#if DEBUG
 import AppKit
 import NextTermCore
 
@@ -160,3 +161,4 @@ extension SelfTest {
         agent.view.send(txt: "\u{03}")
     }
 }
+#endif
