@@ -422,12 +422,15 @@ public final class RemoteAccessCalls: @unchecked Sendable { // its state lives u
     }
 
     /// Reads a request's body. `protocolVersion` is its `MCP-Protocol-Version` header: when sent, it must be one
-    /// of `MCPServer.supportedVersions`.
+    /// of `MCPServer.supportedVersions`, except on `initialize`, where the version is still being agreed in the body
+    /// (a client that opens with a newer one gets the newest Next Term speaks; claude.ai did, 2026-11-23, and its
+    /// first requests were refused).
     public static func read(_ body: Data, protocolVersion: String?) -> Incoming {
-        if let protocolVersion, !MCPServer.supportedVersions.contains(protocolVersion) { return .badVersion }
-        guard let parsed = try? JSONSerialization.jsonObject(with: body) else { return .invalid }
-        if parsed is [Any] { return .batch }
-        guard let message = parsed as? [String: Any] else { return .invalid }
+        let unspoken = protocolVersion.map { !MCPServer.supportedVersions.contains($0) } ?? false
+        guard let parsed = try? JSONSerialization.jsonObject(with: body) else { return unspoken ? .badVersion : .invalid }
+        if parsed is [Any] { return unspoken ? .badVersion : .batch }
+        guard let message = parsed as? [String: Any] else { return unspoken ? .badVersion : .invalid }
+        if unspoken, message["method"] as? String != "initialize" { return .badVersion }
         guard let method = message["method"] as? String else { return .notification }
         guard let id = message["id"], !(id is NSNull) else { return .notification }
         guard method == "tools/call" else { return .request(message) }

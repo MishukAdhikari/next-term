@@ -522,6 +522,11 @@ import Testing
         #expect(incoming(#""text""#).status == 400)
         #expect(incoming("").status == 400)
         #expect(incoming(#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#, version: "1999-01-01").status == 400)
+        // initialize agrees the version in its body: a newer header than the door speaks is answered, not refused.
+        let opening = incoming(#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2026-07-28"}}"#,
+                               version: "2026-07-28")
+        #expect(opening.status == nil && opening.reason == nil)
+        #expect(incoming(#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#, version: "2026-07-28").status == 400)
         for version in MCPServer.supportedVersions {
             #expect(incoming(#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#, version: version).status == nil)
         }
