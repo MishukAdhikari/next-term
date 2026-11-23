@@ -168,7 +168,7 @@ struct ChatBlockRenderer {
             style.firstLineHeadIndent = 12
             style.headIndent = 12
             style.tailIndent = -12
-            out.append(NSAttributedString(string: line + "\n", attributes: [.font: font, .foregroundColor: NSColor.labelColor,
+            out.append(NSAttributedString(string: line + "\n", attributes: [.font: font, .foregroundColor: Theme.system(.label),
                                                                            .paragraphStyle: style, .chatPanel: panel]))
         }
     }
@@ -197,7 +197,7 @@ struct ChatBlockRenderer {
         // Web links read as links; Next Term's own rows set their own colours.
         text.enumerateAttribute(.link, in: NSRange(location: 0, length: text.length)) { value, range, _ in
             guard value != nil else { return }
-            text.addAttribute(.foregroundColor, value: NSColor.linkColor, range: range)
+            text.addAttribute(.foregroundColor, value: Theme.system(.link), range: range)
         }
         out.append(text)
         if out.length == 0 { out.append(NSAttributedString(string: " ", attributes: [.font: NSFont.systemFont(ofSize: body)])) }
@@ -206,9 +206,9 @@ struct ChatBlockRenderer {
     private func thought(_ thought: ChatThought, id: String, into out: NSMutableAttributedString) {
         let font = NSFontManager.shared.convert(.systemFont(ofSize: secondary), toHaveTrait: .italicFontMask)
         let row = NSMutableAttributedString()
-        row.append(symbol(thought.folded ? "chevron.right" : "chevron.down", size: secondary - 2, color: .tertiaryLabelColor,
+        row.append(symbol(thought.folded ? "chevron.right" : "chevron.down", size: secondary - 2, color: Theme.system(.tertiaryLabel),
                           label: thought.folded ? "Folded" : "Unfolded", weight: .semibold, on: font))
-        row.append(NSAttributedString(string: "\t" + thought.title, attributes: [.font: font, .foregroundColor: NSColor.secondaryLabelColor]))
+        row.append(NSAttributedString(string: "\t" + thought.title, attributes: [.font: font, .foregroundColor: Theme.system(.secondaryLabel)]))
         row.addAttribute(.link, value: ChatLink.toggle(id).url, range: NSRange(location: 0, length: row.length))
         row.append(NSAttributedString(string: "\n", attributes: [.font: font]))
         row.addAttribute(.paragraphStyle, value: singleLineRow(), range: NSRange(location: 0, length: row.length))
@@ -221,7 +221,7 @@ struct ChatBlockRenderer {
             let style = paragraph(before: index == 0 ? 6 : 0, after: index == lines.count - 1 ? 4 : 0, lineSpacing: 2)
             style.firstLineHeadIndent = rowIndent
             style.headIndent = rowIndent
-            out.append(NSAttributedString(string: line + "\n", attributes: [.font: text, .foregroundColor: NSColor.secondaryLabelColor,
+            out.append(NSAttributedString(string: line + "\n", attributes: [.font: text, .foregroundColor: Theme.system(.secondaryLabel),
                                                                            .paragraphStyle: style, .chatPanel: panel]))
         }
     }
@@ -230,9 +230,9 @@ struct ChatBlockRenderer {
     private func group(_ group: ChatToolGroup, id: String, into out: NSMutableAttributedString) {
         let font = NSFont.monospacedSystemFont(ofSize: mono, weight: .regular)
         let row = NSMutableAttributedString()
-        row.append(symbol(group.expanded ? "chevron.down" : "chevron.right", size: secondary - 2, color: .tertiaryLabelColor,
+        row.append(symbol(group.expanded ? "chevron.down" : "chevron.right", size: secondary - 2, color: Theme.system(.tertiaryLabel),
                           label: group.expanded ? "Unfolded," : "Folded,", weight: .semibold, on: font))
-        row.append(NSAttributedString(string: "\t" + group.title, attributes: [.font: font, .foregroundColor: NSColor.secondaryLabelColor]))
+        row.append(NSAttributedString(string: "\t" + group.title, attributes: [.font: font, .foregroundColor: Theme.system(.secondaryLabel)]))
         let whole = NSRange(location: 0, length: row.length)
         row.addAttribute(.link, value: ChatLink.toggle(id).url, range: whole)
         let files = group.tools.map(\.shownTitle).joined(separator: "\n")
@@ -264,16 +264,16 @@ struct ChatBlockRenderer {
         let row = NSMutableAttributedString()
         let color: NSColor
         switch tool.status {
-        case .pending: color = .tertiaryLabelColor
-        case .inProgress: color = .controlAccentColor
-        case .completed: color = .secondaryLabelColor
-        case .failed: color = .systemRed
+        case .pending: color = Theme.system(.tertiaryLabel)
+        case .inProgress: color = Theme.system(.accent)
+        case .completed: color = Theme.system(.secondaryLabel)
+        case .failed: color = Theme.system(.red)
         }
         // VoiceOver reads the symbol's description first: "Done, Bash(npm test)".
         row.append(symbol(tool.symbolName, size: secondary, color: color, label: tool.statusWord.capitalized + ",", on: font))
         let title = ChatTool.withoutStyleCodes(tool.shownTitle).replacingOccurrences(of: "\n", with: " ")
         row.append(NSAttributedString(string: "\t" + title, attributes: [.font: font,
-                                                                        .foregroundColor: tool.status == .failed ? NSColor.systemRed : NSColor.labelColor]))
+                                                                        .foregroundColor: tool.status == .failed ? Theme.system(.red) : Theme.system(.label)]))
         // One line, the whole command in the tooltip; a click unfolds the output (with the whole command above it).
         let opens = !tool.output.isEmpty
         let whole = NSRange(location: 0, length: row.length)
@@ -304,7 +304,7 @@ struct ChatBlockRenderer {
             style.headIndent = style.firstLineHeadIndent
             style.tailIndent = -10
             style.lineBreakMode = .byCharWrapping
-            out.append(NSAttributedString(string: title + "\n", attributes: [.font: detail, .foregroundColor: NSColor.secondaryLabelColor,
+            out.append(NSAttributedString(string: title + "\n", attributes: [.font: detail, .foregroundColor: Theme.system(.secondaryLabel),
                                                                               .paragraphStyle: style, .chatPanel: panel]))
         }
         let opened = title.count > Self.wholeCommandAfter
@@ -315,7 +315,7 @@ struct ChatBlockRenderer {
             style.headIndent = style.firstLineHeadIndent
             style.tailIndent = -10
             style.lineBreakMode = .byCharWrapping
-            out.append(NSAttributedString(string: line + "\n", attributes: [.font: detail, .foregroundColor: NSColor.labelColor,
+            out.append(NSAttributedString(string: line + "\n", attributes: [.font: detail, .foregroundColor: Theme.system(.label),
                                                                            .paragraphStyle: style, .chatPanel: panel]))
         }
         if capped {
@@ -324,7 +324,7 @@ struct ChatBlockRenderer {
             style.headIndent = style.firstLineHeadIndent
             let words = shown.linesLeftOut ? "Show all \(total) lines" : "Show the whole output"
             out.append(NSAttributedString(string: words + "\n", attributes: [
-                .font: NSFont.systemFont(ofSize: secondary), .foregroundColor: NSColor.linkColor, .paragraphStyle: style,
+                .font: NSFont.systemFont(ofSize: secondary), .foregroundColor: Theme.system(.link), .paragraphStyle: style,
                 .link: ChatLink.showAll(id).url, .chatPanel: panel,
             ]))
         }
@@ -334,13 +334,13 @@ struct ChatBlockRenderer {
         let font = NSFont.monospacedSystemFont(ofSize: mono, weight: .regular)
         let small = NSFont.systemFont(ofSize: secondary)
         let row = NSMutableAttributedString()
-        row.append(symbol(change.created ? "doc.badge.plus" : "pencil", size: secondary, color: .secondaryLabelColor,
+        row.append(symbol(change.created ? "doc.badge.plus" : "pencil", size: secondary, color: Theme.system(.secondaryLabel),
                           label: change.created ? "Created" : "Edited", on: font))
-        row.append(NSAttributedString(string: "\t" + change.path, attributes: [.font: font, .foregroundColor: NSColor.labelColor]))
-        row.append(NSAttributedString(string: "  +\(change.added)", attributes: [.font: font, .foregroundColor: NSColor.systemGreen]))
-        row.append(NSAttributedString(string: " \u{2212}\(change.removed)", attributes: [.font: font, .foregroundColor: NSColor.systemRed]))
+        row.append(NSAttributedString(string: "\t" + change.path, attributes: [.font: font, .foregroundColor: Theme.system(.label)]))
+        row.append(NSAttributedString(string: "  +\(change.added)", attributes: [.font: font, .foregroundColor: Theme.system(.green)]))
+        row.append(NSAttributedString(string: " \u{2212}\(change.removed)", attributes: [.font: font, .foregroundColor: Theme.system(.red)]))
         row.append(NSAttributedString(string: "   ", attributes: [.font: small]))
-        row.append(NSAttributedString(string: "Open Diff", attributes: [.font: small, .foregroundColor: NSColor.linkColor,
+        row.append(NSAttributedString(string: "Open Diff", attributes: [.font: small, .foregroundColor: Theme.system(.link),
                                                                        .link: ChatLink.diff(id).url,
                                                                        .toolTip: "Show this file\u{2019}s changes in the editor"]))
         row.append(NSAttributedString(string: "\n", attributes: [.font: font]))
@@ -354,7 +354,7 @@ struct ChatBlockRenderer {
     private func plan(_ entries: [ACPSession.PlanEntry], into out: NSMutableAttributedString) {
         let head = paragraph(before: 0, after: 4)
         out.append(NSAttributedString(string: "Plan\n", attributes: [.font: NSFont.systemFont(ofSize: secondary, weight: .semibold),
-                                                                    .foregroundColor: NSColor.secondaryLabelColor, .paragraphStyle: head]))
+                                                                    .foregroundColor: Theme.system(.secondaryLabel), .paragraphStyle: head]))
         let font = NSFont.systemFont(ofSize: body)
         for (index, entry) in entries.enumerated() {
             let row = NSMutableAttributedString()
@@ -362,16 +362,16 @@ struct ChatBlockRenderer {
             let color: NSColor
             let word: String
             switch entry.status {
-            case .pending: name = "circle"; color = .tertiaryLabelColor; word = "To do,"
-            case .inProgress: name = "circle.lefthalf.filled"; color = .controlAccentColor; word = "In progress,"
-            case .completed: name = "checkmark.circle.fill"; color = .secondaryLabelColor; word = "Done,"
+            case .pending: name = "circle"; color = Theme.system(.tertiaryLabel); word = "To do,"
+            case .inProgress: name = "circle.lefthalf.filled"; color = Theme.system(.accent); word = "In progress,"
+            case .completed: name = "checkmark.circle.fill"; color = Theme.system(.secondaryLabel); word = "Done,"
             }
             row.append(symbol(name, size: secondary, color: color, label: word))
-            var attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.labelColor]
+            var attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: Theme.system(.label)]
             if entry.status == .completed {
-                attributes[.foregroundColor] = NSColor.secondaryLabelColor
+                attributes[.foregroundColor] = Theme.system(.secondaryLabel)
                 attributes[.strikethroughStyle] = NSUnderlineStyle.single.rawValue
-                attributes[.strikethroughColor] = NSColor.tertiaryLabelColor
+                attributes[.strikethroughColor] = Theme.system(.tertiaryLabel)
             }
             row.append(NSAttributedString(string: "  ", attributes: [.font: font]))
             row.append(NSAttributedString(string: entry.content, attributes: attributes))
@@ -386,15 +386,15 @@ struct ChatBlockRenderer {
         let name: String
         let color: NSColor
         switch outcome {
-        case .allowed: name = "checkmark.shield"; color = .secondaryLabelColor
-        case .rejected: name = "xmark.shield"; color = .systemRed
-        case .cancelled: name = "minus.circle"; color = .tertiaryLabelColor
-        case .answered: name = "text.bubble"; color = .secondaryLabelColor
+        case .allowed: name = "checkmark.shield"; color = Theme.system(.secondaryLabel)
+        case .rejected: name = "xmark.shield"; color = Theme.system(.red)
+        case .cancelled: name = "minus.circle"; color = Theme.system(.tertiaryLabel)
+        case .answered: name = "text.bubble"; color = Theme.system(.secondaryLabel)
         }
         let row = NSMutableAttributedString()
         row.append(symbol(name, size: secondary, color: color, label: nil, on: NSFont.systemFont(ofSize: secondary)))
         row.append(NSAttributedString(string: "\t" + ChatTranscript.answerLine(action: action, answer: answer) + "\n",
-                                      attributes: [.font: NSFont.systemFont(ofSize: secondary), .foregroundColor: NSColor.secondaryLabelColor]))
+                                      attributes: [.font: NSFont.systemFont(ofSize: secondary), .foregroundColor: Theme.system(.secondaryLabel)]))
         row.addAttribute(.paragraphStyle, value: rowParagraph(), range: NSRange(location: 0, length: row.length))
         out.append(row)
     }
@@ -403,18 +403,18 @@ struct ChatBlockRenderer {
         let name: String
         let color: NSColor
         switch tone {
-        case .info: name = "info.circle"; color = .tertiaryLabelColor
-        case .warning: name = "exclamationmark.triangle"; color = .systemOrange
-        case .error: name = "xmark.octagon"; color = .systemRed
+        case .info: name = "info.circle"; color = Theme.system(.tertiaryLabel)
+        case .warning: name = "exclamationmark.triangle"; color = Theme.system(.orange)
+        case .error: name = "xmark.octagon"; color = Theme.system(.red)
         }
         let font = NSFont.systemFont(ofSize: secondary)
         let row = NSMutableAttributedString()
         row.append(symbol(name, size: secondary, color: color, label: tone == .info ? nil : (tone == .error ? "Error:" : "Warning:")))
-        let words = NSMutableAttributedString(string: "  " + text + "\n", attributes: [.font: font, .foregroundColor: NSColor.secondaryLabelColor])
+        let words = NSMutableAttributedString(string: "  " + text + "\n", attributes: [.font: font, .foregroundColor: Theme.system(.secondaryLabel)])
         // A terminal-only command's note links its Open in Terminal (R4).
         let offer = (words.string as NSString).range(of: "Open in Terminal")
         if offersTerminal, offer.location != NSNotFound {
-            words.addAttributes([.link: ChatLink.openInTerminal.url, .foregroundColor: NSColor.linkColor], range: offer)
+            words.addAttributes([.link: ChatLink.openInTerminal.url, .foregroundColor: Theme.system(.link)], range: offer)
         }
         row.append(words)
         row.addAttribute(.paragraphStyle, value: rowParagraph(), range: NSRange(location: 0, length: row.length))
@@ -423,7 +423,7 @@ struct ChatBlockRenderer {
 
     private func turnEnded(_ words: String, usage: String?, reason: ACPSession.StopReason, into out: NSMutableAttributedString) {
         let font = NSFont.systemFont(ofSize: secondary)
-        let color: NSColor = reason == .endTurn ? .tertiaryLabelColor : .secondaryLabelColor
+        let color: NSColor = reason == .endTurn ? Theme.system(.tertiaryLabel) : Theme.system(.secondaryLabel)
         let text = words + (usage.map { "  \u{00B7}  " + $0 } ?? "")
         out.append(NSAttributedString(string: text + "\n", attributes: [.font: font, .foregroundColor: color,
                                                                        .paragraphStyle: paragraph(before: 0, after: 6),

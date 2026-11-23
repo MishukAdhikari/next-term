@@ -557,6 +557,9 @@ final class DatabasePane: NSView, NSTableViewDataSource, NSTableViewDelegate {
         tableView === tableList ? tables.count : page?.rows.count ?? 0
     }
 
+    /// Selected rows in the theme's selection tint, not AppKit's accent fill (see ThemedRowView).
+    func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? { ThemedRowView() }
+
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         guard tableView === tableList else {
             let cell = grid.cell(for: tableColumn, row: row)

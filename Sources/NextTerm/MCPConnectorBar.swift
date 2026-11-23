@@ -49,7 +49,7 @@ final class MCPConnectorBar: NSView {
         primary.bezelStyle = .rounded
         primary.controlSize = .small
         primary.font = .systemFont(ofSize: 11, weight: .medium)
-        primary.bezelColor = .controlAccentColor
+        primary.bezelColor = Theme.system(.accent)
         primary.keyEquivalent = "" // Return stays the terminal's
         primary.target = self
         primary.action = #selector(primaryClicked)

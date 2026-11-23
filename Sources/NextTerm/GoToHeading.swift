@@ -132,7 +132,7 @@ final class GoToHeadingController: NSObject, NSTextFieldDelegate, NSTableViewDat
         background.layer?.cornerRadius = 10
         background.layer?.masksToBounds = true
         background.layer?.borderWidth = 1
-        background.layer?.borderColor = WorkSplitView.line.cgColor
+        background.themedBorder(WorkSplitView.line)
         panel.contentView = background
 
         let mark = NSImageView(image: NSImage(systemSymbolName: "list.bullet.indent", accessibilityDescription: nil) ?? NSImage())
@@ -143,7 +143,7 @@ final class GoToHeadingController: NSObject, NSTextFieldDelegate, NSTableViewDat
         field.font = .systemFont(ofSize: 16)
         field.textColor = Theme.text
         field.placeholderAttributedString = NSAttributedString(string: "Go to heading", attributes: [
-            .font: NSFont.systemFont(ofSize: 16), .foregroundColor: NSColor.placeholderTextColor,
+            .font: NSFont.systemFont(ofSize: 16), .foregroundColor: Theme.system(.placeholder),
         ])
         field.delegate = self
         field.cell?.isScrollable = true
@@ -279,7 +279,7 @@ final class GoToHeadingCell: NSTableCellView {
             let isMarked = (i..<j).contains { marked.contains($0) }
             text.append(NSAttributedString(string: String(decoding: utf8[i..<j], as: UTF8.self), attributes: [
                 .font: NSFont.systemFont(ofSize: 13, weight: isMarked ? .bold : weight),
-                .foregroundColor: isMarked ? (chosen ? NSColor.white : Theme.gitModified) : Theme.text,
+                .foregroundColor: isMarked ? (chosen ? Theme.ui(.listChosenMark) : Theme.gitModified) : Theme.text,
             ]))
             i = j
         }

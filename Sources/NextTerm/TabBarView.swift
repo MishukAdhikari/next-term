@@ -1132,14 +1132,14 @@ enum StatusGlyph {
     /// A tinted image, for menus.
     static func image(for state: TabState, size: CGFloat = 12) -> NSImage? {
         guard let name = symbolName(for: state) else { return nil }
-        // Palette mode paints each layer: the mark (✓ ✕ !) white, the circle in the state's colour.
+        // Palette mode paints each layer: the mark (✓ ✕ !) in onStatus (white), the circle in the state's colour.
         // With a single colour the mark would vanish into the circle. Done is quiet, nothing needing you yet: a dark ✓
         // on a softer green, plain green with Increase Contrast.
         let colors: [NSColor]
         switch state {
         case .working: colors = [color(for: state)]
         case .done: colors = [Theme.bar, DisplayOptions.increasesContrast ? Theme.done : Theme.doneQuiet]
-        default: colors = [.white, color(for: state)]
+        default: colors = [Theme.ui(.onStatus), color(for: state)]
         }
         let config = NSImage.SymbolConfiguration(pointSize: size, weight: .bold)
             .applying(.init(paletteColors: colors))
@@ -1324,7 +1324,7 @@ final class RemoteMarkView: NSView {
         color.setFill()
         NSBezierPath(ovalIn: dot).fill()
         if link == .disconnected {
-            NSColor.white.setFill()
+            Theme.ui(.onStatus).setFill()
             NSRect(x: dot.minX + 1.75, y: dot.midY - 0.65, width: d - 3.5, height: 1.3).fill()
         }
     }

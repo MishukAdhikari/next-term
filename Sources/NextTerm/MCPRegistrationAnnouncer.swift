@@ -59,9 +59,34 @@ enum MCPRegistrationAnnouncer {
         ApprovalLayout.style(keep, look: .accent)
         alert.addButton(withTitle: "Remove")
         let done: (NSApplication.ModalResponse) -> Void = { response in
-            if response == .alertSecondButtonReturn { remove(notice, from: window) }
+            if response == .alertSecondButtonReturn { confirmRemove(notice, over: window) }
         }
         if let window, window.isVisible { alert.beginSheetModal(for: window, completionHandler: done) } else { done(alert.runModal()) }
+    }
+
+    /// Remove, asked first: removing is not recommended, so the question says what the agents lose and its primary,
+    /// Keep Tools (Return), keeps them. Only Remove goes on to take Next Term out.
+    static func confirmRemove(_ notice: MCPRegistrationNotice, over window: NSWindow?, answered: ((Bool) -> Void)? = nil) {
+        let alert = NSAlert()
+        alert.messageText = notice.removeQuestion
+        alert.informativeText = notice.removeInfo
+        let keep = alert.addButton(withTitle: MCPRegistrationNotice.keepButton)
+        ApprovalLayout.style(keep, look: .accent)
+        let remove = alert.addButton(withTitle: MCPRegistrationNotice.removeButton)
+        remove.keyEquivalent = ""
+        // Escape is the safe answer too, as it is in any question: NSAlert gives it only to a button named Cancel.
+        let escape = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            guard event.window === alert.window, event.keyCode == 53 else { return event }
+            keep.performClick(nil)
+            return nil
+        }
+        let done: (NSApplication.ModalResponse) -> Void = { response in
+            if let escape { NSEvent.removeMonitor(escape) }
+            let removed = response == .alertSecondButtonReturn
+            if removed { Self.remove(notice, from: window) }
+            answered?(removed)
+        }
+        if let window, window.isVisible, window.attachedSheet == nil { alert.beginSheetModal(for: window, completionHandler: done) } else { done(alert.runModal()) }
     }
 
     /// Remove: agent control off, which takes Next Term out of every agent it was added to, then says so.
@@ -91,7 +116,7 @@ final class MCPRegistrationCard: NSView {
         themedBackground(Theme.tabHover)
         layer?.cornerRadius = 8
         layer?.borderWidth = 1
-        layer?.borderColor = WorkSplitView.line.cgColor
+        themedBorder(WorkSplitView.line)
         message.font = .systemFont(ofSize: 12.5, weight: .medium)
         message.textColor = Theme.text
         meaning.font = .systemFont(ofSize: 12)
@@ -101,8 +126,8 @@ final class MCPRegistrationCard: NSView {
         files.isSelectable = true
         details = DisclosureRow(title: "Details", content: files)
         let remove = NSButton(title: "Remove", target: self, action: #selector(removePressed))
-        // A plain button: Keep only puts the notice away, and the window's own primary (Go to Window, Open Project) stays
-        // the one button that stands out.
+        // Keep is the recommended answer, and Remove asks first (confirmRemove). Both plain, with no key: the window's own
+        // primary (Go to Window, Open Project) stays the one button that stands out.
         let keep = NSButton(title: "Keep", target: self, action: #selector(keepPressed))
         for button in [remove, keep] as [NSButton] {
             button.bezelStyle = .rounded
@@ -173,9 +198,11 @@ final class MCPRegistrationCard: NSView {
 
     @objc private func keepPressed() { onDone?() }
 
+    /// Remove asks first and recommends keeping; the card goes only once the question is answered with Remove.
     @objc private func removePressed() {
-        let window = self.window
-        onDone?()
-        if let notice { MCPRegistrationAnnouncer.remove(notice, from: window) }
+        guard let notice else { return }
+        MCPRegistrationAnnouncer.confirmRemove(notice, over: window) { [weak self] removed in
+            if removed { self?.onDone?() }
+        }
     }
 }

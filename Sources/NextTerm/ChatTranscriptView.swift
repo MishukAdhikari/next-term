@@ -381,7 +381,7 @@ final class ChatTextView: NSTextView {
             // Only the part near the rect: a long block's outline costs no layout off screen.
             var box = lineBox(range, layout: layout, container: container)
             box = box.insetBy(dx: -6, dy: -3)
-            NSColor.keyboardFocusIndicatorColor.withAlphaComponent(0.5).setStroke()
+            Theme.system(.focusRing).withAlphaComponent(0.5).setStroke()
             let path = NSBezierPath(roundedRect: box, xRadius: 6, yRadius: 6)
             path.lineWidth = 1.5
             path.stroke()
@@ -412,22 +412,22 @@ final class ChatTextView: NSTextView {
         switch panel.kind {
         case .prompt:
             let fill = box.insetBy(dx: 0, dy: -8)
-            NSColor.labelColor.withAlphaComponent(0.06).setFill()
+            Theme.system(.label).withAlphaComponent(0.06).setFill()
             NSBezierPath(roundedRect: fill, xRadius: 8, yRadius: 8).fill()
         case .code, .detail:
             let indent: CGFloat = panel.kind == .detail ? headIndent(at: range.location) - 10 : 0
             var fill = box.insetBy(dx: 0, dy: panel.kind == .code ? -8 : -6)
             fill.origin.x += indent
             fill.size.width -= indent
-            NSColor.labelColor.withAlphaComponent(0.05).setFill()
+            Theme.system(.label).withAlphaComponent(0.05).setFill()
             let path = NSBezierPath(roundedRect: fill, xRadius: 6, yRadius: 6)
             path.fill()
-            NSColor.separatorColor.withAlphaComponent(0.5).setStroke()
+            Theme.system(.separator).withAlphaComponent(0.5).setStroke()
             path.lineWidth = 0.5
             path.stroke()
         case .quote:
             let x = box.minX + headIndent(at: range.location) - 10
-            NSColor.tertiaryLabelColor.setFill()
+            Theme.system(.tertiaryLabel).setFill()
             NSBezierPath(roundedRect: NSRect(x: x, y: box.minY, width: 2, height: box.height), xRadius: 1, yRadius: 1).fill()
         case .rule:
             // A hairline from the end of the closing words to the column's end.
@@ -437,7 +437,7 @@ final class ChatTextView: NSTextView {
             let start = origin.x + used.maxX + 12
             let end = box.maxX
             guard end > start + 8 else { return }
-            NSColor.separatorColor.setFill()
+            Theme.system(.separator).setFill()
             NSRect(x: start, y: (box.midY).rounded() + 0.5, width: end - start, height: 1 / max(1, window?.backingScaleFactor ?? 2)).fill()
         }
     }

@@ -22,7 +22,7 @@ final class MarkdownStyler {
     /// A heading's size, by level, as a multiple of the editor's font size.
     static let headingScales: [CGFloat] = [1, 1.5, 1.3, 1.15, 1, 1, 1]
     /// Link text, when no grammar colours it (the highlighting bundle is missing).
-    static let linkColor = Theme.pair(light: NSColor(hex: 0x1F5BD6), dark: NSColor(hex: 0x548AF7))
+    static let linkColor = Theme.ui(.link)
 
     private let storage: NSTextStorage
     private weak var layoutManager: NSLayoutManager?

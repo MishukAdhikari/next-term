@@ -5,7 +5,7 @@ import NextTermCore
 /// Code with an npm copy behind it, a standalone Codex, Gemini CLI from npm, Goose from Homebrew and Cursor's own install.
 /// The latest versions come from a stub (no network), the schedules from a defaults domain of the part's own, the logs
 /// from a folder of its own. Screenshots: the section with its agents, an update running, and the empty section. Each
-/// of the eleven toolbar names is whole and the window keeps its one size.
+/// of the twelve toolbar names is whole and the window keeps its one size.
 extension SelfTest {
     static func agentsSettingsChecks() async {
         let manager = AgentCLIManager.shared
@@ -77,11 +77,11 @@ extension SelfTest {
               && opens.allSatisfy { $0 == "-" || $0 == "Terminal" || $0 == "Chat" },
               "agents settings: each chat agent's row has Opens as (Terminal or Chat) beside Auto-update, the others none",
               zip(pane.rows.map(\.agent.id), opens).map { "\($0) \($1)" }.joined(separator: ", "))
-        // The toolbar: eleven names, each whole, none in an overflow menu.
+        // The toolbar: twelve names, each whole, none in an overflow menu.
         let items = settings.toolbarItems
         let visible = window.toolbar?.visibleItems?.count ?? 0
-        check(items.count == 11 && visible == 11 && items.map(\.label) == SettingsWindowController.sections.map(\.label),
-              "agents settings: the toolbar shows all eleven sections, every name whole", "\(visible) of \(items.count) visible")
+        check(items.count == 12 && visible == 12 && items.map(\.label) == SettingsWindowController.sections.map(\.label),
+              "agents settings: the toolbar shows all twelve sections, every name whole", "\(visible) of \(items.count) visible")
         if let cut = settingsSectionCutOff(in: window) { check(false, "agents settings: nothing in the section is cut off", cut) }
         await screenshot(window, suffix: "-agents-settings")
 
@@ -145,7 +145,7 @@ extension SelfTest {
               && gemini?["version"] as? String == "0.67.0",
               "agents settings: list_agent_clis lists them for agents", String(answer.prefix(400)))
 
-        // One steady size, with Agents among eleven sections.
+        // One steady size, with Agents among twelve sections.
         let steady = window.frame
         var moved: [String] = []
         for section in SettingsWindowController.sections {
@@ -153,7 +153,7 @@ extension SelfTest {
             window.layoutIfNeeded()
             if window.frame != steady { moved.append(section.label) }
         }
-        check(moved.isEmpty, "agents settings: every one of the eleven sections keeps the window's one size", moved.joined(separator: ", "))
+        check(moved.isEmpty, "agents settings: every one of the twelve sections keeps the window's one size", moved.joined(separator: ", "))
         settings.showTab("agents")
 
         // No agent on PATH: one calm line and the way to the others.

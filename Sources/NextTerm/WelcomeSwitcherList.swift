@@ -267,7 +267,7 @@ final class SwitcherHeadingRowView: NSTableRowView {
 enum SwitcherRowStyle {
     /// Secondary text (folder, branch, destination) on a selected row. `Theme.textDim` is 3.74:1 on the selection's
     /// blue, under the 4.5:1 small text needs; this is 5.10:1.
-    static let selectedSecondary = Theme.pair(light: NSColor(hex: 0x4A4F5A), dark: NSColor(hex: 0xB8BBC2))
+    static let selectedSecondary = Theme.ui(.selectedSecondary)
     static let gutterCenter: CGFloat = 20
     /// Where the names start in a row: the gutter, 14 to 26, then 8.
     static let nameX: CGFloat = 34
@@ -517,8 +517,8 @@ final class SwitcherProjectCell: NSTableCellView {
         name.stringValue = project.title
         dotColor = color?.swatchColor ?? Theme.textDim
         // Filled: open in a window. A ring: closed.
-        dot.layer?.backgroundColor = project.isOpen ? dotColor.cgColor : NSColor.clear.cgColor
-        dot.layer?.borderColor = dotColor.cgColor
+        dot.themedBackground(project.isOpen ? dotColor : nil)
+        dot.themedBorder(dotColor)
         dot.layer?.borderWidth = project.isOpen ? 0 : 1
         // A window with no project: a terminal, or a server for one whose tab in front is on a server.
         let kind: WindowKind? = project.window?.kind

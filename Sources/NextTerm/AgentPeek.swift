@@ -128,6 +128,7 @@ final class AgentPeek: NSObject, NSPopoverDelegate, NSTextFieldDelegate {
         content.peek = self
 
         header.font = .systemFont(ofSize: 12, weight: .semibold)
+        header.textColor = Theme.system(.label)
         header.lineBreakMode = .byTruncatingTail
         text.isEditable = false
         text.isSelectable = true
@@ -150,9 +151,9 @@ final class AgentPeek: NSObject, NSPopoverDelegate, NSTextFieldDelegate {
         field.lineBreakMode = .byTruncatingTail
         field.usesSingleLineMode = true
         note.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
-        note.textColor = .secondaryLabelColor
+        note.textColor = Theme.system(.secondaryLabel)
         hints.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
-        hints.textColor = .tertiaryLabelColor
+        hints.textColor = Theme.system(.tertiaryLabel)
 
         let stack = NSStackView(views: [header, scroll, question, choices, field, note, hints])
         stack.orientation = .vertical

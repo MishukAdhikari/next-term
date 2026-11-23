@@ -39,8 +39,8 @@ final class CodeLayoutManager: NSLayoutManager {
     static let fenceTint = Theme.overlay(0.035)
     static let codeTint = Theme.overlay(0.07)
     static let markColor = Theme.textDim
-    static let ruleColor = Theme.pair(light: Theme.dynamic(\.divider), dark: NSColor(hex: 0x43454A))
-    static let quoteColor = Theme.pair(light: NSColor(hex: 0xC9CCD2), dark: NSColor(hex: 0x4E5157))
+    static let ruleColor = Theme.ui(.rule)
+    static let quoteColor = Theme.ui(.quote)
 
     override func drawGlyphs(forGlyphRange glyphsToShow: NSRange, at origin: NSPoint) {
         let characters = characterRange(forGlyphRange: glyphsToShow, actualGlyphRange: nil)
@@ -110,7 +110,7 @@ final class CodeLayoutManager: NSLayoutManager {
         let font: NSFont = storage.attribute(.font, at: first, effectiveRange: nil) as? NSFont ?? .monospacedSystemFont(ofSize: 13, weight: .regular)
         // The syntax colour, else the text's.
         let syntax = temporaryAttribute(.foregroundColor, atCharacterIndex: first, effectiveRange: nil) as? NSColor
-        let color: NSColor = syntax ?? storage.attribute(.foregroundColor, at: first, effectiveRange: nil) as? NSColor ?? .textColor
+        let color: NSColor = syntax ?? storage.attribute(.foregroundColor, at: first, effectiveRange: nil) as? NSColor ?? Theme.system(.text)
         let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: color]
         let width = Self.bullet.size(withAttributes: attributes).width
         enumerateLineFragments(forGlyphRange: glyphs) { fragment, _, container, fragmentGlyphs, _ in
@@ -156,7 +156,7 @@ final class CodeLayoutManager: NSLayoutManager {
                 tick.lineWidth = max(1.5, side * 0.12)
                 tick.lineCapStyle = .round
                 tick.lineJoinStyle = .round
-                NSColor.white.setStroke()
+                Theme.ui(.onAccent).setStroke()
                 tick.stroke()
             } else {
                 path.lineWidth = 1.2

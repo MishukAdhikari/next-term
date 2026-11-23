@@ -659,13 +659,14 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
     private var rows: [KeyboardShortcuts.Command] = []
 
     /// Each section's toolbar item: its name as the toolbar shows it, and its SF Symbol (all in macOS 13's set).
-    /// Keyboard Shortcuts shows as Shortcuts, so all eleven fit whole; its tooltip and the window's title name it fully.
+    /// Keyboard Shortcuts shows as Shortcuts, so all twelve fit whole; its tooltip and the window's title name it fully.
     static let sections: [(id: String, label: String, symbol: String)] = [
         ("general", "General", "gearshape"), ("editor", "Editor", "doc.text"), ("terminal", "Terminal", "terminal"),
         ("notifications", "Notifications", "bell.badge"), ("keys", "Shortcuts", "keyboard"),
         ("import", "Import", "square.and.arrow.down"), ("agents", "Agents", "cpu"), ("skills", "Skills", "sparkles"),
         ("mcp", "MCP Servers", "server.rack"),
-        ("tasks", "Tasks", "checklist"), ("secrets", "Secrets", "key"),
+        ("tasks", "Tasks", "checklist"), (RemoteAccessSettingsView.tabID, "Remote Access", "network"),
+        ("secrets", "Secrets", "key"),
     ]
 
     /// The tab view the toolbar picks a section of: the window's content, with no tabs of its own.
@@ -734,6 +735,10 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
         tasksTab.label = "Tasks"
         tasksTab.view = TaskSettingsView()
         tabs.addTabViewItem(tasksTab)
+        let remoteAccessTab = NSTabViewItem(identifier: RemoteAccessSettingsView.tabID)
+        remoteAccessTab.label = "Remote Access"
+        remoteAccessTab.view = RemoteAccessSettingsView()
+        tabs.addTabViewItem(remoteAccessTab)
         // Secrets is last: after Skills and Tasks, and after Remote Access once that tab is in.
         let secretsTab = NSTabViewItem(identifier: "secrets")
         secretsTab.label = "Secrets"

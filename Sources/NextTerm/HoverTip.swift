@@ -143,7 +143,7 @@ final class HoverTip {
         background.themedBackground(Theme.tabHover)
         background.layer?.cornerRadius = 5
         background.layer?.borderWidth = 1
-        background.layer?.borderColor = WorkSplitView.line.cgColor
+        background.themedBorder(WorkSplitView.line)
         panel.contentView = background
         label.font = .systemFont(ofSize: 11)
         label.textColor = Theme.text

@@ -39,7 +39,45 @@ extension SelfTest {
             await screenshot(c, suffix: "-themes-\(palette.id)")
             await screenshotParts(c, suffix: "-themes-\(palette.id)")
         }
+        #if DEBUG // its database helpers are a debug build's only
+        await themedSelectionChecks(c, root: root)
+        #endif
     }
+
+    #if DEBUG
+    /// Selected rows in every theme: a database's grid and its record list, one focused and one not. Both are drawn
+    /// in the theme's selection tint with the text keeping its colour, never AppKit's saturated accent fill (dark
+    /// text on a strong blue was unreadable in light themes).
+    static func themedSelectionChecks(_ c: TerminalWindowController, root: URL) async {
+        guard let window = c.window else { return }
+        let store = CellStore(in: root.appendingPathComponent("store"))
+        let area = c.editorArea
+        area.openDatabase(store.path)
+        guard let pane = area.activeDatabase else { return check(false, "themes: a database opens for the selection screenshots") }
+        defer { area.closeAll() }
+        _ = await wait(5) { pane.isSettled && pane.page != nil }
+        pane.select(table: "messages")
+        _ = await wait(5) { pane.isSettled && pane.page?.table == "messages" }
+        guard let content = pane.page?.columns.firstIndex(of: "content") else { return check(false, "themes: messages' columns") }
+        CellHand(window: window, byHand: false).click(pane.grid, row: 62, column: content)
+        _ = await wait(3) { pane.isDetailShown && pane.detail.detail?.body == "message 63" }
+        pane.detail.rowList.selectRowIndexes(IndexSet(integer: 1), byExtendingSelection: false)
+        window.makeFirstResponder(pane.detail.rowList)
+        for palette in ThemePalette.builtIn {
+            if palette.isDark { Preferences.darkTheme = palette.id } else { Preferences.lightTheme = palette.id }
+            Preferences.appearance = palette.isDark ? .dark : .light
+            await pause(0.6)
+            let lists: [NSTableView] = [pane.grid, pane.detail.rowList]
+            let plain = lists.compactMap { list -> String? in
+                let row = list.selectedRow
+                guard row >= 0, let view = list.rowView(atRow: row, makeIfNecessary: false) else { return nil }
+                return view is ThemedRowView ? nil : "\(type(of: list))'s row \(row + 1) is \(type(of: view))"
+            }
+            check(plain.isEmpty, "themes: \(palette.name) draws selected rows in its own selection tint", plain.joined(separator: "; "))
+            await screenshot(c, suffix: "-themes-selection-\(palette.id)")
+        }
+    }
+    #endif
 
     /// One theme's colours against its own paper and bars: text 4.5:1, quiet marks 3:1, the terminal's and the code's.
     static func paletteChecks(_ p: ThemePalette) {
