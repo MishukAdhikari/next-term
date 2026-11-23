@@ -372,6 +372,7 @@ enum MCPControl {
             RemoteMCP.call(tool, arguments, caller: caller, approval: approval, requester: requester, connection: connection, reply: reply)
         case "list_shortcuts": MainActor.assumeIsolated { reply(ShortcutsMCP.listShortcuts(arguments)) }
         case "show_settings": MainActor.assumeIsolated { reply(ShortcutsMCP.showSettings(arguments)) }
+        case "remote_access_guide": MainActor.assumeIsolated { RemoteAccessGuideMCP.call(arguments, reply: reply) }
         case "list_agent_clis": MainActor.assumeIsolated { AgentCLIManager.listForMCP(all: arguments["all"] as? Bool ?? false, reply: reply) }
         case "list_skills", "get_skill", "install_skill", "remove_skill":
             MainActor.assumeIsolated {

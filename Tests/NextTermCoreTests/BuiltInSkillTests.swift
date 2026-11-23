@@ -44,7 +44,7 @@ import Testing
         #expect(SkillLibrary.projectFolders(from: home, home: home).isEmpty) // never the home folder
         let entries = SkillLibrary.entries(from: package, home: home, nextTerm: BuiltInSkill.all)
         #expect(entries.map(\.name) == ["lint", "deploy", "review", "notes", "next-term-tabs", "next-term-worktrees", "next-term-setup",
-                                          "next-term-secrets"])
+                                          "next-term-secrets", "next-term-remote-access"])
         let lint = try #require(entries.first)
         #expect(lint.copy.scope == .project && lint.copy.place == "packages/web/.agents/skills" && !lint.native)
         // An agent Next Term doesn't know gets the nearest copy, and the other is named.
@@ -161,14 +161,16 @@ import Testing
     /// Each built-in in the Agent Skills format, named as it is served, with a description list_skills shows whole (it cuts
     /// at 300 characters), and only next-term-tabs under the tabs switch.
     @Test func everyBuiltInIsWholeInListSkills() {
-        #expect(BuiltInSkill.all.map(\.name) == ["next-term-tabs", "next-term-worktrees", "next-term-setup", "next-term-secrets"])
+        #expect(BuiltInSkill.all.map(\.name) == ["next-term-tabs", "next-term-worktrees", "next-term-setup", "next-term-secrets",
+                                                 "next-term-remote-access"])
         for builtIn in BuiltInSkill.all {
             #expect(builtIn.text.hasPrefix("---\nname: \(builtIn.name)\ndescription: "), "\(builtIn.name)")
             #expect(!builtIn.description.isEmpty && builtIn.description.count <= 300, "\(builtIn.name): \(builtIn.description.count)")
             #expect(BuiltInSkill.named(builtIn.name) == builtIn)
         }
         #expect(BuiltInSkill.offered(tabs: true) == BuiltInSkill.all)
-        #expect(BuiltInSkill.offered(tabs: false).map(\.name) == ["next-term-worktrees", "next-term-setup", "next-term-secrets"])
+        #expect(BuiltInSkill.offered(tabs: false).map(\.name) == ["next-term-worktrees", "next-term-setup", "next-term-secrets",
+                                                                 "next-term-remote-access"])
     }
 
     /// next-term-secrets: Secrets first, a key used by name and never seen, and a missing one asked for in Next Term, not
@@ -226,6 +228,16 @@ import Testing
         #expect(text.contains("pastes or names a repository"))
         let description = BuiltInSkill.worktrees.description
         #expect(description.contains("sync: elsewhere") && description.contains("its own project") && description.count <= 300)
+    }
+
+    /// next-term-remote-access: the guide first, the user's part never the agent's, and the dashboard steps.
+    @Test func theRemoteAccessSkillLeavesTheUsersPartToThem() {
+        let text = BuiltInSkill.remoteAccess.text
+        #expect(text.contains("`remote_access_guide`") && text.contains("`show_settings` with tab `remote_access`"))
+        #expect(text.contains("Never ask for the token, the master key or the recovery key"))
+        #expect(text.contains("`door_address`") && text.contains("never `localhost`") && text.contains("`connector_url`"))
+        #expect(MCPServer.tool(named: "remote_access_guide")?.description.contains("next-term-remote-access") == true)
+        #expect(!MCPServer.skillsParagraph(offeringTabs: true).contains("next-term-remote-access"))
     }
 
     /// next-term-setup: what MCP may change, Settings for the rest, and keys only from list_shortcuts, in a table.

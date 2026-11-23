@@ -601,7 +601,7 @@ final class UpdateSheetController: NSWindowController, NSWindowDelegate {
     let detailsToggle = NSButton(title: "", target: nil, action: nil)
     let detailsList = UpdateListScroll(maxHeight: 160, bordered: true, insets: NSEdgeInsets(top: 6, left: 8, bottom: 6, right: 8))
     let decisionsList = UpdateListScroll(maxHeight: 88, bordered: false)
-    /// Notes another feature adds (Remote access stopping), shown under the decisions; none yet.
+    /// Notes another feature adds (Remote access stopping), shown under the decisions.
     let notesStack = NSStackView()
     /// Why the last press has not quit yet (a dialog is open, an approved change finishes).
     let noteLabel = NSTextField(wrappingLabelWithString: "")
@@ -700,6 +700,7 @@ final class UpdateSheetController: NSWindowController, NSWindowDelegate {
         summaryLabel.showIfChanged(flow.summary)
         resized = renderDetails(flow.details) || resized
         resized = renderDecisions(decisions) || resized
+        resized = RemoteAccess.shared.showUpdateNote(in: notesStack) || resized
         if noteLabel.stringValue != (note ?? "") || noteLabel.isHidden != (note == nil) {
             noteLabel.stringValue = note ?? ""
             noteLabel.isHidden = note == nil

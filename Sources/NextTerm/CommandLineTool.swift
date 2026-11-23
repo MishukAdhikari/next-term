@@ -9,6 +9,7 @@ enum CommandLineTool {
     static func run(_ arguments: [String]) -> Never {
         // `nxtrm mcp`: the MCP server agents start (see MCPServer). A file named "mcp" is `nxtrm ./mcp`.
         if arguments == ["mcp"] { MCPBridge.run() }
+        if let targets = RemoteAccessGuardTargets.parse(arguments) { RemoteAccessTunnelGuard.run(targets) } // `nxtrm tunnel-guard …`: Remote access's tunnel watchdog
         // `nxtrm agent NAME`: an agent session over ACP in this tab (AgentSessionCLI, plan 030). `nxtrm ./agent` opens a
         // file named agent.
         if arguments.first == "agent" { AgentSessionCLI.run(Array(arguments.dropFirst())) }

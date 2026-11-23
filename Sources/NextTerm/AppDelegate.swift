@@ -229,6 +229,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         get { UserDefaults.standard.object(forKey: "agentControl") as? Bool ?? true }
         set {
             UserDefaults.standard.set(newValue, forKey: "agentControl")
+            MainActor.assumeIsolated { RemoteAccess.shared.agentControlChanged(newValue) } // off: Remote access too
             if newValue { startAgentControl() } else { MCPControlServer.shared.stop(); MCPRegistration.update(on: false) }
             syncBuiltInSkills()
         }
@@ -640,6 +641,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         KeyboardShortcuts.shared.capture(menu)
         NSApp.mainMenu = menu
         setUpNotifications()
+        MainActor.assumeIsolated { RemoteAccess.shared.launched() } // starts again if saved on
         // Fetches the open repositories now and then (Settings › Editor › Git); in the self-test, only its own.
         BackgroundFetcher.shared.start()
         // Write the shell integration before the first shell starts. Without it tabs fall back to process polling.
@@ -1199,6 +1201,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        MainActor.assumeIsolated { RemoteAccess.shared.stopForQuit() } // first: the public door closes
         // Each MCP call in flight hears that Next Term quits, or that it restarts for the update (KTD17).
         var restart: UpdateConsent?
         if (terminatingFor ?? quitReason) == .updateRelaunch {
