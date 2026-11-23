@@ -125,7 +125,9 @@ public enum AgentScreen {
         if let asked = sessionQuestion(in: lines, from: start, mask: mask) { return asked }
         let text = lines[start...].joined(separator: "\n")
         if choices.contains(where: { matches($0, text) }) {
-            for row in start..<lines.count {
+            // The lowest question is the live one: a pane shorter than the agent's frame leaves its earlier frames of the
+            // same prompt in scrollback above it (clearing the screen does not clear them), cursor on an older choice.
+            for row in (start..<lines.count).reversed() {
                 let line = lines[row]
                 let ns = line as NSString
                 guard let match = question.firstMatch(in: line, range: NSRange(location: 0, length: ns.length)) else { continue }

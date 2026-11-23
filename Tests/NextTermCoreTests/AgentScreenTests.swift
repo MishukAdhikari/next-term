@@ -456,6 +456,20 @@ private func screenActivity(_ lines: [String]) -> AgentActivity {
         #expect(try #require(AgentScreen.menu(screenLines: moved)).keys(toPick: 0) == ["up", "up", "enter"])
     }
 
+    @Test func aShortPaneReadsTheNewestFrameOfTheQuestion() throws {
+        // A pane shorter than the agent's frame keeps the earlier frame's top rows in scrollback over the redrawn one.
+        let menu = try #require(AgentScreen.menu(screenLines: [
+            "Do you want to make this edit to b.txt?",
+            "❯ 1. Yes",
+            "Do you want to make this edit to b.txt?",
+            "  1. Yes",
+            "❯ 2. Yes, and don't ask again this session",
+            "  3. No, and tell Claude what to do differently (esc)",
+        ]))
+        #expect(menu.question == "Do you want to make this edit to b.txt?")
+        #expect(menu.choices.count == 3 && menu.highlighted == 1)
+    }
+
     @Test func codexGeminiAndCommandCode() throws {
         let codex = try #require(AgentScreen.menu(screenLines: [
             "  Would you like to run the following command?",
