@@ -350,6 +350,10 @@ enum MCPControl {
             waitFor(tab, until: TerminalTab.now + Double(seconds), sawWork: false, reply: reply)
         case "get_editor_selection": reply(editorSelection(caller: caller))
         case "get_open_files": reply(openFiles())
+        case "open_project" where arguments["tab_id"] is String:
+            MainActor.assumeIsolated {
+                openProjectMovingTab(arguments, caller: caller, approval: approval, requester: requester, connection: connection, reply: reply)
+            }
         case "open_project": reply(openProject(arguments["path"] as? String ?? ""))
         case "new_tab": newTab(arguments, caller: caller, reply: reply)
         case "send_to_tab": sendToTab(arguments, caller: caller, reply: reply)
@@ -645,6 +649,40 @@ enum MCPControl {
         var answer: [String: Any] = ["project": path, "tabs": controller.tabs.map { describe($0, in: controller, caller: nil) }]
         if let note = shown.note { answer["note"] = note }
         return ok(answer)
+    }
+
+    /// open_project with tab_id: that tab moves, live, into the project's window, once the user approves on the Mac (it
+    /// moves a window's tab, as focus_tab and set_layout change windows). For the folder of the linked worktree the tab's
+    /// agent works in, this is the strip's own Open as Project, which answers the strip's offer too.
+    @MainActor
+    private static func openProjectMovingTab(_ arguments: [String: Any], caller: TerminalTab?, approval: MCPApproval, requester: String?,
+                                             connection: String?, reply: @escaping Reply) {
+        guard let path = absolute(arguments["path"]), isFolder(path) else {
+            return reply(fail("Not a folder (give an absolute path): \(arguments["path"] as? String ?? "")"))
+        }
+        guard let tab = findTab(arguments["tab_id"]), let source = controller(of: tab) else {
+            return reply(fail("No tab with that id; list_tabs shows them."))
+        }
+        let name = (path as NSString).lastPathComponent
+        if source.project.map(canonicalPath) == path {
+            return reply(fail("That tab is in \(name)’s window already; nothing moved."))
+        }
+        if let why = app.moveRefusal(tab, toProject: path) { return reply(fail(why + " Nothing moved.")) }
+        let context = MCPWriteControl.context(arguments, caller: caller, approval: approval, requester: requester, connection: connection)
+        let ask = MCPWriteControl.Ask(title: "An agent asks to open a project and move a tab into it",
+                                      details: "\(MCPTabNames.named(tab)) moves from \(MCPWriteControl.place(source)) into the window of \(name), opened as its own project. What runs in it keeps running.",
+                                      approveTitle: "Open as Project")
+        MCPWriteControl.approve(ask, context, reply: reply) { approved, window in
+            window?.finish()
+            guard controller(of: tab) != nil else { return reply(fail("That tab closed meanwhile; nothing moved.")) }
+            if let why = app.moveRefusal(tab, toProject: path) { return reply(fail(why + " Nothing moved.")) }
+            let worktree = AgentPlaces.shared.places[tab.id.uuidString].map { canonicalPath($0.checkout.path) } == path
+            guard let destination = worktree ? app.openAsProject(tab: tab, worktree: path) : app.moveTab(tab, toProject: path) else {
+                return reply(fail("The tab couldn’t move; nothing changed."))
+            }
+            reply(ok(["project": path, "moved": tab.id.uuidString.lowercased(), "approved": approved,
+                      "tabs": destination.tabs.map { describe($0, in: destination, caller: nil) }]))
+        }
     }
 
     private static func newTab(_ arguments: [String: Any], caller: TerminalTab?, reply: @escaping Reply) {

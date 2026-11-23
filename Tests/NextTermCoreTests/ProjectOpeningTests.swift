@@ -37,6 +37,23 @@ import Testing
         #expect(ProjectOpening.Setting(mcpName: "newTab") == nil)
     }
 
+    /// Open as Project takes a running tab along into the folder's window, so nothing may replace the window it leaves:
+    /// This Window and Ask open a window of its own instead of stopping the program. New Tab merges the new window into
+    /// this one, As macOS Prefers follows the system, and a window already open on the folder takes the tab.
+    @Test func openAsProjectNeverReplacesTheWindowTheTabLeaves() {
+        typealias Rule = ProjectOpening.OpenAsProject
+        #expect(ProjectOpening.openAsProject(windowOpen: false, setting: .newTab) == Rule.newTab)
+        #expect(ProjectOpening.openAsProject(windowOpen: false, setting: .thisWindow) == Rule.newWindow)
+        #expect(ProjectOpening.openAsProject(windowOpen: false, setting: .ask) == Rule.newWindow)
+        #expect(ProjectOpening.openAsProject(windowOpen: false, setting: .newWindow) == Rule.newWindow)
+        #expect(ProjectOpening.openAsProject(windowOpen: false, setting: .asMacOS, systemPrefersTabs: true) == Rule.newTab)
+        #expect(ProjectOpening.openAsProject(windowOpen: false, setting: .asMacOS, systemPrefersTabs: false) == Rule.newWindow)
+        for setting in ProjectOpening.Setting.allCases {
+            #expect(ProjectOpening.openAsProject(windowOpen: true, setting: setting, systemPrefersTabs: true) == Rule.existing,
+                    "\(setting)")
+        }
+    }
+
     /// A window the restore brought back, with tabs the user has not put anything in yet, is never taken over or replaced:
     /// its put-back lines, notes and scrollback would go before the user saw them. The folder opens in a window of its own,
     /// in front, and nothing asks, whatever "Open Projects In" says.

@@ -233,6 +233,7 @@ final class UpdateKeepSessions {
         let timer = Timer(timeInterval: 1, repeats: true) { _ in
             MainActor.assumeIsolated { UpdateKeepSessions.shared.tick() }
         }
+        timer.tolerance = 0.1 // a tenth of a second: the countdown still reads as one a second
         RunLoop.main.add(timer, forMode: .common)
         self.timer = timer
     }

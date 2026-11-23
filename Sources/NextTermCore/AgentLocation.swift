@@ -178,25 +178,56 @@ public enum AgentLocation {
 
     // MARK: session records (read from their ends)
 
-    /// Which lines of a session record can name a folder, and how to read one.
+    /// Which lines of a session record can name a folder or a write, and how to read one.
     public enum RecordKind: Sendable {
         /// A Claude Code transcript.
         case claude
         /// A Codex rollout.
         case codex
+        /// A Command Code session file: its header names the folder it started in, and it records no moves.
+        case commandCode
 
-        /// What a line's bytes must hold to be worth parsing: most lines are output, not folders.
+        /// What a line's bytes must hold to be worth parsing for a folder: most lines are output, not folders.
         var needles: [Data] {
             switch self {
-            case .claude: return [Data(#""cwd""#.utf8)]
+            case .claude, .commandCode: return [Data(#""cwd""#.utf8)]
             case .codex: return [Data(#""turn_context""#.utf8), Data(#""thread_settings_applied""#.utf8)]
             }
         }
 
+        /// What a line's bytes must hold to be worth parsing for a write: a tool call.
+        var writeNeedles: [Data] {
+            switch self {
+            case .claude, .commandCode: return [Data(#""tool_use""#.utf8)]
+            case .codex: return [Data(#""function_call""#.utf8), Data(#""custom_tool_call""#.utf8), Data(#""local_shell_call""#.utf8)]
+            }
+        }
+
+        var agent: LiveChat.Agent {
+            switch self {
+            case .claude: return .claude
+            case .codex: return .codex
+            case .commandCode: return .commandCode
+            }
+        }
+
+        /// The folder a line names as where the agent works now; Command Code's header is only where it started.
         func folder(_ line: [String: Any], modified: Date) -> RecordedFolder? {
             switch self {
             case .claude: return AgentLocation.claudeFolder(line: line, modified: modified)
             case .codex: return AgentLocation.codexFolder(line: line, modified: modified)
+            case .commandCode: return nil
+            }
+        }
+
+        /// The folder a line names, which the relative paths of the calls after it start from.
+        func cwd(_ line: [String: Any]) -> String? {
+            switch self {
+            case .claude: return AgentLocation.claudeCwd(line: line)
+            case .codex: return AgentLocation.codexCwd(line: line)
+            case .commandCode:
+                guard line["type"] as? String == "session", let cwd = line["cwd"] as? String, !cwd.isEmpty else { return nil }
+                return cwd
             }
         }
     }
@@ -244,6 +275,46 @@ public enum AgentLocation {
         return (nil, end)
     }
 
+    /// What the record at `path` says from `start` (where a line starts; nil: its start) to `size`, read forward
+    /// once, and no further back than `recordReach` from its end: the folder its last line naming one names, each
+    /// line's writes dated by that line, the folder relative paths start from after it (`cwd` before it), and where
+    /// its last whole line ends. A line not ended yet is left for the next read.
+    static func readForward(_ path: String, kind: RecordKind, from start: UInt64?, size: UInt64, modified: Date, cwd: String?)
+        -> (found: RecordedFolder?, writes: [DatedWrite], cwd: String?, end: UInt64?) {
+        let floor = max(start ?? 0, size > recordReach ? size - recordReach : 0)
+        guard size > floor, let handle = FileHandle(forReadingAtPath: path) else { return (nil, [], cwd, nil) }
+        defer { try? handle.close() }
+        try? handle.seek(toOffset: floor)
+        guard let data = try? handle.read(upToCount: Int(size - floor)), let last = data.lastIndex(of: 0x0A) else { return (nil, [], cwd, nil) }
+        let end = floor + UInt64(last - data.startIndex) + 1
+        var whole = data[data.startIndex..<last]
+        if floor > (start ?? 0) {
+            // The line at `floor` started before it: it is left out.
+            guard let newline = whole.firstIndex(of: 0x0A) else { return (nil, [], cwd, end) }
+            whole = whole[(newline + 1)...]
+        }
+        var cwd = cwd
+        var folderLine: [String: Any]?
+        var writes: [DatedWrite] = []
+        let needles = kind.needles, writeNeedles = kind.writeNeedles
+        for line in whole.split(separator: 0x0A) {
+            let names = needles.contains { line.range(of: $0) != nil }
+            let acts = writeNeedles.contains { line.range(of: $0) != nil }
+            guard names || acts, let json = (try? JSONSerialization.jsonObject(with: Data(line))) as? [String: Any] else { continue }
+            if names, let folder = kind.cwd(json) {
+                cwd = folder
+                folderLine = json
+            }
+            guard acts else { continue }
+            let signals = AgentWrites.signals(record: json, agent: kind.agent, cwd: cwd)
+            guard !signals.isEmpty else { continue }
+            let at = lineDate(json, modified: modified)
+            writes += signals.map { DatedWrite(signal: $0, at: at) }
+        }
+        // Only the newest folder is wanted: its date is read once.
+        return (folderLine.flatMap { kind.folder($0, modified: modified) }, writes, cwd, end)
+    }
+
     /// The folder the record at `path` names last, read back from its end.
     static func lastFolder(_ path: String, kind: RecordKind) -> RecordedFolder? {
         guard let file = RecordFile(path) else { return nil }
@@ -261,9 +332,18 @@ public enum AgentLocation {
 
     /// One line of a Claude Code transcript: its `cwd`, unless a sub-agent wrote it.
     static func claudeFolder(line: [String: Any], modified: Date) -> RecordedFolder? {
+        guard let cwd = claudeCwd(line: line) else { return nil }
+        return RecordedFolder(folder: cwd, at: lineDate(line, modified: modified))
+    }
+
+    static func claudeCwd(line: [String: Any]) -> String? {
         guard line["isSidechain"] as? Bool != true, let cwd = line["cwd"] as? String, !cwd.isEmpty else { return nil }
-        let at = (line["timestamp"] as? String).flatMap(AgentSessions.parseDate) ?? modified
-        return RecordedFolder(folder: cwd, at: at)
+        return cwd
+    }
+
+    /// When a record's line was written: its `timestamp`, or the file's last write when it has none.
+    static func lineDate(_ line: [String: Any], modified: Date) -> Date {
+        (line["timestamp"] as? String).flatMap(AgentSessions.parseDate) ?? modified
     }
 
     /// Codex: the folder of the last turn (`turn_context`), or of settings applied to the thread since
@@ -277,6 +357,11 @@ public enum AgentLocation {
 
     /// One line of a Codex rollout: the folder a `turn_context` or `thread_settings_applied` names.
     static func codexFolder(line: [String: Any], modified: Date) -> RecordedFolder? {
+        guard let cwd = codexCwd(line: line) else { return nil }
+        return RecordedFolder(folder: cwd, at: lineDate(line, modified: modified))
+    }
+
+    static func codexCwd(line: [String: Any]) -> String? {
         let payload = line["payload"] as? [String: Any]
         var cwd: String?
         if line["type"] as? String == "turn_context" {
@@ -285,8 +370,7 @@ public enum AgentLocation {
             cwd = (payload?["thread_settings"] as? [String: Any])?["cwd"] as? String
         }
         guard let cwd, !cwd.isEmpty else { return nil }
-        let at = (line["timestamp"] as? String).flatMap(AgentSessions.parseDate) ?? modified
-        return RecordedFolder(folder: cwd, at: at)
+        return cwd
     }
 
     /// The session the `claude` with process `pid` has open, and the folder it started in, from
@@ -508,6 +592,15 @@ public struct Held<Value: Equatable>: Equatable {
         public let to: Value
         /// When the new value was first seen.
         public let since: Date
+    }
+
+    /// Takes a value that counts at once, with no hold (a place an agent wrote in); returns the change, if any.
+    public mutating func set(_ new: Value) -> (from: Value?, to: Value)? {
+        candidate = nil
+        wasBlocked = false
+        guard new != value else { return nil }
+        defer { value = new }
+        return (value, new)
     }
 
     /// Takes what was seen at `now`; returns the change once it counts.

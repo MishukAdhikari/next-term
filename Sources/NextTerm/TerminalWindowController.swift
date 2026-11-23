@@ -288,9 +288,16 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     /// Browse Home Folder was clicked in this window's "No project open": while its tab is in no project, the tree shows
     /// the home folder, as files only (ProjectSidebarView.browsingOnly).
     private(set) var browsesHome = false
-    private var ticker: Timer?
     private var tickCount = 0
+    /// A spinner frame's strip redraw is waiting for the run loop's turn to end (tabSpinnerTurned).
+    private var stripQueued = false
     private var closeConfirmed = false
+    /// Closing a linked worktree's window reads whether its worktree could go before it asks: under way.
+    private var readingWorktree = false
+    /// The close asks as any window's does, nothing about the worktree: git couldn't read it, or the last tab moved out.
+    private var skipsWorktreeQuestion = false
+    /// The linked worktree this window shows, as last found for its project.
+    private var linkedWorktreeFound: (project: String?, path: String?)?
     /// Called when the window closes; the flag says the Welcome window follows if no other window is left
     /// (Close Project, or the last tab closed).
     var onClose: ((TerminalWindowController, _ welcome: Bool) -> Void)?
@@ -502,10 +509,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         setSidebarVisible(AppDelegate.shared.sidebarVisible)
         takeProjectColor()
 
-        let ticker = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in self?.tick() }
-        ticker.tolerance = 0.03
-        RunLoop.main.add(ticker, forMode: .common)
-        self.ticker = ticker
+        WindowTicker.shared.start() // every window's chores, on one beat paced by what they show
         // A window that refreshed once a second while no one could see it is up to date the moment it shows again.
         for (name, ofApp) in NSWindow.visibilityNotifications {
             NotificationCenter.default.addObserver(self, selector: #selector(visibilityChanged), name: name, object: ofApp ? NSApp : window)
@@ -587,11 +591,84 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     private func makeTab(directory: String?, remote: RemoteTab? = nil, id: UUID = UUID(), byAgent: Bool = false) -> TerminalTab {
         let tab = TerminalTab(directory: directory, fontSize: AppDelegate.shared.terminalFontSize, remote: remote, id: id)
+        if remote != nil { RemotePoller.shared.start() } // it runs while a remote tab is open, and stops itself after
         tab.view.awaitsChoice = byAgent
-        tab.delegate = self
-        // ⌘-click on "src/a.ts:42" in the output opens the editor there.
-        tab.view.openFile = { [weak self] url, line, column in self?.openFile(url, line: line, column: column) }
+        wire(tab)
         return tab
+    }
+
+    /// What ties a tab to the window it is in: its exit and changes reach this window, and ⌘-click on "src/a.ts:42" in
+    /// its output opens this window's editor there. Done again when the tab moves to another window (`attach`).
+    private func wire(_ tab: TerminalTab) {
+        tab.delegate = self
+        tab.view.openFile = { [weak self] url, line, column in self?.openFile(url, line: line, column: column) }
+    }
+
+    /// The pane `tab` shows in here, carried along when it moves to another window (`attach`).
+    func paneView(of tab: TerminalTab) -> PaneView? { group(of: tab)?.paneView(tab) }
+
+    /// Takes in a tab running in another window, as it is: its program, scrollback, title and state stay, and its pane
+    /// (`paneView`) brings its chat and prompt box. Nothing starts or restarts. It comes as a tab of its own, after the
+    /// tabs here; `detach` then lets go of it in the window it left. The tab does not come pinned.
+    func attach(_ tab: TerminalTab, paneView: PaneView?, select selectIt: Bool = true) {
+        wire(tab)
+        insertRestored(PaneGroup(moving: tab, paneView: paneView), starting: [])
+        AppDelegate.shared.projectsChanged()
+        if selectIt || groups.count == 1 {
+            select(groups.count - 1)
+        } else {
+            refresh()
+        }
+    }
+
+    /// Lets go of a tab `attach` took into another window: out of this window's tabs, without stopping its program or
+    /// listing it under Reopen Closed Tab. A window left with no tabs closes, asking only about unsaved files and values
+    /// in its editor; Cancel keeps the window, with a fresh shell in it.
+    func detach(_ tab: TerminalTab) {
+        guard let index = groups.firstIndex(where: { $0.contains(tab) }) else { return }
+        // A rename in progress refers to tabs by position: finish it while positions still hold.
+        if window?.firstResponder is NSTextView, tabBar.isEditing || tabList.isEditing { window?.makeFirstResponder(nil) }
+        let group = groups[index]
+        // The terminal had the keyboard here and took it along: nothing in this window has it now.
+        let keyboardLeft = !(window?.firstResponder is NSView)
+        defer { AppDelegate.shared.projectsChanged() }
+        if group.remove(tab, keepingView: true) {
+            // One pane fewer; the tab stays, its neighbour taking the room and the keyboard the moved pane had.
+            group.layout()
+            if index == activeIndex, keyboardLeft, !group.focused.view.awaitsChoice { window?.makeFirstResponder(group.focused.view) }
+            refreshVisibility()
+            refresh()
+            return
+        }
+        group.view.removeFromSuperview()
+        groups.remove(at: index)
+        if groups.isEmpty { return closeLeftEmpty(after: tab) }
+        if index == activeIndex {
+            select(max(0, index - 1), unfold: false, arming: false) // the left neighbour, an agent's still waiting for a click
+        } else {
+            if index < activeIndex { activeIndex -= 1 }
+            refresh()
+        }
+    }
+
+    /// The window's last tab moved out (`detach`): the window goes. Unsaved files or values in its editor are asked about
+    /// first, as closing the window asks, with a fresh shell put in so that Cancel leaves a usable window.
+    private func closeLeftEmpty(after moved: TerminalTab) {
+        opensWelcome = true
+        skipsWorktreeQuestion = true // the agent went on elsewhere: nothing to ask about its worktree
+        guard closeAsks || !editorArea.savingDatabases.isEmpty else {
+            closeConfirmed = true
+            window?.close()
+            return
+        }
+        addTab(directory: project ?? (moved.remote == nil ? moved.directory : nil))
+        window?.performClose(nil)
+        // Kept open (Cancel): a later close asks about the worktree again.
+        if let window, !hasClosed {
+            WindowSheets.afterSheet(on: window) { [weak self] in
+                if self?.hasClosed == false { self?.skipsWorktreeQuestion = false }
+            }
+        }
     }
 
     /// Brings a terminal to the front: its tab selected, its pane focused (and un-zoomed if hidden). `arming` false: an
@@ -1066,15 +1143,31 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         return last.isEmpty ? tab.directory : last
     }
 
-    private func tick() {
+    /// When the half-second and one-second chores last ran (TerminalTab.now): they keep their rhythm whatever the
+    /// beat's pace (WindowTicker).
+    private var choresRan = (half: TimeInterval(0), second: TimeInterval(0))
+
+    /// Something someone can look at: not minimised, hidden or covered (NSWindow.canBeSeen).
+    var canBeSeen: Bool { window?.canBeSeen != false }
+
+    /// A command or an agent runs in one of this window's tabs: the beat watches it (WindowTicker).
+    var runsSomething: Bool { tabs.contains { $0.status.running } }
+
+    /// One beat of the shared clock (WindowTicker), `interval` seconds after the last; `prompted` by output while
+    /// idle, it looks at each tab's foreground process at once (a command may have started there).
+    func tick(interval: TimeInterval, prompted: Bool = false) {
+        guard !hasClosed else { return }
         tickCount += 1
         let now = TerminalTab.now
+        let half = prompted || now - choresRan.half >= 0.45, second = now - choresRan.second >= 0.95
+        if half { choresRan.half = now }
+        if second { choresRan.second = now }
         refreshVisibility()
         for (index, tab) in tabs.enumerated() {
             tab.view.drawIfSeenAgain()
-            if tickCount % 2 == 0 { tab.pollForeground(); tab.pollServing() } // every 0.5 s
-            // The agent in sight every 0.25 s; the others every 0.5 s, half of them on each tick.
-            if isOnScreen(tab) || (tickCount + index) % 2 == 0 { tab.pollAgentScreen() }
+            if half { tab.pollForeground(); tab.pollServing() } // every 0.5 s
+            // The agent in sight on every beat; at the fastest beat the others on every other one, half on each.
+            if isOnScreen(tab) || interval > WindowTicker.Pace.watching.rawValue || (tickCount + index) % 2 == 0 { tab.pollAgentScreen() }
             tab.status.tick(at: now)
             tab.noteNeed(at: now)
             if let notice = tab.status.takeNotice() {
@@ -1082,21 +1175,25 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             }
         }
         if openedByAgent { armScratchClose() }
-        if tickCount % 4 == 0 { editorArea.checkDisk() } // agents edit the files you have open
+        if second { editorArea.checkDisk() } // agents edit the files you have open
         // A window no one can see refreshes once a second (its tabs' marks still reach the Dock badge and the
         // notifications), and at once when it shows again (visibilityChanged).
-        if window?.canBeSeen != false || tickCount % 4 == 0 { refresh() }
-        if tickCount % 4 == 0 { updateProjectTab() }
+        if canBeSeen || second { refresh() }
+        if second { updateProjectTab() }
     }
 
     @objc private func visibilityChanged() {
+        WindowTicker.shared.retune() // shown, hidden, the app in use or not: the beat's pace follows
         guard window?.canBeSeen == true else { return }
         refresh()
+        editorArea.checkDisk() // what agents and git changed while no one could see it
     }
 
-    func refresh() {
+    /// The tab strip's items, one for each tab: its title (the spinner frame as View › Agent Spinner shows it), mark,
+    /// tooltip and shortcut.
+    private func tabBarItems() -> [TabBarItem] {
         let shortcuts = Self.tabShortcuts(count: groups.count)
-        let items = groups.enumerated().map { index, group -> TabBarItem in
+        return groups.enumerated().map { index, group -> TabBarItem in
             let tab = group.focused
             guard group.isSplit else {
                 return TabBarItem(title: AgentSpinner.shown(tab.title), truncation: tab.titleTruncation, state: tab.status.state, tooltip: tab.tooltip,
@@ -1118,6 +1215,10 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
                               shorterTitles: tab.shorterTitles.map { AgentSpinner.shown($0) + others }, editableTitle: tab.editableTitle,
                               context: tab.contextUsage, pinned: group.pinned)
         }
+    }
+
+    func refresh() {
+        let items = tabBarItems()
         feedTabStrips(placeMarked(items))
         // An agent started or stopped, or another one is the one Send to Agent types into: the Ask hints follow.
         let asked = agentTab.map { "\(ObjectIdentifier($0).hashValue) \(Self.agentName(of: $0)) \($0.title)" }
@@ -1126,6 +1227,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             updateAskHints()
         }
         refreshPaneHeaders()
+        updateWorktreeStrips()
         sidebar.showRemote(activeTab?.remoteMark) // the pane with the keyboard: the tree follows it
         updateRailMarks(items)
         announceBackgroundChanges()
@@ -1415,7 +1517,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         guard project != nil, let window else { return NSSound.beep() }
         opensWelcome = true
         window.performClose(nil)
-        if window.isVisible && window.attachedSheet == nil { opensWelcome = false } // close was refused
+        // Close was refused; a worktree's question comes once git has read it.
+        if window.isVisible && window.attachedSheet == nil && !readingWorktree { opensWelcome = false }
     }
 
     // MARK: project colour
@@ -2957,71 +3060,112 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         }
         editorsConfirmed = false
         valuesConfirmed = false
+        // A linked worktree's window (an agent's, most often) always asks, busy or not, merged or not (Quit never does).
+        if let worktree = linkedWorktree, !skipsWorktreeQuestion { return askClosingWorktree(worktree, sender) }
         if stopConfirmed { return true } // asked for the whole merged window (MergedWindowClose)
         let busy = busyTabs
         let kept = Self.keptList(tabs)
         guard !busy.isEmpty || !kept.isEmpty else { return true }
-        let info = [busy.isEmpty ? "" : Self.stopText("Closing it stops", busy), kept].filter { !$0.isEmpty }.joined(separator: "\n\n")
-        // A linked worktree's window (an agent's, most often) can take its worktree with it: a choice set apart, last.
-        let worktree = project.flatMap { WorktreeWindow.repository(ofLinkedWorktree: $0) == nil ? nil : $0 }
-        let answered: (NSApplication.ModalResponse) -> Void = { [weak self] response in
-            guard let self else { return }
-            switch response {
-            case .alertFirstButtonReturn:
-                self.closeConfirmed = true
-                sender.close()
-            case .alertThirdButtonReturn:
-                if let worktree { self.closeRemovingWorktree(worktree) }
-            default:
-                self.opensWelcome = false
-            }
-        }
-        if worktree != nil {
-            AlternativeAlert(title: "Close this window?", info: info, buttons: ["Close Window", "Cancel"], alternative: WorktreeRemoval.closeAndRemove,
-                             note: WorktreeRemoval.closingInfo(branch: sidebar.git.snapshot?.branch)).begin(over: sender, completion: answered)
-            return false
-        }
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = "Close this window?"
-        alert.informativeText = info
+        alert.informativeText = closeStops
         alert.addButton(withTitle: "Close Window").hasDestructiveAction = true
         alert.addButton(withTitle: "Cancel")
-        alert.beginSheetModal(for: sender, completionHandler: answered)
+        alert.beginSheetModal(for: sender) { [weak self] response in
+            guard let self else { return }
+            guard response == .alertFirstButtonReturn else { return self.opensWelcome = false }
+            self.closeConfirmed = true
+            sender.close()
+        }
         return false
     }
 
-    /// Whether closing the window now asks something first: about unsaved files or database values, or what closing stops.
+    /// What closing the window stops and what it keeps running, for its question; empty when nothing, or when a merged
+    /// window's close asked about it already.
+    private var closeStops: String {
+        if stopConfirmed { return "" }
+        let busy = busyTabs
+        return [busy.isEmpty ? "" : Self.stopText("Closing it stops", busy), Self.keptList(tabs)].filter { !$0.isEmpty }.joined(separator: "\n\n")
+    }
+
+    /// The linked worktree this window's project is, if it is one (found again only when the project changes).
+    private var linkedWorktree: String? {
+        guard GitWriter.git != nil, let project else { return nil }
+        if let found = linkedWorktreeFound, found.project == project { return found.path }
+        let path = WorktreeWindow.repository(ofLinkedWorktree: project) == nil ? nil : project
+        linkedWorktreeFound = (project, path)
+        return path
+    }
+
+    /// The one question closing a linked worktree's window asks, once git has said whether the worktree could go (with
+    /// this window's tabs and agents left out, as they end with it): Close Window, Cancel and, set apart, Close and
+    /// Remove Worktree; or the first two with every reason it stays. Read first, so there is never a second question.
+    private func askClosingWorktree(_ path: String, _ sender: NSWindow) -> Bool {
+        guard !readingWorktree else { return false }
+        readingWorktree = true
+        GitActions.readWorktree(at: path) { [weak self] read in
+            guard let self else { return }
+            guard let (model, row) = read else {
+                self.readingWorktree = false
+                self.skipsWorktreeQuestion = true
+                return sender.performClose(nil)
+            }
+            GitActions.removalFacts(row, in: model, leaving: self, countUnpushed: true) { [weak self] facts, _ in
+                guard let self else { return }
+                self.readingWorktree = false
+                guard !self.hasClosed else { return }
+                let asked = WorktreeRemoval.closeQuestion(facts: facts, stops: self.closeStops, branch: row.worktree.branch)
+                AlternativeAlert(title: asked.title, info: asked.info, buttons: asked.buttons, alternative: asked.alternative, note: asked.note)
+                    .begin(over: sender) { [weak self] response in
+                        guard let self else { return }
+                        switch response {
+                        case .alertFirstButtonReturn:
+                            WorktreeEndOffer.answered(path) // asked here: its agents ending don't ask again
+                            self.closeConfirmed = true
+                            sender.close()
+                        case .alertThirdButtonReturn:
+                            WorktreeEndOffer.answered(path)
+                            self.closeRemovingWorktree(path)
+                        default:
+                            self.opensWelcome = false
+                        }
+                    }
+            }
+        }
+        return false
+    }
+
+    /// Whether closing the window now asks something first: about unsaved files or database values, what closing stops,
+    /// or, for a linked worktree's window, whether its worktree goes too.
     var closeAsks: Bool {
         if closeConfirmed { return false }
         if !editorArea.dirtyDocuments.isEmpty && !editorsConfirmed { return true }
         if !editorArea.draftDatabases.isEmpty && !valuesConfirmed { return true }
+        if linkedWorktree != nil && !skipsWorktreeQuestion { return true }
         return !stopConfirmed && (!busyTabs.isEmpty || !Self.keptList(tabs).isEmpty)
     }
 
-    /// Close and Remove Worktree: when the worktree at `path` can go (WorktreeRemoval.verdict, with this window's tabs
-    /// and agents left out, as they end with it), the window closes, the programs in it end, and then the worktree is
-    /// removed. When it can't, says why; Close Window still closes and keeps it.
+    /// Close and Remove Worktree: the programs in the window end, it closes, and once they are gone the worktree is
+    /// removed, after a last look at whether it can go (WorktreeRemoval.verdict, with this window's tabs and agents left
+    /// out): something opened or changed there while the question was up keeps it, saying why.
     private func closeRemovingWorktree(_ path: String) {
-        withGit(at: path) { [weak self] actions in
-            guard let self, let window = self.window, let model = actions.model,
-                  let row = BranchPopupController.worktreeRow(at: path, in: model) else {
-                self?.opensWelcome = false
-                return NSSound.beep()
-            }
-            actions.removalVerdict(row, leaving: self) { verdict, _ in
-                if let why = WorktreeRemoval.whyItStays(verdict) {
-                    return GitPrompt.ask("“\(row.folder)” can’t be removed now", info: why, buttons: ["Close Window", "Cancel"], over: window) { choice in
-                        guard choice == 0 else { return self.opensWelcome = false }
-                        self.closeConfirmed = true
-                        window.close()
+        guard let window else { return }
+        // Ended here, not by the close (it finds them ended), to know when they are gone.
+        let waiting = TerminalTab.terminate(tabs, finishLater: false)
+        closeConfirmed = true
+        window.close()
+        TabHangup.finishLater(waiting) {
+            // Read again now, not kept from the question: its agents may have committed or moved HEAD while it was up.
+            GitActions.readWorktree(at: path) { read in
+                guard let (model, row) = read else { return } // gone already
+                GitActions.removalVerdict(row, in: model, leaving: self) { verdict, _ in
+                    if let why = WorktreeRemoval.whyItStays(verdict) {
+                        let front = AppDelegate.shared.frontOpenController?.window
+                        return GitPrompt.ask("“\(row.folder)” was kept", info: why + "\n\nIts window is closed.", buttons: ["OK"], over: front) { _ in }
                     }
+                    GitActions.removeClosed(row.worktree, folder: row.folder, model: model)
                 }
-                // Ended here, not by the close (it finds them ended), to know when they are gone.
-                let waiting = TerminalTab.terminate(self.tabs, finishLater: false)
-                self.closeConfirmed = true
-                window.close()
-                TabHangup.finishLater(waiting) { GitActions.removeClosed(row.worktree, folder: row.folder, model: model) }
             }
         }
     }
@@ -3030,8 +3174,6 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         hasClosed = true
         scratchClose?.cancel()
         scratchClose = nil
-        ticker?.invalidate()
-        ticker = nil
         columnHost.windowClosing() // a pending open, the list, its reveal's timer and its Escape monitor go with it
         sidebar.stopWatching()
         _ = TerminalTab.terminate(tabs, finishLater: true)
@@ -3221,9 +3363,28 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     func tabDidChange(_ tab: TerminalTab) {
         // Events (command end, bell) can land between ticks; post their notices straight away.
         if let notice = tab.status.takeNotice() { AppDelegate.shared.post(notice, tab: tab, in: self) }
+        // At once, as it always was: what changed (a state, a title) reaches the strip, the rail and the Dock badge in the
+        // same turn. The spinner's frames, which came several times a second, no longer come here (tabSpinnerTurned).
         AppDelegate.shared.updateCopilotFolders() // a new folder for Copilot CLI to connect from
         noticeServedURLs()
         refresh()
+        WindowTicker.shared.retune() // a command started or ended: the beat's pace may change
+    }
+
+    /// Only the frame of an agent's own spinner turned in its title (TerminalTab.setTerminalTitle). Nothing else
+    /// changed, so only the tab strip, the rail and the pane headers are drawn again, and only where the frame shows: in a window
+    /// someone can see, with the spinner turning (View › Agent Spinner).
+    func tabSpinnerTurned(_ tab: TerminalTab) {
+        guard AgentSpinner.turns, canBeSeen, !stripQueued else { return }
+        stripQueued = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self, !self.hasClosed else { return }
+            self.stripQueued = false
+            let items = self.tabBarItems()
+            self.feedTabStrips(self.placeMarked(items))
+            self.updateRailMarks(items)
+            self.refreshPaneHeaders() // a split's pane headers show the frame too (AgentSpinner)
+        }
     }
 
     /// A tab's served address came or went (a dev server started or stopped): the Services rows' ports are looked at

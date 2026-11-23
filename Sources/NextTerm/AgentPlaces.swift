@@ -1,17 +1,24 @@
 import AppKit
 import NextTermCore
 
-/// Where each local agent tab's agent works: its checkout and branch, held 3 s, for the one mark a tab gets
-/// when that is not what its window shows or its branch was switched under it. Once a second while an agent
-/// runs in a local tab: each agent's own folder (its process's, or the one its session record names after
-/// a move the process didn't make), git's worktree list for its repository (read again only when a HEAD or
-/// a git folder changed), then PlaceTracker. The reads run off the main thread; remote tabs get nothing.
+/// Where each local agent tab's agent works: its checkout and branch, for the one mark a tab gets when that is
+/// not what its window shows or its branch was switched under it. Once a second while an agent runs in a local
+/// tab: each agent's own folder (its process's, or the one its session record names after a move the process
+/// didn't make) and what its session record says it wrote since, git's worktree list for its repository (read
+/// again only when a HEAD or a git folder changed), then WorktreeLifecycle, the one record of where each agent
+/// works. The reads run off the main thread; remote tabs get nothing.
 /// Design: claudedocs/2026-10-09-brainstorm-branch-aware-agents (R1–R10, R30).
 final class AgentPlaces {
     static let shared = AgentPlaces()
 
     /// Where each agent tab's agent works, as it counts (by tab id).
     private(set) var places: [String: AgentPlace] = [:]
+    /// The linked worktrees each tab's agent worked in since this version first ran (by tab id), kept after it ends.
+    private(set) var history: [String: [String]] = [:]
+    /// How each agent tab's agent came to be where it is (by tab id): whether that was before this version first ran.
+    private(set) var placements: [String: WorktreeLifecycle.Placement] = [:]
+    /// Told, on the main thread, the tabs (by id) whose agents ended at the last look.
+    var agentsEnded: ((Set<String>) -> Void)?
     /// Each agent tab's folder as last read, not held (by tab id), with the agent's process.
     private var folders: [String: (pid: Int32, folder: String, at: Date)] = [:]
     /// What each window shows, by the folder it shows: its repository and checkout.
@@ -28,7 +35,7 @@ final class AgentPlaces {
 
     // Read and written on `queue` only.
     private let queue = DispatchQueue(label: "nextterm.places", qos: .utility)
-    private var tracker = PlaceTracker()
+    private var lifecycle = WorktreeLifecycle(since: AgentPlaces.firstRun)
     /// Each agent's process folder, and since when it has been there.
     private var processFolders: [String: (pid: Int32, folder: String?, since: Date)] = [:]
     /// The repository each agent run is matched against: the one it started in.
@@ -41,12 +48,28 @@ final class AgentPlaces {
     /// The agents' session records, followed as they grow.
     private var records = SessionRecords()
     private var missingTranscripts: [String: Date] = [:]
+    /// Command Code's session file for each agent run (by tab id), and when it was last looked for.
+    private var commandCodeFiles: [String: (startedAt: Date, path: String?, looked: Date)] = [:]
+
+    /// The moment this version first followed what agents write, kept once: what they did before it is the baseline,
+    /// never offered.
+    static let firstRun: Date = {
+        let key = "agentWorktreesSince"
+        if let stored = UserDefaults.standard.object(forKey: key) as? Date { return stored }
+        let now = Date()
+        UserDefaults.standard.set(now, forKey: key)
+        return now
+    }()
 
     private init() {
         let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in self?.tick() }
         timer.tolerance = 0.2 // its wakeups may join the system's others
         RunLoop.main.add(timer, forMode: .common)
         self.timer = timer
+        agentsEnded = { [weak self] ended in
+            guard let history = self?.history else { return }
+            MainActor.assumeIsolated { WorktreeEndOffer.agentsEnded(ended, history: history) }
+        }
     }
 
     // MARK: what the app asks
@@ -102,15 +125,95 @@ final class AgentPlaces {
             }
             if let key = switched.by.tabKey { fields["switched_by_tab"] = key.lowercased() }
         }
+        if let offer = offers.state(of: tab.id.uuidString, in: place.checkout.path) { fields["worktree_offer"] = offer.rawValue }
         return fields
+    }
+
+    // MARK: the offer to open a worktree as a project
+
+    /// What the strip above each agent tab has offered (WorktreeLifecycle.Offers), kept in UserDefaults; a self-test's
+    /// stays in memory.
+    private(set) var offers = WorktreeLifecycle.Offers(stored: SelfTest.isRequested ? nil
+        : UserDefaults.standard.object(forKey: WorktreeLifecycle.Offers.defaultsKey))
+
+    /// The linked worktree `tab`'s agent works in, when it is not the checkout `controller`'s window shows nor the
+    /// repository's main one, and git still lists it on disk.
+    private func otherWorktree(of tab: TerminalTab, in controller: TerminalWindowController) -> (checkout: Checkout, shown: String?)? {
+        guard let place = place(of: tab), !place.checkout.isMain else { return nil }
+        let shown = Self.shownFolder(of: controller).flatMap { self.shown[$0] }?.checkout.path
+        guard place.checkout.path != shown, FileManager.default.fileExists(atPath: place.checkout.path) else { return nil }
+        return (place.checkout, shown)
+    }
+
+    /// The worktree whose strip shows above `tab` now, in front in `controller`'s window: offered once the person
+    /// hasn't typed in that tab for HintRules' quiet interval.
+    func worktreeStrip(for tab: TerminalTab, in controller: TerminalWindowController) -> Checkout? {
+        guard let found = otherWorktree(of: tab, in: controller) else { return nil }
+        let key = tab.id.uuidString
+        return changingOffers { offers in
+            offers.strip(for: key, placement: placements[key], isMain: false, shown: found.shown,
+                         sinceUserKey: TerminalTab.now - tab.lastUserInputAt) == found.checkout.path ? found.checkout : nil
+        }
+    }
+
+    /// The worktree `tab`'s menu and its place mark may open as a project: offered, or held by Not Now.
+    func offerableWorktree(of tab: TerminalTab, in controller: TerminalWindowController) -> Checkout? {
+        guard let checkout = otherWorktree(of: tab, in: controller)?.checkout,
+              offers.offerable(tab.id.uuidString, checkout.path) else { return nil }
+        return checkout
+    }
+
+    /// Whether Not Now holds the strip for the worktree `tab`'s agent works in: its place mark brings it back.
+    func offerHeld(_ tab: TerminalTab, in controller: TerminalWindowController) -> Bool {
+        guard let checkout = otherWorktree(of: tab, in: controller)?.checkout else { return false }
+        return offers.state(of: tab.id.uuidString, in: checkout.path) == .dismissed
+    }
+
+    /// Not Now on `tab`'s strip for `worktree`.
+    func dismissOffer(_ tab: TerminalTab, worktree: String) {
+        changingOffers { $0.dismiss(tab.id.uuidString, worktree) }
+    }
+
+    /// The place mark's click: the strip Not Now held shows again. False when none was held.
+    @discardableResult
+    func reoffer(_ tab: TerminalTab, worktree: String) -> Bool {
+        changingOffers { $0.reoffer(tab.id.uuidString, worktree) }
+    }
+
+    /// `tab` was opened in `worktree`'s own window.
+    func offerOpened(_ tab: TerminalTab, worktree: String) {
+        changingOffers { $0.opened(tab.id.uuidString, worktree) }
+    }
+
+    /// Agents seen in a worktree before this version first ran keep it as the baseline, in tabs not in front too.
+    private func noteOfferBaselines() {
+        changingOffers { offers in
+            for (key, placement) in placements where placement.baseline {
+                offers.note(key, placement: placement, isMain: places[key]?.checkout.isMain ?? true)
+            }
+        }
+    }
+
+    /// Changes the offers and keeps them when they changed, forgetting tabs that closed.
+    @discardableResult
+    private func changingOffers<T>(_ change: (inout WorktreeLifecycle.Offers) -> T) -> T {
+        var changed = offers
+        let result = change(&changed)
+        guard changed != offers else { return result }
+        if !SelfTest.isRequested, let app = AppDelegate.shared {
+            changed.keep(only: Set(app.controllers.flatMap(\.tabs).map(\.id.uuidString)))
+            UserDefaults.standard.set(changed.stored, forKey: WorktreeLifecycle.Offers.defaultsKey)
+        }
+        offers = changed
+        return result
     }
 
     /// Keep Going: the branch now checked out becomes the chat's own.
     func keepGoing(_ tab: TerminalTab) {
         let key = tab.id.uuidString
         queue.async { [self] in
-            tracker.keepGoing(key)
-            let places = tracker.places
+            lifecycle.keepGoing(key)
+            let places = lifecycle.places
             DispatchQueue.main.async { self.places = places }
         }
     }
@@ -170,7 +273,15 @@ final class AgentPlaces {
             if !places.isEmpty || !folders.isEmpty {
                 places = [:]
                 folders = [:]
-                queue.async { [self] in tracker = PlaceTracker() }
+                // The record outlives the agents: it is told none runs, never started over.
+                queue.async { [self] in
+                    lifecycle.update(PlaceSighting(), at: now) { _, _, _ in .none }
+                    let history = lifecycle.history, ended = lifecycle.ended
+                    DispatchQueue.main.async {
+                        self.placements = [:]
+                        self.publish(history: history, ended: ended)
+                    }
+                }
             }
             return
         }
@@ -191,8 +302,16 @@ final class AgentPlaces {
                 places = read.places
                 folders = read.folders
                 shown = read.shown
+                placements = read.placements
+                noteOfferBaselines()
+                publish(history: read.history, ended: read.ended)
             }
         }
+    }
+
+    private func publish(history: [String: [String]], ended: Set<String>) {
+        self.history = history
+        if !ended.isEmpty { agentsEnded?(ended) }
     }
 
     /// Shell tabs that started a git command that can move HEAD since the last look: a switch in that
@@ -217,6 +336,9 @@ final class AgentPlaces {
         var places: [String: AgentPlace] = [:]
         var folders: [String: (pid: Int32, folder: String, at: Date)] = [:]
         var shown: [String: (repository: String, checkout: Checkout)] = [:]
+        var history: [String: [String]] = [:]
+        var ended: Set<String> = []
+        var placements: [String: WorktreeLifecycle.Placement] = [:]
     }
 
     private func read(_ probes: [Probe], windows: Set<String>, sighting start: PlaceSighting, git: String, home: String, at now: Date) -> Read {
@@ -234,14 +356,14 @@ final class AgentPlaces {
         }
         var sighted: [(probe: Probe, folder: String)] = []
         for probe in probes {
-            let folder = agentFolder(probe, home: home)
+            let (folder, writes) = agentFolder(probe, home: home)
             sighted.append((probe, folder))
             guard let repository = startRepository(probe, folder: folder, known: sighting.repositories, git: git, at: now) else { continue }
             if sighting.repositories[repository] == nil {
                 sighting.repositories[repository] = checkouts(of: repository, git: git, at: now)
             }
             sighting.agents.append(PlaceSighting.Agent(key: probe.key, title: probe.title, repository: repository, folder: folder,
-                                                       working: probe.working, startedAt: probe.startedAt))
+                                                       working: probe.working, startedAt: probe.startedAt, writes: writes))
         }
         // Every read of this look is done (git's can take a while under load, between one agent's folder and the
         // next): what it saw is stamped now, after it was read, so no move or switch holds from before it happened.
@@ -250,10 +372,14 @@ final class AgentPlaces {
         let keys = Set(probes.map(\.key))
         processFolders = processFolders.filter { keys.contains($0.key) }
         startRepositories = startRepositories.filter { keys.contains($0.key) }
-        tracker.update(sighting, at: seen) { checkout, from, commit in
+        commandCodeFiles = commandCodeFiles.filter { keys.contains($0.key) }
+        lifecycle.update(sighting, at: seen) { checkout, from, commit in
             AgentLocation.change(in: checkout, from: from, commit: commit, git: git)
         }
-        result.places = tracker.places
+        result.places = lifecycle.places
+        result.history = lifecycle.history
+        result.placements = lifecycle.placements
+        result.ended = lifecycle.ended
         for (folder, repository) in windowRepositories {
             if let checkout = AgentLocation.checkout(containing: canonicalPath(folder), in: sighting.repositories[repository] ?? []) {
                 result.shown[folder] = (repository, checkout)
@@ -262,27 +388,30 @@ final class AgentPlaces {
         return result
     }
 
-    /// Where an agent works now: its process's folder, or its session record's when that is newer.
-    private func agentFolder(_ probe: Probe, home: String) -> String {
+    /// Where an agent works now: its process's folder, or its session record's when that is newer; and what the
+    /// record says it wrote since the last look, its paths made canonical as the checkouts' are.
+    private func agentFolder(_ probe: Probe, home: String) -> (folder: String, writes: [DatedWrite]) {
         let process = ProcessInspector.currentDirectory(of: probe.pid)
         var since = probe.startedAt
         if let last = processFolders[probe.key], last.pid == probe.pid {
             since = last.folder == process ? last.since : Date()
         }
         processFolders[probe.key] = (probe.pid, process, since)
-        let record = recordedFolder(probe, home: home)
-        let folder = AgentLocation.folder(process: process, processSince: since, record: record, startedAt: probe.startedAt)
-        return canonicalPath(folder ?? probe.shellFolder)
+        let record = recorded(probe, home: home)
+        let folder = AgentLocation.folder(process: process, processSince: since, record: record?.folder, startedAt: probe.startedAt)
+        let writes = (record?.writes ?? []).map { DatedWrite(signal: WriteSignal(path: canonicalPath($0.signal.path), kind: $0.signal.kind), at: $0.at) }
+        return (canonicalPath(folder ?? probe.shellFolder), writes)
     }
 
-    /// The folder the agent's session record names last, for agents that record moves their process doesn't
-    /// make: Claude Code's shell `cd`, Codex's `/cd`, Copilot CLI's workspace. Only what was written to the
-    /// record since the last look is read; the folder named before holds until a newer line names another.
-    private func recordedFolder(_ probe: Probe, home: String) -> RecordedFolder? {
+    /// The agent's session record, for agents that record moves their process doesn't make (Claude Code's shell
+    /// `cd`, Codex's `/cd`, Copilot CLI's workspace) and what they write (Claude Code, Codex, Command Code). Only
+    /// what was written to the record since the last look is read; the folder named before holds until a newer
+    /// line names another.
+    private func recorded(_ probe: Probe, home: String) -> RecordRead? {
         switch probe.agent {
         case .claude?:
             guard let session = records.claudeSession(pid: probe.pid, home: home) else { return nil }
-            if let known = transcripts[session.id], isRegularFile(known) { return records.folder(known, kind: .claude) }
+            if let known = transcripts[session.id], isRegularFile(known) { return records.follow(known, kind: .claude) }
             // Where it should be, each time; a look through every project folder at most every 10 s (a new
             // session has no transcript until its first message).
             let scanning = missingTranscripts[session.id].map { Date().timeIntervalSince($0) >= 10 } ?? true
@@ -293,17 +422,27 @@ final class AgentPlaces {
             }
             if transcripts.count > 200 { transcripts.removeAll() }
             transcripts[session.id] = found
-            return records.folder(found, kind: .claude)
+            return records.follow(found, kind: .claude)
         case .codex?:
             // The rollout its process holds open (node's child, when Codex runs through npm).
             for pid in ProcessInspector.family(of: probe.pid).prefix(12) {
                 if let rollout = ProcessInspector.openFiles(of: pid).first(where: { AgentLocation.isCodexRollout($0, home: home) }) {
-                    return records.folder(rollout, kind: .codex)
+                    return records.follow(rollout, kind: .codex)
                 }
             }
             return nil
         case .copilot?:
-            return records.copilotFolder(pid: probe.pid, home: home)
+            return records.copilotFolder(pid: probe.pid, home: home).map { RecordRead(folder: $0) }
+        case .commandCode?:
+            // The newest session file started in its folder since it started, looked for again every 10 s until found.
+            var known = commandCodeFiles[probe.key]
+            if known?.startedAt != probe.startedAt || known?.path.map(isRegularFile) == false { known = nil }
+            if known == nil || (known?.path == nil && Date().timeIntervalSince(known?.looked ?? .distantPast) >= 10) {
+                known = (probe.startedAt, LiveChat.commandCodeFile(folder: probe.shellFolder, since: probe.startedAt, home: home), Date())
+            }
+            commandCodeFiles[probe.key] = known
+            // Its folder is where it started, which its process says too: only its writes are wanted.
+            return known?.path.map { RecordRead(folder: nil, writes: records.follow($0, kind: .commandCode).writes) }
         default:
             return nil
         }

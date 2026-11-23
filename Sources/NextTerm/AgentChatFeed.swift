@@ -4,8 +4,8 @@ import NextTermCore
 
 /// The chat of one agent session tab (plan 047 U3): the journal `nxtrm agent` writes as its session changes, named in its
 /// report (AgentSessionSocket), replayed into a session of the app's own. The file is watched for what is appended (a
-/// file event, and a look every second for a new journal: a session started again in the tab) and read off the main
-/// thread from where the last read ended. Every text is masked as it is read. Nothing is read until a chat view asks.
+/// file event, the session's report of a new journal, and a slow look for one) and read off the main thread from where
+/// the last read ended. Every text is masked as it is read. Nothing is read until a chat view asks.
 @MainActor
 final class AgentChatFeed {
     let tabID: UUID
@@ -31,13 +31,25 @@ final class AgentChatFeed {
     /// Starts following the tab's journal.
     func start() {
         guard timer == nil else { return }
-        let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
+        schedule(every: Self.finding)
+        look()
+    }
+
+    /// How often the tab's report is looked at until it names a journal.
+    private static let finding: TimeInterval = 1
+    /// How often once it has: the file event drives the reads, and a new journal is followed as soon as the session
+    /// reports it (AgentChatWatch.journalReported); this is only the fallback.
+    private static let following: TimeInterval = 5
+
+    /// The look's clock, at `interval`, replacing the one before.
+    private func schedule(every interval: TimeInterval) {
+        timer?.invalidate()
+        let timer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.look() }
         }
-        timer.tolerance = 0.25
+        timer.tolerance = interval / 4
         RunLoop.main.add(timer, forMode: .common)
         self.timer = timer
-        look()
     }
 
     func stop() {
@@ -48,8 +60,12 @@ final class AgentChatFeed {
     }
 
     /// Follows the journal the tab's session reports now (a new one when the session started again), then reads.
-    private func look() {
+    fileprivate func look() {
         let reported = AgentSessionSocket.reports[tabID]?.journal
+        if let timer {
+            let interval = reported == nil ? Self.finding : Self.following
+            if timer.timeInterval != interval { schedule(every: interval) }
+        }
         if reported != path {
             path = reported
             reader = ACPSessionJournal.Reader()
@@ -159,6 +175,12 @@ enum AgentChatWatch {
 }
 
 extension AgentChatWatch {
+    /// The tab's session reported a journal other than the one it reported before: its feed, if one runs, follows it
+    /// now rather than at its next look.
+    static func journalReported(_ tabID: UUID) {
+        feeds[tabID]?.look()
+    }
+
     /// The tab's chat view closed: its feed stops; the journal stays for the next time it opens.
     static func release(_ tabID: UUID) {
         feeds.removeValue(forKey: tabID)?.stop()

@@ -99,6 +99,7 @@ final class AgentPeek: NSObject, NSPopoverDelegate, NSTextFieldDelegate {
         peek.popover.show(relativeTo: rect ?? middle, of: anchor, preferredEdge: edge)
         peek.focus()
         peek.timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak peek] _ in peek?.refresh() }
+        peek.timer?.tolerance = 0.5 // its wakeups may join the system's others
     }
 
     /// Peek at an agent from Go to Agent (⌥): over the terminal of the window in front.

@@ -42,6 +42,8 @@ enum SecretReminders {
         timer = Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { _ in
             MainActor.assumeIsolated { checkOnNewDay() }
         }
+        // A new day is noticed within the hour either way: the wakeup may join the system's others.
+        timer?.tolerance = 10 * 60
     }
 
     private static func storeChanged() {

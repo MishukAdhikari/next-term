@@ -4,9 +4,10 @@ import NextTermCore
 
 /// The live chat of one agent tab (plan 041 U2): the session file its agent writes, found as the context gauge finds it
 /// (AgentUsageWatch.transcriptPath) or, for Command Code, in its projects folder (LiveChat.commandCodeFile); watched
-/// for what is appended (a file event, and a look every second for a file that moved), read off the main thread from
-/// where the last read ended, and handed on as items. A new session in the tab (/clear, a resume) is a new file: the
-/// items start again. Nothing is read until a chat view asks for the feed, and nothing after it lets the feed go.
+/// for what is appended (a file event, and a look every second until it is found, then every five for a file that
+/// moved), read off the main thread from where the last read ended, and handed on as items. A new session in the tab
+/// (/clear, a resume) is a new file: the items start again. Nothing is read until a chat view asks for the feed, and
+/// nothing after it lets the feed go.
 @MainActor
 final class LiveChatFeed {
     let tabID: UUID
@@ -35,13 +36,25 @@ final class LiveChatFeed {
     /// Starts finding and following the file.
     func start() {
         guard timer == nil else { return }
-        let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
+        schedule(every: Self.finding)
+        look()
+    }
+
+    /// How often the file is looked for until it is found.
+    private static let finding: TimeInterval = 1
+    /// How often it is looked for once found: the file event drives the reads, and this notices the agent moving to
+    /// another session (/clear, a resume) within a second, as the chat always has.
+    private static let following: TimeInterval = 1
+
+    /// The look's clock, at `interval`, replacing the one before.
+    private func schedule(every interval: TimeInterval) {
+        timer?.invalidate()
+        let timer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.look() }
         }
-        timer.tolerance = 0.25
+        timer.tolerance = interval / 4
         RunLoop.main.add(timer, forMode: .common)
         self.timer = timer
-        look()
     }
 
     func stop() {
@@ -83,6 +96,11 @@ final class LiveChatFeed {
     }
 
     private func follow(_ found: String?) {
+        // Stopped meanwhile: nothing is watched again.
+        guard let timer else { return }
+        // Found: the look slows down; lost: it looks every second again.
+        let interval = found == nil ? Self.finding : Self.following
+        if timer.timeInterval != interval { schedule(every: interval) }
         guard let found else { return }
         if found != path {
             path = found

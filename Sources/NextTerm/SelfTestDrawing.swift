@@ -58,6 +58,38 @@ extension SelfTest {
         check(finished && drew && whole && tab.screenTail(4).contains("spin-done-42"),
               "shown again, the terminal is drawn whole with what it printed while hidden",
               "finished \(finished), \(DrawCounter.count(view)) draws covering \(NSStringFromRect(area)) of \(NSStringFromRect(view.visibleRect))")
+
+        // A tab behind another in its window: parsed, never drawn, and drawn whole when it is chosen.
+        let behind = w.addTab(directory: dir)
+        guard await wait(15, { behind.status.integrated }) else { return check(false, "drawing: a second tab's shell starts") }
+        w.select(0)
+        behind.view.send(txt: "for i in {1..30}; do printf '\\rbehind %d ' $i; sleep 0.1; done; echo; echo behind-done-$((6*7))\r")
+        await pause(0.5)
+        DrawCounter.reset(behind.view)
+        await pause(2)
+        let behindDraws = DrawCounter.count(behind.view)
+        check(behindDraws == 0, "a tab behind another in its window draws nothing while its program prints", "\(behindDraws) draws in 2 s")
+        _ = await wait(5) { behind.screenTail(4).contains("behind-done-42") }
+        DrawCounter.reset(behind.view)
+        w.select(1)
+        let drewBehind = await wait(3) { DrawCounter.count(behind.view) > 0 }
+        await pause(0.3)
+        let behindArea = DrawCounter.area(behind.view) ?? .zero
+        check(drewBehind && behindArea.insetBy(dx: -1, dy: -1).contains(behind.view.visibleRect),
+              "chosen, the tab that was behind is drawn whole", "\(DrawCounter.count(behind.view)) draws covering \(NSStringFromRect(behindArea))")
+
+        // A window someone can see but isn't typing in draws its terminal's changes at most 30 times a second.
+        guard await bringToFront(c.window ?? window), w.window?.canBeSeen == true, w.window?.isKeyWindow == false,
+              let front = w.activeTab else {
+            return note("skipped 'a window not in front draws at 30 frames a second': it couldn't be put behind another in view")
+        }
+        front.view.send(txt: "for i in {1..300}; do printf '\\rfast %d ' $i; sleep 0.01; done; echo\r")
+        await pause(0.5)
+        DrawCounter.reset(front.view)
+        await pause(1)
+        let pacedDraws = DrawCounter.count(front.view)
+        check(pacedDraws > 0 && pacedDraws <= 33, "a window in view but not in front draws its terminal at most 30 times a second",
+              "\(pacedDraws) draws in 1 s of a program printing 100 times a second")
     }
 }
 

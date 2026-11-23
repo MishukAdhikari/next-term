@@ -69,6 +69,7 @@ final class HintStage {
         let timer = Timer(timeInterval: Self.looksEvery, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.look() }
         }
+        timer.tolerance = Self.looksEvery / 5 // its wakeups may join the system's others
         RunLoop.main.add(timer, forMode: .common)
         looking = timer
     }

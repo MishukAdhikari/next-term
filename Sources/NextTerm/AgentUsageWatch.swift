@@ -4,7 +4,7 @@ import NextTermCore
 
 /// How full each local Claude Code and Codex tab's context is (`AgentUsage`), read every few seconds from the transcript
 /// its own screen writes, and only when that file changed. The tab shows it as a small gauge after its title and in
-/// its tooltip; `list_tabs` gives it as `context`. Started by the first tab that asks.
+/// its tooltip; `list_tabs` gives it as `context`. Started by the first tab that asks; stopped when no agent tab is left.
 @MainActor
 final class AgentUsageWatch {
     static let shared = AgentUsageWatch()
@@ -24,7 +24,7 @@ final class AgentUsageWatch {
 
     private init() {}
 
-    /// Starts the polling the first time a tab asks.
+    /// Starts the polling when a tab asks: the first time, and again after a poll found no agent tab and stopped it.
     func start() {
         guard timer == nil else { return }
         let timer = Timer(timeInterval: Self.interval, repeats: true) { _ in
@@ -59,7 +59,10 @@ final class AgentUsageWatch {
         guard !busy, let app = AppDelegate.shared else { return }
         var probes: [Probe] = []
         var live = Set<UUID>()
+        var agents = false
         for tab in app.controllers.flatMap(\.tabs) {
+            // Any local agent counts, as it does for contextUsage, so a tab that asks never restarts a clock this stops.
+            if tab.localAgent != nil { agents = true }
             guard let agent = tab.localAgent, let kind = AgentTranscript.Kind(agent: agent.rawValue) else { continue }
             let pid = tcgetpgrp(tab.view.process.childfd)
             guard pid > 0 else { continue }
@@ -69,6 +72,11 @@ final class AgentUsageWatch {
         }
         for id in Array(usage.keys) where !live.contains(id) { usage[id] = nil }
         for id in Array(read.keys) where !live.contains(id) { read[id] = nil }
+        // No agent tab left: the clock stops, and the next tab that asks for its usage (contextUsage) starts it again.
+        if !agents {
+            timer?.invalidate()
+            timer = nil
+        }
         guard !probes.isEmpty else { return }
         busy = true
         let paths = claudePaths

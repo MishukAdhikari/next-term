@@ -267,6 +267,60 @@ import Testing
         #expect(records.folder(transcript, kind: .claude)?.folder == "/r/.claude/worktrees/x")
     }
 
+    /// The same read gives the writes of the new lines, forward, each once and dated by its line; a line still
+    /// being written waits for its end.
+    @Test func aRecordsWritesAreReadOnceEachAsItGrows() throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent("nt-writes-\(UUID().uuidString)").path
+        defer { try? FileManager.default.removeItem(atPath: base) }
+        try FileManager.default.createDirectory(atPath: base, withIntermediateDirectories: true)
+        let transcript = base + "/claude.jsonl"
+        func append(_ text: String) throws {
+            let handle = try #require(FileHandle(forWritingAtPath: transcript))
+            try handle.seekToEnd()
+            try handle.write(contentsOf: Data(text.utf8))
+            try handle.close()
+        }
+        func tool(_ name: String, _ input: String, at time: String) -> String {
+            #"{"type":"assistant","cwd":"/r","timestamp":"2026-11-23T10:00:\#(time)Z","message":{"content":[{"type":"tool_use","id":"t","name":"\#(name)","input":\#(input)}]}}"# + "\n"
+        }
+        func date(_ time: String) -> Date? { AgentSessions.parseDate("2026-11-23T10:00:\(time)Z") }
+        func file(_ path: String, _ time: String) -> DatedWrite { DatedWrite(signal: WriteSignal(path: path, kind: .file), at: date(time)!) }
+
+        try (#"{"type":"user","cwd":"/r","timestamp":"2026-11-23T10:00:00Z"}"# + "\n").write(toFile: transcript, atomically: false, encoding: .utf8)
+        var records = SessionRecords()
+        var read = records.follow(transcript, kind: .claude)
+        #expect(read.folder?.folder == "/r" && read.writes.isEmpty)
+        try append(tool("Write", #"{"file_path":"/r-wt/a.txt","content":"x"}"#, at: "01"))
+        read = records.follow(transcript, kind: .claude)
+        #expect(read.writes == [file("/r-wt/a.txt", "01")] && read.folder?.folder == "/r")
+        #expect(records.follow(transcript, kind: .claude).writes.isEmpty) // unchanged: nothing again
+        // Half a line: nothing until its end is written, then it and the next line, once.
+        let half = tool("Edit", #"{"file_path":"src/b.txt","old_string":"a","new_string":"b"}"#, at: "02")
+        try append(String(half.prefix(40)))
+        #expect(records.follow(transcript, kind: .claude).writes.isEmpty)
+        try append(String(half.dropFirst(40)) + tool("Bash", #"{"command":"cd /r-wt && gh issue view 11650"}"#, at: "03"))
+        read = records.follow(transcript, kind: .claude)
+        #expect(read.writes == [file("/r/src/b.txt", "02"), DatedWrite(signal: WriteSignal(path: "/r-wt", kind: .shell), at: date("03")!)])
+        // A 70 KB write, then a line with no tool: the write is read whole.
+        try append(tool("Write", #"{"file_path":"/r-wt/big.txt","content":""# + String(repeating: "x", count: 70_000) + #""}"#, at: "04")
+                   + #"{"type":"user","cwd":"/r","timestamp":"2026-11-23T10:00:05Z"}"# + "\n")
+        #expect(records.follow(transcript, kind: .claude).writes == [file("/r-wt/big.txt", "04")])
+        // Replaced: read back from its end, its writes with their own dates.
+        try (#"{"type":"user","cwd":"/r","timestamp":"2026-11-23T10:00:06Z"}"# + "\n" + tool("Write", #"{"file_path":"/r-wt/c.txt"}"#, at: "07"))
+            .write(toFile: transcript, atomically: true, encoding: .utf8)
+        #expect(records.follow(transcript, kind: .claude).writes == [file("/r-wt/c.txt", "07")])
+        // folder(_:kind:) still reads the folder alone.
+        #expect(records.folder(transcript, kind: .claude)?.folder == "/r")
+
+        // Command Code: its header names the folder relative paths start from; it records no moves.
+        let session = base + "/cc.jsonl"
+        let header = #"{"type":"session","id":"s","timestamp":"2026-11-23T10:00:00Z","cwd":"/cc"}"# + "\n"
+        let message = #"{"type":"message","timestamp":"2026-11-23T10:00:08Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"t","name":"write_file","input":{"file_path":"notes/a.md"}}]}}"# + "\n"
+        try (header + message).write(toFile: session, atomically: false, encoding: .utf8)
+        read = records.follow(session, kind: .commandCode)
+        #expect(read.folder == nil && read.writes == [file("/cc/notes/a.md", "08")])
+    }
+
     @Test func claudeSessionsAndCopilotWorkspacesAreReadAgainOnlyWhenTheyChange() throws {
         let home = FileManager.default.temporaryDirectory.appendingPathComponent("nt-records-home-\(UUID().uuidString)").path
         defer { try? FileManager.default.removeItem(atPath: home) }

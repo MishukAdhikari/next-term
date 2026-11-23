@@ -705,19 +705,27 @@ final class EditorArea: NSView, TabBarViewDelegate {
 
     // MARK: disk changes
 
-    /// Picks up changes other programs (agents, git) made to open files. Called about once a second.
+    /// Picks up changes other programs (agents, git) made to open files. Called about once a second. A window no one
+    /// can see checks nothing: it catches up all at once when it shows again (TerminalWindowController.visibilityChanged),
+    /// and a save still checks its own file first (EditorDocument.save).
     func checkDisk() {
+        guard window?.canBeSeen != false else { return missedChecks = true }
+        let catchingUp = missedChecks
+        missedChecks = false
         for editor in editors { editor.document.checkDisk() }
         for diff in diffs { diff.refreshIfChanged() }
         for notebook in notebooks { notebook.refreshIfChanged() }
         for database in databases { database.refreshIfChanged() }
         for data in dataFiles { data.refreshIfChanged() }
-        // The file being edited against the last commit: a commit (yours or an agent's) moves the marks.
+        // The file being edited against the last commit: a commit (yours or an agent's) moves the marks. Looked at every
+        // five seconds and on showing again, and read again only when git's HEAD or branch moved.
         checks += 1
-        if periodicBaselineChecks, checks % 5 == 0 { activeEditor?.refreshBaseline() }
+        if periodicBaselineChecks, catchingUp || checks % 5 == 0 { activeEditor?.refreshBaselineIfHeadMoved() }
     }
 
     private var checks = 0
+    /// A check was skipped while the window could not be seen: the next one also looks at the last commit at once.
+    private var missedChecks = false
 
     private func resolveConflict(keepMine: Bool) {
         guard let document = activeEditor?.document else { return }
@@ -768,11 +776,12 @@ final class EditorArea: NSView, TabBarViewDelegate {
         let names = Dictionary(grouping: paths, by: { ($0 as NSString).lastPathComponent })
         func title(_ url: URL) -> String {
             let name = url.lastPathComponent
-            return (names[name]?.count ?? 0) > 1 ? name + " — " + url.deletingLastPathComponent().lastPathComponent : name
+            // One line in the tab bar, marks for any line break or control character in a name.
+            return CellText.line((names[name]?.count ?? 0) > 1 ? name + " — " + url.deletingLastPathComponent().lastPathComponent : name)
         }
         var items = panes.map { pane -> TabBarItem in
             if let diff = pane as? DiffPane {
-                return TabBarItem(title: diff.title, state: .idle, tooltip: diff.tooltip, accessibilityStatus: "changes",
+                return TabBarItem(title: CellText.line(diff.title), state: .idle, tooltip: diff.tooltip, accessibilityStatus: "changes",
                                   icon: FileIcons.icon(for: URL(fileURLWithPath: diff.absolutePath), size: 16), modified: false)
             }
             if let log = pane as? GitLogPane {
@@ -794,7 +803,7 @@ final class EditorArea: NSView, TabBarViewDelegate {
             }
             if let database = pane as? DatabasePane {
                 let state = database.isEditingAllowed ? "editing allowed" : "read-only"
-                return TabBarItem(title: database.name, state: .idle, tooltip: RecentProjects.abbreviate(database.path) + " (SQLite, \(state))",
+                return TabBarItem(title: CellText.line(database.name), state: .idle, tooltip: RecentProjects.abbreviate(database.path) + " (SQLite, \(state))",
                                   accessibilityStatus: "database, \(state)" + (database.hasDraft ? ", unsaved change" : ""),
                                   icon: FileIcons.icon(for: database.url, size: 16), modified: database.hasDraft)
             }

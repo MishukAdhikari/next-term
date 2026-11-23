@@ -45,6 +45,52 @@ enum SessionCapture {
         return windows
     }
 
+    /// What a periodic save compares before it captures (SessionSaveSchedule): what `windows` records, read without asking
+    /// the kernel anything. It walks the windows as `windows` does, so a fact added to the capture belongs here too. A
+    /// pane's agent is left to the full capture, which reads it again at least every `SessionSaveSchedule.refresh`.
+    static func signature(_ controllers: [TerminalWindowController]) -> SessionSignature {
+        var signature = SessionSignature()
+        let index: [Int] = AppDelegate.shared.windowIndex.windows.map(\.id)
+        for controller in controllers where !controller.isAgentScratch {
+            var facts: [String] = [String(controller.lastKey.timeIntervalSinceReferenceDate), String(controller.activeIndex),
+                                   String(index.firstIndex(of: controller.indexID) ?? -1), controller.project ?? ""]
+            if let shown = controller.window?.shownWindow {
+                facts += [NSStringFromRect(shown.frame), shown.screen?.localizedName ?? "", String(shown.isMiniaturized),
+                          String(shown.styleMask.contains(.fullScreen))]
+                if let group = shown.tabGroup, group.windows.count > 1 {
+                    facts += [String(UInt(bitPattern: ObjectIdentifier(group).hashValue)),
+                              String(group.windows.firstIndex { $0 === shown } ?? -1), String(group.selectedWindow === shown)]
+                }
+            }
+            signature.add("window", facts)
+            for group in controller.groups {
+                signature.add("group", [group.focused.id.uuidString, group.zoomed?.id.uuidString ?? "", String(group.pinned)])
+                add(group.root, to: &signature)
+            }
+        }
+        return signature
+    }
+
+    private static func add(_ node: PaneGroup.Node, to signature: inout SessionSignature) {
+        switch node {
+        case .pane(let tab):
+            let status = tab.status
+            signature.add("state", [tab.userTitle ?? "", String(tab.lastSelected.timeIntervalSinceReferenceDate),
+                                    status.expandedCommand, String(describing: status.state), String(tab.exited),
+                                    String(tab.disconnected), String(tab.remoteConnected), String(tab.fellBack),
+                                    tab.remote?.session ?? "", tab.restoredRecord?.pending.map { String(describing: $0.state) } ?? ""])
+            let session = AgentSessionSocket.record(of: tab).map { (record: SessionSnapshot.AgentSessionRecord) -> String in
+                "\(record.agent) \(record.sessionID) \(record.folder ?? "")"
+            }
+            signature.addPane(id: tab.id, directory: tab.directory, running: status.running, command: status.command,
+                              title: tab.programTitle, agentSession: session ?? tab.shownSessionID)
+        case .split(let split):
+            signature.add("split", [String(split.vertical), split.children.count.description]
+                + split.dividers.map { (divider: CGFloat) -> String in String(Double(divider)) })
+            for child in split.children { add(child, to: &signature) }
+        }
+    }
+
     /// Each window's place in the order the windows opened, among these: as the index of every window holds them, which
     /// every window's column and ⌘O read, so a restore lists them the same way (RestoreLayout.openingOrder).
     private static func openingOrder(_ controllers: [TerminalWindowController]) -> [ObjectIdentifier: Int] {

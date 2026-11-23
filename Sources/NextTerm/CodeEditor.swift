@@ -918,6 +918,9 @@ final class CodeEditorView: NSView, NSTextViewDelegate {
     private var baseline: String?
     private var baselineHead: String?
     private var baselineLoaded = false
+    /// git's HEAD and branch files as they were when the baseline was last read: while they stay the same, the last
+    /// commit is the same and the baseline is not read again (`refreshBaselineIfHeadMoved`).
+    private var baselineStamp: GitHeadStamp?
     private var marksWork: DispatchWorkItem?
     private static let marksQueue = DispatchQueue(label: "nextterm.change-marks", qos: .utility)
     /// Blame has its own queue: a slow one never holds up the change marks.
@@ -968,6 +971,8 @@ final class CodeEditorView: NSView, NSTextViewDelegate {
         guard let git = Self.git else { return }
         guard document.storage.length <= Self.maxGitSize else { return announceBlame(.tooLarge) }
         blameStale = !blame && Self.blameWanted
+        // Taken before git reads, so a commit during the read is still seen as a move next time.
+        baselineStamp = GitHeadStamp(file: document.path)
         let path = document.path
         let format = document.format
         Self.marksQueue.async { [weak self] in
@@ -986,6 +991,14 @@ final class CodeEditorView: NSView, NSTextViewDelegate {
                 if blame { self.refreshBlame(at: head) }
             }
         }
+    }
+
+    /// Reads the committed version again only if it could have changed: HEAD or its branch moved (a commit, a checkout,
+    /// a pull, yours or an agent's), the file moved, or it was never read. Otherwise nothing runs; a stat of a few of
+    /// git's files is all it costs.
+    func refreshBaselineIfHeadMoved() {
+        guard !baselineLoaded || GitHeadStamp(file: document.path) != baselineStamp else { return }
+        refreshBaseline()
     }
 
     /// Recomputes the marks a moment after typing stops (git diff on the text as it is, unsaved edits too),

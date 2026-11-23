@@ -526,7 +526,7 @@ final class CodexDriver: AgentSessionDriver {
 /// The drift watch's check, every 5 seconds on the main queue, until the driver's `quitting()` cancels it.
 private func driftTimer(_ check: @escaping () -> Void) -> DispatchSourceTimer {
     let timer = DispatchSource.makeTimerSource(queue: .main)
-    timer.schedule(deadline: .now() + 5, repeating: 5)
+    timer.schedule(deadline: .now() + 5, repeating: 5, leeway: .seconds(1)) // its wakeups may join the system's others
     timer.setEventHandler(handler: check)
     timer.resume()
     return timer
