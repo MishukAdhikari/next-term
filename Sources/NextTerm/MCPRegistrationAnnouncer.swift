@@ -74,7 +74,14 @@ enum MCPRegistrationAnnouncer {
         ApprovalLayout.style(keep, look: .accent)
         let remove = alert.addButton(withTitle: MCPRegistrationNotice.removeButton)
         remove.keyEquivalent = ""
+        // Escape is the safe answer too, as it is in any question: NSAlert gives it only to a button named Cancel.
+        let escape = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            guard event.window === alert.window, event.keyCode == 53 else { return event }
+            keep.performClick(nil)
+            return nil
+        }
         let done: (NSApplication.ModalResponse) -> Void = { response in
+            if let escape { NSEvent.removeMonitor(escape) }
             let removed = response == .alertSecondButtonReturn
             if removed { Self.remove(notice, from: window) }
             answered?(removed)
@@ -119,15 +126,14 @@ final class MCPRegistrationCard: NSView {
         files.isSelectable = true
         details = DisclosureRow(title: "Details", content: files)
         let remove = NSButton(title: "Remove", target: self, action: #selector(removePressed))
-        // Keep is the recommended answer, so it is the card's primary; Remove asks first (confirmRemove). Neither takes
-        // a key, so Return stays the window's own.
+        // Keep is the recommended answer, and Remove asks first (confirmRemove). Both plain, with no key: the window's own
+        // primary (Go to Window, Open Project) stays the one button that stands out.
         let keep = NSButton(title: "Keep", target: self, action: #selector(keepPressed))
         for button in [remove, keep] as [NSButton] {
             button.bezelStyle = .rounded
             button.controlSize = .small
             button.keyEquivalent = ""
         }
-        ApprovalLayout.style(keep, look: .accent)
         keep.refusesFirstResponder = true
         let buttons = NSStackView(views: [remove, keep])
         buttons.spacing = 8
