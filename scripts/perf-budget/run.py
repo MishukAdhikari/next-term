@@ -106,6 +106,7 @@ def strips(m):
     """What the terminal's tab strips drew while measured: the top bar's tabs and the list's rows, where counted."""
     parts = [f"{m[key]} {what} draws" for key, what in (('tab_draws', 'top-tab'), ('row_draws', 'list-row'))
              if m.get(key) is not None]
+    if m.get('wakeups') is not None: parts.append(f"{m['wakeups']:.1f} wakeups/s, {m['mw']:.1f} mW")
     return ''.join(', ' + part for part in parts)
 
 
@@ -209,8 +210,9 @@ class Copy:
 
     def counters(self):
         parts = sh(self.check.ru, str(self.process.pid)).split()
-        if len(parts) != 8: return None
-        keys = ('instructions', 'cycles', 'user', 'system', 'child_user', 'child_system', 'footprint')
+        if len(parts) not in (8, 11): return None
+        keys = ('instructions', 'cycles', 'user', 'system', 'child_user', 'child_system', 'footprint',
+                'wakeups', 'idle_wakeups', 'energy')
         return dict(zip(keys, map(int, parts[1:])))
 
     def status(self):
@@ -243,6 +245,9 @@ class Copy:
             'counted': b['instructions'] > a['instructions'],
             'tab_draws': s1[5] - s0[5] if min(s0[5], s1[5]) >= 0 else None,
             'row_draws': s1[6] - s0[6] if min(s0[6], s1[6]) >= 0 else None,
+            # What Energy Impact weighs: wakeups a second, and the kernel's energy estimate in milliwatts.
+            'wakeups': (b['wakeups'] - a['wakeups']) / took if 'wakeups' in b else None,
+            'mw': (b['energy'] - a['energy']) / took / 1e6 if 'energy' in b else None,
         }
 
     def reliefs(self):
