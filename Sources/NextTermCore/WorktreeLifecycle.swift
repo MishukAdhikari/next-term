@@ -269,5 +269,23 @@ extension WorktreeLifecycle {
         public mutating func keep(only keys: Set<String>) {
             states = states.filter { keys.contains($0.key) }
         }
+
+// MARK: - Removal once an agent ends
+// Kept apart from the record above: what is offered when an agent tab's agent ends.
+
+extension WorktreeLifecycle {
+    /// The worktrees to offer removing now that the agents of the `ended` tabs ended: each linked worktree one of them
+    /// worked in after this version first ran (`history`, so never the baseline), that no window shows (`open`: the
+    /// folders the windows show; one inside it counts) and that was never offered (`offered`), first one first, each once.
+    /// Whether removing it would lose anything is the caller's to ask then: one that would is not offered.
+    public static func removalOffers(ended: Set<String>, history: [String: [String]], open: [String], offered: Set<String>) -> [String] {
+        var found: [String] = []
+        for key in ended.sorted() {
+            for path in history[key] ?? [] where !offered.contains(path) && !found.contains(path) {
+                guard !open.contains(where: { $0 == path || $0.hasPrefix(path + "/") }) else { continue }
+                found.append(path)
+            }
+        }
+        return found
     }
 }

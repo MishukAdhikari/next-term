@@ -378,6 +378,7 @@ final class GitToast {
     private static var shown: GitNotice.Shown?
     private static var action: (() -> Void)?
     private static var otherAction: (() -> Void)?
+    private static var gone: (() -> Void)?
     private static var hide: DispatchWorkItem?
     /// How many notices have come up. Work whose notice comes late (after the branches are read again) notes it as it
     /// begins, and passes it as `begun`: an Undo that came up meanwhile stays (GitNotice.replaces).
@@ -401,23 +402,25 @@ final class GitToast {
 
     /// A notice that offers something: its button, then `other` after it ("Don’t Ask Again"). `primary`: the button is
     /// the offer's one primary, in the accent colour (the MCP hub's new-server offer). `skip`: a last button that only
-    /// puts the notice away, this time.
+    /// puts the notice away, this time. `stays`: it stays up until a button is pressed (or another notice takes its
+    /// place), never going by itself. `gone`: once it is down, whatever took it down.
     static func show(_ text: String, in window: NSWindow?, button: String, action: @escaping () -> Void, other: String,
-                     otherAction: @escaping () -> Void, primary: Bool = false, skip: String? = nil) {
+                     otherAction: @escaping () -> Void, primary: Bool = false, skip: String? = nil, stays: Bool = false,
+                     gone: (() -> Void)? = nil) {
         present(text, in: window, button: button, isError: false, begun: nil, action: action, other: other, otherAction: otherAction,
-                primary: primary, skip: skip)
+                primary: primary, skip: skip, stays: stays, gone: gone)
     }
 
     private static func present(_ text: String, in window: NSWindow?, button: String?, isError: Bool, begun: Int?,
                                 action: (() -> Void)?, other: String?, otherAction: (() -> Void)?, primary: Bool = false,
-                                skip: String? = nil) {
+                                skip: String? = nil, stays: Bool = false, gone: (() -> Void)? = nil) {
         guard let window else { return }
         // For a project merged behind another's tab (plan 032): it waits for that tab to come to the front, and never
         // pushes away the notice of the project in use.
         if window.isBackgroundTab {
             return hold(for: window) { [weak window] in
                 present(text, in: window, button: button, isError: isError, begun: begun, action: action, other: other, otherAction: otherAction,
-                        primary: primary, skip: skip)
+                        primary: primary, skip: skip, stays: stays, gone: gone)
             }
         }
         guard GitNotice.replaces(shown, hasButton: button != nil, isError: isError, begun: begun) else { return }
@@ -485,8 +488,10 @@ final class GitToast {
         shown = GitNotice.Shown(number: count, hasButton: button != nil)
         self.action = action
         self.otherAction = otherAction
+        self.gone = gone
         NSAccessibility.post(element: panel, notification: .announcementRequested,
                              userInfo: [.announcement: text, .priority: NSAccessibilityPriorityLevel.medium.rawValue])
+        guard !stays else { return }
         let work = DispatchWorkItem { dismiss() }
         hide = work
         DispatchQueue.main.asyncAfter(deadline: .now() + (button == nil ? 4 : 30), execute: work)
@@ -517,6 +522,9 @@ final class GitToast {
         shown = nil
         action = nil
         otherAction = nil
+        let wasGone = gone
+        gone = nil
+        wasGone?()
         // A notice waiting for this one, once whatever replaces this one (if anything) is up: it waits again then.
         if !waiting.isEmpty {
             DispatchQueue.main.async {

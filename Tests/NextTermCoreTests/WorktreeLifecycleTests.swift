@@ -236,5 +236,53 @@ import Testing
         var kept = back
         kept.keep(only: ["8"])
         #expect(kept.state(of: "7", in: other) == nil && kept.state(of: "8", in: other) == .dismissed)
+
+/// Once an agent tab's agent ends, the worktrees it worked in that no window has open are offered for removal, each
+/// once ever.
+@Suite struct WorktreeLifecycleRemovalOfferTests {
+    let main = "/Code/xCloud"
+    let sibling = "/Code/xcloud-wt-11650"
+    let other = "/Code/xcloud-wt-11700"
+
+    @Test func anEndedAgentsWorktreesNoWindowHasOpen() {
+        let history = ["7": [sibling, other], "8": [other]]
+        #expect(WorktreeLifecycle.removalOffers(ended: ["7"], history: history, open: [main], offered: []) == [sibling, other])
+        // A window on it, or on a folder inside it: not offered.
+        #expect(WorktreeLifecycle.removalOffers(ended: ["7"], history: history, open: [sibling + "/app"], offered: []) == [other])
+        #expect(WorktreeLifecycle.removalOffers(ended: ["7"], history: history, open: [sibling], offered: []) == [other])
+        // A folder that only starts with its name is another folder.
+        #expect(WorktreeLifecycle.removalOffers(ended: ["7"], history: history, open: [sibling + "-2"], offered: []) == [sibling, other])
+        // Offered once ever: answered or put away, never again.
+        #expect(WorktreeLifecycle.removalOffers(ended: ["7"], history: history, open: [], offered: [sibling]) == [other])
+        // Two tabs ending at once that both worked in one: offered once.
+        #expect(WorktreeLifecycle.removalOffers(ended: ["7", "8"], history: history, open: [], offered: []) == [sibling, other])
+        // A tab whose agent still runs: nothing.
+        #expect(WorktreeLifecycle.removalOffers(ended: ["9"], history: history, open: [], offered: []).isEmpty)
+    }
+
+    /// The last agent ending still offers; one whose only signals were from before this version first ran never does.
+    @Test func theLastAgentEndingOffersAndTheBaselineNever() {
+        let t0 = Date(timeIntervalSince1970: 1_000_000)
+        let repo = "/Code/xCloud/.git"
+        func sighting(writes: [DatedWrite], startedAt: Date) -> PlaceSighting {
+            var seen = PlaceSighting()
+            seen.repositories[repo] = [Checkout(path: main, head: .branch("main"), commit: "a1", isMain: true),
+                                       Checkout(path: sibling, head: .branch("fix/11650"), commit: "b2")]
+            seen.agents = [PlaceSighting.Agent(key: "7", title: "tab 7", repository: repo, folder: main, working: false, startedAt: startedAt,
+                                               writes: writes)]
+            return seen
+        }
+        let wrote = [DatedWrite(signal: WriteSignal(path: sibling + "/a.txt", kind: .file), at: t0.addingTimeInterval(1))]
+
+        var fresh = WorktreeLifecycle(since: t0)
+        fresh.update(sighting(writes: wrote, startedAt: t0), at: t0.addingTimeInterval(2)) { _, _, _ in .switched }
+        fresh.update(PlaceSighting(), at: t0.addingTimeInterval(3)) { _, _, _ in .switched }
+        #expect(WorktreeLifecycle.removalOffers(ended: fresh.ended, history: fresh.history, open: [main], offered: []) == [sibling])
+
+        var baseline = WorktreeLifecycle(since: t0.addingTimeInterval(100))
+        baseline.update(sighting(writes: wrote, startedAt: t0), at: t0.addingTimeInterval(200)) { _, _, _ in .switched }
+        baseline.update(PlaceSighting(), at: t0.addingTimeInterval(201)) { _, _, _ in .switched }
+        #expect(baseline.ended == ["7"])
+        #expect(WorktreeLifecycle.removalOffers(ended: baseline.ended, history: baseline.history, open: [main], offered: []).isEmpty)
     }
 }

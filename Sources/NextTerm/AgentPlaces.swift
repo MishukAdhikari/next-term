@@ -66,6 +66,11 @@ final class AgentPlaces {
         timer.tolerance = 0.2 // its wakeups may join the system's others
         RunLoop.main.add(timer, forMode: .common)
         self.timer = timer
+        // Each worktree an ended agent worked in, with no window on it, is offered for removal once.
+        agentsEnded = { [weak self] ended in
+            guard let history = self?.history else { return }
+            MainActor.assumeIsolated { WorktreeEndOffer.agentsEnded(ended, history: history) }
+        }
     }
 
     // MARK: what the app asks

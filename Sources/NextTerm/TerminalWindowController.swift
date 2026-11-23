@@ -291,6 +291,12 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     private var ticker: Timer?
     private var tickCount = 0
     private var closeConfirmed = false
+    /// Closing a linked worktree's window reads whether its worktree could go before it asks: under way.
+    private var readingWorktree = false
+    /// The close asks as any window's does, nothing about the worktree: git couldn't read it, or the last tab moved out.
+    private var skipsWorktreeQuestion = false
+    /// The linked worktree this window shows, as last found for its project.
+    private var linkedWorktreeFound: (project: String?, path: String?)?
     /// Called when the window closes; the flag says the Welcome window follows if no other window is left
     /// (Close Project, or the last tab closed).
     var onClose: ((TerminalWindowController, _ welcome: Bool) -> Void)?
@@ -650,6 +656,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     /// first, as closing the window asks, with a fresh shell put in so that Cancel leaves a usable window.
     private func closeLeftEmpty(after moved: TerminalTab) {
         opensWelcome = true
+        skipsWorktreeQuestion = true // the agent went on elsewhere: nothing to ask about its worktree
         guard closeAsks || !editorArea.savingDatabases.isEmpty else {
             closeConfirmed = true
             window?.close()
@@ -657,6 +664,12 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         }
         addTab(directory: project ?? (moved.remote == nil ? moved.directory : nil))
         window?.performClose(nil)
+        // Kept open (Cancel): a later close asks about the worktree again.
+        if let window, !hasClosed {
+            WindowSheets.afterSheet(on: window) { [weak self] in
+                if self?.hasClosed == false { self?.skipsWorktreeQuestion = false }
+            }
+        }
     }
 
     /// Brings a terminal to the front: its tab selected, its pane focused (and un-zoomed if hidden). `arming` false: an
@@ -1481,7 +1494,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         guard project != nil, let window else { return NSSound.beep() }
         opensWelcome = true
         window.performClose(nil)
-        if window.isVisible && window.attachedSheet == nil { opensWelcome = false } // close was refused
+        // Close was refused; a worktree's question comes once git has read it.
+        if window.isVisible && window.attachedSheet == nil && !readingWorktree { opensWelcome = false }
     }
 
     // MARK: project colour
@@ -3023,71 +3037,107 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         }
         editorsConfirmed = false
         valuesConfirmed = false
+        // A linked worktree's window (an agent's, most often) always asks, busy or not, merged or not (Quit never does).
+        if let worktree = linkedWorktree, !skipsWorktreeQuestion { return askClosingWorktree(worktree, sender) }
         if stopConfirmed { return true } // asked for the whole merged window (MergedWindowClose)
         let busy = busyTabs
         let kept = Self.keptList(tabs)
         guard !busy.isEmpty || !kept.isEmpty else { return true }
-        let info = [busy.isEmpty ? "" : Self.stopText("Closing it stops", busy), kept].filter { !$0.isEmpty }.joined(separator: "\n\n")
-        // A linked worktree's window (an agent's, most often) can take its worktree with it: a choice set apart, last.
-        let worktree = project.flatMap { WorktreeWindow.repository(ofLinkedWorktree: $0) == nil ? nil : $0 }
-        let answered: (NSApplication.ModalResponse) -> Void = { [weak self] response in
-            guard let self else { return }
-            switch response {
-            case .alertFirstButtonReturn:
-                self.closeConfirmed = true
-                sender.close()
-            case .alertThirdButtonReturn:
-                if let worktree { self.closeRemovingWorktree(worktree) }
-            default:
-                self.opensWelcome = false
-            }
-        }
-        if worktree != nil {
-            AlternativeAlert(title: "Close this window?", info: info, buttons: ["Close Window", "Cancel"], alternative: WorktreeRemoval.closeAndRemove,
-                             note: WorktreeRemoval.closingInfo(branch: sidebar.git.snapshot?.branch)).begin(over: sender, completion: answered)
-            return false
-        }
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = "Close this window?"
-        alert.informativeText = info
+        alert.informativeText = closeStops
         alert.addButton(withTitle: "Close Window").hasDestructiveAction = true
         alert.addButton(withTitle: "Cancel")
-        alert.beginSheetModal(for: sender, completionHandler: answered)
+        alert.beginSheetModal(for: sender) { [weak self] response in
+            guard let self else { return }
+            guard response == .alertFirstButtonReturn else { return self.opensWelcome = false }
+            self.closeConfirmed = true
+            sender.close()
+        }
         return false
     }
 
-    /// Whether closing the window now asks something first: about unsaved files or database values, or what closing stops.
+    /// What closing the window stops and what it keeps running, for its question; empty when nothing, or when a merged
+    /// window's close asked about it already.
+    private var closeStops: String {
+        if stopConfirmed { return "" }
+        let busy = busyTabs
+        return [busy.isEmpty ? "" : Self.stopText("Closing it stops", busy), Self.keptList(tabs)].filter { !$0.isEmpty }.joined(separator: "\n\n")
+    }
+
+    /// The linked worktree this window's project is, if it is one (found again only when the project changes).
+    private var linkedWorktree: String? {
+        guard GitWriter.git != nil, let project else { return nil }
+        if let found = linkedWorktreeFound, found.project == project { return found.path }
+        let path = WorktreeWindow.repository(ofLinkedWorktree: project) == nil ? nil : project
+        linkedWorktreeFound = (project, path)
+        return path
+    }
+
+    /// The one question closing a linked worktree's window asks, once git has said whether the worktree could go (with
+    /// this window's tabs and agents left out, as they end with it): Close Window, Cancel and, set apart, Close and
+    /// Remove Worktree; or the first two with every reason it stays. Read first, so there is never a second question.
+    private func askClosingWorktree(_ path: String, _ sender: NSWindow) -> Bool {
+        guard !readingWorktree else { return false }
+        readingWorktree = true
+        withGit(at: path) { [weak self] actions in
+            guard let self else { return }
+            guard let model = actions.model, let row = BranchPopupController.worktreeRow(at: path, in: model) else {
+                self.readingWorktree = false
+                self.skipsWorktreeQuestion = true
+                return sender.performClose(nil)
+            }
+            actions.removalFacts(row, leaving: self) { [weak self] facts, _ in
+                guard let self else { return }
+                self.readingWorktree = false
+                guard !self.hasClosed else { return }
+                let asked = WorktreeRemoval.closeQuestion(facts: facts, stops: self.closeStops, branch: row.worktree.branch)
+                AlternativeAlert(title: asked.title, info: asked.info, buttons: asked.buttons, alternative: asked.alternative, note: asked.note)
+                    .begin(over: sender) { [weak self] response in
+                        guard let self else { return }
+                        switch response {
+                        case .alertFirstButtonReturn:
+                            self.closeConfirmed = true
+                            sender.close()
+                        case .alertThirdButtonReturn:
+                            self.closeRemovingWorktree(row, actions: actions, model: model)
+                        default:
+                            self.opensWelcome = false
+                        }
+                    }
+            }
+        }
+        return false
+    }
+
+    /// Whether closing the window now asks something first: about unsaved files or database values, what closing stops,
+    /// or, for a linked worktree's window, whether its worktree goes too.
     var closeAsks: Bool {
         if closeConfirmed { return false }
         if !editorArea.dirtyDocuments.isEmpty && !editorsConfirmed { return true }
         if !editorArea.draftDatabases.isEmpty && !valuesConfirmed { return true }
+        if linkedWorktree != nil && !skipsWorktreeQuestion { return true }
         return !stopConfirmed && (!busyTabs.isEmpty || !Self.keptList(tabs).isEmpty)
     }
 
-    /// Close and Remove Worktree: when the worktree at `path` can go (WorktreeRemoval.verdict, with this window's tabs
-    /// and agents left out, as they end with it), the window closes, the programs in it end, and then the worktree is
-    /// removed. When it can't, says why; Close Window still closes and keeps it.
-    private func closeRemovingWorktree(_ path: String) {
-        withGit(at: path) { [weak self] actions in
-            guard let self, let window = self.window, let model = actions.model,
-                  let row = BranchPopupController.worktreeRow(at: path, in: model) else {
-                self?.opensWelcome = false
-                return NSSound.beep()
-            }
+    /// Close and Remove Worktree: the programs in the window end, it closes, and once they are gone the worktree is
+    /// removed, after a last look at whether it can go (WorktreeRemoval.verdict, with this window's tabs and agents left
+    /// out): something opened or changed there while the question was up keeps it, saying why.
+    private func closeRemovingWorktree(_ row: BranchPopupController.WorktreeRow, actions: GitActions, model: BranchModel) {
+        guard let window else { return }
+        // Ended here, not by the close (it finds them ended), to know when they are gone.
+        let waiting = TerminalTab.terminate(tabs, finishLater: false)
+        closeConfirmed = true
+        window.close()
+        TabHangup.finishLater(waiting) {
             actions.removalVerdict(row, leaving: self) { verdict, _ in
                 if let why = WorktreeRemoval.whyItStays(verdict) {
-                    return GitPrompt.ask("“\(row.folder)” can’t be removed now", info: why, buttons: ["Close Window", "Cancel"], over: window) { choice in
-                        guard choice == 0 else { return self.opensWelcome = false }
-                        self.closeConfirmed = true
-                        window.close()
-                    }
+                    let open = AppDelegate.shared.controllers.filter { !$0.hasClosed }
+                    let front = (open.first { $0.window?.isKeyWindow == true } ?? open.first)?.window
+                    return GitPrompt.ask("“\(row.folder)” was kept", info: why + "\n\nIts window is closed.", buttons: ["OK"], over: front) { _ in }
                 }
-                // Ended here, not by the close (it finds them ended), to know when they are gone.
-                let waiting = TerminalTab.terminate(self.tabs, finishLater: false)
-                self.closeConfirmed = true
-                window.close()
-                TabHangup.finishLater(waiting) { GitActions.removeClosed(row.worktree, folder: row.folder, model: model) }
+                GitActions.removeClosed(row.worktree, folder: row.folder, model: model)
             }
         }
     }
