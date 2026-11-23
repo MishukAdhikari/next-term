@@ -78,10 +78,13 @@ enum LocalHerdr {
     }
 }
 
-/// The 2-second check for herdr run in local tabs, as the status check is for a server's: while a tab has herdr's client
-/// in front, one `herdr agent list` per herdr server (and `herdr tab list` when one of its tabs is on screen and no agent
-/// has herdr's focus), off the main thread, through the client's own herdr and its own socket. It stops when no tab
-/// needs it. Next Term never starts, keeps or restores this herdr; it changes it only as an agent asks over MCP and the
+/// The check for herdr run in local tabs, as the status check is for a server's: while a tab has herdr's client in front,
+/// one `herdr agent list` per herdr server (and `herdr tab list` when one of its tabs is on screen and no agent has
+/// herdr's focus), off the main thread, through the client's own herdr and its own socket. Every 2 seconds while a window
+/// following herdr can be seen and Next Term is the app in use, or while one of its agents waits on a decision; every 6
+/// seconds otherwise (HerdrPace), and a check at once when such a window shows again or the app comes forward, so what
+/// someone looks at is never behind. herdr has no stream of its changes to follow instead (`agent wait` waits on one
+/// agent's state, for wait_for_tab), so its list is asked for. It stops when no tab needs it. Next Term never starts, keeps or restores this herdr; it changes it only as an agent asks over MCP and the
 /// user approves on the Mac (start_agent, close_tab on an agent's id; HerdrMCP).
 final class LocalHerdrWatch {
     static let shared = LocalHerdrWatch()
@@ -93,6 +96,10 @@ final class LocalHerdrWatch {
 
     private var tabs: [Followed] = []
     private var timer: Timer?
+    /// The wait the timer runs at now (HerdrPace).
+    private var interval: TimeInterval?
+    /// The observers of what changes the pace: the app's activity and the windows' visibility, while a tab is followed.
+    private var observers: [NSObjectProtocol] = []
     private var inFlight: Set<String> = []
     private var soon = false
 
@@ -103,17 +110,58 @@ final class LocalHerdrWatch {
         if tabs.isEmpty {
             timer?.invalidate()
             timer = nil
+            interval = nil
+            observers.forEach(NotificationCenter.default.removeObserver)
+            observers = []
             machineWatches.values.forEach { $0.end() }
             machineWatches = [:]
             return
         }
-        if timer == nil {
-            let timer = Timer(timeInterval: 2, repeats: true) { [weak self] _ in self?.check() }
-            timer.tolerance = 0.5 // its wakeups may join the system's others
-            RunLoop.main.add(timer, forMode: .common)
-            self.timer = timer
-        }
+        if observers.isEmpty { observePace() }
+        retune()
         if on { checkSoon() }
+    }
+
+    /// Sets the timer to the pace the followed tabs want now: a change of pace takes effect at once.
+    private func retune() {
+        let wanted = pace
+        guard wanted != interval || timer == nil else { return }
+        timer?.invalidate()
+        interval = wanted
+        let timer = Timer(timeInterval: wanted, repeats: true) { [weak self] _ in self?.check() }
+        timer.tolerance = wanted / 4 // its wakeups may join the system's others
+        RunLoop.main.add(timer, forMode: .common)
+        self.timer = timer
+    }
+
+    /// Every 2 seconds while a window following herdr can be seen and the app is in use, or while one of herdr's agents
+    /// (on a machine of its too) waits on a decision; every 6 otherwise.
+    private var pace: TimeInterval {
+        let followed = tabs.compactMap(\.tab).filter { !$0.exited && $0.localHerdr != nil }
+        let seen = followed.contains { ($0.delegate as? TerminalWindowController)?.canBeSeen == true }
+        let deciding = followed.contains { tab in
+            tab.herdrTracker.nextRead != nil || tab.herdrTracker.agents.contains { $0.status == .blocked }
+        } || machineWatches.values.contains { watch in
+            watch.machines.contains { $0.tracker.agents.contains { $0.status == .blocked } }
+        }
+        return HerdrPace.interval(seen: seen, active: NSApp.isActive, deciding: deciding)
+    }
+
+    /// The app coming forward or going back, and a window showing or hiding, change the pace; when it quickens, a check
+    /// comes at once, so a window someone looks at again shows herdr as it is now.
+    private func observePace() {
+        let center = NotificationCenter.default
+        for (name, ofApp) in NSWindow.visibilityNotifications {
+            observers.append(center.addObserver(forName: name, object: ofApp ? NSApp : nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.paceChanged() }
+            })
+        }
+    }
+
+    private func paceChanged() {
+        let before = interval
+        retune()
+        if let before, let now = interval, now < before { checkSoon() }
     }
 
     /// A check within 300 ms (a command changed what herdr shows, or a tab started following it).
@@ -138,6 +186,7 @@ final class LocalHerdrWatch {
     var allMachines: [HerdrMachineWatch] { Array(machineWatches.values) }
 
     private func check() {
+        defer { retune() }
         let followed = tabs.compactMap(\.tab).filter { !$0.exited && $0.localHerdr != nil }
         let servers = Dictionary(grouping: followed, by: { $0.localHerdr!.server })
         followMachines(servers)
