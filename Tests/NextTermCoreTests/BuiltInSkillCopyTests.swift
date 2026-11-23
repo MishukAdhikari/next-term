@@ -68,7 +68,9 @@ import Testing
     @Test func thePlanCoversEveryBuiltInAndWantsOnlyTheOffered() {
         let absent = BuiltInSkillCopy.plan(states: [:], written: [:], wanted: BuiltInSkill.offered(tabs: false), declined: [])
         #expect(absent.map(\.skill.name) == BuiltInSkill.all.map(\.name))
-        #expect(absent.map(\.action) == [.nothing, .write, .write, .write])
+        // Every skill offered is written; one not offered (the tabs skill, with tabs off) is left alone.
+        let offered = Set(BuiltInSkill.offered(tabs: false).map(\.name))
+        #expect(absent.map(\.action) == BuiltInSkill.all.map { offered.contains($0.name) ? .write : .nothing })
         // A copy Next Term wrote and someone edited is theirs, whatever the hash on record: left as it is.
         let edited = BuiltInSkill.worktrees.text + "\nMy own line.\n"
         let state = BuiltInSkillCopy.state(onDisk: edited, folderExists: true, written: BuiltInSkillCopy.hash(BuiltInSkill.worktrees.text),
