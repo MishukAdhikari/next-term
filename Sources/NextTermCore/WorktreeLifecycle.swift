@@ -269,6 +269,8 @@ extension WorktreeLifecycle {
         public mutating func keep(only keys: Set<String>) {
             states = states.filter { keys.contains($0.key) }
         }
+    }
+}
 
 // MARK: - Removal once an agent ends
 // Kept apart from the record above: what is offered when an agent tab's agent ends.

@@ -236,6 +236,8 @@ import Testing
         var kept = back
         kept.keep(only: ["8"])
         #expect(kept.state(of: "7", in: other) == nil && kept.state(of: "8", in: other) == .dismissed)
+    }
+}
 
 /// Once an agent tab's agent ends, the worktrees it worked in that no window has open are offered for removal, each
 /// once ever.
