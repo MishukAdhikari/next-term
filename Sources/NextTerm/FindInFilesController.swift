@@ -461,8 +461,8 @@ final class FindInFilesController: NSWindowController, NSWindowDelegate, NSOutli
             attachment.bounds = NSRect(x: 0, y: -3, width: 16, height: 16)
             text.append(NSAttributedString(attachment: attachment))
             text.append(Typography.gap(6, font: .systemFont(ofSize: 13)))
-            let name = (file.path as NSString).lastPathComponent
-            let folder = (file.path as NSString).deletingLastPathComponent
+            let name = CellText.line((file.path as NSString).lastPathComponent) // one line, marks for any control character
+            let folder = CellText.line((file.path as NSString).deletingLastPathComponent) // a folder can hold them too
             text.append(NSAttributedString(string: name, attributes: [.font: NSFont.systemFont(ofSize: 13, weight: .semibold), .foregroundColor: Theme.system(.label)]))
             if !folder.isEmpty {
                 text.append(Typography.gap(8, font: .systemFont(ofSize: 12)))
