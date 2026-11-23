@@ -48,6 +48,17 @@ public struct MCPRegistrationNotice: Equatable, Sendable {
             : "can ask them to set it up or run tabs. One entry in each; nothing else changed."
     }
 
+    /// Removing is not recommended, so it asks first: the question, what the agents lose, and the two answers, Keep Tools
+    /// (the primary) and Remove.
+    public var removeQuestion: String { "Remove Next Term’s tools from \(agentList)?" }
+    public var removeInfo: String {
+        let (who, their) = agents.count == 1 ? (agentList, "its") : ("your agents", "their")
+        return "We recommend keeping them. Without them, \(who) can’t open tabs or read \(their) windows, use your Secrets by name, "
+            + "or reach the servers you connected in Next Term. Nothing else in \(their) settings changes."
+    }
+    public static let keepButton = "Keep Tools"
+    public static let removeButton = "Remove"
+
     /// Each agent on a line of its own, with its file: "Codex: ~/.codex/config.toml".
     public var fileLines: [String] { rows.map { "\($0.agent): \($0.file)" } }
 
