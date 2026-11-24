@@ -153,8 +153,11 @@ extension SelfTest {
             guard let down = event(.leftMouseDown), let up = event(.leftMouseUp) else { return }
             NSApp.postEvent(up, atStart: false)
             NSApp.sendEvent(down)
-            // A mouse-up the view did not track (the click was refused) is not left for the next one.
-            while NSApp.nextEvent(matching: [.leftMouseUp], until: .distantPast, inMode: .default, dequeue: true) != nil {}
+            // A mouse-up still queued goes through the app now, as its event loop would send it, so none arrives after the
+            // check has read what the click did. Thrown away instead, it never reaches a view whose gesture recognizers
+            // hold the mouse-down until they see the mouse-up (a plain table such as the detail's row list, on macOS 26):
+            // they keep the press and every event after it, the keys too, until the next click lets them go.
+            while let left = NSApp.nextEvent(matching: [.leftMouseUp], until: .distantPast, inMode: .default, dequeue: true) { NSApp.sendEvent(left) }
         }
 
         /// A key, to the window's first responder: ↑ 126, ↓ 125, ← 123, → 124, ↩ 36, Space 49, Esc 53.
