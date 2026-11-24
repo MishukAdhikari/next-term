@@ -1156,6 +1156,10 @@ extension SelfTest {
         // keyboard), the self-test's own keys not taken for typing, so it comes forward now and never after its close.
         let arrival: AgentArrival.Mode = app.agentArrival
         app.agentArrival = .focus
+        // A project of the user's, as this check is about: an agent's window on a temporary folder is its scratch, in
+        // no history (AgentScratch, checked in its own part), and every fixture here is in the temporary folder.
+        AgentScratch.projectForTest = canonicalPath(feed)
+        defer { AgentScratch.projectForTest = nil }
         UserKeys.ignoredForTest = true
         let agent: TerminalWindowController = app.openFolder(feed, newWindow: false, forAgent: true)
         agent.presentForAgent(nil, explicit: true)

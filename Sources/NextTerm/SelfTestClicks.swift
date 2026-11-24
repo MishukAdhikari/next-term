@@ -538,15 +538,29 @@ extension SelfTest {
     private static func arrowCheck(_ c: TerminalWindowController, _ node: FileNode, _ mode: String) async {
         let outline = c.sidebar.outline
         if outline.isItemExpanded(node) { outline.collapseItem(node) }
+        // Through the window, as a hand's click comes: on macOS 26 the arrow is a plain button the window's own tracking
+        // presses, and a mouse-down handed to the button itself goes on up to the tree as a click on the row (which,
+        // with single clicks on, opened the folder in the arrow's place). The mouse-up waits in the queue and goes
+        // through the window next, as the app's event loop would send it.
         func pressArrow() -> Bool {
             let row = outline.row(forItem: node)
-            guard row >= 0 else { return false }
+            guard row >= 0, let window = outline.window else { return false }
             outline.scrollRowToVisible(row)
             let rowView = outline.rowView(atRow: row, makeIfNecessary: true)
             guard let disclosure = rowView?.subviews.first(where: { $0.identifier == NSOutlineView.disclosureButtonIdentifier }) else { return false }
-            click(disclosure, at: NSPoint(x: disclosure.bounds.midX, y: disclosure.bounds.midY))
+            let location = disclosure.convert(NSPoint(x: disclosure.bounds.midX, y: disclosure.bounds.midY), to: nil)
+            let time = ProcessInfo.processInfo.systemUptime
+            func event(_ type: NSEvent.EventType, after delay: Double) -> NSEvent? {
+                NSEvent.mouseEvent(with: type, location: location, modifierFlags: [], timestamp: time + delay, windowNumber: window.windowNumber,
+                                   context: nil, eventNumber: 0, clickCount: 1, pressure: type == .leftMouseUp ? 0 : 1)
+            }
+            guard let down = event(.leftMouseDown, after: 0), let up = event(.leftMouseUp, after: 0.08) else { return false }
+            NSApp.postEvent(up, atStart: false)
+            window.sendEvent(down)
+            while let left = NSApp.nextEvent(matching: .leftMouseUp, until: .distantPast, inMode: .default, dequeue: true) { window.sendEvent(left) }
             return true
         }
+        let presses = outline.presses
         guard pressArrow() else { return note("\(mode): no disclosure button on the folder's row: the arrow click is not checked") }
         let opened = await wait(3) { outline.isItemExpanded(node) }
         await pause(0.3)
@@ -554,9 +568,10 @@ extension SelfTest {
         let pressed = pressArrow()
         let closed = await wait(3) { !outline.isItemExpanded(node) }
         await pause(0.3)
-        check(opened && stayedOpen && pressed && closed && !outline.isItemExpanded(node) && c.editorArea.panes.isEmpty,
+        let rowClicks = outline.presses - presses
+        check(opened && stayedOpen && pressed && closed && !outline.isItemExpanded(node) && rowClicks == 0 && c.editorArea.panes.isEmpty,
               "\(mode): a click on a folder's arrow opens it, and the next closes it, once each",
-              "opened \(opened), stayed \(stayedOpen), closed \(closed)")
+              "opened \(opened), stayed \(stayedOpen), closed \(closed), \(rowClicks) clicks on the row")
     }
 
     /// Keys move the selection and never open; showing the file in the tree never loops; proposals are

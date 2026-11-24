@@ -21,11 +21,21 @@ public enum AgentScratch {
 
     /// Whether `path` is a temporary folder, or inside one: symlinks resolved, so /tmp/x and /private/tmp/x both are.
     public static func isTemporary(_ path: String, temporary: String = NSTemporaryDirectory()) -> Bool {
+        let spellings: [String] = [path, canonicalPath(path)]
+        #if DEBUG
+        if let kept = projectForTest, spellings.contains(where: { $0 == kept || $0.hasPrefix(kept + "/") }) { return false }
+        #endif
         let roots: [String] = roots(temporary: temporary)
-        return [path, canonicalPath(path)].contains { (spelling: String) -> Bool in
+        return spellings.contains { (spelling: String) -> Bool in
             roots.contains { spelling == $0 || spelling.hasPrefix($0 + "/") }
         }
     }
+
+    #if DEBUG
+    /// The self-test's folder that stands in for a project of the user's, though it is in the temporary folder as all
+    /// its fixtures are (the Welcome window's project an agent opens): no scratch while it is set.
+    nonisolated(unsafe) public static var projectForTest: String?
+    #endif
 
     /// Whether a project goes into Recent Projects, the history and the session restore: every one but a temporary
     /// folder an agent opened. One the user opened there themselves (a fixture in /tmp) is kept as any other.
