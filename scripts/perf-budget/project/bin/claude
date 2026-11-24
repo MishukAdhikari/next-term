@@ -6,7 +6,11 @@ import os, sys, time
 
 seconds = float(sys.argv[1]) if len(sys.argv) > 1 else 60
 spinner = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
-width = 76
+# As agent UIs do, the box fits the terminal: a fixed width wider than it would wrap, and every redraw scroll.
+try:
+    width = max(20, min(76, os.get_terminal_size(1).columns - 2))
+except OSError:
+    width = 76
 start = time.time()
 height = 0
 frame = 0
