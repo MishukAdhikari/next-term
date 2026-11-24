@@ -23,6 +23,17 @@ These are good hotkeys:
 - **Shortcuts app:** the Open URLs action.
 - **Stream Deck:** a Website action.
 
+## Spotlight and Shortcuts actions
+
+Next Term gives macOS four actions. Find them in Spotlight, or in the Shortcuts app under Next Term:
+
+- **Go to Waiting Agent:** brings forward the tab whose agent waits for you.
+- **Go to Anything:** opens Go to Anything over the window in front.
+- **Open Project:** opens a folder as a project.
+- **Start Agent:** starts Claude Code, Codex, OpenCode, Gemini CLI or Command Code in a folder, after you say yes in Next Term.
+
+Each one opens the link above that does the same thing, so it can do no more than the link. Siri and Spotlight also know "Go to the waiting agent in Next Term" and "Go to anything in Next Term" with no setup. The actions come with releases, which are built with Xcode; a copy built with only the Command Line Tools has none.
+
 ## nxtrm call
 
 `nxtrm call TOOL '{json}'` runs one of Next Term's tools and prints its answer, as JSON for most:
