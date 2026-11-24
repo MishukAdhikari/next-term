@@ -67,7 +67,9 @@ extension SelfTest {
                 wrong.append("\(item.title) (\(id), not in the menu bar)")
                 continue
             }
+            // Clear Buffer's ⌘K is Go to Anything…'s on the menu bar while it is closed; a terminal answers it (terminalKeys).
             let inMenuBar = command.item.flatMap(KeyboardShortcuts.chord(of:))
+                ?? shortcuts.terminalKeys.first { $0.value === command.item }?.key
             if KeyboardShortcuts.chord(of: item) != inMenuBar { wrong.append("\(item.title) (\(id))") }
         }
         check(wrong.isEmpty, "menus: \(name)'s commands are menu-bar commands, with their keys shown", wrong.joined(separator: ", "))

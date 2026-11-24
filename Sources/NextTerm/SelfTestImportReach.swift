@@ -87,30 +87,38 @@ extension SelfTest {
               keys.filter { !ImportSnapshot.same($0, before[$0], after[$0]) }.joined(separator: ", "))
     }
 
-    /// The JetBrains set's ⌘K and ⇧⌘K: on the menus, and the terminal's own ⌘K.
+    /// The JetBrains set's ⇧⌘K and ⌘K: Push… on the menus, and ⌘K Go to Anything… there as in every set (plan 034),
+    /// Clear Buffer's while a terminal has the keyboard and Link's in a Markdown file's editor.
     private static func importJetBrainsKeysChecks() {
         let shortcuts = KeyboardShortcuts.shared
         let presetBefore = shortcuts.preset
         defer { shortcuts.preset = presetBefore }
         func item(_ id: String) -> NSMenuItem? { shortcuts.commands.first { $0.id == id }?.item }
-        shortcuts.preset = .jetBrains
-        let commit = item("gitCommit:"), push = item("gitPush:"), clear = item("clearBuffer:")
-        check(commit?.keyEquivalent == "k" && commit?.keyEquivalentModifierMask == .command
-              && push?.keyEquivalent == "k" && push?.keyEquivalentModifierMask == [.command, .shift],
-              "JetBrains keys: Commit… ⌘K and Push… ⇧⌘K", "\(commit?.keyEquivalent ?? "nil") \(push?.keyEquivalent ?? "nil")")
-        check(clear?.keyEquivalent == "", "and Clear Buffer's ⌘K is kept off the menus, for the terminal to answer",
-              clear?.keyEquivalent ?? "nil")
         let commandK = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .command, timestamp: 0, windowNumber: 0,
                                         context: nil, characters: "k", charactersIgnoringModifiers: "k", isARepeat: false, keyCode: 40)
-        check(commandK.flatMap(shortcuts.terminalItem(for:)) === clear && clear != nil, "a terminal with the keyboard clears on ⌘K")
-        check(shortcuts.sharing("gitCommit:") == "⌘K is Clear Buffer while a terminal has the keyboard, Commit… everywhere else",
-              "Settings says where ⌘K is which", shortcuts.sharing("gitCommit:") ?? "nil")
-        // Commit… is back on its own key in Next Term's set (⇧⌘C), off ⌘K.
-        shortcuts.preset = .nextTerm
-        let commitKey = item("gitCommit:").flatMap(KeyboardShortcuts.chord(of:))
-        check(item("clearBuffer:")?.keyEquivalent == "k" && commitKey == shortcuts.baseChord(for: "gitCommit:")
-              && commandK.flatMap(shortcuts.terminalItem(for:)) == nil,
-              "with Next Term's keys, ⌘K is Clear Buffer's everywhere again", "Commit… \(commitKey?.display ?? "none")")
+        let nextTermsCommit = KeyChord(key: "c", command: true, shift: true)
+        let shares = "⌘K is Link while a Markdown file’s editor has the keyboard, Clear Buffer while a terminal has the keyboard, "
+            + "Go to Anything… everywhere else"
+        for preset in [KeymapPreset.jetBrains, .nextTerm] {
+            shortcuts.preset = preset
+            let name = preset == .jetBrains ? "JetBrains keys" : "Next Term's keys"
+            let commit = item("gitCommit:").flatMap(KeyboardShortcuts.chord(of:))
+            let goTo = item("goToAnything:").flatMap(KeyboardShortcuts.chord(of:))
+            if preset == .jetBrains {
+                let push = item("gitPush:").flatMap(KeyboardShortcuts.chord(of:))
+                check(commit == nextTermsCommit && push == KeyChord(key: "k", command: true, shift: true),
+                      "JetBrains keys: Commit… keeps Next Term's ⇧⌘C and Push… is ⇧⌘K", "\(commit?.display ?? "none") \(push?.display ?? "none")")
+            } else {
+                check(commit == nextTermsCommit && commit == shortcuts.baseChord(for: "gitCommit:"),
+                      "with Next Term's keys, Commit… is ⇧⌘C", commit?.display ?? "none")
+            }
+            let clear = item("clearBuffer:")
+            check(goTo == KeyChord(key: "k", command: true) && clear?.keyEquivalent == "",
+                  "\(name): ⌘K is Go to Anything… on the menus, Clear Buffer's kept off them for the terminal to answer",
+                  "\(goTo?.display ?? "none"), Clear \(clear?.keyEquivalent ?? "nil")")
+            check(commandK.flatMap(shortcuts.terminalItem(for:)) === clear && clear != nil, "\(name): a terminal with the keyboard clears on ⌘K")
+            check(shortcuts.sharing("clearBuffer:") == shares, "\(name): Settings says where ⌘K is which", shortcuts.sharing("clearBuffer:") ?? "nil")
+        }
     }
 
     /// An IDE unused for 180 days is listed, last, under "Not used lately".
