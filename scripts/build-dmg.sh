@@ -1,6 +1,6 @@
 #!/bin/bash
 # Builds "Next Term.app" (universal: Apple Silicon + Intel) and a drag-to-install DMG in dist/.
-# Needs only the Xcode Command Line Tools.
+# Needs only the Xcode Command Line Tools; with Xcode, the app also gets its Spotlight and Shortcuts actions.
 #
 #   scripts/build-dmg.sh                 ad-hoc signed (runs here; elsewhere needs Open Anyway, see README)
 #   SIGN_ID=<SHA-1 of the release identity> scripts/build-dmg.sh
@@ -65,6 +65,8 @@ cp LICENSE THIRD_PARTY_NOTICES.md "$APP/Contents/Resources/"
   echo "<p>Free software under the MIT License.<br>Next Term › Acknowledgements lists the open-source software it includes.</p>"
   echo "</body></html>"
 } > "$APP/Contents/Resources/Credits.html"
+# Spotlight and Shortcuts actions: Metadata.appintents, made with Xcode's tool when it is there (scripts/app-intents.sh).
+scripts/app-intents.sh "$APP/Contents/Resources"
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
