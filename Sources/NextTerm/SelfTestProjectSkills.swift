@@ -40,7 +40,7 @@ extension SelfTest {
         probe.layoutIfNeeded()
         check(probe.frame.width <= 621 && pane.personal.isHidden
               && view.rows.map(\.name) == ["st-deploy", "st-lint", "next-term-tabs", "next-term-worktrees", "next-term-setup",
-                                             "next-term-secrets"],
+                                             "next-term-secrets", "next-term-remote-access"],
               "skills project: Project lists the project's skills and Next Term's own last, fits Settings, and Personal is hidden",
               "\(probe.frame.width) \(view.rows.map(\.name))")
 
@@ -61,10 +61,11 @@ extension SelfTest {
         let builtIn = !app.agentControl ? "—" : app.agentsOfferTabs ? "via Next Term" : "off"
         check(text("next-term-tabs", "where") == "Next Term" && text("next-term-tabs", codex) == builtIn
               && text("next-term-setup", codex) == reachable && text("next-term-worktrees", claude) == reachable
-              && text("next-term-secrets", codex) == reachable && view.openButton.isEnabled == false
+              && text("next-term-secrets", codex) == reachable && text("next-term-remote-access", codex) == reachable
+              && view.openButton.isEnabled == false
               && view.summary.stringValue == "2 skills · read-only",
               "skills project: Next Term's own skills follow their switches (tabs its own, the others agent control), and the summary counts the project's",
-              ["next-term-tabs", "next-term-worktrees", "next-term-setup", "next-term-secrets"].map { text($0, codex) }.joined(separator: " | ") + " " + view.summary.stringValue)
+              ["next-term-tabs", "next-term-worktrees", "next-term-setup", "next-term-secrets", "next-term-remote-access"].map { text($0, codex) }.joined(separator: " | ") + " " + view.summary.stringValue)
 
         ProjectSkillsView.projectsForTest = []
         view.reload()
