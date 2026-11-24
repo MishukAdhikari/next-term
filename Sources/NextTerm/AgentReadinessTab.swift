@@ -8,8 +8,14 @@ extension AgentReadiness {
     func written(_ data: ArraySlice<UInt8>, tab: TerminalTab) {
         let agentRunning = Self.runsLocalAgent(tab)
         guard agentRunning || watchedCount > 0 else { return }
-        let working = agentRunning && tab.status.state == .working
-        written(data, id: tab.id, agentRunning: agentRunning, working: working)
+        written(data, id: tab.id, agentRunning: agentRunning, working: agentRunning && Self.screenSaysWorking(tab.status))
+    }
+
+    /// The agent works as its own screen (or its reports) shows it: only that work took the line. Work told only by output
+    /// timing proves nothing of the sort: the echo of a key the user typed, read late on a busy main thread, is output
+    /// a moment after the input, and taking it for the agent's turn would forget the text still in its prompt.
+    private static func screenSaysWorking(_ status: TabStatus) -> Bool {
+        status.state == .working && status.screenSynced
     }
 
     /// Whether Next Term may type into the tab now, and if not, why. send_to_tab's busy and starting checks count,
@@ -18,7 +24,7 @@ extension AgentReadiness {
         sweepClosedTabs()
         let status = tab.status
         let agentRunning = Self.runsLocalAgent(tab)
-        let working = status.state == .working
+        let working = Self.screenSaysWorking(status)
         let herdr = tab.remote?.keep == .herdr && !tab.fellBack
         // herdr's agents draw their prompt on the server: nothing here sees what is typed there.
         let line: Bool? = herdr ? nil : lineHasText(tab.id, agentRunning: agentRunning, working: working)

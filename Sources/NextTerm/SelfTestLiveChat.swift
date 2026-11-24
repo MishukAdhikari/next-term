@@ -241,29 +241,6 @@ extension SelfTest {
         await liveChatQuietAndSmooth(pane: pane, tab: tab, window: window, tickFlag: base + "/tick")
     }
 
-    /// Draws of one terminal view, counted while a self-test watches it (`countDraws`).
-    nonisolated(unsafe) private static var drawsCounted = 0
-    nonisolated(unsafe) private static weak var drawsOf: NSView?
-    nonisolated(unsafe) private static var drawCounterInstalled = false
-
-    /// Counts `view`'s draws from now on: NextTermView gets a draw(_:) of its own that counts and then draws as
-    /// SwiftTerm does. For the self-test only; nothing in the app calls it.
-    @MainActor static func countDraws(of view: NextTermView) {
-        drawsOf = view
-        drawsCounted = 0
-        guard !drawCounterInstalled else { return }
-        drawCounterInstalled = true
-        let selector = #selector(NSView.draw(_:))
-        guard let inherited = class_getInstanceMethod(TerminalView.self, selector) else { return }
-        typealias Draw = @convention(c) (AnyObject, Selector, NSRect) -> Void
-        let draw = unsafeBitCast(method_getImplementation(inherited), to: Draw.self)
-        let counting: @convention(block) (AnyObject, NSRect) -> Void = { object, rect in
-            if object === drawsOf { drawsCounted += 1 }
-            draw(object, selector, rect)
-        }
-        class_addMethod(NextTermView.self, selector, imp_implementationWithBlock(counting), method_getTypeEncoding(inherited))
-    }
-
     /// Small scroll steps over the chat's transcript, up from the end and back: each step's main-thread time (the
     /// scroll and the drawing it causes), in ms, sorted.
     @MainActor static func scrollSteps(_ transcript: ChatTranscriptView, window: NSWindow) -> [Double] {
@@ -358,7 +335,9 @@ extension SelfTest {
         let idle = summary(scrollSteps(transcript, window: window))
 
         // The agent prints a line every 50 ms behind the chat.
-        countDraws(of: tab.view)
+        // Counted as the drawing part counts them: one wrapper on SwiftTerm's draw, so every terminal view is counted.
+        DrawCounter.install()
+        DrawCounter.reset(tab.view)
         let ticksBefore = lastTick()
         fm.createFile(atPath: tickFlag, contents: nil)
         let busyStarted = Date()
@@ -366,7 +345,7 @@ extension SelfTest {
         let busy = summary(scrollSteps(transcript, window: window))
         await pause(max(0, 2 - Date().timeIntervalSince(busyStarted)))
         let ticksAfter = lastTick()
-        let drawsHidden = drawsCounted
+        let drawsHidden = DrawCounter.count(tab.view)
 
         let numbers = String(format: "300 blocks loaded in %.1f ms; 300 steps of 14 pt; idle: ", loadMs) + idle.words
             + "; agent printing every 50 ms: " + busy.words
@@ -401,10 +380,9 @@ extension SelfTest {
         await pause(0.2)
         let latest = lastTick()
         pane.setChat(shown: false)
-        check(await wait(2) { !tab.view.isHidden && drawsCounted > drawsHidden } && screen().contains("tick \(latest)"),
+        check(await wait(2) { !tab.view.isHidden && DrawCounter.count(tab.view) > drawsHidden } && screen().contains("tick \(latest)"),
               "live chat: back on the terminal it draws at once, showing the agent's latest line",
-              "hidden \(tab.view.isHidden), draws \(drawsCounted - drawsHidden), latest tick \(latest)")
-        drawsOf = nil
+              "hidden \(tab.view.isHidden), draws \(DrawCounter.count(tab.view) - drawsHidden), latest tick \(latest)")
         await screenshot(window, suffix: "-terminal-after-chat")
     }
 }

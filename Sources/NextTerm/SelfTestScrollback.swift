@@ -211,8 +211,10 @@ extension SelfTest {
               "scrollback: restored lines show once, above the divider, each from the left edge", shown.joined(separator: " | "))
         check(AgentScreen.activity(screenLines: restored.screenTail()) == .asking("Do you want to proceed?"),
               "scrollback: the replayed question reads as one on the whole screen")
-        check(AgentScreen.activity(screenLines: restored.liveTail()) == .idle,
-              "scrollback: questions are read only below the divider, so it asks nothing")
+        // Nothing is below the divider yet: the live part is empty, which reads as a blank screen, no question and no turn.
+        check(restored.liveTail().isEmpty && AgentScreen.activity(screenLines: restored.liveTail()) == .blank,
+              "scrollback: questions are read only below the divider, so it asks nothing",
+              "\(restored.liveTail()) \(AgentScreen.activity(screenLines: restored.liveTail()))")
         check(TerminalTab.loginRefusal(restored.screenTail(16)) != nil && TerminalTab.loginRefusal(restored.liveTail(16)) == nil,
               "scrollback: a replayed ssh refusal is not this connection's")
         // A program that prints the divider's text after its question hides nothing: the divider is known by its row.

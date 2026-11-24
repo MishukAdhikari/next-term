@@ -42,9 +42,10 @@ extension SelfTest {
         try? FileManager.default.removeItem(at: bin)
     }
 
-    /// The agent's screen shows the working hint, or nothing.
+    /// The agent's screen shows the working hint, or its idle footer: a blank screen says nothing either way
+    /// (AgentActivity.blank, as Codex clears it to update itself), so it would end no turn.
     private static func setWorking(_ tab: TerminalTab, _ working: Bool) async -> Bool {
-        tab.view.feed(text: working ? "\u{1b}[H\u{1b}[2J✻ Working… (esc to interrupt)\r\n" : "\u{1b}[H\u{1b}[2J")
+        tab.view.feed(text: working ? "\u{1b}[H\u{1b}[2J✻ Working… (esc to interrupt)\r\n" : "\u{1b}[H\u{1b}[2J? for shortcuts\r\n")
         return await wait(5) { (tab.status.state == .working) == working }
     }
 
