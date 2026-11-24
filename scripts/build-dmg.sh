@@ -10,6 +10,7 @@
 #                                         signed, notarized and stapled for distribution
 set -euo pipefail
 cd "$(dirname "$0")/.."
+source scripts/swiftpm.sh
 
 VERSION="${VERSION:-0.1.0}"
 BUILD="${BUILD:-$(git rev-list --count HEAD 2>/dev/null || echo 1)}"
@@ -21,8 +22,8 @@ APP="$DIST/$APP_NAME.app"
 DMG="$DIST/NextTerm-$VERSION.dmg"
 
 echo "==> Building arm64 and x86_64"
-swift build -c release --triple arm64-apple-macosx13.0
-swift build -c release --triple x86_64-apple-macosx13.0
+swift build "${SWIFTPM_FLAGS[@]}" -c release --triple arm64-apple-macosx13.0
+swift build "${SWIFTPM_FLAGS[@]}" -c release --triple x86_64-apple-macosx13.0
 
 echo "==> Assembling $APP"
 rm -rf "$APP"

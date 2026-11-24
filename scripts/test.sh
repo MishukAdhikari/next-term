@@ -13,6 +13,7 @@
 # the run's own, removed too.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+source scripts/swiftpm.sh
 # One run at a time on this Mac: the sweep below must never meet another run's fixtures.
 if [[ -z "${NT_TEST_LOCKED:-}" ]] && command -v lockf >/dev/null 2>&1; then
   export NT_TEST_LOCKED=1
@@ -38,7 +39,7 @@ export TMPDIR="$RUN_TMP/"
 FW="$(xcode-select -p)/Library/Developer/Frameworks"
 if [[ -d "$FW/Testing.framework" ]]; then
   LIB="$(xcode-select -p)/Library/Developer/usr/lib"
-  swift test -Xswiftc -F -Xswiftc "$FW" -Xlinker -rpath -Xlinker "$FW" -Xlinker -rpath -Xlinker "$LIB" "$@"
+  swift test "${SWIFTPM_FLAGS[@]}" -Xswiftc -F -Xswiftc "$FW" -Xlinker -rpath -Xlinker "$FW" -Xlinker -rpath -Xlinker "$LIB" "$@"
 else
-  swift test "$@"
+  swift test "${SWIFTPM_FLAGS[@]}" "$@"
 fi

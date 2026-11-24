@@ -9,6 +9,7 @@
 #                                    and a tmux of its own (SelfTestKeepProbe.swift). Installs neither.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+source scripts/swiftpm.sh
 
 HARNESS_ID=me.mishuk.nextterm.relaunch-harness
 
@@ -62,7 +63,7 @@ STUB
 # outside the temporary folders, which the resume gate keeps an agent's code and store out of. Everything is in those two
 # folders, except the throwaway copy's own defaults domain, removed after.
 relaunch() {
-  swift build
+  swift build "${SWIFTPM_FLAGS[@]}"
   local id=$HARNESS_ID folder agent
   folder="$(cd "$(mktemp -d)" && pwd -P)"
   agent="$(cd "$(mktemp -d "$HOME/Library/Caches/nt-relaunch-agent.XXXXXX")" && pwd -P)"
@@ -176,7 +177,7 @@ C
 # file, then the scratch root, the harness folder and the throwaway app's defaults. It never touches a process by name
 # alone, nor the user's own herdr or tmux.
 keep_probe() {
-  swift build
+  swift build "${SWIFTPM_FLAGS[@]}"
   local folder root session="nt-probe-$$" herdr="" tmux="" step failed=0
   folder="$(cd "$(mktemp -d)" && pwd -P)"
   root="$(cd "$(mktemp -d /tmp/ntp.XXXXXX)" && pwd -P)"
@@ -333,7 +334,7 @@ if [[ "${1:-}" == "--relaunch" ]]; then
 fi
 
 BIN="${1:-.build/debug/NextTerm}"
-if [[ "$BIN" == .build/debug/NextTerm ]]; then swift build; fi
+if [[ "$BIN" == .build/debug/NextTerm ]]; then swift build "${SWIFTPM_FLAGS[@]}"; fi
 REPORT="${REPORT:-$(mktemp -d)/selftest.txt}"
 perl -e 'alarm 1800; exec @ARGV' "$BIN" --self-test "$REPORT" >/dev/null 2>&1 || true
 touch "$REPORT"
