@@ -287,20 +287,28 @@ import Testing
     @Test func aReadRacingAWriteIsNeverTakenForAnOlderCopy() throws {
         let setup = try Setup()
         let record = try setup.signIn().get()
-        let done = DispatchSemaphore(value: 0)
+        // Threads of their own, not GCD's: on a runner with few CPUs the global queue may have no thread to give while
+        // other tests wait on it, and the readers would never run.
+        final class Stop: @unchecked Sendable {
+            private let lock = NSLock()
+            private var stopped = false
+            var isSet: Bool { lock.lock(); defer { lock.unlock() }; return stopped }
+            func set() { lock.lock(); stopped = true; lock.unlock() }
+        }
+        let stop = Stop()
         let tampered = Outcomes()
-        let readers = DispatchGroup()
-        for _ in 0..<4 {
-            DispatchQueue.global().async(group: readers) {
-                while done.wait(timeout: .now()) == .timedOut {
+        let ended = DispatchSemaphore(value: 0)
+        for _ in 0..<3 {
+            Thread {
+                while !stop.isSet {
                     if case .failure = setup.store.read() { tampered.add(.tampered) }
                 }
-                done.signal()
-            }
+                ended.signal()
+            }.start()
         }
         for turn in 0..<300 { try setup.store.setConsent(id: record.id, agent: "codex", allowed: turn % 2 == 0) }
-        done.signal()
-        readers.wait()
+        stop.set()
+        for _ in 0..<3 { #expect(ended.wait(timeout: .now() + 30) == .success, "a reader never ended") }
         #expect(tampered.all.isEmpty, "\(tampered.all.count) reads were taken for an older copy")
         // An older copy really put back still reads as tampered.
         let older = try #require(try setup.folder.read(SignInFile.name, cap: SignInFile.maxSize))
