@@ -87,7 +87,7 @@ public final class MCPHubLoopback: @unchecked Sendable {
         Thread { [weak self] in
             while true {
                 let client = accept(fd, nil, nil)
-                if client < 0 { if errno == EINTR { continue } else { return } }
+                if client < 0 { if errno == EINTR { continue } else { ListenerRetire.loopEnded(fd); return } }
                 guard let self else { Darwin.close(client); return }
                 self.serve(client)
             }
@@ -116,7 +116,7 @@ public final class MCPHubLoopback: @unchecked Sendable {
         let wasEnded = ended
         ended = true
         lock.unlock()
-        for fd in fds where fd >= 0 { shutdown(fd, SHUT_RDWR); Darwin.close(fd) }
+        for fd in fds { ListenerRetire.retire(fd) }
         if !wasEnded { arrived.signal() }
     }
 
@@ -161,7 +161,7 @@ public final class MCPHubLoopback: @unchecked Sendable {
         listener = -1
         listener6 = -1
         lock.unlock()
-        for fd in listening where fd >= 0 { shutdown(fd, SHUT_RDWR); Darwin.close(fd) }
+        for fd in listening { ListenerRetire.retire(fd) }
         arrived.signal()
     }
 

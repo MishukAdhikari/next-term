@@ -60,31 +60,61 @@ extension SelfTest {
         sidebarRowFitCheck(sidebar)
     }
 
-    /// The sidebar's own Databases and Services rows, as laid out at its width now, pass the same look.
+    /// The sidebar's own Databases and Services rows, as laid out at its width now, pass the same look; then each one
+    /// selected, where the source list draws its name in its selected style (semibold, wider), and the line has to
+    /// follow it. The selection and the focus are put back after.
     private static func sidebarRowFitCheck(_ sidebar: ProjectSidebarView) {
         let outline = sidebar.outline
-        var problems: [String] = []
-        var looked = 0
-        for row in 0..<outline.numberOfRows {
+        let rows = (0..<outline.numberOfRows).filter { row in
             let item = outline.item(atRow: row)
-            guard item is DatabaseItem || item is DatabasesGroup || ServicesGroup.holds(item) else { continue }
-            outline.scrollRowToVisible(row)
-            outline.layoutSubtreeIfNeeded()
-            guard let cell = outline.view(atColumn: 0, row: row, makeIfNecessary: true) else { continue }
-            cell.layoutSubtreeIfNeeded()
-            let look: (state: LineState, problem: String?)
-            if let database = cell as? DatabaseCellView {
-                look = lineLook(database, database.line, badge: database.badge)
-            } else if let service = cell as? ServiceCellView {
-                look = lineLook(service, service.line, badge: service.badge)
-            } else {
-                continue
-            }
-            looked += 1
-            if let problem = look.problem { problems.append("row \(row): \(problem)") }
+            return item is DatabaseItem || item is DatabasesGroup || ServicesGroup.holds(item)
         }
-        check(looked > 2 && problems.isEmpty, "links: the sidebar's Databases and Services rows show their names whole as they fit",
-              problems.first ?? "\(looked) rows")
+        func looks() -> (looked: Int, problems: [String]) {
+            var problems: [String] = []
+            var looked = 0
+            for row in rows {
+                outline.scrollRowToVisible(row)
+                outline.layoutSubtreeIfNeeded()
+                guard let cell = outline.view(atColumn: 0, row: row, makeIfNecessary: true) else { continue }
+                cell.layoutSubtreeIfNeeded()
+                let look: (state: LineState, problem: String?)
+                if let database = cell as? DatabaseCellView {
+                    look = lineLook(database, database.line, badge: database.badge)
+                } else if let service = cell as? ServiceCellView {
+                    look = lineLook(service, service.line, badge: service.badge)
+                } else {
+                    continue
+                }
+                looked += 1
+                if let problem = look.problem { problems.append("row \(row): \(problem)") }
+            }
+            return (looked, problems)
+        }
+        let plain = looks()
+        check(plain.looked > 2 && plain.problems.isEmpty, "links: the sidebar's Databases and Services rows show their names whole as they fit",
+              plain.problems.first ?? "\(plain.looked) rows")
+
+        let selection = outline.selectedRowIndexes
+        let focus = outline.window?.firstResponder
+        outline.window?.makeFirstResponder(outline)
+        var selected: [String] = []
+        var styles: Set<Int> = []
+        // Only rows a person can select: the group headers refuse a selection, so their selected look never shows.
+        let selectable = rows.filter { row in
+            outline.delegate?.outlineView?(outline, shouldSelectItem: outline.item(atRow: row)) ?? true
+        }
+        for row in selectable {
+            outline.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+            let one = looks()
+            selected += one.problems.filter { $0.hasPrefix("row \(row):") }
+            if let cell = outline.view(atColumn: 0, row: row, makeIfNecessary: false) as? NSTableCellView {
+                styles.insert(cell.backgroundStyle.rawValue)
+            }
+        }
+        outline.selectRowIndexes(selection, byExtendingSelection: false)
+        if let focus { outline.window?.makeFirstResponder(focus) }
+        check(!selectable.isEmpty && selected.isEmpty, "links: a selected Databases or Services row shows its name whole as it fits",
+              selected.first ?? "\(selectable.count) rows, background styles \(styles.sorted())")
     }
 
     /// Where `view` sits as the constraints place it: its alignment rect, which leaves out a label's insets.

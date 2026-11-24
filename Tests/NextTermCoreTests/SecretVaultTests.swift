@@ -454,6 +454,24 @@ private final class FolderFixture {
         #expect(throws: SecretFolder.Failure.refused) { _ = try f.folder.read("other.json", cap: SecretVault.maxFileSize) }
     }
 
+    /// A read opens the file and then looks at it: a write's rename in between leaves the opened file no name, and
+    /// its bytes are the whole version before that write, so the read takes them. Two names stay refused.
+    @Test func aFileReplacedWhileOpenIsStillOwnAndALinkedOneIsNot() throws {
+        let f = try FolderFixture()
+        try f.folder.ensure()
+        try f.folder.write("v.json", data: Data("old".utf8))
+        let descriptor = open(f.folder.path("v.json"), O_RDONLY)
+        defer { close(descriptor) }
+        try f.folder.write("v.json", data: Data("new".utf8))
+        var info = stat()
+        #expect(fstat(descriptor, &info) == 0 && info.st_nlink == 0)
+        #expect(f.folder.isOwnFile(info, opened: true))
+        #expect(!f.folder.isOwnFile(info)) // a name looked up never has no links: only an opened file may
+        #expect(link(f.folder.path("v.json"), f.folder.path("w.json")) == 0)
+        #expect(lstat(f.folder.path("v.json"), &info) == 0 && info.st_nlink == 2)
+        #expect(!f.folder.isOwnFile(info, opened: true))
+    }
+
     @Test func aChangeBetweenReadAndWriteIsRetriedOnTheNewBytes() throws {
         let f = try FolderFixture()
         try f.folder.ensure()

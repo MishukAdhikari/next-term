@@ -69,7 +69,7 @@ public final class MCPHubFakeRemote: @unchecked Sendable {
         let thread = Thread { [weak self] in
             while true {
                 let client = accept(fd, nil, nil)
-                if client < 0 { if errno == EINTR { continue } else { return } }
+                if client < 0 { if errno == EINTR { continue } else { ListenerRetire.loopEnded(fd); return } }
                 guard let self else { close(client); return }
                 Thread { self.serve(client) }.start() // its own thread: a busy test run's queues never hold it up
             }
@@ -86,7 +86,7 @@ public final class MCPHubFakeRemote: @unchecked Sendable {
         let fd = listener
         listener = -1
         lock.unlock()
-        if fd >= 0 { shutdown(fd, SHUT_RDWR); close(fd) }
+        ListenerRetire.retire(fd)
     }
 
     public var seen: [Seen] {

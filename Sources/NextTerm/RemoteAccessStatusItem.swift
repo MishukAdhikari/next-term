@@ -62,6 +62,7 @@ final class RemoteAccessStatusItem: NSObject, NSMenuDelegate {
         let timer = Timer(timeInterval: Self.recount, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.update() }
         }
+        timer.tolerance = Self.recount / 4
         RunLoop.main.add(timer, forMode: .common)
         self.timer = timer
         return item

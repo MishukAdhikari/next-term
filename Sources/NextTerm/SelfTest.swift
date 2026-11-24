@@ -394,12 +394,14 @@ enum SelfTest {
         check(await wait(5) { second.currentDirectory() == "/private/tmp" }, "new tab opens in the same directory", second.currentDirectory())
 
         // Foreground process lookup through the kernel.
-        second.view.send(txt: "sleep 1.5\r")
+        // Long enough to outlast the looks below on a busy Mac: at 1.5 s the command could end before the spinner check.
+        second.view.send(txt: "sleep 3\r")
         check(await wait(3) { ProcessInspector.foreground(ptyFileDescriptor: second.view.process.childfd,
                                                           shellPid: second.view.process.shellPid, shellName: "zsh")?.name == "sleep" },
               "foreground process is read from the pty")
-        check(second.status.running && second.status.state == .idle, "a plain command shows no spinner (only agents do)", second.status.state.rawValue)
-        check(await wait(5) { !second.status.running }, "command end is detected")
+        check(await wait(2) { second.status.running } && second.status.state == .idle, "a plain command shows no spinner (only agents do)",
+              "running \(second.status.running), \(second.status.state.rawValue)")
+        check(await wait(7) { !second.status.running }, "command end is detected")
 
         // Failure in a background tab.
         second.view.send(txt: "sleep 1; false\r")

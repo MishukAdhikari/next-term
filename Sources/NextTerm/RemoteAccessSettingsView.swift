@@ -152,11 +152,7 @@ final class RemoteAccessSettingsView: NSView {
         keyObserver = NotificationCenter.default.addObserver(forName: key, object: window, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.cameToFront() }
         }
-        let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.tick() }
-        }
-        RunLoop.main.add(timer, forMode: .common)
-        self.timer = timer
+        startTicking()
         detect()
         refresh()
     }
@@ -165,15 +161,32 @@ final class RemoteAccessSettingsView: NSView {
         refresh()
     }
 
+    /// The countdown's beat, while the window shows: it stops itself once Settings is closed or hidden (its views
+    /// live on), and starts again when Settings comes forward.
+    private func startTicking() {
+        guard timer == nil else { return }
+        let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.tick() }
+        }
+        timer.tolerance = 0.1
+        RunLoop.main.add(timer, forMode: .common)
+        self.timer = timer
+    }
+
     private func cameToFront() {
+        startTicking()
         if detectedAt.map({ Date().timeIntervalSince($0) >= Self.detectAgain }) ?? true { detect() }
         refresh()
     }
 
     /// Every second while the window shows: the pairing countdown; every 30, the connections' times. A closed
-    /// Settings window keeps its views, so the timer runs on, but does nothing.
+    /// Settings window keeps its views, so the timer stops here and `cameToFront` starts it again.
     private func tick() {
-        guard window?.isVisible == true else { return }
+        guard window?.isVisible == true else {
+            timer?.invalidate()
+            timer = nil
+            return
+        }
         refreshCountdown()
         ticks += 1
         if ticks % 30 == 0 { refreshConnections() }

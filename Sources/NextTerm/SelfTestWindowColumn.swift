@@ -954,7 +954,10 @@ extension SelfTest {
     }
 
     /// A click in the middle of `view` as a hand makes one: the mouse-up waits in the queue, and the mouse-down goes
-    /// through the window, which hit-tests it and hands out the keyboard as it does for a real click.
+    /// through the window, which hit-tests it and hands out the keyboard as it does for a real click. A view that tracks
+    /// the press in a loop of its own takes the mouse-up from the queue; one that does not (on macOS 26 a plain button
+    /// is pressed by the window's own tracking, which ends only when the window is sent the mouse-up) leaves it there,
+    /// and it goes through the window next, as the app's event loop would send it.
     private static func clickThroughWindow(_ view: NSView) {
         guard let window = view.window else { return }
         let location: NSPoint = view.convert(NSPoint(x: view.bounds.midX, y: view.bounds.midY), to: nil)
@@ -966,8 +969,8 @@ extension SelfTest {
         guard let down = event(.leftMouseDown, after: 0), let up = event(.leftMouseUp, after: 0.05) else { return }
         NSApp.postEvent(up, atStart: false)
         window.sendEvent(down)
-        // A mouse-up nothing tracked must not arrive later.
-        while NSApp.nextEvent(matching: .leftMouseUp, until: .distantPast, inMode: .default, dequeue: true) != nil {}
+        // Handed on now, so none arrives later, after the check has read what the click did.
+        while let left = NSApp.nextEvent(matching: .leftMouseUp, until: .distantPast, inMode: .default, dequeue: true) { window.sendEvent(left) }
     }
 
     /// ⌃⌘S as the keyboard sends it: a CGEvent, so AppKit reads its characters off the layout, sent to the app, which

@@ -103,6 +103,7 @@ final class RemoteAccessActivityView: NSView, NSTableViewDataSource, NSTableView
                 self.reload()
             }
         }
+        timer.tolerance = Self.rereadEvery / 4
         RunLoop.main.add(timer, forMode: .common)
         self.timer = timer
     }
