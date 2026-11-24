@@ -53,8 +53,10 @@ extension SelfTest {
               let up = secretsMouse(.leftMouseUp, window, view.convert(point, to: nil), count) else { return }
         NSApp.postEvent(up, atStart: false)
         window.sendEvent(down)
-        while NSApp.nextEvent(matching: [.leftMouseDragged, .leftMouseUp], until: .distantPast, inMode: .default,
-                              dequeue: true) != nil {}
+        // Sent on, not thrown away: on macOS 26 a table's gesture recognizers hold the mouse-down until they see its
+        // mouse-up, and one taken from the queue unsent leaves the press held (the next click then waits for good).
+        while let left = NSApp.nextEvent(matching: [.leftMouseDragged, .leftMouseUp], until: .distantPast, inMode: .default,
+                                         dequeue: true) { window.sendEvent(left) }
     }
 
     private static func secretsMouse(_ type: NSEvent.EventType, _ window: NSWindow, _ inWindow: NSPoint, _ count: Int) -> NSEvent? {
