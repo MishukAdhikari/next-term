@@ -144,6 +144,7 @@ extension SelfTest {
         pressKey(host, code: 30, [.command, .control]) // ]
         let forth: Bool = await wait(3) { host.tabGroup?.selectedWindow === second }
         check(back && forth, "window tabs: ⌃⌘[ and ⌃⌘] switch to the previous and next project tab", "back \(back), forth \(forth)")
+        await keyboardFollowsTabChecks(c, host: host, second: second)
 
         // A save records the group: both in it, in the tab bar's order, the one in front marked, one frame.
         let windows: [SessionSnapshot.Window] = SessionCapture.windows([c, other])
@@ -238,6 +239,73 @@ extension SelfTest {
         let closed: Bool = await wait(5) { other.hasClosed && last.hasClosed }
         check(closed && !c.hasClosed && host.isVisible, "window tabs: Close Window closes every project merged into the window, and no other window",
               "second closed \(other.hasClosed), third closed \(last.hasClosed), sheet \(lastWindow.attachedSheet != nil)")
+    }
+
+    /// The keyboard goes with the tab in front (UsersWindow): the tab in front changed while Next Term is hidden has it once
+    /// shown again; a tab switched to while Go to Anything or an approval-style panel has the keyboard counts as the user's
+    /// at once, becomes main, and keeps the keyboard when the panel closes (it went back to the tab left). Starts and ends
+    /// with `second` in front and key.
+    private static func keyboardFollowsTabChecks(_ c: TerminalWindowController, host: NSWindow, second: NSWindow) async {
+        guard host.tabGroup?.selectedWindow === second, NSApp.keyWindow === second else {
+            return check(false, "window tabs: set up for the keyboard checks", "selected \(host.tabGroup?.selectedWindow?.title ?? "none"), key \(NSApp.keyWindow?.title ?? "none")")
+        }
+        // The tab in front changed while hidden: shown again, the keyboard is in it, never in the tab left.
+        NSApp.hide(nil)
+        let hidden: Bool = await wait(3) { NSApp.isHidden }
+        host.tabGroup?.selectedWindow = host
+        NSApp.unhide(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        var keyBehind = false // the split itself: AppKit may or may not hand the keyboard to the tab behind on the way
+        let agreed: Bool = await wait(3) {
+            if NSApp.keyWindow === second && second.isBackgroundTab { keyBehind = true }
+            return NSApp.isActive && NSApp.keyWindow === host
+        }
+        await pause(0.3) // nothing repairs the repair
+        if keyBehind { note("window tabs: shown again, AppKit gave the keyboard to the tab behind before the repair") }
+        check(hidden && agreed && NSApp.keyWindow === host && host.tabGroup?.selectedWindow === host && lastKeyOf(second) < lastKeyOf(host),
+              "window tabs: the tab brought to the front while Next Term is hidden has the keyboard once it is shown again",
+              "hidden \(hidden), agreed \(agreed), key \(NSApp.keyWindow?.title ?? "none"), selected \(host.tabGroup?.selectedWindow?.title ?? "none")")
+
+        // Go to Anything open over the tab in front, the other tab brought to the front meanwhile (as a tab switch from the
+        // panel does): it is the user's at once, and closing the panel leaves it in front with the keyboard.
+        GoToAnythingPanel.toggle(from: c)
+        let opened: Bool = await wait(3) { NSApp.keyWindow is GoToAnythingPanel }
+        host.tabGroup?.selectedWindow = second
+        let usersAtOnce: Bool = second.isUsersWindow && !host.isUsersWindow && !host.takeKeyboard() && NSApp.keyWindow is GoToAnythingPanel
+        let mainFollows: Bool = await wait(3) { NSApp.mainWindow === second }
+        if GoToAnythingPanel.isOpen { GoToAnythingPanel.toggle(from: c) }
+        let kept: Bool = await wait(3) { NSApp.keyWindow === second }
+        await pause(0.5)
+        check(opened && usersAtOnce && mainFollows && kept && host.tabGroup?.selectedWindow === second && NSApp.keyWindow === second,
+              "window tabs: a tab brought to the front while Go to Anything is open is the user's, and keeps the front and the keyboard when it closes",
+              "opened \(opened), the user's at once \(usersAtOnce), main follows \(mainFollows), kept \(kept), "
+                  + "selected \(host.tabGroup?.selectedWindow?.title ?? "none"), key \(NSApp.keyWindow?.title ?? "none")")
+
+        // A panel made as the approval is (utility, not activating, key only if needed), with the keyboard: the same.
+        let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 320, height: 160),
+                            styleMask: [.titled, .closable, .utilityWindow, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.keepsItsOwnFrame()
+        panel.isReleasedWhenClosed = false
+        panel.becomesKeyOnlyIfNeeded = true
+        panel.center()
+        panel.makeKeyAndOrderFront(nil)
+        let panelKey: Bool = await wait(3) { NSApp.keyWindow === panel }
+        host.tabGroup?.selectedWindow = host
+        let switched: Bool = await wait(3) { NSApp.mainWindow === host && NSApp.keyWindow === panel }
+        panel.close()
+        let staysOnHost: Bool = await wait(3) { NSApp.keyWindow === host }
+        await pause(0.5)
+        check(panelKey && switched && staysOnHost && host.tabGroup?.selectedWindow === host && NSApp.keyWindow === host,
+              "window tabs: a tab brought to the front while an approval panel has the keyboard keeps the front and the keyboard when it closes",
+              "panel key \(panelKey), main follows \(switched), kept \(staysOnHost), selected \(host.tabGroup?.selectedWindow?.title ?? "none"), "
+                  + "key \(NSApp.keyWindow?.title ?? "none")")
+
+        second.makeKeyAndOrderFront(nil)
+        _ = await wait(3) { host.tabGroup?.selectedWindow === second && NSApp.keyWindow === second }
+    }
+
+    private static func lastKeyOf(_ window: NSWindow) -> Date {
+        (window.windowController as? TerminalWindowController)?.lastKey ?? .distantPast
     }
 
     /// In a merged window, where the terminal's tab bar sits below the system tab bar and out of the title strip: resting
