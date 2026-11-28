@@ -541,7 +541,16 @@ enum MCPControl {
     private static func listProjects() -> MCPServer.CallResult {
         let open = app.controllers.compactMap(\.project)
         let recent = app.recentProjects.filter { !open.contains($0) }
-        return ok(["open": open, "recent": recent])
+        app.refreshWindowIndex()
+        let windows = app.windowIndex.windows.compactMap { window in window.project.map { (path: $0, lastKey: window.lastKey) } }
+        let dates = ISO8601DateFormatter()
+        let projects = ProjectList.build(open: windows, history: MainActor.assumeIsolated { ProjectHistoryRecorder.shared.history.existing() },
+                                         recents: RecentProjects(app.recentProjects).existing()).map { item -> [String: Any] in
+            var row: [String: Any] = ["path": item.path, "open": item.open]
+            if let used = item.lastUsed { row["last_used"] = dates.string(from: used) }
+            return row
+        }
+        return ok(["open": open, "recent": recent, "projects": projects])
     }
 
     /// At a zsh prompt it waits for the hook's report of a line just written to (200 ms at most), so `input` and the screen

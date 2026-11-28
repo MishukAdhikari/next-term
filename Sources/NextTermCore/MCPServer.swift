@@ -181,7 +181,7 @@ public enum MCPServer {
              inputSchema: #"{"type": "object", "properties": {\#(agentTabID), "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 300, "description": "Default 50: some clients give up on a tool after 60 seconds, unless they send a progress token and reset their timeout on progress (the wait then sends progress every 20 seconds); call again to keep waiting."}, "until": {"type": "array", "items": {"type": "string", "enum": ["idle", "working", "blocked", "done", "unknown"]}, "description": "A herdr agent's id: the states to wait for (herdr agent wait --until)."}, "match": {"type": "string", "description": "Text to wait for on the screen (herdr pane wait-output for a herdr pane)."}, "regex": {"type": "boolean", "description": "match is a regular expression. Default false."}}, "required": ["tab_id"], "additionalProperties": false}"#,
              readOnly: true, destructive: false, idempotent: true, timeout: 300),
         Tool(name: "list_projects", title: "List projects",
-             description: "Projects open in Next Term and recently opened ones (folder paths).",
+             description: "Projects open in Next Term and recently opened ones (folder paths): open and recent, and projects, both together with the one used last first, each with open and last_used.",
              inputSchema: #"{"type": "object", "properties": {}, "additionalProperties": false}"#,
              readOnly: true, destructive: false, idempotent: true, timeout: 15),
         Tool(name: "get_editor_selection", title: "Get the editor selection",

@@ -56,7 +56,7 @@ nxtrm call show_tab '{"tab_id": "…"}'
 `integrations/raycast` is a Raycast extension built on the links and `nxtrm call`:
 
 - **Search Tabs:** every tab, with its project and state. Return brings it forward.
-- **Search Projects:** open and recent projects. Return opens one, and ⇧⌘A starts an agent there. Type a name after it (`Search Projects api`) to start filtered, or turn it on as a fallback command in Raycast's settings: typing a project's name in Raycast, when nothing else matches, then offers to search your projects for it.
+- **Search Projects:** your projects, the one you used last first. Return opens one, and ⇧⌘A starts an agent there. Type a name after it (`Search Projects api`) to start filtered, or turn it on as a fallback command in Raycast's settings: typing a project's name in Raycast, when nothing else matches, then offers to search your projects for it.
 - **Start Agent:** pick a project and an agent, with an optional first prompt.
 - **Agents Waiting:** a menu-bar count of the agents waiting for you. Click one to go to it.
 - **Go to Waiting Agent** and **Go to Anything:** give either one a hotkey in Raycast.
