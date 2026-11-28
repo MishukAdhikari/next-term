@@ -513,7 +513,7 @@ enum MCPControl {
 
     private static func listTabs(project: String?, caller: TerminalTab?, herdrCaller: [String: String]) -> MCPServer.CallResult {
         let wanted = project.map { canonicalPath(($0 as NSString).expandingTildeInPath) }
-        let key = NSApp.keyWindow
+        let key: NSWindow? = UsersWindow.key // the tab in front, whichever of its group holds the keyboard
         let windows: [[String: Any]] = app.controllers.compactMap { controller in
             if let wanted, controller.project != wanted { return nil }
             var window: [String: Any] = [

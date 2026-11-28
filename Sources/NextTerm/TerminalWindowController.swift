@@ -11,6 +11,10 @@ final class TerminalWindow: NSWindow {
         return candidates.lazy.compactMap { $0 as? TerminalWindow }.first(where: \.isShownFrame)
     }
 
+    /// Never a tab behind another while a key panel closes (UsersWindow.keyWindowClosing): the keyboard goes to the tab
+    /// in front instead of bringing this one back over it.
+    override var canBecomeKey: Bool { super.canBecomeKey && !(UsersWindow.keyWindowClosing && isBackgroundTab) }
+
     var onControlTab: ((_ backwards: Bool) -> Void)?
     /// A key down for a terminal, before the terminal gets it (Tab completion); true: taken.
     var onTerminalKey: ((NSEvent, NextTermView) -> Bool)?
@@ -1109,10 +1113,11 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     /// The user can see the active tab only while this window is in front in the active app: key, or main
     /// while its own panel or sheet has the keyboard (⌘P, Find in Files, an alert). Panels and sheets never
-    /// become main; another window (Settings) does, and then this one is not in front.
+    /// become main; another window (Settings) does, and then this one is not in front. Merged as tabs, the tab in
+    /// front of the key or main one is, and a tab behind it never is, keyboard or not (isUsersWindow).
     private var userCanSeeWindow: Bool {
         guard let window, NSApp.isActive, !window.isMiniaturized else { return false }
-        return window.isKeyWindow || window.isMainWindow
+        return window.isUsersWindow
     }
 
     func refreshVisibility() {
@@ -3184,8 +3189,13 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     }
 
     func windowDidBecomeKey(_ notification: Notification) {
-        if !keyingForAgent { lastKey = Date() } // brought forward for an agent: not a window the user went to
-        if !keyingForAgent { userTouched() }
+        // Brought forward for an agent: not a window the user went to. Nor a tab behind another that AppKit handed the
+        // keyboard back to: the user is in the tab in front, which gets it a turn later (UsersWindow.repairSoon).
+        if !keyingForAgent, window?.isBackgroundTab != true {
+            lastKey = Date()
+            userTouched()
+        }
+        UsersWindow.repairSoon()
         watchTabGroup()
         activityChanged()
         refreshVisibility()
@@ -3206,7 +3216,10 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         activityChanged()
         refreshVisibility()
     }
-    func windowDidBecomeMain(_ notification: Notification) { activityChanged() }
+    func windowDidBecomeMain(_ notification: Notification) {
+        activityChanged()
+        UsersWindow.repairSoon()
+    }
     func windowDidResignMain(_ notification: Notification) {
         activityChanged()
         refreshVisibility()

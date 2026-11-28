@@ -29,9 +29,10 @@ final class HintStage {
     /// How long a trigger waits for its moment, and how often it looks. The self-test stands in for these.
     static var waitsAtMost: TimeInterval = HintWaits.atMost
     static var looksEvery: TimeInterval = 1
-    /// The window the user works in: Next Term's key window while it is in front. The self-test stands in.
+    /// The window the user works in: Next Term's key window while it is in front, as shown (UsersWindow.key). The
+    /// self-test stands in.
     static var front: () -> TerminalWindowController? = {
-        NSApp.isActive ? NSApp.keyWindow?.windowController as? TerminalWindowController : nil
+        NSApp.isActive ? UsersWindow.key?.windowController as? TerminalWindowController : nil
     }
 
     /// A waiting trigger: whether it still holds, and an attempt to put its hint up in the window in front, true once up.

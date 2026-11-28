@@ -434,7 +434,7 @@ final class CommandSuggestionController: NSObject, NSMenuItemValidation {
     }
 
     static var frontTab: TerminalTab? {
-        (NSApp.keyWindow?.windowController as? TerminalWindowController)?.activeTab
+        (UsersWindow.key?.windowController as? TerminalWindowController)?.activeTab
     }
 
     /// The panel may open for `tab`: at its shell's prompt; on a server, by what the status checks said last, fresh or
