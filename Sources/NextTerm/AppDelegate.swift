@@ -614,6 +614,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // tell a new install from one used before. Never in a self-test.
         if !SelfTest.isRequested { layoutPickerDue = LayoutPicker.isDue(in: .standard) }
         MainActor.assumeIsolated { ThemeWatch.start() } // the app's look, before any window opens (plan 049)
+        UsersWindow.watchCloses() // a key panel's close leaves the keyboard in the tab in front (plan 032)
         // Secrets' marks first, with no crypto, so the first MCP answer and IDE message are already masked; then the
         // load check, off the main thread.
         MainActor.assumeIsolated { SecretsStore.shared.loadMarks() }

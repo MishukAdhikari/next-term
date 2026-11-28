@@ -47,7 +47,8 @@ final class SecretsWindowController: NSWindowController, NSWindowDelegate {
             guard NSApp.isActive, let before, before.isVisible, let sheet, sheet.isVisible else { return }
             let key: NSWindow? = NSApp.keyWindow
             guard key === sheet || (parent != nil && key === parent) else { return }
-            before.makeKey()
+            // To the tab the user is in: a tab behind another made key would come to the front over it.
+            before.shownWindow.takeKeyboard(raise: false)
         }
         giveBack()
         DispatchQueue.main.async {
@@ -64,7 +65,7 @@ final class SecretsWindowController: NSWindowController, NSWindowDelegate {
         guard let before = keyBeforeRestore, before.isVisible, let window else { return }
         let key: NSWindow? = NSApp.keyWindow
         guard key === window || key?.sheetParent === window else { return }
-        before.makeKey()
+        before.shownWindow.takeKeyboard(raise: false) // the tab the user is in, never one behind it
     }
 
     /// The restore ended: the keyboard goes back now, and once more after AppKit's own turn, in case it makes the

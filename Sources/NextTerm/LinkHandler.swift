@@ -57,7 +57,7 @@ enum LinkHandler {
     /// The tab whose agent waits for the user: the one waiting longest, outside the tab in front when another waits.
     static func waiting() -> TerminalTab? {
         let app: AppDelegate = AppDelegate.shared
-        let front = (NSApp.keyWindow?.windowController as? TerminalWindowController)?.activeTab
+        let front = (UsersWindow.key?.windowController as? TerminalWindowController)?.activeTab
         let all = app.controllers.filter { !$0.hasClosed }.flatMap(\.tabs).filter { $0.status.state == .attention }
         return all.first { $0 !== front } ?? all.first
     }

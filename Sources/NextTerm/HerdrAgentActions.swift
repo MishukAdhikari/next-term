@@ -153,8 +153,10 @@ enum HerdrAgentActions {
             then(response)
         }
         if let window = tab.view.window {
-            alert.beginSheetModal(for: window, completionHandler: done)
-            alert.window.initialFirstResponder = focus
+            WindowSheets.whenInFront(window) { // on a tab behind another, once its tab is in front
+                alert.beginSheetModal(for: window, completionHandler: done)
+                alert.window.initialFirstResponder = focus
+            }
         } else {
             done(alert.runModal())
         }
@@ -164,6 +166,10 @@ enum HerdrAgentActions {
         let alert = NSAlert()
         alert.messageText = title
         alert.informativeText = text
-        if let window = tab.view.window { alert.beginSheetModal(for: window) } else { alert.runModal() }
+        guard let window = tab.view.window else {
+            alert.runModal()
+            return
+        }
+        WindowSheets.whenInFront(window) { alert.beginSheetModal(for: window) } // a tab behind another: once it is in front
     }
 }

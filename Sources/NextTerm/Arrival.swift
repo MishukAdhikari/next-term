@@ -16,10 +16,11 @@ enum UserKeys {
 }
 
 extension TerminalWindowController {
-    /// The window the user is working in: Next Term's key or main window while it is the app in front, else the window
-    /// they went to last (they come back to it, and the tab they left in front).
+    /// The window the user is working in: Next Term's key or main window while it is the app in front, as shown (the tab in
+    /// front, never one behind it: isUsersWindow), else the window they went to last (they come back to it, and the tab
+    /// they left in front).
     var hasUsersKeyboard: Bool {
-        if NSApp.isActive { return window?.isKeyWindow == true || window?.isMainWindow == true }
+        if NSApp.isActive { return window?.isUsersWindow == true }
         return AppDelegate.shared.lastUsedController === self
     }
 
@@ -38,7 +39,10 @@ extension TerminalWindowController {
     @discardableResult
     func presentForAgent(_ tab: TerminalTab?, explicit: Bool = false, login: Bool = false) -> (selected: Bool, note: String?) {
         let first = arrive(tab, explicit: explicit, login: login, waited: 0, selected: false)
-        return (first.selected || tab.map { activeTab === $0 } == true, first.note)
+        let selected: Bool = first.selected || tab.map { activeTab === $0 } == true
+        // Selected in a window that stays a tab behind another (plan 032) is out of sight: not selected, to the agent.
+        guard selected, tab != nil, window?.isBackgroundTab == true else { return (selected, first.note) }
+        return (false, first.note ?? "Its window is a tab behind another in a merged window, so it is out of sight until the user goes to that tab.")
     }
 
     @discardableResult

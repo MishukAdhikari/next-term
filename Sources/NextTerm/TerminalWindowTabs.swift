@@ -47,7 +47,8 @@ extension TerminalWindowController {
     }
 
     /// Its tab came to the front, went behind another, or the tabs beside it changed: what is seen follows at once (its
-    /// terminals, the sidebar's refresh), the hover list closes behind, and a question held for its tab is asked now.
+    /// terminals, the sidebar's refresh), the hover list closes behind, a question held for its tab is asked now, and the
+    /// keyboard goes with the tab in front.
     func tabSelectionChanged() {
         guard let window, !hasClosed else { return }
         NotificationCenter.default.post(name: NSWindow.tabSelectionDidChange, object: window)
@@ -61,6 +62,7 @@ extension TerminalWindowController {
         updateProjectTab()
         columnHost.column.setMerged(mergedIDs)
         columnHost.list?.setMerged(mergedIDs)
+        UsersWindow.repairSoon() // the keyboard, or the main window, left in the tab that went behind follows the user
     }
 
     /// The windows merged with this one, by their ids in the index, this one among them; empty for a window of its own.
@@ -239,6 +241,26 @@ enum WindowSheets {
             if let observer { NotificationCenter.default.removeObserver(observer) }
             DispatchQueue.main.async(execute: then)
         }
+    }
+
+    /// `then` now while `window` is the tab in front of its group or a window of its own, else once its tab comes to the
+    /// front (never if it closes first): a sheet begun on a tab behind another brings that tab to the front, over the one
+    /// the user chose.
+    static func whenInFront(_ window: NSWindow, then: @escaping () -> Void) {
+        guard window.isBackgroundTab else { return then() }
+        let center = NotificationCenter.default
+        var observers: [NSObjectProtocol] = []
+        let stop = { for observer in observers { center.removeObserver(observer) } }
+        observers = [
+            center.addObserver(forName: NSWindow.tabSelectionDidChange, object: window, queue: .main) { [weak window] _ in
+                MainActor.assumeIsolated {
+                    guard let window, !window.isBackgroundTab else { return }
+                    stop()
+                    then()
+                }
+            },
+            center.addObserver(forName: NSWindow.willCloseNotification, object: window, queue: .main) { _ in stop() },
+        ]
     }
 }
 
